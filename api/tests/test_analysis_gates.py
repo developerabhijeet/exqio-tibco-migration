@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from api.app.models import AuditLog, Gate, JobEvent, ModelCall, Process, Rule
+from api.app.models import AnalysisRun, AuditLog, Gate, JobEvent, ModelCall, Process, Rule
+from api.app.services import analysis as analysis_svc
+from engine.agents.provider import ProviderError
 
 # Do not spend 30 s on a blocked embedding-model download; fall back to the hash backend sooner.
 os.environ.setdefault("EMBEDDINGS_LOAD_TIMEOUT", "8")
@@ -310,7 +313,8 @@ async def test_decisions_recorded_in_memory(client, app):
 
     rows = await asyncio.to_thread(app.state.knowledge.query,
                                    "SELECT kind, text, context, created_by, source FROM "
-                                   "knowledge.memory_items WHERE project_id = %s ORDER BY created_at",
+                                   "knowledge.memory_items WHERE project_id = %s AND source <> "
+                                   "'rsi-seed' ORDER BY created_at",
                                    [pid])
     assert [r["kind"] for r in rows] == ["decision"] * 3
     edit, keep, rename = rows
@@ -450,3 +454,169 @@ async def test_ask_answers_from_the_knowledge_base(client):
     assert all(c["process_id"] == procs[DFR]["id"] for c in answer["citations"] if c["process_id"])
     r = await client.post("/ask", json={"project_id": "nope", "question": "x"})
     assert r.status_code == 404
+
+
+# ------------------------------------------------------------------ review round 1
+def _provider_off(settings) -> None:
+    settings.provider = "auto"
+    settings.claude_code_oauth_token = ""
+    settings.azure_openai_endpoint = ""
+    settings.azure_openai_api_key = ""
+
+
+async def _audit_count(app) -> int:
+    async with app.state.sessionmaker() as s:
+        return await s.scalar(select(func.count()).select_from(AuditLog))
+
+
+async def test_code_only_rerun_keeps_decisions_and_gates(client, app, settings):
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+    view = await _decide_findings(client, await _decide_rules(client, await _analyse(client, proc_id)))
+    assert (await client.post(f"/gates/{proc_id}/G1", json={"state": "approved", "note": ""},
+                              headers=SME)).status_code == 200
+    before = (await client.get(f"/processes/{proc_id}/analysis")).json()
+    assert any(f["finding_key"] == "F1" for f in before["findings"])
+
+    _provider_off(settings)
+    after = await _analyse(client, proc_id)
+    assert after["ai_available"] is False and after["notice"] == "code-only analysis: no model configured"
+    assert [(r["id"], r["rule_key"], r["status"], r["text"]) for r in after["rules"]] == \
+           [(r["id"], r["rule_key"], r["status"], r["text"]) for r in before["rules"]]
+    assert all(r["challenge"] for r in after["rules"])  # earlier verdicts carried
+    assert [(f["finding_key"], f["decision"], f["business_impact"]) for f in after["findings"]] == \
+           [(f["finding_key"], f["decision"], f["business_impact"]) for f in before["findings"]]
+    assert after["summary"] == before["summary"]
+    assert after["coverage"]["complete"] is True and after["verification"]["passed"] is True
+    assert after["spec_hash"] == before["spec_hash"]
+    g1 = _gate(after, "G1")
+    assert g1["state"] == "approved" and g1["stale"] is False
+    assert "gate reset" not in await _audit_actions(client, proc_id)
+    assert view  # (decisions made above)
+
+
+async def test_failed_analyst_carries_forward_or_fails_without_persisting(client, app, monkeypatch):
+    _, procs = await _scanned(client)
+
+    async def broken(*args, **kwargs):
+        raise ProviderError("model unavailable")
+
+    # nothing to carry forward: the job fails and nothing is stored
+    fresh = procs[CAI]["id"]
+    monkeypatch.setattr(analysis_svc, "analyse", broken)
+    r = await client.post(f"/processes/{fresh}/analyse")
+    job = await _wait_job(client, r.json()["job_id"])
+    assert job["status"] == "failed" and "nothing was stored" in job["error"]
+    async with app.state.sessionmaker() as s:
+        assert await s.scalar(select(AnalysisRun.id).where(AnalysisRun.process_id == fresh)) is None
+        assert await s.scalar(select(Rule.id).where(Rule.process_id == fresh)) is None
+
+    # with an earlier analysis: the analyst failure keeps the earlier rules and decisions
+    monkeypatch.undo()
+    proc_id = procs[DFR]["id"]
+    before = await _decide_rules(client, await _analyse(client, proc_id))
+    monkeypatch.setattr(analysis_svc, "analyse", broken)
+    after = await _analyse(client, proc_id)
+    assert after["notice"] == "partial analysis: a model stage failed, see the job log"
+    assert "analyst" in after["ai_reason"]
+    assert [(r["rule_key"], r["status"]) for r in after["rules"]] == \
+           [(r["rule_key"], r["status"]) for r in before["rules"]]
+    assert {f["finding_key"] for f in after["findings"]} >= {"F1"}  # the risk stage still ran
+
+
+async def test_rule_keys_are_never_reused(client, app):
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+    first = await _analyse(client, proc_id)
+    last = first["rules"][-1]
+    assert last["rule_key"] == f"R{len(first['rules'])}" and last["citations"][0]["kind"] == "sql"
+    activity = last["citations"][0]["activity_id"]
+    async with app.state.sessionmaker() as s:
+        row = await s.get(Process, proc_id)
+        original_ir = row.ir
+        ir = dict(original_ir)
+        ir["activities"] = [{**a, "config": {k: v for k, v in a["config"].items()
+                                             if k not in ("sql", "settings")}}
+                            if a["id"] == activity else a for a in ir["activities"]]
+        row.ir = ir
+        await s.commit()
+    second = await _analyse(client, proc_id)
+    assert last["rule_key"] not in {r["rule_key"] for r in second["rules"]}
+    async with app.state.sessionmaker() as s:
+        row = await s.get(Process, proc_id)
+        row.ir = original_ir
+        await s.commit()
+    third = await _analyse(client, proc_id)
+    back = next(r for r in third["rules"] if r["text"] == last["text"])
+    assert back["rule_key"] == f"R{len(first['rules']) + 1}"  # a new key, the old one is retired
+
+
+async def test_get_never_writes_and_shows_stale_gates_after_rescan(client, app, tmp_path):
+    estate = tmp_path / "estate"
+    shutil.copytree(SYNTHETIC, estate)
+    r = await client.post("/projects", json={"name": "gmf"})
+    pid = r.json()["id"]
+    assert (await client.post(f"/projects/{pid}/upload", json={"path": str(estate)})).status_code == 201
+    job = await _wait_job(client, (await client.post(f"/projects/{pid}/scan", json={})).json()["job_id"])
+    assert job["status"] == "done"
+    procs = {p["ir_id"]: p for p in (await client.get(f"/projects/{pid}/processes")).json()}
+    proc_id = procs[DFR]["id"]
+    await _decide_findings(client, await _decide_rules(client, await _analyse(client, proc_id)))
+    assert (await client.post(f"/gates/{proc_id}/G1", json={"state": "approved", "note": ""},
+                              headers=SME)).status_code == 200
+
+    bwp = estate / "DealerFunding/Processes/dealerfunding/DealerFundingRequest.bwp"
+    head, _, rest = bwp.read_text().partition("\n")
+    bwp.write_text(head + "\n\n" + rest)
+    assert (await client.post(f"/projects/{pid}/upload", json={"path": str(estate)})).status_code == 201
+    job = await _wait_job(client, (await client.post(f"/projects/{pid}/scan", json={})).json()["job_id"])
+    assert job["status"] == "done" and job["result"]["changed"] == 1
+
+    count = await _audit_count(app)
+    view = (await client.get(f"/processes/{proc_id}/analysis")).json()
+    gates = (await client.get(f"/processes/{proc_id}/gates")).json()
+    await client.get(f"/processes/{proc_id}/analysis")
+    assert await _audit_count(app) == count  # reads never write
+    g1, g2 = _gate({"gates": gates}, "G1"), _gate({"gates": gates}, "G2")
+    assert g1["state"] == "approved" and g1["stale"] is True
+    assert "IR changed since analysis: re-run analysis" in g1["reason"]
+    assert g2["enabled"] is False and "G1 approval is stale" in g2["reason"]
+    assert view["ir_changed"] is True and _gate(view, "G1")["stale"] is True
+
+    # the next action reconciles: the stale G1 is reset, and approving needs a re-analysis
+    r = await client.post(f"/gates/{proc_id}/G1", json={"state": "approved", "note": ""}, headers=SME)
+    assert r.status_code == 409 and "IR changed since analysis" in r.json()["detail"]
+    g1 = _gate((await client.get(f"/processes/{proc_id}/analysis")).json(), "G1")
+    assert g1["state"] == "pending" and g1["reset_reason"] == "spec hash changed since the gate was decided"
+    view = await _analyse(client, proc_id)
+    assert view["ir_changed"] is False
+    assert "IR changed" not in (_gate(view, "G1")["reason"] or "")
+
+
+async def test_owner_may_reject_a_gate_that_is_not_enabled(client):
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+    r = await client.post(f"/gates/{proc_id}/G1", json={"state": "approved", "note": ""}, headers=SME)
+    assert r.status_code == 409
+    r = await client.post(f"/gates/{proc_id}/G1", json={"state": "rejected", "note": "scope unclear"},
+                          headers=SME)
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "rejected" and r.json()["note"] == "scope unclear"
+    audit = (await client.get(f"/processes/{proc_id}/audit")).json()
+    rejected = next(a for a in audit if a["action"] == "gate rejected")
+    assert rejected["detail"]["reason"] == "scope unclear"
+    r = await client.post(f"/gates/{proc_id}/G4", json={"state": "rejected", "note": "no"},
+                          headers={"X-Agent": "builder"})
+    assert r.status_code == 403
+
+
+async def test_project_creation_seeds_rsi_patterns(client, app):
+    r = await client.post("/projects", json={"name": "seeded"})
+    pid = r.json()["id"]
+    sql = "SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s AND source = 'rsi-seed'"
+    for _ in range(150):
+        rows = await asyncio.to_thread(app.state.knowledge.query, sql, [pid])
+        if rows[0]["n"]:
+            break
+        await asyncio.sleep(0.2)
+    assert rows[0]["n"] > 0

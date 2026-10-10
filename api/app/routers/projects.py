@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import zipfile
 from pathlib import Path
@@ -28,9 +29,11 @@ from api.app.schemas.project import (
     UploadPathIn,
 )
 from api.app.services import uploads
+from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.scan import scan_job
 
 router = APIRouter(tags=["projects"])
+log = logging.getLogger(__name__)
 
 
 async def _project(session: AsyncSession, project_id: str) -> Project:
@@ -41,12 +44,25 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
 
 
 @router.post("/projects", status_code=201, response_model=ProjectOut)
-async def create_project(body: ProjectCreate, session: SessionDep) -> Project:
+async def create_project(body: ProjectCreate, request: Request, session: SessionDep) -> Project:
+    """Create a project and, in the background, seed its migration memory with the R Systems
+    TIBCO-to-.NET patterns (``source: rsi-seed``). Seeding failures are logged, never fatal."""
     project = Project(name=body.name.strip())
     session.add(project)
     await session.commit()
     await session.refresh(project)
+    task = asyncio.create_task(_seed(request.app.state.knowledge, project.id))
+    request.app.state.background.add(task)
+    task.add_done_callback(request.app.state.background.discard)
     return project
+
+
+async def _seed(knowledge: Knowledge, project_id: str) -> None:
+    try:
+        n = await knowledge.seed_patterns(project_id)
+        log.info("project %s: %d RSI seed patterns loaded into migration memory", project_id, n)
+    except KnowledgeUnavailable as exc:
+        log.warning("project %s: RSI seed patterns not loaded: %s", project_id, exc)
 
 
 @router.get("/projects", response_model=list[ProjectOut])

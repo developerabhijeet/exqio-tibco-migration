@@ -51,6 +51,7 @@ from engine.agents.risk import review_risk
 from engine.agents.routing import ModelCallRecord
 from engine.analysis.coverage import coverage_matrix
 from engine.analysis.evidence import EvidenceIndex
+from engine.analysis.models import Challenge as EngineChallenge
 from engine.analysis.models import Citation
 from engine.analysis.models import Finding as EngineFinding
 from engine.analysis.models import Rule as EngineRule
@@ -78,15 +79,16 @@ def norm(text: str | None) -> str:
 
 
 # ------------------------------------------------------------------ id assignment
-def assign_rule_keys(rules: list[EngineRule], existing: list[dict[str, Any]]) -> dict[str, str]:
+def assign_rule_keys(rules: list[EngineRule], existing: list[dict[str, Any]], mark: int = 0) -> dict[str, str]:
     """Give each analyst rule its key (``R<n>``) and restore SME decisions on matched rules.
+    New keys start above ``mark`` (the process's high-water mark), so a key is never reused.
     Returns ``{key: analyst text}`` for ``original_text``."""
     by_text: dict[str, dict[str, Any]] = {}
     for e in existing:
         for t in (e["original_text"], e["text"]):
             if t:
                 by_text.setdefault(norm(t), e)
-    next_n = max((gate_svc.key_number(e["key"]) for e in existing), default=0) + 1
+    next_n = max([mark, *(gate_svc.key_number(e["key"]) for e in existing)]) + 1
     used: set[str] = set()
     originals: dict[str, str] = {}
     for r in rules:
@@ -107,9 +109,10 @@ def assign_rule_keys(rules: list[EngineRule], existing: list[dict[str, Any]]) ->
     return originals
 
 
-def assign_finding_keys(findings: list[EngineFinding], existing: list[dict[str, Any]]) -> None:
+def assign_finding_keys(findings: list[EngineFinding], existing: list[dict[str, Any]], mark: int = 0) -> None:
+    """``F<n>`` keys for AI findings, matched on normalised text, new ones above ``mark``."""
     ai_by_text = {norm(e["text"]): e for e in existing if e["source"] == "ai"}
-    next_n = max((gate_svc.key_number(e["key"]) for e in existing if e["source"] == "ai"), default=0) + 1
+    next_n = max([mark, *(gate_svc.key_number(e["key"]) for e in existing if e["source"] == "ai")]) + 1
     used: set[str] = set()
     for f in findings:
         if f.source != "ai":
@@ -180,10 +183,36 @@ def analyse_job(process_id: str, settings: Settings, knowledge: Knowledge):
     return run
 
 
+class AnalysisFailed(Exception):
+    """A model stage failed and there is no earlier analysis to carry forward: nothing is stored."""
+
+
 def _existing(rules: list[Rule], findings: list[Finding]) -> tuple[list[dict], list[dict]]:
     return ([{"key": r.rule_key, "text": r.text, "original_text": r.original_text, "status": r.status,
               "owner": r.owner} for r in rules],
             [{"key": f.finding_key, "text": f.text, "source": f.source} for f in findings])
+
+
+def _carried_rules(rows: list[Rule]) -> list[EngineRule]:
+    """The stored rules as engine rules, to be re-verified and re-covered against the current IR.
+    An ``unverified`` rule goes back to ``draft`` so the verifier decides it again."""
+    out = []
+    for r in rows:
+        ch = r.challenge
+        out.append(EngineRule(
+            id=r.rule_key, text=r.text, confidence=r.confidence,
+            status="draft" if r.status == "unverified" else r.status, owner=r.owner,
+            memory_refs=list(r.memory_refs or []),
+            citations=[Citation.model_validate(_cit(c)) for c in r.citations or []],
+            challenge=EngineChallenge.model_validate(ch) if ch else None))
+    return out
+
+
+def _carried_ai_findings(rows: list[Finding]) -> list[EngineFinding]:
+    return [EngineFinding(id=f.finding_key, severity=f.severity, text=f.text, source="ai",
+                          business_impact=f.business_impact,
+                          citations=[Citation.model_validate(_cit(c)) for c in f.citations or []])
+            for f in rows if f.source == "ai"]
 
 
 async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
@@ -196,8 +225,16 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
         project_id = row.project_id
         proc = IRProcess.model_validate(row.ir)
         app = IRApplication.model_validate({**(app_row.ir if app_row else {}), "processes": []})
-        old_rules, old_findings = _existing(await gate_svc.load_rules(s, process_id),
-                                            await gate_svc.load_findings(s, process_id))
+        rule_rows = await gate_svc.load_rules(s, process_id)
+        finding_rows = await gate_svc.load_findings(s, process_id)
+        old_rules, old_findings = _existing(rule_rows, finding_rows)
+        prev = await gate_svc.latest_analysis(s, process_id)
+        prev_summary = (prev.summary or {}) if prev else {}
+        prev_technical = {i.ref: i.technical_reason for i in (await s.execute(
+            select(CoverageItem).where(CoverageItem.process_id == process_id))).scalars() if i.technical_reason}
+    has_previous = prev is not None
+    marks = dict(prev_summary.get("key_marks") or {})
+    snapshot = {r.rule_key: (r.status, r.text) for r in rule_rows}
 
     async def on_record(rec: ModelCallRecord) -> None:
         state = "failed: " + (rec.error or "") if rec.error else (
@@ -214,6 +251,12 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
             primary_name=provider.primary.name, on_record=on_record)
     ai_errors: list[str] = []
 
+    def stage_failed(stage: str, exc: Exception) -> None:
+        ai_errors.append(f"{stage}: {exc}")
+        if not has_previous:
+            raise AnalysisFailed(f"{stage} failed and there is no earlier analysis to keep, so nothing "
+                                 f"was stored: {exc}") from exc
+
     # 1. static risk rules (code)
     await ctx.stage(STAGES[0])
     static = run_static_rules(proc, app.contracts, app.substvars)
@@ -225,8 +268,10 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
     rules: list[EngineRule] = []
     technical: dict[str, str] = {}
     summary: str | None = None
+    rules_from_model = False
+    keep_note = f"; keeping the {len(rule_rows)} earlier rule(s)" if rule_rows else ""
     if provider is None:
-        await ctx.log(SKIPPED, tag="ai")
+        await ctx.log(SKIPPED + keep_note, tag="ai")
     else:
         memory_items: list[Any] = []
         query = " ".join([proc.name, *[a.name for a in proc.activities[:30]]])
@@ -240,12 +285,20 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
         try:
             out = await analyse(proc, app.contracts, memory_items, provider)
             rules, technical, summary = out.rules, out.technical, out.summary or None
+            rules_from_model = True
             await ctx.log(f"Workflow Analyst proposed {len(rules)} rule(s) and marked "
                           f"{len(technical)} item(s) technical", tag="ai")
         except (ProviderError, JsonOutputError) as exc:
-            ai_errors.append(f"analyst: {exc}")
-            await ctx.log(f"Workflow Analyst failed, continuing code only: {exc}", tag="ai")
-    originals = assign_rule_keys(rules, old_rules)
+            await ctx.log(f"Workflow Analyst failed: {exc}" + keep_note, tag="ai")
+            stage_failed("analyst", exc)
+    if rules_from_model:
+        originals = assign_rule_keys(rules, old_rules, int(marks.get("rule", 0)))
+    else:  # carry the earlier rules (and their technical items and summary) forward
+        rules = _carried_rules(rule_rows)
+        originals = {r.rule_key: r.original_text or r.text for r in rule_rows}
+        technical = prev_technical
+        if prev_summary.get("summary_source") in ("model", "carried"):
+            summary = prev_summary.get("text")
 
     # 3. citation verifier (code)
     await ctx.stage(STAGES[2])
@@ -265,25 +318,37 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
     # 5. Risk Reviewer (ai)
     await ctx.stage(STAGES[4])
     findings: list[EngineFinding] = list(static)
+    findings_from_model = False
+    ai_rows = [f for f in finding_rows if f.source == "ai"]
+    keep_note = f"; keeping the {len(ai_rows)} earlier AI finding(s)" if ai_rows else ""
+    index = EvidenceIndex(proc)
     if provider is None:
-        await ctx.log(SKIPPED, tag="ai")
+        await ctx.log(SKIPPED + keep_note, tag="ai")
     else:
-        index = EvidenceIndex(proc)
         try:
             findings = await review_risk(proc, static, provider,
                                          lambda _p, c: index.has(c.activity_id, c.kind, c.text))
+            findings_from_model = True
             added = sum(1 for f in findings if f.source == "ai")
             await ctx.log(f"Risk Reviewer described the impact of {len(static)} static finding(s) and "
                           f"added {added} finding(s)", tag="ai")
         except (ProviderError, JsonOutputError) as exc:
-            ai_errors.append(f"risk reviewer: {exc}")
-            await ctx.log(f"Risk Reviewer failed, continuing code only: {exc}", tag="ai")
-    assign_finding_keys(findings, old_findings)
+            await ctx.log(f"Risk Reviewer failed: {exc}" + keep_note, tag="ai")
+            stage_failed("risk reviewer", exc)
+    if findings_from_model:
+        assign_finding_keys(findings, old_findings, int(marks.get("finding", 0)))
+    else:  # earlier impacts on the static findings, earlier AI findings re-checked
+        impacts = {f.finding_key: f.business_impact for f in finding_rows if f.business_impact}
+        findings = [f.model_copy(update={"business_impact": impacts.get(f.id)}) for f in static]
+        for f in _carried_ai_findings(finding_rows):
+            if not all(index.has(c.activity_id, c.kind, c.text) for c in f.citations):
+                await ctx.log(f"{f.id}: a citation is no longer found in the current IR (kept for the SME)")
+            findings.append(f)
 
     # 6. Independent Challenger (ai)
     await ctx.stage(STAGES[5])
     if provider is None:
-        await ctx.log(SKIPPED, tag="ai")
+        await ctx.log(SKIPPED + ("; keeping the earlier verdicts" if rules else ""), tag="ai")
     elif not rules:
         await ctx.log("no rules to challenge", tag="ai")
     else:
@@ -295,23 +360,36 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
                           + (f" ({', '.join(disagree)}): flagged for the SME" if disagree else ""),
                           tag="ai")
         except (ProviderError, JsonOutputError) as exc:
-            ai_errors.append(f"challenger: {exc}")
-            await ctx.log(f"Independent Challenger failed, continuing without verdicts: {exc}", tag="ai")
+            await ctx.log(f"Independent Challenger failed, keeping earlier verdicts where the rule text "
+                          f"is unchanged: {exc}", tag="ai")
+            stage_failed("challenger", exc)
+            earlier = {r.rule_key: r for r in rule_rows}
+            for r in rules:
+                e = earlier.get(r.id)
+                if r.challenge is None and e is not None and e.challenge and norm(e.text) == norm(r.text):
+                    r.challenge = EngineChallenge.model_validate(e.challenge)
 
     # 7. persist (code)
     await ctx.stage(STAGES[6])
+    full_run = rules_from_model and findings_from_model and not ai_errors
     ai_available = provider is not None and not ai_errors
     ai_reason = choice.reason or ("; ".join(ai_errors) or None)
+    summary_source = "model" if rules_from_model and summary else ("carried" if summary else "code")
     if summary is None:
         summary = (f"Code-only analysis of {proc.name}: {len(proc.activities)} activities, "
                    f"{len(proc.transitions)} transitions, {len(static)} static finding(s). "
                    + ("No model is configured, so no business rules were proposed."
                       if provider is None else "The model stages did not complete."))
     notice = CODE_ONLY_NOTICE if provider is None else (PARTIAL_NOTICE if ai_errors else None)
-    result = await _persist(ctx, process_id, choice.name, summary, technical, ai_available, ai_reason,
-                            notice, rules, originals, findings, verification, coverage)
-    await ctx.log(f"stored {len(rules)} rule(s), {len(findings)} finding(s), {coverage.total} coverage "
-                  f"item(s); spec hash {result['spec_hash'][:12]}"
+    meta = {"text": summary, "summary_source": summary_source, "technical": technical,
+            "ai_available": ai_available, "ai_reason": ai_reason, "notice": notice,
+            "key_marks": marks, "full_run": full_run}
+    result = await _persist(ctx, process_id, choice.name, meta, rules, originals, findings, coverage,
+                            snapshot, keep_decided=not full_run)
+    await ctx.log(f"stored {result['rules']} rule(s), {result['findings']} finding(s), "
+                  f"{result['coverage_total']} coverage item(s)"
+                  + ("" if full_run else " (earlier decisions kept: not every model stage ran)")
+                  + f"; spec hash {result['spec_hash'][:12]}"
                   + (f"; gates reset: {', '.join(result['gates_reset'])}" if result["gates_reset"] else ""))
 
     async with ctx.sessionmaker() as s:
@@ -320,23 +398,22 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
     await ctx.log(f"knowledge store not updated: {error}" if error else
                   "summary, rules and findings indexed for Ask")
     return {**result, "ai_available": ai_available, "ai_reason": ai_reason, "provider": choice.name,
-            "rules": len(rules), "findings": len(findings), "verified": verification.verified,
-            "citations": verification.total, "covered": coverage.covered,
-            "coverage_total": coverage.total}
+            "full_run": full_run}
 
 
-async def _persist(ctx: JobContext, process_id: str, provider_name: str, summary: str,
-                   technical: dict[str, str], ai_available: bool, ai_reason: str | None,
-                   notice: str | None, rules: list[EngineRule], originals: dict[str, str],
-                   findings: list[EngineFinding], verification: Any, coverage: Any) -> dict[str, Any]:
+async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: dict[str, Any],
+                   rules: list[EngineRule], originals: dict[str, str], findings: list[EngineFinding],
+                   coverage: Any, snapshot: dict[str, tuple[str, str]], *,
+                   keep_decided: bool) -> dict[str, Any]:
+    """Store one analysis. The process row is locked, so a rule or finding decision cannot
+    interleave; a rule the SME changed while the job ran keeps the SME's status and text. On a
+    code-only or partial run (``keep_decided``) no decided rule or finding is deleted."""
     async with ctx.sessionmaker() as s:
-        process = await s.get(Process, process_id)
-        analysis = AnalysisRun(
-            process_id=process_id, job_id=ctx.job_id, provider=provider_name,
-            static_only=not ai_available,
-            summary={"text": summary, "technical": technical, "ai_available": ai_available,
-                     "ai_reason": ai_reason, "notice": notice},
-            verification=verification.model_dump(mode="json"))
+        process = await s.get(Process, process_id, with_for_update=True)
+        await gate_svc.reconcile(s, process)
+        meta = {**meta, "ir_hash": gate_svc.ir_hash(process.ir)}
+        analysis = AnalysisRun(process_id=process_id, job_id=ctx.job_id, provider=provider_name,
+                               static_only=not meta["ai_available"], summary=meta, verification={})
         s.add(analysis)
         await s.flush()
 
@@ -348,18 +425,23 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, summary
             if row is None:
                 row = Rule(process_id=process_id, rule_key=r.id)
                 s.add(row)
+            concurrent = r.id in snapshot and (row.status, row.text) != snapshot[r.id]
             row.analysis_id = analysis.id
-            row.text = r.text
+            if not concurrent:  # else the SME decided while the job ran: theirs stands
+                row.text = r.text
+                row.status = r.status
             row.original_text = originals.get(r.id, r.text)
             row.citations = [c.model_dump(mode="json") for c in r.citations]
             row.confidence = r.confidence
-            row.status = r.status
-            row.owner = r.owner
+            row.owner = r.owner if row.owner is None or r.owner else row.owner
             row.memory_refs = list(r.memory_refs)
             row.challenge = r.challenge.model_dump(mode="json") if r.challenge else None
             rows[r.id] = row
         for gone in old_rules.values():
             if gone.status in gate_svc.RULE_DECIDED:
+                if keep_decided:
+                    rows[gone.rule_key] = gone
+                    continue
                 gate_svc.audit(s, process, gate_svc.SYSTEM, "rule removed by re-analysis",
                                actor_kind=gate_svc.SYSTEM,
                                detail={"rule_key": gone.rule_key, "text": gone.text, "status": gone.status,
@@ -368,13 +450,15 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, summary
         await s.flush()
 
         await s.execute(delete(Challenge).where(Challenge.process_id == process_id))
-        for r in rules:
-            if r.challenge:
-                s.add(Challenge(process_id=process_id, rule_id=rows[r.id].id, verdict=r.challenge.verdict,
-                                reason=r.challenge.reason, model=r.challenge.model))
+        for row in rows.values():
+            ch = row.challenge
+            if ch:
+                s.add(Challenge(process_id=process_id, rule_id=row.id, verdict=ch["verdict"],
+                                reason=ch.get("reason", ""), model=ch.get("model", "")))
 
         old_findings = {f.finding_key: f for f in await gate_svc.load_findings(s, process_id)}
         old_finding_keys = set(old_findings)
+        kept_findings: set[str] = set()
         for f in findings:
             row = old_findings.pop(f.id, None)
             if row is None:
@@ -386,8 +470,12 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, summary
             row.citations = [c.model_dump(mode="json") for c in f.citations]
             row.source = f.source
             row.business_impact = f.business_impact
+            kept_findings.add(f.id)
         for gone in old_findings.values():
             if gone.decision:
+                if keep_decided:
+                    kept_findings.add(gone.finding_key)
+                    continue
                 gate_svc.audit(s, process, gate_svc.SYSTEM, "finding removed by re-analysis",
                                actor_kind=gate_svc.SYSTEM,
                                detail={"finding_key": gone.finding_key, "decision": gone.decision,
@@ -398,29 +486,43 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, summary
         s.add_all(CoverageItem(process_id=process_id, analysis_id=analysis.id, kind=i.kind, ref=i.ref,
                                covered_by=list(i.covered_by), technical_reason=i.technical_reason)
                   for i in coverage.items)
+        await s.flush()
+        # verification and coverage over what is actually stored (kept rows, concurrent decisions)
+        verification, coverage = await refresh_checks(s, process, analysis,
+                                                      await gate_svc.load_rules(s, process_id))
+        marks = dict(meta.get("key_marks") or {})
+        marks["rule"] = max([int(marks.get("rule", 0)), *(gate_svc.key_number(k) for k in rows)])
+        marks["finding"] = max([int(marks.get("finding", 0)),
+                                *(gate_svc.key_number(k) for k in kept_findings if k.startswith("F"))])
+        analysis.summary = {**meta, "key_marks": marks}
 
         if process.migration_status == "not_started":
             process.migration_status = "analysed"
-        changed = old_rule_keys != set(rows) or old_finding_keys != {f.id for f in findings}
+        changed = old_rule_keys != set(rows) or old_finding_keys != kept_findings
         gate_svc.audit(s, process, gate_svc.SYSTEM, "analysis completed", actor_kind=gate_svc.SYSTEM,
-                       detail={"job_id": ctx.job_id, "provider": provider_name, "rules": len(rules),
-                               "findings": len(findings), "verified": verification.verified,
+                       detail={"job_id": ctx.job_id, "provider": provider_name, "rules": len(rows),
+                               "findings": len(kept_findings), "verified": verification.verified,
                                "citations": verification.total, "covered": coverage.covered,
-                               "coverage_total": coverage.total, "ai_available": ai_available})
+                               "coverage_total": coverage.total, "ai_available": meta["ai_available"],
+                               "full_run": not keep_decided})
         _, new_hash, reset = await gate_svc.apply_spec_hash(
             s, process, reason="analysis re-run", actor=gate_svc.SYSTEM, actor_kind=gate_svc.SYSTEM,
             force=changed)
         analysis.spec_hash = new_hash
         await s.commit()
-        return {"analysis_id": analysis.id, "spec_hash": new_hash, "gates_reset": reset}
+        return {"analysis_id": analysis.id, "spec_hash": new_hash, "gates_reset": reset,
+                "rules": len(rows), "findings": len(kept_findings), "verified": verification.verified,
+                "citations": verification.total, "covered": coverage.covered,
+                "coverage_total": coverage.total}
 
 
 # ------------------------------------------------------------------ checks after a decision
 async def refresh_checks(session: AsyncSession, process: Process, analysis: AnalysisRun | None,
-                         rules: list[Rule]) -> None:
-    """Re-run the citation verifier and the coverage matrix over the stored rules."""
+                         rules: list[Rule]) -> tuple[Any, Any]:
+    """Re-run the citation verifier and the coverage matrix over the stored rules; the
+    verification is stored on ``analysis`` and the coverage rows are updated."""
     if analysis is None:
-        return
+        return None, None
     proc = IRProcess.model_validate(process.ir)
     engine_rules = [EngineRule(id=r.rule_key, text=r.text, confidence=r.confidence, status=r.status,
                                citations=[Citation.model_validate(_cit(c)) for c in r.citations or []])
@@ -445,6 +547,7 @@ async def refresh_checks(session: AsyncSession, process: Process, analysis: Anal
                                      technical_reason=item.technical_reason))
         else:
             row.covered_by = list(item.covered_by)
+    return verification, coverage
 
 
 async def update_rule(session: AsyncSession, knowledge: Knowledge, rule_id: str, status: str | None,
@@ -452,7 +555,8 @@ async def update_rule(session: AsyncSession, knowledge: Knowledge, rule_id: str,
     row = await session.get(Rule, rule_id)
     if row is None:
         raise LookupError("rule not found")
-    process = await session.get(Process, row.process_id)
+    process = await session.get(Process, row.process_id, with_for_update=True)  # not during a persist
+    await session.refresh(row)
     analysis = await gate_svc.latest_analysis(session, process.id)
     await gate_svc.reconcile(session, process)
     memory: tuple[str, dict[str, Any]] | None = None
@@ -502,7 +606,8 @@ async def decide_finding(session: AsyncSession, knowledge: Knowledge, finding_id
     row = await session.get(Finding, finding_id)
     if row is None:
         raise LookupError("finding not found")
-    process = await session.get(Process, row.process_id)
+    process = await session.get(Process, row.process_id, with_for_update=True)
+    await session.refresh(row)
     await gate_svc.reconcile(session, process)
     note = (note or "").strip() or None
     if row.decision == decision and row.note == note:
@@ -560,9 +665,8 @@ def _finding_out(f: Finding) -> dict[str, Any]:
 
 
 async def analysis_view(session: AsyncSession, process: Process) -> dict[str, Any]:
-    """Everything tab 3 shows for one process. Resets stale gates first (and commits)."""
-    if await gate_svc.reconcile(session, process):
-        await session.commit()
+    """Everything tab 3 shows for one process. Read only: never writes (stale gates show
+    ``stale: true`` until the next decision or analysis resets them)."""
     analysis = await gate_svc.latest_analysis(session, process.id)
     rules = await gate_svc.load_rules(session, process.id)
     findings = await gate_svc.load_findings(session, process.id)
@@ -596,4 +700,6 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
         "spec_hash": process.spec_hash,
         "gates": await gate_svc.gates_view(session, process),
         "blockers": gate_svc.unknown_activity_blockers(process.ir),
+        "ir_changed": bool(analysis and (summary.get("ir_hash") or gate_svc.ir_hash(process.ir))
+                           != gate_svc.ir_hash(process.ir)),
     }

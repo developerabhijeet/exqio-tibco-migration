@@ -5,6 +5,11 @@ hard-coded line numbers, so the citations quote real IR text and pass the citati
 The synthetic estate's DealerFundingRequest and CreditApplicationIntake get business wording;
 any other process gets generic, still verifiable, rules.
 
+The fake analyst proposes rules from conditional transitions and SQL statements only, and marks
+every coverage item those rules do not cite as technical ("plumbing step"), so coverage is
+always complete with the fake. That is a property of the fake, not of the analysis: a real model
+decides what is technical, and the coverage code checks it.
+
 Dispatch is on the request tags the engine agents set: ``stage`` ``analyse`` (Workflow
 Analyst), ``risk`` (Risk Reviewer), ``challenge`` (Independent Challenger), ``name`` (domain
 namer), ``design`` (Solution Designer), ``build`` (Code Builder), ``review`` (review panel),

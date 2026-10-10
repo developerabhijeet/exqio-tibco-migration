@@ -16,9 +16,7 @@ async def list_gates(process_id: str, session: SessionDep) -> list[dict]:
     proc = await session.get(Process, process_id)
     if proc is None:
         raise HTTPException(status_code=404, detail="process not found")
-    if await svc.reconcile(session, proc):
-        await session.commit()
-    return await svc.gates_view(session, proc)
+    return await svc.gates_view(session, proc)  # read only: stale gates show stale: true
 
 
 @router.post("/gates/{process_id}/{gate}", response_model=GateOut)

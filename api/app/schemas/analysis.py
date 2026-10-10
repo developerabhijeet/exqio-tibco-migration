@@ -119,6 +119,7 @@ class CoverageOut(BaseModel):
 class GateOut(BaseModel):
     gate: GateName
     state: Literal["pending", "approved", "rejected", "needs_review"]
+    stale: bool  # decided, but the spec hash moved since (reset on the next action, never by a GET)
     enabled: bool
     reason: str | None  # why it is not enabled
     spec_hash: str | None
@@ -150,6 +151,7 @@ class AnalysisOut(BaseModel):
     spec_hash: str
     gates: list[GateOut]
     blockers: list[str]  # e.g. "unknown activity types: ..."
+    ir_changed: bool  # the IR changed since the latest analysis ran: re-run analysis
 
 
 class RulePatch(BaseModel):

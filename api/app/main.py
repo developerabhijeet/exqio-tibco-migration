@@ -53,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.scan_lock = asyncio.Lock()
         app.state.analyse_lock = asyncio.Lock()
         app.state.knowledge = Knowledge(psycopg_url(settings.database_url))
+        app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
         app.state.scenario_lock = asyncio.Lock()  # one scenario-database user at a time (reseeds)
         app.state.services = {}  # build id -> running generated service (verify.RunInfo)
         app.state.fernet, app.state.fernet_generated = make_fernet(settings)
@@ -67,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            if app.state.background:
+                await asyncio.gather(*app.state.background, return_exceptions=True)
             for info in list(app.state.services.values()):
                 try:
                     await asyncio.to_thread(info.handle.stop)

@@ -18,14 +18,13 @@ import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-import psycopg
-
-from engine.agents.provider import mask_sensitive
+from engine.agents.jsonout import JsonOutputError
+from engine.agents.provider import ProviderError, mask_sensitive
 from engine.domains.models import Graph
 from engine.knowledge.ask import Answer
 from engine.knowledge.ask import ask as engine_ask
 from engine.knowledge.memory import MigrationMemory
-from engine.knowledge.store import KnowledgeError, KnowledgeStore
+from engine.knowledge.store import KnowledgeStore
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -83,6 +82,10 @@ class Knowledge:
         return await self.run(lambda s: MigrationMemory(s).record(
             project_id, "decision", masked_text, masked_ctx, MEMORY_SOURCE, user))
 
+    async def seed_patterns(self, project_id: str) -> int:
+        """Load the R Systems seed patterns (``source: rsi-seed``) into a project. Idempotent."""
+        return len(await self.run(lambda s: MigrationMemory(s).seed_rsi_patterns(project_id)))
+
     async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[Any]:
         return await self.run(lambda s: MigrationMemory(s).retrieve(project_id, query, k=k))
 
@@ -109,7 +112,9 @@ class Knowledge:
         store = KnowledgeStore(self.dsn)
         try:
             return await engine_ask(store, MigrationMemory(store), project_id, question, provider)
-        except (psycopg.Error, KnowledgeError) as exc:
+        except (ProviderError, JsonOutputError):
+            raise  # the caller retries without a model
+        except Exception as exc:  # any store-side failure is "knowledge base unavailable" (503)
             raise KnowledgeUnavailable(f"{type(exc).__name__}: {exc}") from exc
         finally:
             await asyncio.to_thread(store.close)

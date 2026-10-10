@@ -10,8 +10,14 @@ Resets:
 * a finding decision moves the decisions part: G2 to G6 reset, and a decided G1 is rebound to
   the new hash (G1 covers the rules only), with an audit line ``gate rebound``;
 * an analysis re-run resets G1 to G6 when the hash or the set of rules or findings changed;
-* anything else that moved the hash (a rescan that changed the IR) is caught on the next read
-  by :func:`reconcile`: every decided gate whose recorded hash differs is reset.
+* anything else that moved the hash (a rescan that changed the IR) is caught by
+  :func:`reconcile` on the next action (a rule or finding decision, an analysis, a gate
+  decision): every decided gate whose recorded hash differs is reset. Reads never write: until
+  then the gate shows ``stale: true`` and a stale approval does not enable the next gate.
+
+G1 also needs the latest analysis to have seen the current IR (``ir_hash`` stored on the run);
+after a rescan that changed the IR the reason is "IR changed since analysis: re-run analysis".
+A gate may always be rejected by its owner, enabled or not; the note is recorded as the reason.
 
 Every reset writes an audit line ``gate reset`` with the gate, the reason and both hashes.
 Gate decisions refuse agents (``require_user`` in the router) and are refused with 409 and the
@@ -21,6 +27,7 @@ design hash, build hash and evidence hash (parity report or plan) it binds to.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from itertools import pairwise
 from typing import Any
@@ -31,13 +38,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.app.db import utcnow
 from api.app.models import AnalysisRun, AuditLog, CoverageItem, Finding, Gate, Process, Rule
 from api.app.services import evidence as evidence_svc
-from engine.ir.spec_hash import spec_hash
+from engine.ir.spec_hash import canonical_json, spec_hash
 
 GATES: tuple[str, ...] = ("G1", "G2", "G3", "G4", "G5", "G6")
 RULE_DECIDED = frozenset({"approved", "edited", "rejected"})
 RULE_APPROVED = frozenset({"approved", "edited"})
 SYSTEM = "system"
 STALE_REASON = "spec hash changed since the gate was decided"
+IR_CHANGED = "IR changed since analysis: re-run analysis"
 
 
 class GateBlocked(Exception):
@@ -71,6 +79,23 @@ async def load_findings(session: AsyncSession, process_id: str) -> list[Finding]
 async def latest_analysis(session: AsyncSession, process_id: str) -> AnalysisRun | None:
     return await session.scalar(select(AnalysisRun).where(AnalysisRun.process_id == process_id)
                                 .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id).limit(1))
+
+
+def ir_hash(ir: dict[str, Any]) -> str:
+    """SHA-256 of the canonical IR JSON (stored on each analysis run as ``summary.ir_hash``)."""
+    return hashlib.sha256(canonical_json(ir).encode("utf-8")).hexdigest()
+
+
+def is_stale(row: Gate | None, process: Process) -> bool:
+    return row is not None and row.state != "pending" and row.spec_hash != process.spec_hash
+
+
+def _not_approved(prev: str, row: Gate | None, process: Process) -> list[str]:
+    if row is None or row.state != "approved":
+        return [f"{prev} not approved"]
+    if is_stale(row, process):
+        return [f"{prev} approval is stale: the spec hash changed since it was decided"]
+    return []
 
 
 def hash_rules(rules: list[Rule]) -> list[dict[str, Any]]:
@@ -176,6 +201,9 @@ async def gate_reasons(session: AsyncSession, process: Process) -> dict[str, lis
         g2.append("analysis has not run")
     g1 += unknown_activity_blockers(process.ir)
     if analysis is not None:
+        seen = (analysis.summary or {}).get("ir_hash")
+        if seen and seen != ir_hash(process.ir):
+            g1.append(IR_CHANGED)
         rules = await load_rules(session, process.id)
         undecided = [r.rule_key for r in rules if r.status not in RULE_DECIDED]
         if undecided:
@@ -198,22 +226,20 @@ async def gate_reasons(session: AsyncSession, process: Process) -> dict[str, lis
         if open_findings:
             g2.append(f"{len(open_findings)} finding(s) undecided: {', '.join(open_findings)}")
     out["G1"] = g1
-    if (g := rows.get("G1")) is None or g.state != "approved":
-        g2.append("G1 not approved")
+    g2 += _not_approved("G1", rows.get("G1"), process)
     out["G2"] = g2
     evidence = await evidence_svc.evidence_reasons(session, process, rows)
     for prev, name in pairwise(GATES[1:]):
         row = rows.get(prev)
-        out[name] = list(evidence.get(name, []))
-        if row is None or row.state != "approved":
-            out[name].append(f"{prev} not approved")
+        out[name] = list(evidence.get(name, [])) + _not_approved(prev, row, process)
     return out
 
 
-def gate_out(name: str, row: Gate | None, reasons: list[str]) -> dict[str, Any]:
+def gate_out(name: str, row: Gate | None, reasons: list[str], process: Process) -> dict[str, Any]:
     return {
         "gate": name,
         "state": row.state if row else "pending",
+        "stale": is_stale(row, process),
         "enabled": not reasons,
         "reason": "; ".join(reasons) or None,
         "spec_hash": row.spec_hash if row else None,
@@ -228,18 +254,21 @@ def gate_out(name: str, row: Gate | None, reasons: list[str]) -> dict[str, Any]:
 
 
 async def gates_view(session: AsyncSession, process: Process) -> list[dict[str, Any]]:
+    """Read only: a gate whose spec hash moved shows ``stale: true`` until the next action."""
     rows = await gate_rows(session, process.id)
     reasons = await gate_reasons(session, process)
-    return [gate_out(name, rows.get(name), reasons[name]) for name in GATES]
+    return [gate_out(name, rows.get(name), reasons[name], process) for name in GATES]
 
 
 async def decide(session: AsyncSession, process: Process, gate: str, state: str, note: str | None,
                  user: str) -> dict[str, Any]:
-    """Approve or reject one gate; 409 (``GateBlocked``) when it is not enabled."""
+    """Approve or reject one gate. Approval needs the gate enabled (else ``GateBlocked``, 409);
+    the owner may always reject, and the note is recorded as the reason."""
     await reconcile(session, process)
-    reasons = (await gate_reasons(session, process))[gate]
-    if reasons:
-        raise GateBlocked(f"{gate} is not enabled: {'; '.join(reasons)}")
+    if state == "approved":
+        reasons = (await gate_reasons(session, process))[gate]
+        if reasons:
+            raise GateBlocked(f"{gate} is not enabled: {'; '.join(reasons)}")
     rows = await gate_rows(session, process.id)
     row = rows.get(gate)
     if row is None:
@@ -259,6 +288,7 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
     row.reset_reason = None
     audit(session, process, user, f"gate {state}", gate=gate,
           detail={"spec_hash": process.spec_hash, "note": note, "previous_state": previous,
+                  **({"reason": note or "rejected by the gate owner"} if state == "rejected" else {}),
                   **{k: v for k, v in hashes.items() if v}})
     if state == "rejected" and gate != GATES[-1]:
         await reset_gates(session, process, rows, GATES[GATES.index(gate) + 1], f"{gate} rejected",
@@ -269,4 +299,4 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
         elif process.migration_status == "validated":
             process.migration_status = "analysed"
     await session.flush()
-    return gate_out(gate, row, [])
+    return gate_out(gate, row, (await gate_reasons(session, process))[gate], process)
