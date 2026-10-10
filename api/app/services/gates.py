@@ -15,8 +15,9 @@ Resets:
 
 Every reset writes an audit line ``gate reset`` with the gate, the reason and both hashes.
 Gate decisions refuse agents (``require_user`` in the router) and are refused with 409 and the
-reason when a gate is not enabled. G3 to G6 are enabled when the previous gate is approved;
-Task 19 adds their own evidence checks.
+reason when a gate is not enabled. G3 to G6 are enabled when the previous gate is approved and
+their evidence exists (:mod:`api.app.services.evidence`); a decision on them also records the
+design hash, build hash and evidence hash (parity report or plan) it binds to.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.db import utcnow
 from api.app.models import AnalysisRun, AuditLog, CoverageItem, Finding, Gate, Process, Rule
+from api.app.services import evidence as evidence_svc
 from engine.ir.spec_hash import spec_hash
 
 GATES: tuple[str, ...] = ("G1", "G2", "G3", "G4", "G5", "G6")
@@ -199,9 +201,12 @@ async def gate_reasons(session: AsyncSession, process: Process) -> dict[str, lis
     if (g := rows.get("G1")) is None or g.state != "approved":
         g2.append("G1 not approved")
     out["G2"] = g2
+    evidence = await evidence_svc.evidence_reasons(session, process, rows)
     for prev, name in pairwise(GATES[1:]):
         row = rows.get(prev)
-        out[name] = [] if row is not None and row.state == "approved" else [f"{prev} not approved"]
+        out[name] = list(evidence.get(name, []))
+        if row is None or row.state != "approved":
+            out[name].append(f"{prev} not approved")
     return out
 
 
@@ -242,14 +247,19 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
         session.add(row)
         rows[gate] = row
     previous = row.state
+    hashes = await evidence_svc.decision_hashes(session, process, gate)
     row.state = state
     row.spec_hash = process.spec_hash
+    row.design_hash = hashes["design_hash"]
+    row.build_hash = hashes["build_hash"]
+    row.evidence_hash = hashes["evidence_hash"]
     row.decided_by = user
     row.decided_at = utcnow()
     row.note = note
     row.reset_reason = None
     audit(session, process, user, f"gate {state}", gate=gate,
-          detail={"spec_hash": process.spec_hash, "note": note, "previous_state": previous})
+          detail={"spec_hash": process.spec_hash, "note": note, "previous_state": previous,
+                  **{k: v for k, v in hashes.items() if v}})
     if state == "rejected" and gate != GATES[-1]:
         await reset_gates(session, process, rows, GATES[GATES.index(gate) + 1], f"{gate} rejected",
                           user, "user", {"spec_hash": process.spec_hash})

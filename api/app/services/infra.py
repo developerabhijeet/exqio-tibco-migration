@@ -1,0 +1,228 @@
+"""Tab 7, Deploy: generated infrastructure, the Azure connection and the Terragrunt plan.
+
+Azure credentials (a service principal) are stored encrypted with Fernet. The key comes from
+``APP_SECRET``: a Fernet key is used as is, any other text is stretched with SHA-256. When
+``APP_SECRET`` is unset (local development) a key is generated at startup with a warning; secrets
+stored with it cannot be read after a restart.
+
+``POST /builds/{id}/plan`` runs ``terragrunt run --all -- plan`` over ``infra/live/<env>`` (Terragrunt
+1.x syntax) when Azure is connected and ``terragrunt`` and ``az`` are present, and parses the adds,
+changes and destroys per unit. Otherwise it records and returns the connect-later state with the
+last validation. G6 is enabled by a plan, or by connect-later acknowledged by an operations user
+with a note.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import logging
+import os
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.app.config import Settings
+from api.app.jobs.runner import JobContext
+from api.app.models import AzureConnection, Build, InfraAsset, Plan, Process
+from api.app.services import evidence
+from api.app.services import gates as gate_svc
+
+log = logging.getLogger(__name__)
+
+PLAN_ENV = "dev"
+PLAN_TIMEOUT_S = 1800
+OUTPUT_LIMIT = 200_000
+RESET_REASON = "new plan"
+SECRET_FIELDS = ("client_secret",)
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_PLAN = re.compile(r"Plan:\s+(\d+)\s+to add,\s+(\d+)\s+to change,\s+(\d+)\s+to destroy")
+_NO_CHANGES = re.compile(r"No changes\.")
+_UNIT = re.compile(r"\[([^\]]+)\]")
+
+
+# ------------------------------------------------------------------ secrets
+def fernet_key(app_secret: str) -> bytes:
+    """``APP_SECRET`` as a Fernet key: used as is when it is one, else derived with SHA-256."""
+    raw = app_secret.strip().encode("utf-8")
+    try:
+        if len(base64.urlsafe_b64decode(raw)) == 32:
+            return raw
+    except (ValueError, TypeError):
+        pass
+    return base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+
+
+def make_fernet(settings: Settings) -> tuple[Fernet, bool]:
+    """``(Fernet, generated)``; ``generated`` when ``APP_SECRET`` is unset and a key was made up."""
+    if settings.app_secret:
+        return Fernet(fernet_key(settings.app_secret)), False
+    log.warning("APP_SECRET is not set: generated a Fernet key for this run; Azure credentials stored now "
+                "cannot be decrypted after a restart. Set APP_SECRET outside local development.")
+    return Fernet(Fernet.generate_key()), True
+
+
+def connection_out(conn: AzureConnection | None, generated_key: bool) -> dict[str, Any]:
+    if conn is None:
+        return {"connected": False}
+    return {"connected": True, "project_id": conn.project_id, "tenant": conn.tenant,
+            "subscription": conn.subscription, "settings": conn.settings or {},
+            "secret_stored": bool(conn.secret_enc),
+            "warning": ("APP_SECRET is not set: the stored secret cannot be read after an API restart"
+                        if generated_key else None),
+            "updated_at": conn.updated_at.isoformat() if conn.updated_at else None}
+
+
+async def save_connection(session: AsyncSession, fernet: Fernet, project_id: str,
+                          body: dict[str, Any]) -> AzureConnection:
+    conn = await session.scalar(select(AzureConnection).where(AzureConnection.project_id == project_id))
+    if conn is None:
+        conn = AzureConnection(project_id=project_id, tenant=body["tenant"], subscription=body["subscription"])
+        session.add(conn)
+    conn.tenant = body["tenant"]
+    conn.subscription = body["subscription"]
+    conn.settings = {k: v for k, v in body.items()
+                     if k not in ("tenant", "subscription", *SECRET_FIELDS) and v not in (None, "")}
+    secret = body.get("client_secret")
+    if secret:
+        conn.secret_enc = fernet.encrypt(str(secret).encode("utf-8")).decode("ascii")
+    await session.flush()
+    return conn
+
+
+def decrypt_secret(fernet: Fernet, conn: AzureConnection) -> str | None:
+    if not conn.secret_enc:
+        return None
+    try:
+        return fernet.decrypt(conn.secret_enc.encode("ascii")).decode("utf-8")
+    except InvalidToken:
+        return None
+
+
+# ------------------------------------------------------------------ views
+async def infra_view(session: AsyncSession, build: Build) -> dict[str, Any]:
+    assets = (await session.execute(select(InfraAsset).where(InfraAsset.build_id == build.id)
+                                    .order_by(InfraAsset.path))).scalars().all()
+    from api.app.services.build import file_tree
+
+    files = [{"path": a.path, "kind": a.kind, "sha256": a.sha256, "validation": a.validation} for a in assets]
+    return {"build_id": build.id, "runtime": build.runtime, "files": files,
+            "tree": file_tree([{"path": f["path"], "origin": "infra"} for f in files]),
+            "validation": build.infra_validation}
+
+
+def plan_out(plan: Plan | None) -> dict[str, Any] | None:
+    if plan is None:
+        return None
+    return {"id": plan.id, "build_id": plan.build_id, "job_id": plan.job_id, "connected": plan.connected,
+            "status": plan.status, "plan_hash": plan.plan_hash, "summary": plan.summary, "output": plan.output,
+            "last_validation": plan.validation, "note": plan.note, "decided_by": plan.decided_by,
+            "apply": {"enabled": False, "reason": "apply is not in this build: review the plan and apply "
+                                                  "through the generated pipeline"},
+            "created_at": plan.created_at.isoformat() if plan.created_at else None}
+
+
+def plan_ready(conn: AzureConnection | None, tools: dict[str, Any]) -> tuple[bool, str | None]:
+    if conn is None:
+        return False, "Azure is not connected (connect later is a supported state)"
+    missing = [t for t in ("terragrunt", "terraform", "az") if not (tools.get(t) or {}).get("present")]
+    if missing:
+        return False, f"missing tool(s) on the API host: {', '.join(missing)}"
+    return True, None
+
+
+async def record_connect_later(session: AsyncSession, build: Build, reason: str) -> Plan:
+    plan = Plan(build_id=build.id, connected=False, status="connect_later",
+                validation=build.infra_validation or {}, note=reason,
+                plan_hash=evidence.canonical_hash({"connect_later": build.build_hash}))
+    session.add(plan)
+    await session.flush()
+    return plan
+
+
+async def acknowledge(session: AsyncSession, build: Build, process: Process, user: str, note: str) -> Plan:
+    plan = Plan(build_id=build.id, connected=False, status="acknowledged", note=note, decided_by=user,
+                validation=build.infra_validation or {},
+                plan_hash=evidence.canonical_hash({"acknowledged": build.build_hash, "by": user, "note": note}))
+    session.add(plan)
+    await session.flush()
+    rows = await gate_svc.gate_rows(session, process.id)
+    await gate_svc.reset_gates(session, process, rows, "G6", "connect-later acknowledged", gate_svc.SYSTEM,
+                               gate_svc.SYSTEM, {"build_id": build.id})
+    gate_svc.audit(session, process, user, "connect-later acknowledged",
+                   detail={"build_id": build.id, "note": note, "plan_id": plan.id})
+    return plan
+
+
+# ------------------------------------------------------------------ plan job
+def parse_plan(output: str) -> dict[str, Any]:
+    """Adds, changes and destroys per unit from ``terragrunt run --all -- plan`` output."""
+    units: dict[str, dict[str, int]] = {}
+    for raw in output.splitlines():
+        line = _ANSI.sub("", raw)
+        m = _PLAN.search(line)
+        no_change = _NO_CHANGES.search(line)
+        if not m and not no_change:
+            continue
+        um = _UNIT.search(line)
+        unit = um.group(1) if um else "."
+        counts = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+        units[unit] = {"add": counts[0], "change": counts[1], "destroy": counts[2]}
+    rows = [{"unit": u, **c} for u, c in sorted(units.items())]
+    return {"units": rows, "add": sum(r["add"] for r in rows), "change": sum(r["change"] for r in rows),
+            "destroy": sum(r["destroy"] for r in rows)}
+
+
+def plan_job(build_id: str, plan_id: str, env: dict[str, str], terragrunt: str):
+    async def run(ctx: JobContext) -> dict[str, Any]:
+        import asyncio
+
+        async with ctx.sessionmaker() as s:
+            build = await s.get(Build, build_id)
+            root = Path(build.output_dir or ".") / "infra" / "live" / PLAN_ENV
+        await ctx.stage("plan")
+        await ctx.log(f"terragrunt run --all --non-interactive -- plan in {root}")
+        argv = [terragrunt, "run", "--all", "--non-interactive", "--", "plan", "-no-color", "-input=false"]
+
+        def go() -> tuple[int, str]:
+            try:
+                proc = subprocess.run(argv, cwd=root, env={**os.environ, **env, "TF_INPUT": "0"},
+                                      capture_output=True, text=True, timeout=PLAN_TIMEOUT_S, check=False)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return 1, str(exc)
+            return proc.returncode, _ANSI.sub("", (proc.stdout or "") + (proc.stderr or ""))
+
+        code, output = await asyncio.to_thread(go)
+        summary = parse_plan(output)
+        await ctx.log(f"plan {'succeeded' if code == 0 else 'failed'}: {summary['add']} to add, "
+                      f"{summary['change']} to change, {summary['destroy']} to destroy over "
+                      f"{len(summary['units'])} unit(s)")
+        async with ctx.sessionmaker() as s:
+            plan = await s.get(Plan, plan_id)
+            build = await s.get(Build, build_id)
+            plan.status = "planned" if code == 0 else "failed"
+            plan.output = output[-OUTPUT_LIMIT:]
+            plan.summary = summary
+            plan.plan_hash = evidence.canonical_hash({"output": output, "build": build.build_hash})
+            process = await s.get(Process, build.process_id)
+            rows = await gate_svc.gate_rows(s, process.id)
+            await gate_svc.reset_gates(s, process, rows, "G6", RESET_REASON, gate_svc.SYSTEM, gate_svc.SYSTEM,
+                                       {"build_id": build_id})
+            await s.commit()
+        return {"plan_id": plan_id, "status": "planned" if code == 0 else "failed", **summary}
+
+    return run
+
+
+def plan_env(conn: AzureConnection, secret: str | None) -> dict[str, str]:
+    env = {"ARM_TENANT_ID": conn.tenant, "ARM_SUBSCRIPTION_ID": conn.subscription}
+    client_id = (conn.settings or {}).get("client_id")
+    if client_id:
+        env["ARM_CLIENT_ID"] = str(client_id)
+    if secret:
+        env["ARM_CLIENT_SECRET"] = secret
+    return env

@@ -28,6 +28,9 @@ class Build(IdMixin, CreatedMixin, Base):
     reviews: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     run_port: Mapped[int | None]
     run_pid: Mapped[int | None]
+    infra_validation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # engine InfraValidation
+    builder: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # {filled: [path], rejections: [...]}
+    error: Mapped[str | None] = mapped_column(Text)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -37,7 +40,8 @@ class BuildFile(IdMixin, Base):
 
     build_id: Mapped[str] = mapped_column(fk("builds.id"), index=True)
     path: Mapped[str]
-    origin: Mapped[str]  # code|ai|test|infra
+    origin: Mapped[str]  # code|agent|ai|infra (agent: a body left for a model; ai: filled by one)
+    process_id: Mapped[str | None]  # IR process id of a per-process file; None for shared files
     tibco_ref: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     sha256: Mapped[str]
     size: Mapped[int] = mapped_column(BigInteger, default=0)
@@ -48,9 +52,13 @@ class TestResult(IdMixin, Base):
     __test__ = False  # not a pytest class
 
     build_id: Mapped[str] = mapped_column(fk("builds.id"), index=True)
-    name: Mapped[str]
+    name: Mapped[str]  # <namespace>.<class>.<method>, as TRX reports it
+    display_name: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str | None]  # rule|branch|scenario|other
     rule_key: Mapped[str | None]
-    outcome: Mapped[str]  # passed|failed|skipped
+    ref: Mapped[str | None]  # branch transition id or scenario id
+    file: Mapped[str | None]
+    outcome: Mapped[str]  # passed|failed|skipped|not_run
     duration_ms: Mapped[float | None]
     message: Mapped[str | None] = mapped_column(Text)
     has_body: Mapped[bool] = mapped_column(default=True)

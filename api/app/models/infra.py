@@ -42,7 +42,10 @@ class Plan(IdMixin, CreatedMixin, Base):
     build_id: Mapped[str] = mapped_column(fk("builds.id"), index=True)
     job_id: Mapped[str | None]
     connected: Mapped[bool] = mapped_column(default=False)
-    status: Mapped[str]  # validated|planned|failed
+    status: Mapped[str]  # connect_later|acknowledged|running|planned|failed
     plan_hash: Mapped[str | None]
     output: Mapped[str | None] = mapped_column(Text)
     validation: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # {units: [{unit, add, change, destroy}], ...}
+    note: Mapped[str | None] = mapped_column(Text)
+    decided_by: Mapped[str | None]  # the operations user who acknowledged connect-later

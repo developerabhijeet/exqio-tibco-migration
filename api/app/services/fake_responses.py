@@ -7,7 +7,13 @@ any other process gets generic, still verifiable, rules.
 
 Dispatch is on the request tags the engine agents set: ``stage`` ``analyse`` (Workflow
 Analyst), ``risk`` (Risk Reviewer), ``challenge`` (Independent Challenger), ``name`` (domain
-namer), and ``feature`` ``ask`` (Ask).
+namer), ``design`` (Solution Designer), ``build`` (Code Builder), ``review`` (review panel),
+``repair`` (repair loop), and ``feature`` ``ask`` (Ask).
+
+The build-side replies are deliberately inert: the fake designer writes a short narrative with one
+decision and one open question, the fake builder returns no file (so placeholders stay and the
+code checks reject the reply, which is logged), the reviewers find nothing and the repair loop
+gets an empty diff (rejected). A fake model never makes a build look better than code made it.
 """
 from __future__ import annotations
 
@@ -203,6 +209,26 @@ def ask_reply(user: str) -> dict:
     return {"answer": answer, "citation_ids": [hid for hid, _, _ in top]}
 
 
+def designer_reply(process: Process | None) -> dict:
+    name = process.name if process is not None else "the process"
+    return {
+        "narrative": (f"{name} becomes one ASP.NET Core service. Each TIBCO step is a method named in "
+                      "the mapping table; SQL is carried verbatim into Dapper repositories, so the parity "
+                      "evaluator can compare the two implementations field by field."),
+        "decisions": [{
+            "title": "Data access",
+            "choice": "Dapper repositories with the TIBCO SQL kept verbatim",
+            "alternatives": ["Entity Framework Core with generated queries"],
+            "reason": "Verbatim SQL keeps behaviour identical and reviewable against the TIBCO source.",
+        }],
+        "open_questions": [{
+            "question": "Should the migrated service keep the TIBCO fault names in its error responses?",
+            "recommendation": "Recommendation, not a decision: keep them for one release so callers can "
+                              "switch over safely.",
+        }],
+    }
+
+
 def reply_for(req: LLMRequest, process: Process | None) -> str:
     user = "".join(str(m.get("content", "")) for m in req.messages if m.get("role") == "user")
     stage = req.tags.get("stage")
@@ -216,6 +242,14 @@ def reply_for(req: LLMRequest, process: Process | None) -> str:
         data = challenger_reply(user)
     elif stage == "name":
         data = namer_reply(user)
+    elif stage == "design":
+        data = designer_reply(process)
+    elif stage == "build":
+        data = {"files": []}
+    elif stage == "review":
+        data = {"findings": []}
+    elif stage == "repair":
+        data = {"diff": ""}
     else:
         data = {}
     return json.dumps(data)

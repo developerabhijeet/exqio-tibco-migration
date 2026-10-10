@@ -370,14 +370,22 @@ async def test_gate_endpoint_accepts_g3_with_g2_approved(client):
     await _decide_findings(client, await _decide_rules(client, await _analyse(client, proc_id)))
     r = await client.post(f"/gates/{proc_id}/G3", json={"state": "approved", "note": ""}, headers=SME)
     assert r.status_code == 409 and "G2 not approved" in r.json()["detail"]
-    for gate in ("G1", "G2", "G3"):
+    for gate in ("G1", "G2"):
         r = await client.post(f"/gates/{proc_id}/{gate}", json={"state": "approved", "note": ""},
                               headers=SME)
         assert r.status_code == 200, (gate, r.text)
+    # G3 also needs its evidence (Task 19): a design record bound to the current spec hash
+    r = await client.post(f"/gates/{proc_id}/G3", json={"state": "approved", "note": ""}, headers=SME)
+    assert r.status_code == 409 and "design record has not been generated" in r.json()["detail"]
+    job = await _wait_job(client, (await client.post(f"/processes/{proc_id}/design")).json()["job_id"])
+    assert job["status"] == "done", job
+    r = await client.post(f"/gates/{proc_id}/G3", json={"state": "approved", "note": ""}, headers=SME)
+    assert r.status_code == 200, r.text
     assert r.json()["gate"] == "G3" and r.json()["state"] == "approved"
     gates = (await client.get(f"/processes/{proc_id}/gates")).json()
     assert [g["gate"] for g in gates] == ["G1", "G2", "G3", "G4", "G5", "G6"]
-    assert _gate({"gates": gates}, "G4")["enabled"] is True
+    g4 = _gate({"gates": gates}, "G4")
+    assert g4["enabled"] is False and g4["reason"] == "no build has finished"
     assert (await client.post(f"/gates/{proc_id}/G7", json={"state": "approved", "note": ""},
                               headers=SME)).status_code == 404
     # rejecting G1 now reopens everything downstream

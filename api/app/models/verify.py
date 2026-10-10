@@ -40,9 +40,10 @@ class FieldDiff(IdMixin, Base):
     __tablename__ = "field_diffs"
 
     run_id: Mapped[str] = mapped_column(fk("scenario_runs.id"), index=True)
+    kind: Mapped[str] = mapped_column(default="field", server_default="field")  # field|side_effect
     field: Mapped[str]
     expected: Mapped[Any] = mapped_column(JSONB, nullable=True)
     actual: Mapped[Any] = mapped_column(JSONB, nullable=True)
-    classification: Mapped[str]  # match|intended|defect|unexplained
+    classification: Mapped[str]  # match|intended|defect|noise
     finding_key: Mapped[str | None]
     note: Mapped[str | None] = mapped_column(Text)

@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # Storage and secrets
     data_dir: Path = Path("./data")
     app_secret: str = ""  # Fernet key for stored Azure credentials
+    # Parity scenario database. Unset: one database per project, ``exiqo_scn_<project>_test`` on the
+    # DATABASE_URL server (created when missing). Set: every project uses this one (its name must
+    # end with ``_test``: its ``gmf`` schema is dropped and reseeded).
+    scenario_database_url: str = ""
+
+    # Routing: inclusive complexity-score bands per tier (Settings screen); unset uses the defaults
+    # strong 8 to 10, standard 4 to 7, efficient 0 to 3.
+    routing_bands: dict[str, tuple[int, int]] | None = None
 
     # Observability
     langfuse_enabled: bool = False
@@ -63,6 +71,10 @@ class Settings(BaseSettings):
                 return json.loads(text)
             return [part.strip() for part in text.split(",") if part.strip()]
         return value
+
+    @property
+    def builds_dir(self) -> Path:
+        return self.data_dir.resolve() / "builds"
 
     @property
     def cors_origin_list(self) -> list[str]:
