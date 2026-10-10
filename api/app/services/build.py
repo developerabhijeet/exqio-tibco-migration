@@ -8,11 +8,16 @@ Order, each stage logged ``code`` or ``ai``:
    ``DATA_DIR/builds/<build id>/``;
 3. tests: written by the generator before any body (one per approved rule, branch and scenario);
    the static inventory says which have a body;
+3b. test engineer (ai): writes the rule and branch test bodies the generator left as
+   ``Assert.Fail("no test body ...")``; plain code checks each body (``check_test_body``); the
+   inventory is recomputed after this stage and again after the repair loop, so ``has_body``
+   reflects the final files;
 4. builder (ai): the Code Builder fills the bodies code left (skipped, with a log line, without a
    model);
 5. review (ai): equivalence, security and standards reviewers over the agent-written code;
-6. restore, build, format, test: ``dotnet``; a step that cannot run is recorded as failed with the
-   reason (``dotnet`` absent, NuGet unreachable), never hidden;
+6. restore, build, format, test: ``dotnet``; restore always runs, bounded to
+   ``RESTORE_TIMEOUT_S``; a failure is annotated with the NuGet probe; a step that cannot run is
+   recorded as failed with the reason (``dotnet`` absent, restore failed), never hidden;
 7. repair (ai): only when restore and build succeeded and tests fail;
 8. infra: Terraform and Terragrunt assets, Dockerfile and pipelines, then their validation;
 9. metrics: the fixed formulas of spec 2.5;
@@ -47,6 +52,7 @@ from engine.agents.builder import BuildRejection, fill_method_bodies
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
 from engine.agents.reviewers import review_panel
+from engine.agents.test_engineer import fill_test_bodies
 from engine.dotnet_gen import runner as dotnet_runner
 from engine.dotnet_gen.generator import (
     GeneratedSolution,
@@ -64,13 +70,14 @@ from engine.infra_gen.generator import generate_infra
 from engine.infra_gen.validators import validate_infra
 from engine.parity.models import Scenario as EngineScenario
 
-STAGES = ["design check", "generate", "tests", "builder", "review", "restore", "build", "format", "test",
+STAGES = ["design check", "generate", "tests", "test engineer", "builder", "review", "restore", "build", "format", "test",
           "repair", "infra", "infra validate", "metrics", "persist"]
 RUNTIMES = ("container_app", "aks")
 LOG_LIMIT = 20000
 RESET_REASON = "new build"
 NO_DOTNET = ("dotnet not found on PATH or in .tools: install the .NET 10 SDK (Settings shows the "
              "toolchains)")
+RESTORE_TIMEOUT_S = 120
 NUGET_DOWN = ("NuGet unreachable: api.nuget.org did not answer and there is no offline cache at "
               ".tools/nuget-cache, so `dotnet restore` of the Api, Infrastructure and Tests projects cannot "
               "succeed here. Run `make nuget-cache` on a machine with NuGet access and copy .tools/nuget-cache "
@@ -86,6 +93,11 @@ class BuildRefused(Exception):
 def find_dotnet() -> str | None:
     """The ``dotnet`` binary the build uses (``scripts/toolchain.detect()``); tests monkeypatch it."""
     return dotnet_runner.find_dotnet()
+
+
+def run_restore(root: Path, dotnet: str) -> StepResult:
+    """``dotnet restore`` of the solution, bounded to ``RESTORE_TIMEOUT_S`` (tests monkeypatch it)."""
+    return DotnetRunner(root, dotnet=dotnet, timeout_s=RESTORE_TIMEOUT_S).restore()
 
 
 def nuget_available() -> bool:
@@ -153,6 +165,14 @@ def build_job(build_id: str, settings: Settings, knowledge: Knowledge, scenario_
             raise
 
     return run
+
+
+def _apply(solution: GeneratedSolution, files: list[GenFile]) -> None:
+    """Write agent-written files to disk and replace them in ``solution.files``."""
+    by_path = {f.path: f for f in files}
+    for f in files:
+        (solution.root / f.path).write_text(f.content, encoding="utf-8", newline="\n")
+    solution.files = [by_path.get(f.path, f) for f in solution.files]
 
 
 # ------------------------------------------------------------------ static test inventory
@@ -304,8 +324,39 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             ctx.sessionmaker, job_id=ctx.job_id, project_id=project_id, process_id=process_id,
             primary_name=provider.primary.name, on_record=ai_logger(ctx))
 
-    # 4. builder (ai)
+    # 3b. test engineer (ai)
     await ctx.stage(STAGES[3])
+    te_rejections: list[BuildRejection] = []
+    te_filled: list[str] = []
+    placeholders = [t for t in inventory if not t["has_body"] and t["kind"] in ("rule", "branch")]
+    if provider is None:
+        await ctx.log("skipped: no model configured, the rule and branch tests keep their placeholders", tag="ai")
+    elif not placeholders:
+        await ctx.log("nothing to write: every rule and branch test already has a body", tag="ai")
+    else:
+        try:
+            te_memory = await knowledge.retrieve_memory(project_id, f"{proc.name} tests")
+        except KnowledgeUnavailable as exc:
+            te_memory = []
+            await ctx.log(f"migration memory unavailable: {exc}")
+        try:
+            written = await fill_test_bodies(solution, proc, approved_rules, scenarios, design, te_memory,
+                                             provider, te_rejections)
+        except (ProviderError, JsonOutputError) as exc:
+            written = []
+            await ctx.log(f"Test Engineer failed: {exc}", tag="ai")
+        _apply(solution, written)
+        te_filled = sorted(f.path for f in written)
+        inventory = test_inventory(solution.files, solution.name)
+        still = [t for t in inventory if not t["has_body"] and t["kind"] in ("rule", "branch")]
+        await ctx.log(f"Test Engineer wrote {len(placeholders) - len(still)} of {len(placeholders)} rule and branch "
+                      f"test bodies in {len(te_filled)} file(s); {len(te_rejections)} body(ies) rejected by the "
+                      "code checks", tag="ai")
+        for r in te_rejections:
+            await ctx.log(f"rejected {r.path} (attempt {r.attempt}): {r.reason}", tag="ai")
+
+    # 4. builder (ai)
+    await ctx.stage(STAGES[4])
     filled_paths: list[str] = []
     rejections: list[BuildRejection] = []
     if provider is None:
@@ -324,19 +375,15 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         except (ProviderError, JsonOutputError) as exc:
             filled = []
             await ctx.log(f"Code Builder failed: {exc}", tag="ai")
-        by_path = {f.path: f for f in filled}
-        for f in filled:
-            target = solution.root / f.path
-            target.write_text(f.content, encoding="utf-8", newline="\n")
-        solution.files = [by_path.get(f.path, f) for f in solution.files]
-        filled_paths = sorted(by_path)
+        _apply(solution, filled)
+        filled_paths = sorted(f.path for f in filled)
         await ctx.log(f"Code Builder filled {len(filled_paths)} file(s); {len(rejections)} reply(ies) rejected "
                       "by the code checks", tag="ai")
         for r in rejections:
             await ctx.log(f"rejected {r.path} (attempt {r.attempt}): {r.reason}", tag="ai")
 
     # 5. review panel (ai)
-    await ctx.stage(STAGES[4])
+    await ctx.stage(STAGES[5])
     reviews: list[dict[str, Any]] = []
     if provider is None:
         await ctx.log("skipped: no model configured", tag="ai")
@@ -360,22 +407,21 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     test_run: TestRun | None = None
     format_ok = False
 
-    await ctx.stage(STAGES[5])
+    await ctx.stage(STAGES[6])
     t0 = time.monotonic()
     if runner is None:
         restore = StepResult(ok=False, log=NO_DOTNET)
-    elif not (probed := await asyncio.to_thread(nuget_probe))[0]:
-        probe = probed[1]
-        restore = StepResult(ok=False, log=f"{NUGET_DOWN}\n\nrestore not attempted (it would retry the unreachable "
-                                           f"source for minutes); probe: {probe}")
     else:
-        restore = await asyncio.to_thread(runner.restore)
-        if not restore.ok and dotnet_runner.nuget_unreachable(restore.log):
-            restore = StepResult(ok=False, log=restore.log + "\n\n" + NUGET_DOWN)
+        restore = await asyncio.to_thread(run_restore, solution.root, dotnet)
+        if not restore.ok:
+            reachable, probe = await asyncio.to_thread(nuget_probe)
+            note = NUGET_DOWN if (not reachable or dotnet_runner.nuget_unreachable(restore.log)) else \
+                "restore failed with the package source reachable: see the log above"
+            restore = StepResult(ok=False, log=f"{restore.log.rstrip()}\n\n{note}\nprobe: {probe}")
     steps.append(_step("restore", restore.ok, restore.log, t0))
     await ctx.log("restore " + ("passed" if restore.ok else f"failed: {restore.log.strip().splitlines()[-1]}"))
 
-    await ctx.stage(STAGES[6])
+    await ctx.stage(STAGES[7])
     t0 = time.monotonic()
     if runner is not None and restore.ok:
         build_result = await asyncio.to_thread(runner.build)
@@ -387,7 +433,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         steps.append(_step("build", False, why, t0, skipped=True))
         await ctx.log(f"build {why}")
 
-    await ctx.stage(STAGES[7])
+    await ctx.stage(STAGES[8])
     t0 = time.monotonic()
     if runner is None:
         steps.append(_step("format", False, NO_DOTNET, t0, skipped=True))
@@ -401,7 +447,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         steps.append(_step("format", fmt.ok, log, t0))
         await ctx.log(f"{mode}: {'passed' if fmt.ok else 'failed'}")
 
-    await ctx.stage(STAGES[8])
+    await ctx.stage(STAGES[9])
     t0 = time.monotonic()
     if runner is not None and build_result is not None and build_result.ok:
         test_run = await asyncio.to_thread(runner.test)
@@ -415,7 +461,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"tests {why}")
 
     # 7. repair loop (ai)
-    await ctx.stage(STAGES[9])
+    await ctx.stage(STAGES[10])
     repair: dict[str, Any] | None = None
     if runner is None or not restore.ok or build_result is None or not build_result.ok:
         await ctx.log("repair loop not run: it needs a restored, compiling solution", tag="ai")
@@ -434,14 +480,15 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         test_run = result.final
         await ctx.log(f"repair loop: {len(result.attempts)} attempt(s); tests now "
                       f"{'pass' if result.final.ok else 'still fail'}", tag="ai")
+    inventory = test_inventory(solution.files, solution.name)  # has_body from the final files
 
     # 8. infrastructure (code)
-    await ctx.stage(STAGES[10])
+    await ctx.stage(STAGES[11])
     infra_files = await asyncio.to_thread(generate_infra, app, design, solution.root, solution.name,
                                           runtime=runtime)
     await ctx.log(f"{len(infra_files)} infrastructure file(s): Terraform modules, Terragrunt live config "
                   f"({runtime}), Dockerfile, pipelines")
-    await ctx.stage(STAGES[11])
+    await ctx.stage(STAGES[12])
     tools = await asyncio.to_thread(toolchain)
     validation = await asyncio.to_thread(validate_infra, solution.root, (tools.get("terraform") or {}).get("path"),
                                          (tools.get("terragrunt") or {}).get("path"))
@@ -452,21 +499,24 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(note)
 
     # 9. metrics (code)
-    await ctx.stage(STAGES[12])
+    await ctx.stage(STAGES[13])
     br = build_result or BuildResult(ok=False, files=sum(1 for f in solution.files if f.path.endswith(".cs")),
                                      log="not built")
     tr = test_run or TestRun(ok=False, log="not run")
     infra_ok = validation.ok if validation.tools_present and any(validation.tools_present.values()) else None
     metrics = compute_metrics(rules, len(branch_transitions(proc)), tr, br, format_ok, infra_ok, process=proc.id)
+    if runner is not None and not restore.ok:
+        metrics.details["standards_adherence"] += (" (reduced check: dotnet format whitespace --folder only, "
+                                                   "because restore failed; analyzers and style rules were not run)")
     await ctx.log("metrics: " + "; ".join(f"{k} {v}" for k, v in metrics.details.items()))
 
     # 10. persist (code)
-    await ctx.stage(STAGES[13])
+    await ctx.stage(STAGES[14])
     tests = merge_results(inventory, test_run)
     layout = solution_layout(solution.name)
     all_files: list[tuple[GenFile, str]] = []
     for f in solution.files:
-        origin = "ai" if f.path in filled_paths else f.origin
+        origin = "ai" if f.path in filled_paths or f.path in te_filled else f.origin
         all_files.append((f, origin))
     for f in infra_files:
         all_files.append((GenFile(path=f.path, content=f.content), "infra"))
@@ -512,7 +562,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         b.builder = {"filled": filled_paths, "rejections": [r.model_dump() if hasattr(r, "model_dump") else
                                                             {"path": r.path, "attempt": r.attempt, "reason": r.reason}
                                                             for r in rejections],
-                     "provider": choice.name, "ai_available": provider is not None}
+                     "provider": choice.name, "ai_available": provider is not None,
+                     "test_engineer": {"filled": te_filled, "rejections": [
+                         {"path": r.path, "attempt": r.attempt, "reason": r.reason} for r in te_rejections]}}
         b.infra_validation = vjson
         b.output_dir = str(solution.root)
         b.build_hash = build_hash

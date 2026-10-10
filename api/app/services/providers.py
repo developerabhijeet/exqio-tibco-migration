@@ -34,7 +34,8 @@ NO_MODEL_REASON = ("no model configured: set CLAUDE_CODE_OAUTH_TOKEN, or AZURE_O
 
 # engine tag -> model_calls.stage
 STAGE_NAMES = {"analyse": "analyst", "risk": "risk", "challenge": "challenger", "name": "namer",
-               "design": "designer", "build": "builder", "review": "reviewer", "repair": "repair"}
+               "design": "designer", "build": "builder", "review": "reviewer", "repair": "repair",
+               "test": "test_engineer"}
 
 LogFn = Callable[[ModelCallRecord], Awaitable[None]]
 

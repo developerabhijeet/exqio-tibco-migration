@@ -19,6 +19,11 @@ The build-side replies are deliberately inert: the fake designer writes a short 
 decision and one open question, the fake builder returns no file (so placeholders stay and the
 code checks reject the reply, which is logged), the reviewers find nothing and the repair loop
 gets an empty diff (rejected). A fake model never makes a build look better than code made it.
+
+The fake Test Engineer (stage ``test``) answers every placeholder method named in the prompt with
+a body that drives ``<Process>Service.ExecuteAsync`` with the happy scenario's fixture input and
+asserts on its result. The bodies pass the engine's body checks (``check_test_body``); they are
+demo data, not reviewed tests, and they are not compile-verified here (no NuGet).
 """
 from __future__ import annotations
 
@@ -234,6 +239,32 @@ def designer_reply(process: Process | None) -> dict:
     }
 
 
+_TARGET_METHOD = re.compile(r"^- method (\w+) \((rule|branch) ([^)]*)\)", re.MULTILINE)
+
+
+def test_engineer_reply(process: Process | None, user: str) -> dict:
+    from engine.dotnet_gen.generator import ident
+
+    stem = ident(process.name, "Process") if process is not None else "Process"
+    tests = []
+    for m in _TARGET_METHOD.finditer(user):
+        what = f"{m.group(2)} {m.group(3)}"
+        body = "\n".join([
+            f"// {what}: the happy scenario through the generated service",
+            "await using var database = new TestDatabase();",
+            "await database.InitializeAsync();",
+            f'var fixture = ScenarioFixture.Load("{stem}", "happy");',
+            "await database.ResetAsync(fixture);",
+            "await using var api = new ApiFactory(database);",
+            "using var scope = api.Services.CreateScope();",
+            f"var service = scope.ServiceProvider.GetRequiredService<{stem}Service>();",
+            f"var result = await service.ExecuteAsync(fixture.InputAs<{stem}Input>(), CancellationToken.None);",
+            "Assert.NotNull(result);",
+        ])
+        tests.append({"method": m.group(1), "body": body})
+    return {"tests": tests}
+
+
 def reply_for(req: LLMRequest, process: Process | None) -> str:
     user = "".join(str(m.get("content", "")) for m in req.messages if m.get("role") == "user")
     stage = req.tags.get("stage")
@@ -255,6 +286,8 @@ def reply_for(req: LLMRequest, process: Process | None) -> str:
         data = {"findings": []}
     elif stage == "repair":
         data = {"diff": ""}
+    elif stage == "test":
+        data = test_engineer_reply(process, user)
     else:
         data = {}
     return json.dumps(data)

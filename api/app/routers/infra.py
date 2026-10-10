@@ -89,14 +89,22 @@ async def plan(build_id: str, request: Request, session: SessionDep, runner: Run
     tools = build_svc.toolchain()
     ready, reason = svc.plan_ready(conn, tools)
     if not ready:
+        latest = await evidence.latest_plan(session, build_id)
+        if latest is not None and latest.status == "acknowledged":
+            # connect-later was acknowledged by operations: keep that decision, do not supersede it
+            return {"connected": False, "reason": reason, "last_validation": build.infra_validation,
+                    "plan": svc.plan_out(latest), "acknowledged": True}
         p = await svc.record_connect_later(session, build, reason or "")
         await session.commit()
         return {"connected": False, "reason": reason, "last_validation": build.infra_validation,
-                "plan": svc.plan_out(p)}
+                "plan": svc.plan_out(p), "acknowledged": False}
     running = await active_job(session, "plan", key="build_id", value=build_id)
     if running is not None:
         raise HTTPException(status_code=409, detail=f"a plan of this build is in progress: {running}")
-    secret = svc.decrypt_secret(request.app.state.fernet, conn)
+    try:
+        secret = svc.decrypt_secret(request.app.state.fernet, conn)
+    except svc.SecretUnreadable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     p = await svc.record_connect_later(session, build, "")
     p.connected, p.status, p.note = True, "running", None
     await session.commit()

@@ -24,6 +24,7 @@ import asyncio
 import json
 import re
 import socket
+import threading
 import time
 import urllib.parse
 import warnings
@@ -45,6 +46,7 @@ from api.app.models import Build, FieldDiff, Process, Scenario, ScenarioRun
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
 from api.app.services.context import engine_app, engine_findings, engine_process
+from api.app.services.stub_server import StubServer, client_names
 from engine.domains.discover import activity_sql, sql_tables
 from engine.dotnet_gen.generator import is_sensitive_name, solution_layout
 from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle, find_dotnet
@@ -71,7 +73,7 @@ MODEL_LABEL = "expected output derived from the TIBCO model"
 TEST_DATA_NOTE = ("Rows generated from the schemas, enumerations and branch predicates, with masking applied "
                   "to fields tagged sensitive (SSN, account numbers). Production test data is a separate "
                   "workstream.")
-COMPARED_SIDE_EFFECTS = ("row_written", "message_published")
+COMPARED_SIDE_EFFECTS = ("row_written", "message_published", "service_called")
 VERIFIER_SUBJECT = "exiqo-verifier"
 RESET_REASON = "new verify run"
 
@@ -227,10 +229,12 @@ async def load_scenarios(session: AsyncSession, process_id: str) -> list[Scenari
 
 async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Process, lock: asyncio.Lock,
                            *, refresh: bool = False) -> tuple[list[Scenario], list[str], bool]:
-    """Cached scenarios of a process, generated (and cached) when there are none.
+    """Generate (and cache) the scenarios of a process when there are none, or always with
+    ``refresh``. ``POST /processes/{id}/scenarios/generate``, the build job and the verify job call
+    it; GET endpoints only read the cache (:func:`load_scenarios`).
 
-    Returns ``(rows, notes, generated_now)``. ``refresh`` regenerates the generated ones; SME
-    scenarios are kept.
+    Returns ``(rows, notes, generated_now)``. A refresh upserts the generated scenarios by key, so
+    earlier verify runs keep their scenario; SME scenarios are kept.
     """
     rows = await load_scenarios(session, proc.id)
     if rows and not refresh and any(r.origin == "generated" for r in rows):
@@ -309,9 +313,14 @@ def mask_doc(doc: Any, masked: set[str], path: str = "") -> Any:
     return doc
 
 
-async def test_data(session: AsyncSession, settings: Settings, proc: Process,
-                    lock: asyncio.Lock) -> dict[str, Any]:
-    rows, notes, _ = await ensure_scenarios(session, settings, proc, lock)
+GENERATE_HINT = "no scenarios yet: POST /processes/{id}/scenarios/generate (the build job also generates them)"
+
+
+async def test_data(session: AsyncSession, proc: Process) -> dict[str, Any]:
+    """Read only: inputs of the cached scenarios and the seed rows of the tables the process
+    touches, masked."""
+    rows = await load_scenarios(session, proc.id)
+    notes = [] if rows else [GENERATE_HINT.replace("{id}", proc.id)]
     app = await engine_app(session, proc)
     ip = engine_process(app, proc)
     masked: set[str] = set()
@@ -341,6 +350,16 @@ class RunInfo:
     handle: Any  # ServiceHandle or any object with url, pid, log_path, poll(), stop()
     port: int
     started_at: str = field(default_factory=lambda: utcnow().isoformat())
+    stubs: StubServer | None = None  # the outbound HTTP stub server the service's clients point at
+    clients: list[str] = field(default_factory=list)
+
+    def stop(self) -> None:
+        try:
+            self.handle.stop()
+        finally:
+            if self.stubs is not None:
+                self.stubs.stop()
+            release_port(self.port)
 
     @property
     def url(self) -> str:
@@ -351,10 +370,34 @@ class RunInfo:
         return self.handle.poll() is None
 
 
+_PORT_LOCK = threading.Lock()
+_RESERVED_PORTS: set[int] = set()
+
+
+def reserve_port() -> tuple[socket.socket, int]:
+    """Bind a free port and hold the socket; the caller closes it just before the service binds.
+    Ports handed out by this process stay reserved until :func:`release_port`."""
+    with _PORT_LOCK:
+        for _ in range(50):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("127.0.0.1", 0))
+            port = int(s.getsockname()[1])
+            if port not in _RESERVED_PORTS:
+                _RESERVED_PORTS.add(port)
+                return s, port
+            s.close()
+    raise RuntimeError("no free port")
+
+
+def release_port(port: int) -> None:
+    with _PORT_LOCK:
+        _RESERVED_PORTS.discard(port)
+
+
 def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+    s, port = reserve_port()
+    s.close()
+    return port
 
 
 def connection_names(build_root: Path, app_name: str) -> list[str]:
@@ -370,12 +413,16 @@ def connection_names(build_root: Path, app_name: str) -> list[str]:
     return sorted(n for n in names if n.lower() != "servicebus")
 
 
-def service_env(dsn: str, names: list[str]) -> dict[str, str]:
+def service_env(dsn: str, names: list[str], clients: list[str] | None = None,
+                stub_url: str | None = None) -> dict[str, str]:
     env = {"ASPNETCORE_ENVIRONMENT": "Development", "Auth__Mode": "Development",
            "Messaging__Mode": "InMemory", "KeyVault__Uri": ""}
     conn = npgsql_connection_string(dsn)
     for n in names:
         env[f"ConnectionStrings__{n}"] = conn
+    for c in clients or []:
+        if stub_url:
+            env[f"Clients__{c}__BaseAddress"] = stub_url
     return env
 
 
@@ -422,12 +469,23 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
 
     async with lock:
         await asyncio.to_thread(seed)
-    env = service_env(dsn, connection_names(root, app_name))
-    port = free_port()
+    clients = client_names(root)
+    stubs = StubServer()
+    env = service_env(dsn, connection_names(root, app_name), clients, stubs.url)
+    held, port = reserve_port()
     runner = DotnetRunner(root, dotnet=dotnet)
-    handle: ServiceHandle = await asyncio.to_thread(
-        runner.run_service, solution_layout(app_name)["api_project"], port, env, timeout_s)
-    return RunInfo(build_id=build.id, handle=handle, port=port)
+
+    def launch() -> ServiceHandle:
+        held.close()  # hand the port to the service at the last moment
+        return runner.run_service(solution_layout(app_name)["api_project"], port, env, timeout_s)
+
+    try:
+        handle: ServiceHandle = await asyncio.to_thread(launch)
+    except BaseException:
+        stubs.stop()
+        release_port(port)
+        raise
+    return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients)
 
 
 # ------------------------------------------------------------------ actual results
@@ -566,6 +624,42 @@ async def bus_messages(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+NOT_A_FAULT = ("SelectorMismatch", "InvalidBody")
+
+
+def publish_outcome(outcome: Any) -> Fault | None:
+    """``POST /_bus/publish`` answer ``{disposition: completed|dead_lettered|abandoned, reason,
+    description, messages_published}`` as the run's fault: a dead letter for a business fault is
+    that fault; a selector mismatch, an unreadable body or an abandoned (transient) delivery means
+    the scenario did not run, which raises."""
+    if not isinstance(outcome, dict):
+        raise TypeError(f"unexpected /_bus/publish answer: {outcome!r}")
+    disposition = str(outcome.get("disposition") or "")
+    reason = outcome.get("reason")
+    if disposition == "completed":
+        return None
+    if disposition == "dead_lettered":
+        if not reason or reason in NOT_A_FAULT:
+            raise RuntimeError(f"the service dead-lettered the message: {reason or 'no reason'}"
+                               + (f" ({outcome.get('description')})" if outcome.get("description") else ""))
+        return Fault(name=str(reason))
+    if disposition == "abandoned":
+        raise RuntimeError(f"the service abandoned the message (transient failure): {reason}: "
+                           f"{outcome.get('description') or ''}".rstrip(": "))
+    raise RuntimeError(f"unknown disposition {disposition!r} from /_bus/publish")
+
+
+def published_window(before: list[dict[str, Any]], after: list[dict[str, Any]], entity: str) -> list[dict[str, Any]]:
+    """Messages the scenario published: the new tail of the bus log without the delivered input
+    message itself (the in-memory bus records it too)."""
+    new = list(after[len(before):])
+    for i, m in enumerate(new):
+        if m.get("entity") == entity:
+            del new[i]
+            break
+    return new
+
+
 async def drive_jms(client: httpx.AsyncClient, proc: IRProcess, scenario: EngineScenario) -> tuple[ExpectedResult, list[dict]]:
     cfg = proc.starter.config if proc.starter else {}
     entity = str(cfg.get("destination") or "")
@@ -573,13 +667,27 @@ async def drive_jms(client: httpx.AsyncClient, proc: IRProcess, scenario: Engine
     before = await bus_messages(client)
     r = await client.post("/_bus/publish", json={"entity": entity, "payload": scenario.input, "properties": props})
     r.raise_for_status()
-    outcome = r.json() if r.content else {}
-    new = (await bus_messages(client))[len(before):]
-    reason = outcome.get("reason") if isinstance(outcome, dict) else None
-    fault = Fault(name=str(reason)) if reason and reason not in ("SelectorMismatch", "InvalidBody") else None
-    if reason in ("SelectorMismatch", "InvalidBody"):
-        raise RuntimeError(f"the service dead-lettered the message: {reason}")
+    fault = publish_outcome(r.json() if r.content else None)
+    new = published_window(before, await bus_messages(client), entity)
     return ExpectedResult(output={}, fault=fault), new
+
+
+def confirm_intended(report: ParityReport) -> int:
+    """No counterfactual run exists yet (there is no generic way to apply a Fix finding to the
+    model), so an ``intended`` difference is not confirmed: it becomes a defect that keeps its
+    finding id, and counts as unexplained. Returns how many were reclassified."""
+    n = 0
+    for d in report.fields + report.side_effects:
+        if d.status == "intended":
+            d.status = "defect"
+            n += 1
+    report.unexplained = sum(1 for d in report.fields + report.side_effects if d.status == "defect")
+    return n
+
+
+def applied_noise(report: ParityReport, rules: list[NoiseRule]) -> list[dict[str, str]]:
+    noisy = [d.path for d in report.fields + report.side_effects if d.status == "noise"]
+    return [r.model_dump() for r in rules if any(r.matches(p) for p in noisy)]
 
 
 async def run_verify(ctx: JobContext, build_id: str, settings: Settings, services: dict[str, RunInfo],
@@ -604,6 +712,12 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     if info is None or not info.running:
         raise ServiceNotRunning("the generated service is not running: start it first (POST /builds/{id}/run)")
     kind = proc.starter.kind if proc.starter else "subprocess"
+    resource_names = {r.id: r.name for r in app.resources}
+    resource_timeouts = {r.id: int(r.settings["timeout_ms"]) for r in app.resources
+                         if str(r.settings.get("timeout_ms") or "").isdigit()}
+    if fixes:
+        await ctx.log(f"{len(fixes)} finding(s) decided Fix; without a counterfactual run a difference they touch "
+                      "is reported as a defect with the finding id (unconfirmed intended change)")
     app_name = next((p.stem for p in Path(build.output_dir or ".").glob("*.sln")), "App")
     await ctx.stage("run")
     results: list[dict[str, Any]] = []
@@ -619,6 +733,14 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                 try:
                     if expected is None:
                         raise RuntimeError("no expected result (the evaluator could not run it)")
+                    expects_http = any(e.kind == "service_called" for e in expected.side_effects)
+                    if expects_http and not sc.stub_responses:
+                        raise RuntimeError("the scenario expects outbound HTTP calls but has no stub responses")
+                    if expects_http and info.stubs is None:
+                        raise RuntimeError("the scenario expects outbound HTTP calls but the service has no stub "
+                                           "server (it was not started by the API)")
+                    if info.stubs is not None:
+                        info.stubs.load(sc.stub_responses, resource_names, resource_timeouts)
                     await asyncio.to_thread(reset_db, db, app, sc.seed_state)
                     if kind in ("rest", "http"):
                         before = await bus_messages(client)
@@ -631,22 +753,29 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                                            "or the generated tests")
                     effects = await asyncio.to_thread(actual_rows, db, expected)
                     effects += actual_messages(expected, messages if isinstance(messages, list) else [])
+                    if info.stubs is not None:
+                        effects += info.stubs.side_effects()
                     actual.side_effects = effects
                     try:
                         lineage = build_lineage(expected, app, proc.id)
                     except Exception:  # noqa: BLE001  lineage is best effort; no lineage means no "intended"
                         lineage = {}
-                    report = compare(expected, actual, noise_rules_for(expected), fixes, lineage,
+                    rules = noise_rules_for(expected)
+                    report = compare(expected, actual, rules, fixes, lineage,
                                      scenario_id=key, finding_process=proc.id,
                                      side_effect_kinds=COMPARED_SIDE_EFFECTS)
+                    unconfirmed = confirm_intended(report)
                     status = "match" if report.unexplained == 0 else "differs"
                     results.append({"scenario_id": scenario_id, "key": key, "status": status,
-                                    "report": report, "expected": expected, "actual": actual, "error": None})
+                                    "report": report, "expected": expected, "actual": actual, "error": None,
+                                    "extra": {"unconfirmed_intended": unconfirmed, "counterfactual": False,
+                                              "noise_rules": applied_noise(report, rules)}})
                     await ctx.log(f"{key}: parity {report.parity:.0%}, {report.unexplained} unexplained "
                                   f"({time.monotonic() - started:.1f}s)")
                 except Exception as exc:  # noqa: BLE001  one scenario failing never hides the others
                     results.append({"scenario_id": scenario_id, "key": key, "status": "error", "report": None,
-                                    "expected": expected, "actual": None, "error": f"{type(exc).__name__}: {exc}"})
+                                    "expected": expected, "actual": None, "error": f"{type(exc).__name__}: {exc}",
+                                    "extra": {}})
                     await ctx.log(f"{key}: could not run: {type(exc).__name__}: {exc}")
         finally:
             db.close()
@@ -655,8 +784,8 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     async with ctx.sessionmaker() as s:
         for res in results:
             report: ParityReport | None = res["report"]
-            report_json = report.model_dump(mode="json") if report else {"scenario_id": res["key"],
-                                                                        "error": res["error"]}
+            report_json = ({**report.model_dump(mode="json"), **res["extra"]} if report
+                           else {"scenario_id": res["key"], "error": res["error"]})
             run = ScenarioRun(build_id=build_id, scenario_id=res["scenario_id"], job_id=ctx.job_id,
                               status=res["status"], report=report_json,
                               expected=_result_json(res["expected"]), actual=_result_json(res["actual"]),
@@ -723,4 +852,45 @@ async def parity_view(session: AsyncSession, build: Build) -> dict[str, Any] | N
             "source": "model", "label": MODEL_LABEL, "reports": reports_out, "parity": summary["parity"],
             "unexplained": summary["unexplained"], "matched": summary["matched"], "compared": summary["compared"],
             "intended": summary["intended"], "errors": errors, "report_hash": evidence.parity_hash(runs),
-            "noise_rules": [n.model_dump() for n in DEFAULT_NOISE]}
+            "unconfirmed_intended": sum(int((r.report or {}).get("unconfirmed_intended") or 0) for r in runs),
+            "counterfactual": False,
+            "noise_rules": [n.model_dump() for n in DEFAULT_NOISE],
+            "noise_rules_applied": _unique_rules(r.report or {} for r in runs)}
+
+
+def _unique_rules(reports: Any) -> list[dict[str, str]]:
+    seen: dict[str, dict[str, str]] = {}
+    for rep in reports:
+        for rule in rep.get("noise_rules") or []:
+            seen.setdefault(rule.get("path_glob", ""), rule)
+    return [seen[k] for k in sorted(seen)]
+
+
+# ------------------------------------------------------------------ startup
+def _owned_service(pid: int, build: Build) -> bool:
+    """The recorded pid is still a ``dotnet`` process started for this build (not a reused pid)."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        return False
+    return "dotnet" in cmdline and bool(build.output_dir) and build.output_dir in cmdline
+
+
+async def clear_stale_runs(sessionmaker: Any) -> int:
+    """At startup: services recorded by a previous API process are not managed any more. Stop the
+    ones still alive (their process group, only when the pid is still that build's ``dotnet``) and
+    clear ``run_pid``/``run_port``; returns how many rows were cleared."""
+    import os
+    import signal
+
+    async with sessionmaker() as s:
+        rows = (await s.execute(select(Build).where(Build.run_pid.is_not(None)))).scalars().all()
+        for b in rows:
+            if b.run_pid and _owned_service(b.run_pid, b):
+                try:
+                    os.killpg(b.run_pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            b.run_pid = b.run_port = None
+        await s.commit()
+    return len(rows)

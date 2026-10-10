@@ -34,6 +34,7 @@ from api.app.routers import settings as settings_router
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
 from api.app.services.settings import apply_stored, load_stored
+from api.app.services.verify import clear_stale_runs
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +57,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
         app.state.scenario_lock = asyncio.Lock()  # one scenario-database user at a time (reseeds)
         app.state.services = {}  # build id -> running generated service (verify.RunInfo)
+        app.state.start_locks = {}  # build id -> asyncio.Lock (one service start at a time)
         app.state.fernet, app.state.fernet_generated = make_fernet(settings)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
         try:
             await runner.start()
             async with sessionmaker() as s:
                 apply_stored(settings, await load_stored(s))
+            cleared = await clear_stale_runs(sessionmaker)
+            if cleared:
+                log.warning("cleared %d service run(s) recorded by a previous API process", cleared)
         except Exception as exc:  # noqa: BLE001  start without a database; requests will report it
             log.error("job runner not started (database unavailable or schema missing; run `make db`): %s",
                       exc)
@@ -72,7 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
             for info in list(app.state.services.values()):
                 try:
-                    await asyncio.to_thread(info.handle.stop)
+                    await asyncio.to_thread(info.stop)
                 except Exception:  # best effort on shutdown
                     log.exception("could not stop the service of build %s", info.build_id)
             app.state.services.clear()

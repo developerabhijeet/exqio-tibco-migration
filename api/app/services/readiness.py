@@ -23,7 +23,6 @@ from api.app.models import (
     Process,
     ScanReport,
     Scenario,
-    ScenarioRun,
     TestResult,
 )
 from api.app.services.evidence import latest_verify_runs
@@ -121,10 +120,9 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     def step_ok(b: Build, name: str) -> bool:
         return any(s.get("name") == name and s.get("ok") for s in b.steps or [])
 
-    # compilable .NET
-    compiled = [b for b in finished if step_ok(b, "build")]
-    if compiled:
-        b = compiled[0]
+    # compilable .NET: the latest finished build decides (an older compiling build does not count)
+    if finished and step_ok(finished[0], "build"):
+        b = finished[0]
         rows.append(_row("compilable_dotnet", "met", [_ev("build", f"/builds/{b.id}", "dotnet build log")], None))
     elif finished:
         b = finished[0]
@@ -165,10 +163,8 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     else:
         rows.append(_row("functional_tests", "missing", [], "no tests generated yet"))
 
-    # Swagger parity
-    last_run = await session.scalar(select(ScenarioRun).where(ScenarioRun.build_id.in_([b.id for b in builds]))
-                                    .order_by(ScenarioRun.created_at.desc()).limit(1)) if builds else None
-    runs = await latest_verify_runs(session, last_run.build_id) if last_run is not None else []
+    # Swagger parity: the latest verify run of the latest finished build
+    runs = await latest_verify_runs(session, finished[0].id) if finished else []
     if runs:
         unexplained = sum(int((r.report or {}).get("unexplained") or 0) for r in runs)
         errors = sum(1 for r in runs if r.status == "error")
@@ -185,7 +181,8 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         if scenarios:
             rows.append(_row("swagger_parity", "partial",
                              [_ev("scenarios", f"/processes/{pids[0]}/scenarios", f"{scenarios} scenario(s)")],
-                             "scenarios exist but have not been run against a running service"))
+                             "scenarios exist but the latest build has not been verified against its running "
+                             "service"))
         else:
             rows.append(_row("swagger_parity", "missing", [], "no scenario run yet"))
 

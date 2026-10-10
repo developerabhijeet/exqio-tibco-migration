@@ -3,10 +3,12 @@ running service of a build (Verify uses it): start, status, logs, stop."""
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -120,6 +122,31 @@ async def get_file(build_id: str, path: str, session: SessionDep) -> dict[str, A
             "language": LANGUAGES.get(suffix, "dockerfile" if target.name == "Dockerfile" else "plaintext")}
 
 
+DOWNLOAD_EXCLUDED = frozenset({"bin", "obj", "TestResults", ".exiqo"})
+
+
+def _zip_solution(root: Path) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(root.rglob("*")):
+            rel = path.relative_to(root)
+            if DOWNLOAD_EXCLUDED & set(rel.parts) or path.is_symlink() or not path.is_file():
+                continue
+            zf.write(path, rel.as_posix())
+    return buf.getvalue()
+
+
+@router.get("/builds/{build_id}/download")
+async def download(build_id: str, session: SessionDep) -> Response:
+    """The solution and its infrastructure as a zip (without bin, obj, TestResults and .exiqo)."""
+    build = await _build(session, build_id)
+    if not build.output_dir or not Path(build.output_dir).is_dir():
+        raise HTTPException(status_code=404, detail="the build has no solution on disk")
+    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir))
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="build-{build_id[:12]}.zip"'})
+
+
 @router.get("/builds/{build_id}/tests")
 async def get_tests(build_id: str, session: SessionDep) -> dict[str, Any]:
     await _build(session, build_id)
@@ -148,17 +175,22 @@ async def run_service(build_id: str, request: Request, session: SessionDep,
     free port and wait for ``/health``. 409 when it cannot start, with the log tail."""
     build = await _build(session, build_id)
     services: dict[str, verify_svc.RunInfo] = request.app.state.services
-    current = services.get(build_id)
-    if current is not None and current.running:
-        return verify_svc.run_status(current)
-    proc = await session.get(Process, build.process_id)
-    try:
-        app = await engine_app(session, proc)
-        info = await verify_svc.start_service(settings, build, proc.project_id, app,
-                                              request.app.state.scenario_lock)
-    except (RuntimeError, OSError, verify_svc.ScenarioDBUnavailable) as exc:
-        raise HTTPException(status_code=409, detail=f"the service did not start: {exc}") from exc
-    services[build_id] = info
+    lock = request.app.state.start_locks.setdefault(build_id, asyncio.Lock())
+    async with lock:  # one start per build at a time
+        current = services.get(build_id)
+        if current is not None and current.running:
+            return verify_svc.run_status(current)
+        if current is not None:  # exited: release its stub server and port
+            services.pop(build_id, None)
+            await asyncio.to_thread(current.stop)
+        proc = await session.get(Process, build.process_id)
+        try:
+            app = await engine_app(session, proc)
+            info = await verify_svc.start_service(settings, build, proc.project_id, app,
+                                                  request.app.state.scenario_lock)
+        except (RuntimeError, OSError, verify_svc.ScenarioDBUnavailable) as exc:
+            raise HTTPException(status_code=409, detail=f"the service did not start: {exc}") from exc
+        services[build_id] = info
     build.run_port, build.run_pid = info.port, info.handle.pid
     await session.commit()
     return verify_svc.run_status(info)
@@ -183,7 +215,7 @@ async def stop_service(build_id: str, request: Request, session: SessionDep) -> 
     build = await _build(session, build_id)
     info = request.app.state.services.pop(build_id, None)
     if info is not None:
-        await asyncio.to_thread(info.handle.stop)
+        await asyncio.to_thread(info.stop)
     build.run_port = build.run_pid = None
     await session.commit()
     return {"stopped": info is not None, "running": False}

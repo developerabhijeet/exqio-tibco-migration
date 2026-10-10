@@ -21,8 +21,9 @@ STAGES: list[tuple[str, str, str]] = [
     ("challenger", "challenge", "strong (always: independent second opinion)"),
     ("namer", "name", "by task complexity"),
     ("designer", "design", "by task complexity"),
+    ("test_engineer", "test", "by task complexity"),
     ("builder", "build", "by task complexity"),
-    ("reviewer", "challenge", "by task complexity"),
+    ("reviewer", "challenge", "by task complexity (stage tag review)"),
     ("repair", "repair", "by task complexity"),
     ("ask", "analyse", "by task complexity"),
 ]

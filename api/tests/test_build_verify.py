@@ -15,17 +15,20 @@ skipped when NuGet is unreachable.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
-from api.app.models import AzureConnection, FieldDiff, Gate, JobEvent, ModelCall
+from api.app.models import AzureConnection, Build, FieldDiff, Gate, JobEvent, ModelCall
+from api.app.models import Scenario as ScenarioRow
 from api.app.services import build as build_svc
 from api.app.services import readiness as readiness_svc
 from api.app.services import verify as verify_svc
@@ -277,7 +280,12 @@ async def test_build_fails_without_dotnet_and_g4_disabled(client, app, monkeypat
     kinds = {c["kind"] for c in tests["cases"]}
     assert {"rule", "branch", "scenario"} <= kinds
     assert all(c["file"].startswith("tests/") for c in tests["cases"])
-    assert any(c["kind"] == "rule" and c["has_body"] is False for c in tests["cases"])
+    # the (fake) Test Engineer wrote every rule test body
+    assert all(c["has_body"] for c in tests["cases"] if c["kind"] == "rule")
+    assert build["builder"]["test_engineer"]["filled"]
+    rules_file = next(c["file"] for c in tests["cases"] if c["kind"] == "rule")
+    content = (await client.get(f"/builds/{build_id}/files/{rules_file}")).json()
+    assert content["origin"] == "ai" and "GetRequiredService<FundingStatusLookupService>" in content["content"]
     assert (await client.get(f"/builds/{build_id}/reviews")).json() == []
 
     infra = (await client.get(f"/builds/{build_id}/infra")).json()
@@ -287,7 +295,7 @@ async def test_build_fails_without_dotnet_and_g4_disabled(client, app, monkeypat
     g4 = (await _gates(client, proc_id))["G4"]
     assert g4["enabled"] is False
     assert "compile did not pass" in g4["reason"]
-    assert "without a test body" in g4["reason"]
+    assert "without a test body" not in g4["reason"]
     r = await client.post(f"/gates/{proc_id}/G4", json={"state": "approved", "note": ""}, headers=SME)
     assert r.status_code == 409
 
@@ -296,11 +304,16 @@ async def test_g4_disabled_when_restore_fails(client, app, monkeypatch):
     if build_svc.find_dotnet() is None:
         pytest.skip("dotnet is not installed here")
     if build_svc.nuget_available():  # a machine with NuGet: simulate the unreachable source
+        from engine.dotnet_gen.runner import StepResult
+
+        monkeypatch.setattr(build_svc, "run_restore", lambda root, dotnet: StepResult(
+            ok=False, log="error NU1301: Unable to load the service index (simulated)"))
         monkeypatch.setattr(build_svc, "nuget_probe", lambda: (False, "simulated: source unreachable"))
     _, proc_id, build_id, build = await _built(client, monkeypatch, dotnet=True)
     steps = {s["name"]: s for s in build["steps"]}
     assert steps["restore"]["ok"] is False and "NuGet unreachable" in steps["restore"]["log"]
-    assert "probe:" in steps["restore"]["log"]
+    assert "NU1301" in steps["restore"]["log"] and "probe:" in steps["restore"]["log"]  # restore really ran
+    assert "reduced check" in build["metrics"]["details"]["standards_adherence"]
     assert steps["build"]["skipped"] is True and "restore failed" in steps["build"]["log"]
     assert steps["format"]["ok"] is True and "whitespace" in steps["format"]["log"]  # runs without NuGet
     assert steps["test"]["skipped"] is True
@@ -309,6 +322,34 @@ async def test_g4_disabled_when_restore_fails(client, app, monkeypatch):
     assert g4["enabled"] is False and "compile did not pass (restore failed)" in g4["reason"]
     tests = (await client.get(f"/builds/{build_id}/tests")).json()
     assert tests["summary"]["total"] > 0  # the tests exist as files
+
+
+async def test_test_engineer_fills_rule_bodies_and_clears_g4_reason(client, app, monkeypatch):
+    async def no_bodies(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(build_svc, "fill_test_bodies", no_bodies)
+    _, proc_id, build_id, _ = await _built(client, monkeypatch)
+    tests = (await client.get(f"/builds/{build_id}/tests")).json()
+    unfilled = [c for c in tests["cases"] if c["kind"] == "rule"]
+    assert unfilled and all(c["has_body"] is False for c in unfilled)
+    assert "without a test body" in (await _gates(client, proc_id))["G4"]["reason"]
+
+    monkeypatch.undo()  # the real Test Engineer (fake provider) again; dotnet stays absent
+    monkeypatch.setattr(build_svc, "find_dotnet", lambda: None)
+    r = await client.post(f"/processes/{proc_id}/build", json={})
+    job = await _wait_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job
+    assert "test engineer" in await _stages(app, job["id"])
+    tests = (await client.get(f"/builds/{r.json()['build_id']}/tests")).json()
+    filled = [c for c in tests["cases"] if c["kind"] == "rule"]
+    assert {c["name"] for c in filled} == {c["name"] for c in unfilled}
+    assert all(c["has_body"] for c in filled)
+    g4 = (await _gates(client, proc_id))["G4"]
+    assert "without a test body" not in g4["reason"] and "compile did not pass" in g4["reason"]
+    async with app.state.sessionmaker() as s:
+        calls = (await s.execute(select(ModelCall).where(ModelCall.stage == "test_engineer"))).scalars().all()
+    assert calls
 
 
 async def test_build_scaffold_passes_with_dotnet(client, app, monkeypatch):
@@ -430,6 +471,18 @@ async def test_plan_connect_later(client, app, monkeypatch):
     assert r.json()["status"] == "acknowledged" and r.json()["decided_by"] == "ops.maria"
     g6 = (await _gates(client, proc_id))["G6"]
     assert g6["reason"] == "G5 not approved"
+    # a later plan request while still not ready keeps the acknowledgement
+    out = (await client.post(f"/builds/{build_id}/plan")).json()
+    assert out["acknowledged"] is True and out["plan"]["status"] == "acknowledged"
+    assert (await client.get(f"/builds/{build_id}/plan")).json()["status"] == "acknowledged"
+    assert (await _gates(client, proc_id))["G6"]["reason"] == "G5 not approved"
+
+    # the solution downloads as a zip without build output
+    r = await client.get(f"/builds/{build_id}/download")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert "GmfCredit.sln" in names and "Dockerfile" in names and any(n.startswith("infra/") for n in names)
+    assert not any(part in ("bin", "obj", "TestResults", ".exiqo") for n in names for part in n.split("/"))
 
 
 async def test_readiness_rows(client, app, monkeypatch):
@@ -466,7 +519,11 @@ async def test_readiness_rows(client, app, monkeypatch):
 async def test_scenarios_generated_and_cached(client, app):
     _pid, procs = await _scanned(client)
     proc_id = procs[FSL]["id"]
-    r = await client.get(f"/processes/{proc_id}/scenarios")
+    empty = (await client.get(f"/processes/{proc_id}/scenarios")).json()  # GET never generates
+    assert empty["scenarios"] == [] and "scenarios/generate" in empty["hint"]
+    async with app.state.sessionmaker() as s:
+        assert (await s.execute(select(ScenarioRow))).scalars().all() == []
+    r = await client.post(f"/processes/{proc_id}/scenarios/generate", json={})
     assert r.status_code == 200, r.text
     first = r.json()
     assert first["generated_now"] is True and first["source"] == "model"
@@ -475,8 +532,13 @@ async def test_scenarios_generated_and_cached(client, app):
     assert "FundingStatusLookup:happy" in keys and any(":branch:" in k for k in keys)
     assert all(s["expected"] and s["expected"]["output"] for s in first["scenarios"])
     second = (await client.get(f"/processes/{proc_id}/scenarios")).json()
-    assert second["generated_now"] is False
+    assert second["generated_now"] is False and second["hint"] is None
     assert [s["id"] for s in second["scenarios"]] == [s["id"] for s in first["scenarios"]]
+    again = (await client.post(f"/processes/{proc_id}/scenarios/generate")).json()
+    assert again["generated_now"] is False  # the cache is kept without refresh
+    refreshed = (await client.post(f"/processes/{proc_id}/scenarios/generate", json={"refresh": True})).json()
+    assert refreshed["generated_now"] is True
+    assert [s["id"] for s in refreshed["scenarios"]] == [s["id"] for s in first["scenarios"]]  # upserted
 
     sme = {"name": "Unknown deal", "input": {"parameters": {"dealId": "DL-99999"}}}
     assert (await client.post(f"/processes/{proc_id}/scenarios", json=sme,
@@ -491,6 +553,9 @@ async def test_scenarios_generated_and_cached(client, app):
     assert len(third["scenarios"]) == len(keys) + 1
 
     acc = procs[ACC]["id"]
+    before = (await client.get(f"/processes/{acc}/test-data")).json()
+    assert before["inputs"] == [] and before["notes"]  # read only: the hint, no generation
+    assert (await client.post(f"/processes/{acc}/scenarios/generate")).status_code == 200
     data = (await client.get(f"/processes/{acc}/test-data")).json()
     assert "separate workstream" in data["note"]
     assert data["inputs"] and data["tables"]
@@ -618,3 +683,87 @@ def test_bus_messages_become_side_effects():
     ]
     assert dict(verify_svc._SELECTOR.findall("MsgType = 'FUNDING_REQUEST' AND Region='US'")) == {
         "MsgType": "FUNDING_REQUEST", "Region": "US"}
+
+
+def test_intended_without_counterfactual_counts_as_unexplained():
+    from engine.parity.models import FieldDiff as Diff
+    from engine.parity.models import ParityReport
+
+    report = ParityReport(scenario_id="s", parity=0.5, unexplained=0, fields=[
+        Diff(path="output.body.status", expected="FUNDED", actual="PENDING", status="intended", finding_id="F1"),
+        Diff(path="output.body.dealId", expected="D", actual="D", status="match")])
+    assert verify_svc.confirm_intended(report) == 1
+    assert report.fields[0].status == "defect" and report.fields[0].finding_id == "F1"
+    assert report.unexplained == 1
+
+
+def test_bus_publish_outcome_and_window():
+    assert verify_svc.publish_outcome({"disposition": "completed", "reason": None, "messages_published": 1}) is None
+    fault = verify_svc.publish_outcome({"disposition": "dead_lettered", "reason": "DealerInactiveFault",
+                                        "description": "dealer D1 inactive", "messages_published": 0})
+    assert fault is not None and fault.name == "DealerInactiveFault"
+    for outcome in ({"disposition": "dead_lettered", "reason": "SelectorMismatch"},
+                    {"disposition": "abandoned", "reason": "NpgsqlException", "description": "x"},
+                    {"disposition": "weird"}):
+        with pytest.raises(RuntimeError):
+            verify_svc.publish_outcome(outcome)
+    before = [{"entity": "old", "body": "{}"}]
+    after = before + [{"entity": "gmf.dealer.funding.request", "body": "{}"},
+                      {"entity": "gmf.funding.events", "body": "{\"status\": \"FUNDED\"}"}]
+    assert verify_svc.published_window(before, after, "gmf.dealer.funding.request") == [after[2]]
+
+
+async def test_outbound_stub_server_records_service_calls():
+    import httpx
+
+    from api.app.services.stub_server import StubServer
+    from engine.parity.models import StubResponse
+
+    stubs = StubServer()
+    try:
+        stubs.load({"Res.Equifax/consumer-credit/v2/scores": StubResponse(status=200, body={"score": 781}),
+                    "Res.TransUnion/credit-report/v1/score": StubResponse(status=200, body={}, delay_ms=1500)},
+                   {"Res.Equifax": "EquifaxClient", "Res.TransUnion": "TransUnionClient"},
+                   {"Res.Equifax": 1000, "Res.TransUnion": 1000})
+        async with httpx.AsyncClient(base_url=stubs.url, timeout=5) as c:
+            r = await c.post("consumer-credit/v2/scores", json={"ssn": "1"})
+            assert r.json() == {"score": 781}
+            await c.post("consumer-credit/v2/scores", json={"ssn": "1"})  # a retry: counted once
+            with pytest.raises(httpx.ReadTimeout):
+                await c.post("credit-report/v1/score", json={"ssn": "1"}, timeout=0.2)
+            assert (await c.get("unknown")).status_code == 404
+        effects = stubs.side_effects()
+        assert [(e.target, e.payload) for e in effects] == [
+            ("EquifaxClient POST /consumer-credit/v2/scores", {"request": {"ssn": "1"}, "status": 200}),
+            ("TransUnionClient POST /credit-report/v1/score", {"request": {"ssn": "1"}, "outcome": "timeout"}),
+            ("(unstubbed) GET /unknown", {"request": None, "status": 404}),
+        ]
+    finally:
+        stubs.stop()
+
+
+def test_unreadable_secret_is_reported():
+    from cryptography.fernet import Fernet
+
+    from api.app.models import AzureConnection as Conn
+    from api.app.services import infra as infra_svc
+
+    conn = Conn(project_id="p", tenant="t", subscription="s",
+                secret_enc=Fernet(Fernet.generate_key()).encrypt(b"x").decode())
+    with pytest.raises(infra_svc.SecretUnreadable):
+        infra_svc.decrypt_secret(Fernet(Fernet.generate_key()), conn)
+    assert infra_svc.decrypt_secret(Fernet(Fernet.generate_key()), Conn(project_id="p", tenant="t",
+                                                                        subscription="s")) is None
+
+
+async def test_stale_service_runs_cleared_at_startup(client, app, monkeypatch):
+    _, _, build_id, _ = await _built(client, monkeypatch)
+    async with app.state.sessionmaker() as s:
+        b = await s.get(Build, build_id)
+        b.run_pid, b.run_port = os.getpid(), 5999  # a live pid that is not this build's dotnet
+        await s.commit()
+    assert await verify_svc.clear_stale_runs(app.state.sessionmaker) == 1
+    async with app.state.sessionmaker() as s:
+        b = await s.get(Build, build_id)
+        assert b.run_pid is None and b.run_port is None
+    assert os.getpid()  # still alive: never killed a pid that is not the build's service

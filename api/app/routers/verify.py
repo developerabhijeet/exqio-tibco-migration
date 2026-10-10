@@ -30,19 +30,36 @@ async def _process(session, process_id: str) -> Process:
     return proc
 
 
+class GenerateRequest(BaseModel):
+    refresh: bool = False
+
+
 @router.get("/processes/{process_id}/scenarios")
-async def list_scenarios(process_id: str, request: Request, session: SessionDep, settings: SettingsDep,
-                         refresh: bool = False) -> dict[str, Any]:
-    """The scenario set; generated and cached on first read (``refresh=true`` regenerates the
-    generated ones). 503 when the scenario database cannot be created or seeded."""
+async def list_scenarios(process_id: str, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    """The cached scenario set (read only). Empty, with a ``hint``, until
+    ``POST /processes/{id}/scenarios/generate`` (or a build) has generated it."""
+    proc = await _process(session, process_id)
+    rows = await svc.load_scenarios(session, proc.id)
+    return {"process_id": process_id, "source": "model", "label": svc.MODEL_LABEL, "generated_now": False,
+            "notes": [], "database": svc.scenario_db_name(settings, proc.project_id),
+            "hint": None if rows else svc.GENERATE_HINT.replace("{id}", process_id),
+            "scenarios": [svc.scenario_out(r) for r in rows]}
+
+
+@router.post("/processes/{process_id}/scenarios/generate")
+async def generate_scenarios(process_id: str, request: Request, session: SessionDep, settings: SettingsDep,
+                             body: GenerateRequest | None = None) -> dict[str, Any]:
+    """Generate the scenario set (static scenarios, expected results from the evaluator) and cache
+    it; without ``refresh`` an existing set is returned as is. 503 when the scenario database
+    cannot be created or seeded."""
     proc = await _process(session, process_id)
     try:
         rows, notes, fresh = await svc.ensure_scenarios(session, settings, proc, request.app.state.scenario_lock,
-                                                        refresh=refresh)
+                                                        refresh=(body or GenerateRequest()).refresh)
     except svc.ScenarioDBUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"process_id": process_id, "source": "model", "label": svc.MODEL_LABEL, "generated_now": fresh,
-            "notes": notes, "database": svc.scenario_db_name(settings, proc.project_id),
+            "notes": notes, "database": svc.scenario_db_name(settings, proc.project_id), "hint": None,
             "scenarios": [svc.scenario_out(r) for r in rows]}
 
 
@@ -64,12 +81,9 @@ async def add_scenario(process_id: str, body: SmeScenario, request: Request, ses
 
 
 @router.get("/processes/{process_id}/test-data")
-async def test_data(process_id: str, request: Request, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
-    proc = await _process(session, process_id)
-    try:
-        return await svc.test_data(session, settings, proc, request.app.state.scenario_lock)
-    except svc.ScenarioDBUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+async def test_data(process_id: str, session: SessionDep) -> dict[str, Any]:
+    """Read only: masked inputs of the cached scenarios and seed rows of the tables the process touches."""
+    return await svc.test_data(session, await _process(session, process_id))
 
 
 @router.post("/builds/{build_id}/verify", status_code=202, response_model=JobCreated)
