@@ -7,14 +7,17 @@
    BW5 ``$HTTP-Receiver/ProcessStarterOutput/parameters``).
 2. Activities run in link order. The walk is BPEL's: an activity runs once all its incoming
    links are decided and at least one is true; when none is true it is skipped and its outgoing
-   links die (dead-path elimination), which is how a join after an exclusive choice (four tier
-   mappers into ``RecordDecision``) runs exactly once. Among ready activities the most recently
-   enabled runs first, so parallel branches run one after another, in document order.
+   links die (dead-path elimination), which is how a join after a choice (four tier mappers
+   into ``RecordDecision``) runs exactly once. Among ready activities the most recently
+   enabled runs first, so parallel branches run one after another, in document order. A graph
+   that stops with live activities still waiting (a cycle) raises :class:`EvaluationError`.
 3. Each activity's input binding stylesheet runs through :func:`transform` against the current
    variables; the activity executes by canonical type; its output becomes ``$<ActivityName>``.
-4. Outgoing links: success links fire; of the conditional links the first whose expression is
-   true fires; the otherwise link fires when no conditional did; error links fire only when the
-   activity failed (and then nothing else fires).
+4. Outgoing links: success links fire; every conditional link whose expression is true fires
+   (BW evaluates them all; overlapping conditions run several branches); the otherwise link
+   fires when no conditional did; error links fire only when the activity failed (and then
+   nothing else fires). Conditions use XPath's effective boolean value (a non-empty string,
+   even ``"false"``, is true).
 5. A failure without an error link raises a :class:`Fault` that propagates through
    ``call.process`` to the caller and to the nearest matching fault handler (by fault name,
    else catch-all); an unhandled fault surfaces in ``ExpectedResult.fault``.
@@ -25,6 +28,22 @@ Canonical types executed: see ``SUPPORTED_TYPES`` and ``NOOP_TYPES``; anything e
 Prefixes in transition conditions are not declared in BW6 process files (Studio writes them
 as they appear in the mapper), so condition steps ``pfx:name`` are matched by local name
 (``*:name``); functions (``pfx:name(``) keep their prefix.
+
+A ``group.transaction`` that exits by fault rolls back, and its ``row_written`` side effects
+are dropped from the result (JMS and HTTP effects are not transactional and stay).
+
+Fields computed in XPath double arithmetic (``number(a) div number(b)``) are marked in
+``TraceStep.numeric_kinds`` and listed in ``ExpectedResult.numeric_fields`` with the scale they
+should be compared at (contract ``fractionDigits``, the column scale for rows, else ``None`` =
+15 significant digits).
+
+ASSUMPTIONS (from BW6 documentation as recalled, not evidenced in the estate):
+
+* Send HTTP Request faults are named ``HttpClientException`` (4xx), ``HttpServerException``
+  (5xx) and ``HttpCommunicationException`` (timeout, connection).
+* A catch-all handler sees ``$FaultDetails`` / ``$_error`` shaped
+  ``<FaultDetails><Msg/><MsgCode/><ActivityName/></FaultDetails>``, where ``Msg`` is the
+  thrown fault's ``message`` field (else its name) and ``MsgCode`` the fault name.
 """
 from __future__ import annotations
 
@@ -34,7 +53,7 @@ import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -42,6 +61,7 @@ import psycopg
 from lxml import etree
 
 from engine.ir.models import Activity, Application, Group, Process, Resource, Transition
+from engine.parity.compare import side_effect_prefixes
 from engine.parity.db import ScenarioDB
 from engine.parity.models import (
     ExpectedResult,
@@ -53,13 +73,14 @@ from engine.parity.models import (
     dict_to_xml,
     xml_to_dict,
 )
-from engine.parity.scenarios import (
+from engine.parity.schema import (
     SchemaIndex,
     editor_href,
     rest_body_decl,
     rest_parameters_decl,
     typed_json,
 )
+from engine.parity.sql import sql_write_payload
 from engine.parity.stubs import StubRegistry
 from engine.parity.xpath import XPathContext
 from engine.parity.xslt import XSL_NS, transform
@@ -212,90 +233,6 @@ def _jdbc_value(text: str | None, sql_type: str) -> Any:
     return s
 
 
-_INSERT_RE = re.compile(r"^\s*insert\s+into\s+([\w.\"]+)\s*\((.*?)\)\s*values\s*\((.*)\)\s*;?\s*$",
-                        re.IGNORECASE | re.DOTALL)
-_UPDATE_RE = re.compile(r"^\s*update\s+([\w.\"]+)\s+set\s+(.*?)(?:\s+where\s+(.*?))?\s*;?\s*$",
-                        re.IGNORECASE | re.DOTALL)
-_DELETE_RE = re.compile(r"^\s*delete\s+from\s+([\w.\"]+)(?:\s+where\s+(.*?))?\s*;?\s*$",
-                        re.IGNORECASE | re.DOTALL)
-
-
-def _split_sql(text: str) -> list[str]:
-    out, depth, quote, start = [], 0, False, 0
-    for i, c in enumerate(text):
-        if c == "'":
-            quote = not quote
-        elif not quote and c == "(":
-            depth += 1
-        elif not quote and c == ")":
-            depth -= 1
-        elif not quote and depth == 0 and c == ",":
-            out.append(text[start:i].strip())
-            start = i + 1
-    out.append(text[start:].strip())
-    return out
-
-
-def _fill_placeholders(exprs: list[str], values: list[Any], cursor: list[int]) -> list[Any]:
-    out = []
-    for e in exprs:
-        if e == "?":
-            out.append(values[cursor[0]] if cursor[0] < len(values) else None)
-            cursor[0] += 1
-        else:
-            n = e.count("?")
-            m = re.fullmatch(r"'((?:[^']|'')*)'", e)
-            out.append(m.group(1).replace("''", "'") if m else e)
-            cursor[0] += n
-    return out
-
-
-def sql_write_payload(sql: str, values: list[Any]) -> tuple[str, str, dict[str, Any], dict[str, str]]:
-    """Describe a write statement: ``(verb, table, row, column -> parameter-or-expression)``.
-
-    ``row`` maps each column written (and, for update/delete, each ``where`` column) to the
-    bound value, or to the SQL expression text for non-parameter values (``current_timestamp``).
-    """
-    m = _INSERT_RE.match(sql)
-    if m:
-        cols = [c.strip().strip('"') for c in m.group(2).split(",")]
-        exprs = _split_sql(m.group(3))
-        vals = _fill_placeholders(exprs, values, [0])
-        return "insert", _table(m.group(1)), dict(zip(cols, vals, strict=False)), dict(zip(cols, exprs, strict=False))
-    m = _UPDATE_RE.match(sql)
-    if m:
-        cursor = [0]
-        row: dict[str, Any] = {}
-        sources: dict[str, str] = {}
-        for assign in _split_sql(m.group(2)):
-            col, _, expr = assign.partition("=")
-            col, expr = col.strip().strip('"'), expr.strip()
-            row[col] = _fill_placeholders([expr], values, cursor)[0]
-            sources[col] = expr
-        for col, expr in _where_pairs(m.group(3) or ""):
-            row[f"where.{col}"] = _fill_placeholders([expr], values, cursor)[0]
-            sources[f"where.{col}"] = expr
-        return "update", _table(m.group(1)), row, sources
-    m = _DELETE_RE.match(sql)
-    if m:
-        cursor = [0]
-        row = {}
-        sources = {}
-        for col, expr in _where_pairs(m.group(2) or ""):
-            row[f"where.{col}"] = _fill_placeholders([expr], values, cursor)[0]
-            sources[f"where.{col}"] = expr
-        return "delete", _table(m.group(1)), row, sources
-    return "write", "", {f"param{i + 1}": v for i, v in enumerate(values)}, {}
-
-
-def _where_pairs(where: str) -> list[tuple[str, str]]:
-    return [(c, e.strip()) for c, e in re.findall(r"([\w.\"]+)\s*=\s*(\?|'[^']*'|[\w.]+)", where)]
-
-
-def _table(name: str) -> str:
-    return name.replace('"', "").split(".")[-1]
-
-
 def _json_safe(value: Any) -> Any:
     if isinstance(value, (Decimal, dt.date, dt.datetime, dt.time)):
         return _db_text(value)
@@ -341,6 +278,10 @@ class _Frame:
     path: str  # trace prefix: "" for the scenario's process, "CallX/" inside a subprocess
     reply: tuple[Activity, etree._Element] | None = None
     end: etree._Element | None = None
+    # variable name -> {result path (local names below the root): "double"}
+    numeric: dict[str, dict[tuple[str, ...], str]] = field(default_factory=dict)
+    reply_kinds: dict[tuple[str, ...], str] = field(default_factory=dict)
+    end_kinds: dict[tuple[str, ...], str] = field(default_factory=dict)
 
     @property
     def bw5(self) -> bool:
@@ -352,6 +293,8 @@ class _Run:
     result: ExpectedResult
     stubs: _StubChain
     depth: int = 0
+    # row side effects whose columns are double-derived: (effect, column, column scale)
+    numeric_rows: list[tuple[SideEffect, str, int | None]] = field(default_factory=list)
 
 
 class Evaluator:
@@ -409,6 +352,7 @@ class Evaluator:
             except ActivityFault as exc:
                 run.result.fault = exc.fault
             run.result.output = self._output(frame)
+            run.result.numeric_fields = self._numeric_fields(run, frame)
         self.last_stub_responses = dict(run.stubs.used)
         return run.result
 
@@ -605,6 +549,7 @@ class Evaluator:
         while pending:
             ready = [n for n in pending if n in enabled]
             if not ready:
+                self._check_dead(frame, pending, incoming, links)
                 break
             node_id = max(ready, key=lambda n: (enabled[n], -index[n]))
             pending.discard(node_id)
@@ -619,6 +564,23 @@ class Evaluator:
                 links[t.id] = t.id in fired
                 if all(x.id in links for x in incoming[t.to_id]) and t.to_id not in enabled:
                     enabled[t.to_id] = seq
+
+    @staticmethod
+    def _check_dead(frame: _Frame, pending: set[str], incoming: dict[str, list[Transition]],
+                    links: dict[str, bool]) -> None:
+        """Waiting activities are fine only if none can ever run (no true link reaches them)."""
+        dead = {n for n in pending if not any(links.get(t.id) for t in incoming[n])}
+        changed = True
+        while changed:
+            changed = False
+            for n in list(dead):
+                if any(t.id not in links and t.from_id not in dead for t in incoming[n]):
+                    dead.discard(n)
+                    changed = True
+        if dead != pending or not links:
+            stuck = sorted(pending - dead) or sorted(pending)
+            raise EvaluationError(f"{frame.process.id}: activities {stuck} wait on links that never "
+                                  "resolve (a cycle in the process graph)")
 
     async def _run_node(self, run: _Run, frame: _Frame, node: Activity | Group,
                         outgoing: list[Transition]) -> set[str]:
@@ -647,8 +609,7 @@ class Evaluator:
         fired: set[str] = set()
         conditional_true = False
         for t in outgoing:
-            if (t.kind == "conditional" and not conditional_true and t.expression
-                    and self._condition(frame, t.expression)):
+            if t.kind == "conditional" and t.expression and self._condition(frame, t.expression):
                 fired.add(t.id)
                 conditional_true = True
         for t in outgoing:
@@ -661,22 +622,25 @@ class Evaluator:
 
     def _condition(self, frame: _Frame, expression: str) -> bool:
         ctx = self._context(frame)
-        try:
-            value = ctx.evaluate(_local_steps(expression))
+        try:  # effective boolean value, as BW does: boolean() of the expression
+            value = ctx.evaluate(f"boolean({_local_steps(expression)})")
         except Exception as exc:
             raise EvaluationError(f"{frame.process.id}: cannot evaluate {expression!r}: {exc}") from exc
-        if isinstance(value, list):
-            return bool(value)
-        if isinstance(value, str):
-            return value != "" and value != "false"
-        return bool(value)
+        return value is True
 
     # groups
     async def _run_group(self, run: _Run, frame: _Frame, group: Group, step: TraceStep) -> None:
         members = self._container_nodes(frame.process, group.id)
         if group.kind == "transaction":
-            with self.db.transaction():
-                await self._run_graph(run, frame, members)
+            mark = len(run.result.side_effects)
+            try:
+                with self.db.transaction():
+                    await self._run_graph(run, frame, members)
+            except (ActivityFault, EvaluationError):
+                # rolled back: the rows were never written; messages and calls did happen
+                kept = run.result.side_effects[mark:]
+                run.result.side_effects[mark:] = [e for e in kept if e.kind != "row_written"]
+                raise
         elif group.kind == "iterate":
             ctx = self._context(frame)
             expr = group.config.get("variable_list")
@@ -760,6 +724,8 @@ class Evaluator:
             return
         inp = None if kind == "reply" and not act.config.get("input_xslt") else self._bind_input(frame, act)
         step.input = _as_dict(inp)
+        kinds = self._numeric_kinds(frame, act) if inp is not None else {}
+        step.numeric_kinds = {"/".join(k): v for k, v in kinds.items()}
         output: etree._Element | None = None
         if kind in NOOP_TYPES:
             output = None
@@ -768,7 +734,7 @@ class Evaluator:
             if kind == "assign" and act.config.get("variable") and inp is not None:
                 frame.variables[act.config["variable"]] = inp
         elif kind.startswith("jdbc."):
-            output = self._jdbc(run, frame, act, inp)
+            output = self._jdbc(run, frame, act, inp, kinds)
         elif kind in ("http.invoke", "rest.invoke", "soap.invoke"):
             output = self._http(run, frame, act, inp)
         elif kind in ("jms.send", "jms.publish", "jms.reply"):
@@ -786,7 +752,7 @@ class Evaluator:
             text = _child(inp, "xmlString")
             output = etree.fromstring((text.text or "").encode()) if text is not None else None
         elif kind == "call.process":
-            output = await self._call(run, frame, act, inp)
+            output, kinds = await self._call(run, frame, act, inp)
         elif kind == "throw":
             data = xml_to_dict(inp) if inp is not None else {}
             name = act.config.get("fault_name") or (etree.QName(inp).localname if inp is not None else "Fault")
@@ -796,19 +762,26 @@ class Evaluator:
             if inp is None:
                 inp = self._bind_input(frame, act, "message_xslt")
                 step.input = _as_dict(inp)
+                kinds = self._numeric_kinds(frame, act, "message_xslt") if inp is not None else {}
+                step.numeric_kinds = {"/".join(k): v for k, v in kinds.items()}
             if frame.reply is None:
                 frame.reply = (act, inp if inp is not None else etree.Element("empty"))
+                frame.reply_kinds = kinds
                 step.output = self._reply_output(frame, act, frame.reply[1])
         elif kind == "end":
             frame.end = inp
+            frame.end_kinds = kinds
             output = inp
         if kind not in NOOP_TYPES:  # a no-op (BW6 StartEvent, Empty, Log) has no output variable
             self._bind_output(frame, act, output)
+            if kind in ("mapper", "assign", "xslt.transform", "end", "call.process") and kinds:
+                frame.numeric[bw5_var(act.name) if frame.bw5 else act.name] = kinds
         if not step.output:
             step.output = _as_dict(output)
 
     # JDBC
-    def _jdbc(self, run: _Run, frame: _Frame, act: Activity, inp: etree._Element | None) -> etree._Element:
+    def _jdbc(self, run: _Run, frame: _Frame, act: Activity, inp: etree._Element | None,
+              kinds: dict[tuple[str, ...], str] | None = None) -> etree._Element:
         sql = act.config.get("sql") or (act.config.get("settings") or {}).get("sqlStatement")
         if not sql:
             raise EvaluationError(f"{frame.process.id}/{act.id}: no SQL statement")
@@ -825,12 +798,19 @@ class Evaluator:
                                                              "sqlState": exc.sqlstate or ""}),
                                 activity_id=act.id) from exc
         if act.type == "jdbc.update":
-            _, table, row, _ = sql_write_payload(sql, values)
-            row = self._as_stored(table, row)
-            run.result.side_effects.append(SideEffect(
-                kind="row_written", target=table,
-                payload={k: _json_safe(v) for k, v in row.items()},
-                activity_id=f"{frame.path}{act.id}"))
+            _, table, row, sources = sql_write_payload(sql, values)
+            row = self.as_stored(table, row)
+            effect = SideEffect(kind="row_written", target=table,
+                                payload={k: _json_safe(v) for k, v in row.items()},
+                                activity_id=f"{frame.path}{act.id}")
+            run.result.side_effects.append(effect)
+            index = 0
+            for col, expr in sources.items():  # double-derived parameters -> column scale
+                if expr == "?" and index < len(params) and (kinds or {}).get((params[index].get("name"),)):
+                    meta = self._columns.get(table, {}).get(col.removeprefix("where.")) or {}
+                    scale = meta.get("numeric_scale")
+                    run.numeric_rows.append((effect, col, int(scale) if scale is not None else None))
+                index += expr.count("?")
             out = etree.Element("jdbcUpdateActivityOutput")
             etree.SubElement(out, "noOfUpdates").text = str(result if isinstance(result, int) else 0)
             return out
@@ -846,8 +826,11 @@ class Evaluator:
                     etree.SubElement(rec, col).text = _db_text(val)
         return out
 
-    def _as_stored(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
-        """Round bound values the way the column stores them (``numeric(8,4)`` -> 4 places)."""
+    def as_stored(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+        """Round values the way the column stores them (``numeric(8,4)`` -> 4 places).
+
+        Public so the parity runner can quantise rows read back from the .NET side the same way.
+        """
         if table not in self._columns:
             try:
                 info = self.db.execute(
@@ -955,7 +938,8 @@ class Evaluator:
                                  root=None if decl else "Result")
 
     # subprocess
-    async def _call(self, run: _Run, frame: _Frame, act: Activity, inp: etree._Element | None) -> etree._Element:
+    async def _call(self, run: _Run, frame: _Frame, act: Activity, inp: etree._Element | None
+                    ) -> tuple[etree._Element, dict[tuple[str, ...], str]]:
         target = next((c.target_process for c in frame.process.calls if c.activity_id == act.id), None)
         target = target or act.config.get("sub_process") or act.config.get("subprocess")
         if not target:
@@ -974,7 +958,56 @@ class Evaluator:
             await self._exec_process(run, child)
         finally:
             run.depth -= 1
-        return child.end if child.end is not None else etree.Element("End")
+        return (child.end if child.end is not None else etree.Element("End")), child.end_kinds
+
+    # numeric kinds
+    def _numeric_kinds(self, frame: _Frame, act: Activity, key: str = "input_xslt"
+                       ) -> dict[tuple[str, ...], str]:
+        """Result fields of ``act``'s binding computed in XPath double arithmetic."""
+        sheet = self._stylesheet(frame, act, key)
+        if not sheet:
+            return {}
+        _, leaves = binding_leaves(sheet)
+        out: dict[tuple[str, ...], str] = {}
+        for steps, expr in leaves:
+            if is_double_expression(expr):
+                out[steps] = "double"
+                continue
+            m = re.fullmatch(r"\s*\$([A-Za-z_][\w.-]*)((?:/[\w.*:-]+)*)\s*", expr)
+            if m:
+                path = tuple(x.split(":")[-1] for x in m.group(2).split("/") if x)
+                if frame.numeric.get(m.group(1), {}).get(path):
+                    out[steps] = "double"
+        return out
+
+    def _numeric_fields(self, run: _Run, frame: _Frame) -> dict[str, int | None]:
+        fields: dict[str, int | None] = {}
+        producer: Activity | None
+        if frame.reply is not None:
+            producer, kinds = frame.reply[0], frame.reply_kinds
+            op = str(producer.config.get("operation") or "")
+            wrappers = {f"{op}Response", f"{op}4XXFaultMessage", f"{op}5XXFaultMessage", "item",
+                        "clientError", "serverError"}
+            prefix = "output.body"
+        else:
+            kinds, wrappers, prefix = frame.end_kinds, set(), "output"
+            producer = next((a for a in frame.process.activities if a.type == "end"), None)
+        sheet = self._stylesheet(frame, producer, "input_xslt") if producer is not None else None
+        root = binding_leaves(sheet)[0] if sheet else None
+        decl = self.schema.element(*root) if root else None
+        for steps in kinds:
+            body = list(steps)
+            while body and body[0] in wrappers:
+                body.pop(0)
+            if not body:
+                continue
+            leaf = decl.at(body) if decl is not None else None
+            fields[prefix + "." + ".".join(body)] = leaf.fraction_digits if leaf is not None else None
+        for path, effect in side_effect_prefixes(run.result.side_effects):
+            for e, col, scale in run.numeric_rows:
+                if e is effect:
+                    fields[f"{path}.{col}"] = scale
+        return fields
 
     # output
     def _output(self, frame: _Frame) -> dict[str, Any]:
@@ -1048,3 +1081,75 @@ def _declare_params(stylesheet: str) -> str:
         sheet.insert(first, param)
     sheet.set("version", "2.0")
     return etree.tostring(sheet, encoding="unicode")
+
+
+def binding_leaves(stylesheet: str) -> tuple[tuple[str | None, str] | None, list[tuple[tuple[str, ...], str]]]:
+    """``(root (ns, local), [(path below the root, select)])`` of a binding stylesheet.
+
+    ``xsl:variable`` references are expanded (three levels), so ``$feeApplied`` shows the
+    arithmetic it stands for.
+    """
+    try:
+        sheet = etree.fromstring(stylesheet.encode("utf-8"))
+    except etree.XMLSyntaxError:
+        return None, []
+    variables = {v.get("name"): v.get("select") or "" for v in sheet.iter(f"{_XSL}variable")}
+
+    def expand(expr: str) -> str:
+        for _ in range(3):
+            expr = re.sub(r"\$([A-Za-z_][\w.-]*)",
+                          lambda m: f"({variables[m.group(1)]})" if m.group(1) in variables else m.group(0),
+                          expr)
+        return expr
+
+    template = next(sheet.iter(f"{_XSL}template"), None)
+    if template is None:
+        return None, []
+    roots = list(_literal_children(template))
+    if not roots:
+        return None, []
+    root = roots[0]
+    q = etree.QName(root)
+    leaves: list[tuple[tuple[str, ...], str]] = []
+
+    def walk(el: etree._Element, path: tuple[str, ...]) -> None:
+        selects = [v.get("select") for v in el.iter(f"{_XSL}value-of")
+                   if _owner(v) is el and v.get("select")]
+        if selects:
+            leaves.append((path, expand(selects[0])))
+        for child in _literal_children(el):
+            walk(child, (*path, etree.QName(child).localname))
+
+    for child in _literal_children(root):
+        walk(child, (etree.QName(child).localname,))
+    return (q.namespace, q.localname), leaves
+
+
+def _literal_children(el: etree._Element):
+    for c in el:
+        if not isinstance(c.tag, str):
+            continue
+        if c.tag.startswith(_XSL):
+            if etree.QName(c).localname in ("if", "choose", "when", "otherwise", "for-each"):
+                yield from _literal_children(c)
+            continue
+        yield c
+
+
+def _owner(node: etree._Element) -> etree._Element | None:
+    """Nearest literal (non-XSL) ancestor of an XSL instruction."""
+    cur = node.getparent()
+    while cur is not None and isinstance(cur.tag, str) and cur.tag.startswith(_XSL):
+        cur = cur.getparent()
+    return cur
+
+
+_STRINGS = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def is_double_expression(expr: str) -> bool:
+    """XPath arithmetic on ``number()`` / ``xs:double`` (IEEE double, not xs:decimal)."""
+    text = _STRINGS.sub("''", expr)
+    if not re.search(r"\bnumber\(|\bxsd?:(?:double|float)\(", text):
+        return False
+    return bool(re.search(r"\bdiv\b|\bmod\b|[*+]|\s-\s|\)\s*-", text))

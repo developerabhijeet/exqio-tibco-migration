@@ -40,6 +40,9 @@ class TraceStep(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] = Field(default_factory=dict)
     chosen_transition: str | None = None
+    # Binding result fields computed in XPath double arithmetic (``number(a) div number(b)``),
+    # by local path ("dti", "approval/rate"): value "double".
+    numeric_kinds: dict[str, str] = Field(default_factory=dict)
 
 
 class ExpectedResult(BaseModel):
@@ -48,6 +51,9 @@ class ExpectedResult(BaseModel):
     fault: Fault | None = None
     trace: list[TraceStep] = Field(default_factory=list)
     source: Literal["model", "sandbox"] = "model"
+    # Comparison paths of double-derived fields -> decimal scale to compare at (the contract's
+    # fractionDigits or the column scale); None compares at 15 significant digits.
+    numeric_fields: dict[str, int | None] = Field(default_factory=dict)
 
 
 class Scenario(BaseModel):

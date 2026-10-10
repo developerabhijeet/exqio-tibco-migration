@@ -17,18 +17,16 @@ import pytest
 
 from engine.analysis.models import Citation, Finding
 from engine.ir.models import Application
-from engine.parity.compare import NoiseRule, build_lineage, compare, flatten_result
+from engine.parity.compare import NoiseRule, NumericRule, build_lineage, compare, flatten_result
 from engine.parity.db import ScenarioDB
-from engine.parity.evaluator import Evaluator, sql_write_payload
+from engine.parity.evaluator import Evaluator
 from engine.parity.models import ExpectedResult, Scenario, StubResponse
-from engine.parity.scenarios import (
-    SchemaIndex,
-    SeedData,
-    WireMockStubs,
-    generate_and_evaluate,
-    generate_scenarios,
-    parse_condition,
-)
+from engine.parity.predicates import parse_condition
+from engine.parity.scenarios import generate_and_evaluate, generate_scenarios
+from engine.parity.schema import SchemaIndex
+from engine.parity.seed import SeedData
+from engine.parity.sql import sql_write_payload
+from engine.parity.stubs import WireMockStubs
 from engine.tibco_parser.scanner import scan_folder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -189,16 +187,21 @@ def test_decision_branch_scenarios_cover_all_tiers(gmf, evaluator):
     scenarios = generate_scenarios(proc, gmf.contracts, gmf)
     assert all(s.source == "generated" and s.expected is None for s in scenarios)
     by_kind = {k: [s for s in scenarios if s.kind == k] for k in ("happy", "branch", "fault")}
-    assert len(by_kind["happy"]) == 1 and len(by_kind["branch"]) == 3 and len(by_kind["fault"]) == 1
+    assert len(by_kind["happy"]) == 1 and len(by_kind["branch"]) == 4 and len(by_kind["fault"]) == 1
+    # the tier A branch has the happy path's input but is kept: de-duplication is per kind
+    tier_a = next(s for s in by_kind["branch"] if s.id.endswith("ComputeDTIToAssignTierA"))
+    assert tier_a.input == by_kind["happy"][0].input
     happy = by_kind["happy"][0].input["parameters"]
     # seed data reused: applicant 1 and decision 1 of seed.sql; the new application id is fresh
     assert happy["ssn"] == "912-55-7781" and happy["creditScore"] == 752
     assert happy["applicationId"] == "CA-2026-000107"
-    asyncio.run(_fill(scenarios, evaluator))
+    scenarios = asyncio.run(_fill(scenarios, evaluator))
+    assert len(scenarios) == 6  # every branch scenario really took its link
     outcomes = {s.id: (s.expected.output.get("decision"), s.expected.output.get("tier"),
                        s.expected.fault.name if s.expected.fault else None) for s in scenarios}
     assert outcomes == {
         "DecisionEngine:happy": ("APPROVED", "A", None),
+        "DecisionEngine:branch:ComputeDTIToAssignTierA": ("APPROVED", "A", None),
         "DecisionEngine:branch:ComputeDTIToAssignTierB": ("APPROVED", "B", None),
         "DecisionEngine:branch:ComputeDTIToAssignTierC": ("APPROVED", "C", None),
         "DecisionEngine:branch:ComputeDTIToAssignDecline": ("DECLINED", None, None),
@@ -215,7 +218,70 @@ def test_decision_branch_scenarios_cover_all_tiers(gmf, evaluator):
 async def _fill(scenarios, evaluator):
     from engine.parity.scenarios import fill_expected
 
-    await fill_expected(scenarios, evaluator)
+    return await fill_expected(scenarios, evaluator)
+
+
+def _variant(app: Application, name: str, edit) -> Application:
+    """A deep copy of ``app`` with ``edit(process)`` applied to process ``name``."""
+    copied = copy.deepcopy(app)
+    edit(process(copied, name))
+    return copied
+
+
+def _set_condition(link_id: str, expression: str):
+    def edit(proc):
+        link = next(t for t in proc.transitions if t.id == link_id)
+        link.expression = expression
+    return edit
+
+
+def test_overlapping_conditions_fire_every_true_link(gmf, db, stubs):
+    # BW fires every conditional link whose condition holds; make B overlap A (>= 680 only)
+    app = _variant(gmf, "DecisionEngine", _set_condition(
+        "ComputeDTIToAssignTierB", "number($Start/parameters/creditScore) >= 680"))
+    result = run(Evaluator(app, db, stubs), "creditorigination.DecisionEngine", decision_request(752))
+    steps = {s.activity_id: s for s in result.trace}
+    assert steps["ComputeDTI"].chosen_transition == "ComputeDTIToAssignTierA,ComputeDTIToAssignTierB"
+    assert "AssignTierA" in steps and "AssignTierB" in steps and "AssignDecline" not in steps
+    # the join after both branches still runs once; ($AssignTierA, $AssignTierB, ...)[1] is A
+    assert [s.activity_id for s in result.trace].count("RecordDecision") == 1
+    assert result.output["tier"] == "A"
+    # a generated scenario for B must make A false too, so it stays below 740
+    scenarios = generate_scenarios(process(app, "DecisionEngine"), app.contracts, app)
+    b = next(s for s in scenarios if s.id.endswith("branch:ComputeDTIToAssignTierB"))
+    assert 680 <= b.input["parameters"]["creditScore"] < 740
+
+
+def test_condition_uses_effective_boolean_value(gmf, db, stubs):
+    # XPath: the non-empty string 'false' is true
+    app = _variant(gmf, "DecisionEngine", _set_condition("ComputeDTIToAssignTierA", "'false'"))
+    result = run(Evaluator(app, db, stubs), "creditorigination.DecisionEngine", decision_request(600))
+    assert "AssignTierA" in [s.activity_id for s in result.trace]
+    app = _variant(gmf, "DecisionEngine", _set_condition("ComputeDTIToAssignTierA", "0"))
+    result = run(Evaluator(app, db, stubs), "creditorigination.DecisionEngine", decision_request(752))
+    assert "AssignTierA" not in [s.activity_id for s in result.trace]
+
+
+def test_cycle_in_link_graph_is_an_error(gmf, db, stubs):
+    from engine.ir.models import Transition
+    from engine.parity.evaluator import EvaluationError
+
+    def edit(proc):
+        proc.transitions.append(Transition(id="Loop", from_id="RecordApplication", to_id="AssignTierA",
+                                           kind="success"))
+    app = _variant(gmf, "DecisionEngine", edit)
+    with pytest.raises(EvaluationError, match="never resolve"):
+        run(Evaluator(app, db, stubs), "creditorigination.DecisionEngine", decision_request(752))
+
+
+def test_fill_expected_drops_scenarios_that_miss_their_link(gmf, evaluator):
+    wrong = Scenario(id="DecisionEngine:branch:ComputeDTIToAssignTierB", process_id="creditorigination.DecisionEngine",
+                     name="claims B", kind="branch", input=decision_request(752))
+    right = Scenario(id="DecisionEngine:branch:ComputeDTIToAssignTierC", process_id="creditorigination.DecisionEngine",
+                     name="C", kind="branch", input=decision_request(650))
+    with pytest.warns(UserWarning, match="did not take its link"):
+        kept = asyncio.run(_fill([wrong, right], evaluator))
+    assert [s.id for s in kept] == ["DecisionEngine:branch:ComputeDTIToAssignTierC"]
 
 
 def test_bureau_single_bureau_flag_on_timeout(evaluator):
@@ -304,6 +370,20 @@ def test_evaluator_runs_isolated_by_default(evaluator, db):
     assert db.execute("select count(*) as n from payment")[0]["n"] == before
 
 
+def test_transaction_group_fault_drops_its_rows(gmf, db, stubs):
+    # UpdateLoanAccount fails after InsertPayment: the local transaction rolls back
+    def edit(proc):
+        act = next(a for a in proc.activities if a.id == "UpdateLoanAccount")
+        act.config["sql"] = act.config["sql"].replace("set fees_due", "set no_such_column")
+    app = _variant(gmf, "PaymentPosting", edit)
+    evaluator = Evaluator(app, db, stubs, isolate=False)  # real commit/rollback
+    result = _payment(evaluator, db, 3, "PMT-0000940")
+    assert result.fault is not None and result.fault.name == "JDBCSQLException"
+    assert not effects(result, "row_written", "payment")
+    assert db.execute("select count(*) as n from payment where payment_id = ?", ["PMT-0000940"])[0]["n"] == 0
+    assert "InsertPayment" in [s.activity_id for s in result.trace]
+
+
 def test_rest_lookup_and_iterate_and_bw5(evaluator, apps, db, stubs):
     found = run(evaluator, "loanservicing.AccountLookup", {"parameters": {"accountNumber": "GMF-10000003"}})
     assert found.output["status"] == 200 and found.output["body"]["maskedSsn"] == "***-**-9042"
@@ -389,9 +469,13 @@ def test_schema_and_seed_helpers(gmf):
 # --- comparison --------------------------------------------------------------------------------
 
 
+# The real shape the analysis emits for PAY-F1: the condition on the link out of LoadAccount.
 S_GRACE = Finding(id="S_grace", severity="medium", source="static", decision="fix",
                   text="Late fee charged on day 10; policy says after 10 days.",
-                  citations=[Citation(activity_id="AssessLateFee", kind="expression", text="lateFee = 25.00")])
+                  citations=[Citation(activity_id="LoadAccount", kind="condition",
+                                      text="days-from-duration(...) >= 10")])
+PAYMENT = "loanservicing.PaymentPosting"
+DECISION = "creditorigination.DecisionEngine"
 
 
 def _fixed_payment_posting(gmf: Application) -> Application:
@@ -406,11 +490,15 @@ def _fixed_payment_posting(gmf: Application) -> Application:
 
 def test_compare_intended_change(gmf, db, stubs, evaluator):
     expected = _payment(evaluator, db, 10, "PMT-0000930")
-    actual = _payment(Evaluator(_fixed_payment_posting(gmf), db, stubs), db, 10, "PMT-0000930")
-    lineage = build_lineage(expected, gmf, "loanservicing.PaymentPosting")
-    assert "AssessLateFee" in lineage["row_written[payment][0].late_fee_applied"]
+    fixed = Evaluator(_fixed_payment_posting(gmf), db, stubs)
+    counterfactual = _payment(fixed, db, 10, "PMT-0000930")  # the model with the fix applied
+    actual = counterfactual.model_copy(deep=True)  # the .NET service implements the fix
+    lineage = build_lineage(expected, gmf, PAYMENT)
+    late = {(e.process_id, e.activity_id) for e in lineage["row_written[payment][0].late_fee_applied"]}
+    assert {(PAYMENT, "AssessLateFee"), (PAYMENT, "LoadAccount")} <= late  # data + control
     report = compare(expected, actual, [NoiseRule(path_glob="*.posted_at", reason="clock")], [S_GRACE],
-                     lineage, scenario_id="PaymentPosting:day10")
+                     lineage, scenario_id="PaymentPosting:day10", counterfactual=counterfactual,
+                     finding_process=PAYMENT)
     late = next(d for d in report.side_effects if d.path == "row_written[payment][0].late_fee_applied")
     assert (late.expected, late.actual, late.status, late.finding_id) == ("25.00", "0.00", "intended", "S_grace")
     assert report.unexplained == 0
@@ -422,7 +510,74 @@ def test_compare_intended_change(gmf, db, stubs, evaluator):
     assert report.parity == pytest.approx(sum(d.status == "match" for d in compared) / len(compared))
     # a finding decided keep explains nothing
     kept = S_GRACE.model_copy(update={"decision": "keep"})
-    assert compare(expected, actual, [], [kept], lineage).unexplained == 4
+    assert compare(expected, actual, [], [kept], lineage, finding_process=PAYMENT).unexplained == 4
+    # scoped by process: the same activity id cited for another process explains nothing
+    assert compare(expected, actual, [], [S_GRACE], lineage,
+                   finding_process=DECISION).unexplained == 4
+    # a difference the counterfactual does not produce stays a defect, even inside the lineage
+    wrong = actual.model_copy(deep=True)
+    wrong.side_effects[0].payload["late_fee_applied"] = "5.00"
+    report = compare(expected, wrong, [], [S_GRACE], lineage, counterfactual=counterfactual,
+                     finding_process=PAYMENT)
+    late = next(d for d in report.side_effects if d.path == "row_written[payment][0].late_fee_applied")
+    assert late.status == "defect"
+
+
+def test_compare_tier_threshold_change_is_intended(gmf, db, stubs, evaluator):
+    """A finding on the tier B threshold (a condition, not a binding) explains the tier fields.
+
+    Data lineage alone misses it: AssignTierB's binding reads only $Start, so the decision on
+    ComputeDTI's outgoing link is only reachable through control dependence."""
+    finding = Finding(id="S_tierB", severity="high", source="ai", decision="fix",
+                      text="Tier B starts at 700, not 680.",
+                      citations=[Citation(activity_id="ComputeDTI", kind="condition",
+                                          text="number($Start/parameters/creditScore) >= 680")])
+    expected = run(evaluator, DECISION, decision_request(690))
+    fixed = _variant(gmf, "DecisionEngine", _set_condition(
+        "ComputeDTIToAssignTierB",
+        "number($Start/parameters/creditScore) >= 700 and number($Start/parameters/creditScore) <= 739"))
+    counterfactual = run(Evaluator(fixed, db, stubs), DECISION, decision_request(690))
+    assert (expected.output.get("tier"), counterfactual.output.get("decision")) == ("B", "DECLINED")
+    actual = counterfactual.model_copy(deep=True)
+    data_only = build_lineage(expected, gmf, DECISION, control=False)
+    before = compare(expected, actual, [], [finding], data_only, counterfactual=counterfactual,
+                     finding_process=DECISION)
+    assert next(d for d in before.fields if d.path == "output.decision").status == "defect"
+    lineage = build_lineage(expected, gmf, DECISION)
+    report = compare(expected, actual, [], [finding], lineage, counterfactual=counterfactual,
+                     finding_process=DECISION)
+    statuses = {d.path: d.status for d in report.fields}
+    assert statuses["output.decision"] == "intended" and statuses["output.tier"] == "intended"
+    assert statuses["output.apr"] == "intended" and statuses["output.dti"] == "match"
+    assert report.unexplained == 0
+    # an unrelated difference in a field the fix does not change stays a defect
+    actual.output["dti"] = "0.5"
+    assert compare(expected, actual, [], [finding], lineage, counterfactual=counterfactual,
+                   finding_process=DECISION).unexplained == 1
+
+
+def test_compare_numeric_double_fields(evaluator):
+    expected = run(evaluator, DECISION, decision_request(752))
+    # the evaluator marks number() division as XPath double; rows compare at the column scale
+    assert expected.numeric_fields == {"output.dti": None, "row_written[decision][0].dti": 4}
+    compute = next(s for s in expected.trace if s.activity_id == "ComputeDTI")
+    assert compute.numeric_kinds == {"dti": "double"}
+    assert expected.output["dti"] == "0.23387096774193547"
+    actual = expected.model_copy(deep=True)
+    actual.output["dti"] = "0.2338709677419354838709677419"  # .NET decimal division
+    actual.side_effects[0].payload["dti"] = "0.23387"  # raw value; quantised to numeric(8,4)
+    report = compare(expected, actual, [], [], {})
+    statuses = {d.path: d.status for d in report.fields + report.side_effects}
+    assert statuses["output.dti"] == "match" and statuses["row_written[decision][0].dti"] == "match"
+    assert report.unexplained == 0
+    actual.output["dti"] = "0.25"  # a wrong formula
+    report = compare(expected, actual, [], [], {})
+    assert {d.path: d.status for d in report.fields}["output.dti"] == "defect"
+    # explicit rules: tolerance, and never noise
+    loose = [NumericRule(path_glob="output.dti", rel_tol=0.1, reason="demo")]
+    assert {d.path: d.status for d in compare(expected, actual, [], [], {}, numeric_rules=loose).fields}[
+        "output.dti"] == "match"
+    assert evaluator.as_stored("decision", {"dti": Decimal("0.23387")}) == {"dti": Decimal("0.2339")}
 
 
 def test_compare_defect(evaluator):
