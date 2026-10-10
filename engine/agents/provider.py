@@ -47,9 +47,10 @@ class LLMResponse:
     latency_ms: int
     model: str
     provider: str
-    # True when cost_usd carries a real figure (reported by the provider or computed from
-    # PRICES_USD_PER_MTOK); False when the model is not priced and cost_usd is 0.0.
-    cost_estimated: bool = True
+    # True when cost_usd was computed from the price table (PRICES_USD_PER_MTOK) rather than
+    # reported by the provider. False when the provider reported it (Claude Code), when it is a
+    # fake, or when the model is not priced and cost_usd is 0.0.
+    cost_estimated: bool = False
 
 
 @runtime_checkable
@@ -112,6 +113,7 @@ class FakeProvider:
             latency_ms=1,
             model=req.model or "fake-model",
             provider=self.name,
+            cost_estimated=False,
         )
 
     def models(self) -> dict[Tier, str]:
@@ -155,29 +157,41 @@ SENSITIVE_FIELDS = ("ssn", "account_number", "card_number")
 _SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 MASK = "***"
 
+# A key is sensitive when it contains the field name as whole words, so borrower_ssn,
+# ssn_last4, customerSsn and ns:accountNumber match but classname does not. The field name may be
+# joined by "_", "-", "." or nothing, or by camel case (account_number, accountNumber).
+_PREFIX = r"(?:[A-Za-z0-9]*[_\-.])*(?:[a-z0-9]+(?=[A-Z]))?"
+_SUFFIX = r"(?:[_\-.][A-Za-z0-9_\-.]*|[A-Z][A-Za-z0-9]*)?"
+_VALUE = r"""(?P<val>"[^"]*"|'[^']*'|[^\s,;}\]&<"']+)"""
+
+
+def _field_alt(fields: Iterable[str]) -> str:
+    alts: list[str] = []
+    for f in fields:
+        parts = [p for p in re.split(r"[_\-.\s]+|(?<=[a-z])(?=[A-Z])", f.strip()) if p]
+        if parts:
+            alts.append("(?i:" + r"[_\-.]?".join(re.escape(p) for p in parts) + ")")
+    return "|".join(sorted(set(alts), key=len, reverse=True))
+
 
 def _field_pattern(fields: Iterable[str]) -> re.Pattern[str]:
-    names: list[str] = []
-    for f in fields:
-        f = f.strip()
-        if not f:
-            continue
-        names.append(re.escape(f))
-        if "_" in f:  # accountNumber as well as account_number
-            head, *rest = f.split("_")
-            names.append(re.escape(head + "".join(p.capitalize() for p in rest)))
-    alt = "|".join(sorted(set(names), key=len, reverse=True))
+    alt = _field_alt(fields)
+    key = rf"{_PREFIX}(?:{alt}){_SUFFIX}"
     return re.compile(
         rf"""
-        (?:
-          (?P<key>(?<![A-Za-z0-9])(?:[A-Za-z0-9]*_)?(?P<q1>["']?)(?:{alt})(?P=q1))
+        (?P<pair>
+          (?P<q>["']?)(?<![A-Za-z0-9])(?P<key>{key})(?P=q)
           (?P<sep>\s*[:=]\s*)
-          (?P<val>"[^"]*"|'[^']*'|[^\s,;}}\]&<"']+)
+          {_VALUE}
+        )
         |
-          (?P<open><(?P<tag>(?:{alt}))>)(?P<body>[^<]*)(?P<close></(?P=tag)>)
+        (?P<element>
+          (?P<open><(?P<oname>(?:[A-Za-z0-9_.\-]+:)?{key})(?P<attrs>\s[^<>]*)?>)
+          (?P<body>[^<]*)
+          (?P<close></(?P=oname)\s*>)
         )
         """,
-        re.IGNORECASE | re.VERBOSE,
+        re.VERBOSE,
     )
 
 
@@ -186,17 +200,21 @@ _DEFAULT_PATTERN = _field_pattern(SENSITIVE_FIELDS)
 
 def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:
     """Mask SSNs and the values of sensitive fields before text reaches a log, a trace, a tag
-    or an embedding. Never apply it to a prompt: citations must quote the source verbatim."""
+    or an embedding. Never apply it to a prompt: citations must quote the source verbatim.
+
+    Handles ``key: value``, ``key=value``, JSON ``"key": "value"`` and ``<key>value</key>``
+    (with namespace prefix and attributes). ``extra_fields`` adds field names tagged sensitive
+    in configuration."""
     if not text:
         return text
     extra = [f for f in extra_fields if f]
     pattern = _field_pattern([*SENSITIVE_FIELDS, *extra]) if extra else _DEFAULT_PATTERN
 
     def repl(m: re.Match[str]) -> str:
-        if m.group("tag"):
+        if m.group("element"):
             return f"{m.group('open')}{MASK}{m.group('close')}"
         val = m.group("val")
         masked = f"{val[0]}{MASK}{val[0]}" if val[:1] in "\"'" and len(val) >= 2 else MASK
-        return f"{m.group('key')}{m.group('sep')}{masked}"
+        return f"{m.group('q')}{m.group('key')}{m.group('q')}{m.group('sep')}{masked}"
 
     return _SSN.sub("***-**-****", pattern.sub(repl, text))

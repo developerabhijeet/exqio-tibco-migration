@@ -5,7 +5,7 @@ from engine.analysis.models import Challenge, Rule
 from engine.ir.models import Contract, Process
 
 from .jsonout import CHALLENGE_SCHEMA
-from .prompting import ask_json, render_process, render_prompt, wrap_source
+from .prompting import ask_json, render_process, render_prompt
 from .routing import RoutedProvider
 
 
@@ -32,7 +32,7 @@ async def challenge(
     system, user = render_prompt(
         "challenger",
         process_name=process.name,
-        source=wrap_source(render_process(process, contracts or [])),
+        source=render_process(process, contracts or []),
         rules=_rules_block(rules),
     )
     data, resp = await ask_json(

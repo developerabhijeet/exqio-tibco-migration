@@ -7,7 +7,7 @@ from engine.analysis.models import Citation, Finding
 from engine.ir.models import Process
 
 from .jsonout import RISK_SCHEMA, coerce_citations
-from .prompting import ask_json, render_process, render_prompt, wrap_source
+from .prompting import ask_json, render_process, render_prompt
 from .routing import RoutedProvider
 
 EvidenceCheck = Callable[[Process, Citation], bool]
@@ -36,7 +36,7 @@ async def review_risk(
     system, user = render_prompt(
         "risk",
         process_name=process.name,
-        source=wrap_source(render_process(process, [])),
+        source=render_process(process, []),
         findings=_findings_block(static_findings),
     )
     data, _ = await ask_json(

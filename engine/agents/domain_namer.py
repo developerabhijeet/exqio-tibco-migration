@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any, TypeVar
 
 from .jsonout import DOMAIN_SCHEMA, JsonOutputError
-from .prompting import ask_json, render_prompt, wrap_source
+from .prompting import ask_json, render_prompt
 from .provider import ProviderError
 from .routing import RoutedProvider
 
@@ -33,7 +33,7 @@ async def name_domains(candidates: Sequence[C], provider: RoutedProvider) -> lis
     code suggested stay."""
     if not candidates:
         return []
-    system, user = render_prompt("domain_namer", source=wrap_source(_block(candidates)))
+    system, user = render_prompt("domain_namer", source=_block(candidates))
     try:
         data, _ = await ask_json(
             provider, "name", None, system, user, DOMAIN_SCHEMA, tags={"stage": "name"}

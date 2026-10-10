@@ -10,7 +10,7 @@ from engine.analysis.models import Rule
 from engine.ir.models import Contract, Process
 
 from .jsonout import ANALYST_SCHEMA, as_float, coerce_citations
-from .prompting import ask_json, memory_block, render_process, render_prompt, wrap_source
+from .prompting import ask_json, memory_block, render_process, render_prompt
 from .provider import MemoryItem
 from .routing import RoutedProvider
 
@@ -48,7 +48,7 @@ async def analyse(
     system, user = render_prompt(
         "analyst",
         process_name=process.name,
-        source=wrap_source(render_process(process, contracts)),
+        source=render_process(process, contracts),
         memory=memory_block(memory_items),
     )
     data, _ = await ask_json(

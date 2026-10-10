@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from engine.analysis.models import Citation
@@ -127,26 +128,37 @@ def json_instruction(schema: dict) -> str:
     )
 
 
+_FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\r?\n?(.*?)(?:```|\Z)", re.DOTALL)
+
+
 def parse_json_block(text: str) -> dict:
-    """Parse the first JSON object in ``text``; tolerant of code fences and surrounding prose."""
+    """Parse the first top-level JSON object in ``text``, tolerating code fences and prose before
+    or after it.
+
+    Only the first ``{`` is tried. If that object is truncated or malformed the call raises: it
+    never falls back to an inner object, because that would return partial data as if it were
+    the whole reply.
+    """
     if not text or not text.strip():
         raise JsonOutputError("empty reply")
-    decoder = json.JSONDecoder()
     s = text.strip()
-    pos = 0
-    while True:
-        start = s.find("{", pos)
-        if start < 0:
-            break
-        try:
-            obj, _ = decoder.raw_decode(s, start)
-        except json.JSONDecodeError:
-            pos = start + 1
-            continue
-        if isinstance(obj, dict):
-            return obj
-        pos = start + 1
-    raise JsonOutputError("no JSON object found in the reply")
+    fence = _FENCE.search(s)
+    if fence:
+        s = fence.group(1).strip()
+    start = s.find("{")
+    if start < 0:
+        raise JsonOutputError("no JSON object found in the reply")
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(s, start)
+    except json.JSONDecodeError as exc:
+        raise JsonOutputError(f"the JSON object is truncated or malformed: {exc.msg}") from exc
+    if not isinstance(obj, dict):
+        raise JsonOutputError("the reply is not a JSON object")
+    return obj
+
+
+def missing_required(data: dict, schema: dict) -> list[str]:
+    return [k for k in schema.get("required", []) if k not in data]
 
 
 def coerce_citations(raw: Any) -> list[Citation]:

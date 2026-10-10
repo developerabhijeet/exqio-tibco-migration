@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -19,7 +20,19 @@ from .provider import (
     estimate_cost,
 )
 
-API_VERSION = "2024-10-21"
+DEFAULT_API_VERSION = "2024-10-21"
+API_VERSION = DEFAULT_API_VERSION
+API_VERSION_ENV = "AZURE_OPENAI_API_VERSION"
+# o-series reasoning deployments (o1, o3, o4-mini) and gpt-5 deployments reject ``max_tokens``
+# and require ``max_completion_tokens``. The check is on the deployment NAME, which the operator
+# chooses, so a deployment with an unrelated name backed by such a model needs
+# ``use_completion_tokens=True``.
+_COMPLETION_TOKENS_NAME = re.compile(r"^o\d|gpt-?5", re.IGNORECASE)
+
+
+def uses_completion_tokens(deployment: str) -> bool:
+    return bool(_COMPLETION_TOKENS_NAME.search(deployment or ""))
+
 _DEPLOYMENT_ENV = {
     "strong": "AZURE_OPENAI_DEPLOYMENT_STRONG",
     "standard": "AZURE_OPENAI_DEPLOYMENT_STANDARD",
@@ -37,10 +50,14 @@ class AzureOpenAIProvider:
         deployments: Mapping[str, str] | None = None,
         client: Any | None = None,
         env: Mapping[str, str] | None = None,
+        api_version: str | None = None,
+        use_completion_tokens: bool | None = None,
     ) -> None:
         e: Mapping[str, str] = os.environ if env is None else env
         self.endpoint = endpoint or e.get("AZURE_OPENAI_ENDPOINT") or None
         self.api_key = api_key or e.get("AZURE_OPENAI_API_KEY") or None
+        self.api_version = api_version or e.get(API_VERSION_ENV) or DEFAULT_API_VERSION
+        self._use_completion_tokens = use_completion_tokens
         if deployments is None:
             deployments = {t: e.get(var, "") for t, var in _DEPLOYMENT_ENV.items()}
         self._deployments: dict[Tier, str] = {
@@ -60,7 +77,7 @@ class AzureOpenAIProvider:
             if not self.available:
                 raise ProviderUnavailable("Azure OpenAI endpoint, key or deployments are not set")
             self._client = openai.AsyncAzureOpenAI(
-                azure_endpoint=self.endpoint, api_key=self.api_key, api_version=API_VERSION
+                azure_endpoint=self.endpoint, api_key=self.api_key, api_version=self.api_version
             )
         return self._client
 
@@ -72,8 +89,12 @@ class AzureOpenAIProvider:
         kwargs: dict[str, Any] = {
             "model": req.model,
             "messages": [{"role": "system", "content": system}, *req.messages],
-            "max_tokens": req.max_tokens,
         }
+        override = self._use_completion_tokens
+        if override if override is not None else uses_completion_tokens(req.model):
+            kwargs["max_completion_tokens"] = req.max_tokens
+        else:
+            kwargs["max_tokens"] = req.max_tokens
         if req.json_schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
         started = time.monotonic()

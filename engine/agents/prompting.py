@@ -7,12 +7,13 @@ never masked: citations have to quote it verbatim.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from engine.ir.models import Contract, Process
 
-from .jsonout import JsonOutputError, parse_json_block
+from .jsonout import JsonOutputError, missing_required, parse_json_block
 from .provider import LLMRequest, LLMResponse, Tier
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -40,16 +41,31 @@ def load_prompt(name: str) -> tuple[str, str]:
     return split_prompt((PROMPT_DIR / f"{name}.md").read_text(encoding="utf-8"))
 
 
+# Values that carry TIBCO-derived or SME-authored text are always wrapped as data. Callers pass
+# them raw; wrapping happens here so no template can be fed unwrapped content.
+DATA_KEYS = frozenset({
+    "source", "process_name", "rules", "findings", "memory", "design", "targets", "code",
+    "failures", "files",
+})
+_SOURCE_TAG = re.compile(r"<\s*(/?)\s*source\s*>", re.IGNORECASE)
+
+
 def render_prompt(name: str, **values: Any) -> tuple[str, str]:
     system, user = load_prompt(name)
-    return render(system, **values), render(user, **values)
+    wrapped = {
+        k: (wrap_source(str(v), inline=(k == "process_name")) if k in DATA_KEYS else v)
+        for k, v in values.items()
+    }
+    return render(system, **wrapped), render(user, **wrapped)
 
 
-def wrap_source(text: str) -> str:
-    """Wrap TIBCO content so the model treats it as data. A literal closing tag inside the
-    content is broken so it cannot end the block early."""
-    safe = text.replace("</source>", "</ source>")
-    return f"<source>\n{safe}\n</source>"
+def wrap_source(text: str, inline: bool = False) -> str:
+    """Wrap content so the model treats it as data. Any ``<source>`` or ``</source>`` tag inside
+    the content (any case, any inner whitespace) has its ``<`` escaped to ``&lt;`` so it cannot end
+    the block early."""
+    safe = _SOURCE_TAG.sub(lambda m: "&lt;" + m.group(0)[1:], text)
+    sep = "" if inline else "\n"
+    return f"<source>{sep}{safe}{sep}</source>"
 
 
 def _flatten(prefix: str, value: Any, out: list[tuple[str, str]]) -> None:
@@ -137,15 +153,21 @@ async def ask_json(
             tags=dict(tags or {}),
         )
         resp = await provider.complete_for(task_kind, process, req, tier=tier)
+        note = RETRY_NOTE
         try:
-            return parse_json_block(resp.text), resp
+            data = parse_json_block(resp.text)
+            missing = missing_required(data, schema)
+            if missing:
+                note = f"{RETRY_NOTE} Missing required keys: {', '.join(missing)}."
+                raise JsonOutputError(f"missing required keys: {', '.join(missing)}")
+            return data, resp
         except JsonOutputError:
             if attempt >= retries:
                 raise
             attempt += 1
             messages += [
                 {"role": "assistant", "content": resp.text},
-                {"role": "user", "content": RETRY_NOTE},
+                {"role": "user", "content": note},
             ]
 
 

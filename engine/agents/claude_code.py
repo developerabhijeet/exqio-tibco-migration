@@ -131,5 +131,5 @@ class ClaudeCodeProvider:
             latency_ms=int((time.monotonic() - started) * 1000),
             model=model,
             provider=self.name,
-            cost_estimated=cost is not None,
+            cost_estimated=False,  # reported by the SDK, not computed from a price table
         )

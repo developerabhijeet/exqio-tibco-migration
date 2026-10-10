@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -16,6 +17,7 @@ from .provider import (
     LLMRequest,
     LLMResponse,
     ProviderError,
+    ProviderUnavailable,
     Tier,
     mask_sensitive,
 )
@@ -98,7 +100,8 @@ class ModelCallRecord:
     latency: int  # milliseconds
     fell_back: bool
     tags: dict[str, str]
-    cost_estimated: bool = True
+    cost_estimated: bool = False
+    error: str | None = None  # set when the call failed and no response was obtained
     primary_error: str | None = None
 
 
@@ -107,7 +110,9 @@ Recorder = Callable[[ModelCallRecord], Awaitable[None]]
 
 class RoutedProvider:
     """Chooses a model tier from the task's complexity, falls back to the secondary provider on
-    ``ProviderError`` (rate limit, outage, missing configuration) and records every call."""
+    ``ProviderError`` (rate limit, outage, missing configuration) and records every call,
+    failed ones included. ``sensitive_fields`` extends the masking applied to recorded tags and
+    error text."""
 
     def __init__(
         self,
@@ -115,11 +120,29 @@ class RoutedProvider:
         fallback: LLMProvider | None,
         table: RoutingTable | None = None,
         recorder: Recorder | None = None,
+        sensitive_fields: Sequence[str] = (),
     ) -> None:
         self.primary = primary
         self.fallback = fallback
         self.table = table or RoutingTable()
         self.recorder = recorder
+        self.sensitive_fields = tuple(sensitive_fields)
+
+    def _mask(self, text: str) -> str:
+        return mask_sensitive(text, self.sensitive_fields)
+
+    @staticmethod
+    async def _attempt(provider: LLMProvider, req: LLMRequest, tier: Tier) -> LLMResponse:
+        model = provider.models().get(tier, "")
+        if not model:
+            raise ProviderUnavailable(
+                f"{provider.name} has no model or deployment configured for the {tier} tier"
+            )
+        return await provider.complete(dataclasses.replace(req, model=model))
+
+    async def _record(self, record: ModelCallRecord) -> None:
+        if self.recorder is not None:
+            await self.recorder(record)
 
     async def complete_for(
         self,
@@ -133,39 +156,57 @@ class RoutedProvider:
         independent challenger always runs on the strongest)."""
         complexity = task_complexity(process, task_kind)
         chosen: Tier = tier or self.table.tier_for(complexity)
-        fell_back = False
-        primary_error: str | None = None
-        try:
-            resp = await self.primary.complete(
-                dataclasses.replace(req, model=self.primary.models()[chosen])
-            )
-        except ProviderError as exc:
-            if self.fallback is None:
-                raise
-            primary_error = str(exc)
-            fell_back = True
-            resp = await self.fallback.complete(
-                dataclasses.replace(req, model=self.fallback.models()[chosen])
-            )
-        if self.recorder is not None:
-            await self.recorder(
+        tags = {k: self._mask(str(v)) for k, v in req.tags.items()}
+        started = time.monotonic()
+
+        async def failed(provider: LLMProvider, exc: Exception, fell_back: bool,
+                         primary_error: str | None) -> None:
+            await self._record(
                 ModelCallRecord(
                     task_kind=task_kind,
                     complexity=complexity,
                     tier=chosen,
-                    provider=resp.provider,
-                    model=resp.model,
-                    usage={
-                        "in": resp.usage_in,
-                        "out": resp.usage_out,
-                        "cached": resp.cached_tokens,
-                    },
-                    cost=resp.cost_usd,
-                    latency=resp.latency_ms,
+                    provider=provider.name,
+                    model=provider.models().get(chosen, ""),
+                    usage={"in": 0, "out": 0, "cached": 0},
+                    cost=0.0,
+                    latency=int((time.monotonic() - started) * 1000),
                     fell_back=fell_back,
-                    tags={k: mask_sensitive(str(v)) for k, v in req.tags.items()},
-                    cost_estimated=resp.cost_estimated,
-                    primary_error=mask_sensitive(primary_error) if primary_error else None,
+                    tags=tags,
+                    error=self._mask(str(exc)),
+                    primary_error=primary_error,
                 )
             )
+
+        fell_back = False
+        primary_error: str | None = None
+        try:
+            resp = await self._attempt(self.primary, req, chosen)
+        except ProviderError as exc:
+            if self.fallback is None:
+                await failed(self.primary, exc, False, None)
+                raise
+            primary_error = self._mask(str(exc))
+            fell_back = True
+            try:
+                resp = await self._attempt(self.fallback, req, chosen)
+            except ProviderError as exc2:
+                await failed(self.fallback, exc2, True, primary_error)
+                raise
+        await self._record(
+            ModelCallRecord(
+                task_kind=task_kind,
+                complexity=complexity,
+                tier=chosen,
+                provider=resp.provider,
+                model=resp.model,
+                usage={"in": resp.usage_in, "out": resp.usage_out, "cached": resp.cached_tokens},
+                cost=resp.cost_usd,
+                latency=resp.latency_ms,
+                fell_back=fell_back,
+                tags=tags,
+                cost_estimated=resp.cost_estimated,
+                primary_error=primary_error,
+            )
+        )
         return resp
