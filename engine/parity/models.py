@@ -26,6 +26,8 @@ class SideEffect(BaseModel):
     kind: Literal["row_written", "message_published", "service_called", "subprocess_called"]
     target: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    # Provenance (trace path of the activity that caused it); not compared, used for lineage.
+    activity_id: str | None = None
 
 
 class Fault(BaseModel):
