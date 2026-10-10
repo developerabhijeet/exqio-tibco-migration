@@ -1,0 +1,202 @@
+"""Provider abstraction: request and response types, a fake and a null provider,
+the per-model price table and sensitive-value masking.
+
+Keys come from the environment only. Nothing here logs request or response text.
+"""
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Literal, Protocol, runtime_checkable
+
+Tier = Literal["strong", "standard", "efficient"]
+TIERS: tuple[Tier, ...] = ("strong", "standard", "efficient")
+
+
+class ProviderError(Exception):
+    """A model call failed. The routed provider retries these on the fallback."""
+
+
+class ProviderUnavailable(ProviderError):
+    """The provider is not configured (missing key, endpoint or deployment)."""
+
+
+class RateLimited(ProviderError):
+    """The provider refused the call because of a rate limit or overload."""
+
+
+@dataclass
+class LLMRequest:
+    system: str
+    messages: list[dict]
+    model: str
+    max_tokens: int
+    json_schema: dict | None = None
+    cache: bool = True
+    tags: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class LLMResponse:
+    text: str
+    usage_in: int
+    usage_out: int
+    cached_tokens: int
+    cost_usd: float
+    latency_ms: int
+    model: str
+    provider: str
+    # True when cost_usd carries a real figure (reported by the provider or computed from
+    # PRICES_USD_PER_MTOK); False when the model is not priced and cost_usd is 0.0.
+    cost_estimated: bool = True
+
+
+@runtime_checkable
+class LLMProvider(Protocol):
+    name: str
+
+    async def complete(self, req: LLMRequest) -> LLMResponse: ...
+
+    def models(self) -> dict[Tier, str]: ...
+
+
+@dataclass
+class MemoryItem:
+    """Minimal stand-in for Task 10's knowledge ``MemoryItem`` (same field names)."""
+
+    id: str
+    kind: str
+    text: str
+    source: str
+
+
+class NullProvider:
+    """Always unavailable. Lets the routed provider fall straight to its fallback."""
+
+    name = "none"
+
+    async def complete(self, req: LLMRequest) -> LLMResponse:
+        raise ProviderUnavailable("no model provider is configured")
+
+    def models(self) -> dict[Tier, str]:
+        return {"strong": "", "standard": "", "efficient": ""}
+
+
+class FakeProvider:
+    """Scripted provider for tests. Each response is consumed in order.
+
+    An item that is an ``Exception`` is raised instead of returned. Every request is kept
+    in ``requests`` so tests can inspect the exact prompt that was sent.
+    """
+
+    def __init__(self, responses: list[str | Exception], name: str = "fake") -> None:
+        self.name = name
+        self._responses = list(responses)
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, req: LLMRequest) -> LLMResponse:
+        self.requests.append(req)
+        if not self._responses:
+            raise ProviderError("FakeProvider has no scripted response left")
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        prompt = req.system + "".join(str(m.get("content", "")) for m in req.messages)
+        return LLMResponse(
+            text=item,
+            usage_in=max(1, len(prompt) // 4),
+            usage_out=max(1, len(item) // 4),
+            cached_tokens=0,
+            cost_usd=0.0,
+            latency_ms=1,
+            model=req.model or "fake-model",
+            provider=self.name,
+        )
+
+    def models(self) -> dict[Tier, str]:
+        return {"strong": "fake-strong", "standard": "fake-standard", "efficient": "fake-efficient"}
+
+
+# ---------------------------------------------------------------- pricing
+
+# (input USD per million tokens, output USD per million tokens). Indicative list prices for the
+# Azure OpenAI models likely to back the three deployments; review before quoting cost to a
+# customer. Keys are matched as the longest prefix of the model name the API reports.
+PRICES_USD_PER_MTOK: dict[str, tuple[float, float]] = {
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-5": (1.25, 10.00),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5-nano": (0.05, 0.40),
+}
+CACHED_INPUT_DISCOUNT = 0.5  # cached prompt tokens are billed at half the input price
+
+
+def estimate_cost(model: str, tokens_in: int, tokens_out: int, cached: int = 0) -> float | None:
+    """Cost in USD from the price table, or None when the model is not priced."""
+    name = (model or "").lower()
+    matches = [k for k in PRICES_USD_PER_MTOK if name.startswith(k)]
+    if not matches:
+        return None
+    price_in, price_out = PRICES_USD_PER_MTOK[max(matches, key=len)]
+    cached = max(0, min(cached, tokens_in))
+    fresh = tokens_in - cached
+    total = fresh * price_in + cached * price_in * CACHED_INPUT_DISCOUNT + tokens_out * price_out
+    return total / 1_000_000
+
+
+# ---------------------------------------------------------------- masking
+
+SENSITIVE_FIELDS = ("ssn", "account_number", "card_number")
+_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+MASK = "***"
+
+
+def _field_pattern(fields: Iterable[str]) -> re.Pattern[str]:
+    names: list[str] = []
+    for f in fields:
+        f = f.strip()
+        if not f:
+            continue
+        names.append(re.escape(f))
+        if "_" in f:  # accountNumber as well as account_number
+            head, *rest = f.split("_")
+            names.append(re.escape(head + "".join(p.capitalize() for p in rest)))
+    alt = "|".join(sorted(set(names), key=len, reverse=True))
+    return re.compile(
+        rf"""
+        (?:
+          (?P<key>(?<![A-Za-z0-9])(?:[A-Za-z0-9]*_)?(?P<q1>["']?)(?:{alt})(?P=q1))
+          (?P<sep>\s*[:=]\s*)
+          (?P<val>"[^"]*"|'[^']*'|[^\s,;}}\]&<"']+)
+        |
+          (?P<open><(?P<tag>(?:{alt}))>)(?P<body>[^<]*)(?P<close></(?P=tag)>)
+        )
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+
+_DEFAULT_PATTERN = _field_pattern(SENSITIVE_FIELDS)
+
+
+def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:
+    """Mask SSNs and the values of sensitive fields before text reaches a log, a trace, a tag
+    or an embedding. Never apply it to a prompt: citations must quote the source verbatim."""
+    if not text:
+        return text
+    extra = [f for f in extra_fields if f]
+    pattern = _field_pattern([*SENSITIVE_FIELDS, *extra]) if extra else _DEFAULT_PATTERN
+
+    def repl(m: re.Match[str]) -> str:
+        if m.group("tag"):
+            return f"{m.group('open')}{MASK}{m.group('close')}"
+        val = m.group("val")
+        masked = f"{val[0]}{MASK}{val[0]}" if val[:1] in "\"'" and len(val) >= 2 else MASK
+        return f"{m.group('key')}{m.group('sep')}{masked}"
+
+    return _SSN.sub("***-**-****", pattern.sub(repl, text))
