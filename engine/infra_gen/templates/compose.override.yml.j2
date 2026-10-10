@@ -25,6 +25,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Debug keeps the development endpoints that Auth__Mode=Development needs; Release removes them.
+        CONFIGURATION: Debug
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,6 +37,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       Auth__Mode: Development
       Messaging__Mode: InMemory
+      KeyVault__Uri: ""
 [% for name, db in connection_strings %]
       ConnectionStrings__[[ name ]]: "Host=postgres;Port=5432;Database=[[ db ]];Username=app;Password=app"
 [% endfor %]

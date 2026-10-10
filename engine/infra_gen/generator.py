@@ -7,22 +7,29 @@ application and the design record by code; nothing here calls a model.
 Layout (relative to the solution root)::
 
     infra/modules/<module>/{main,variables,outputs}.tf     nine modules, copied from templates/
-    infra/live/terragrunt.hcl                              root: azurerm backend, provider, common inputs
+    infra/live/root.hcl                                    root: azurerm backend, provider, common inputs
+    infra/bootstrap/tfstate.sh                             creates the state storage root.hcl points at
     infra/live/<env>/<app>/<module>/terragrunt.hcl         one unit per module and environment
     Dockerfile, .dockerignore, docker-compose.override.yml
     .github/workflows/<app>.yml, azure-pipelines.yml
 
 Design record to infrastructure:
   * Service Bus queues, topics and subscriptions come from ``design.messaging``;
-  * Key Vault secret names come from ``design.config`` entries with ``secret=True`` (colons become
-    ``--``, the .NET Key Vault configuration convention; other characters become ``-``);
-  * non-secret config keys become container environment variables (``Gmf:Mod:Key`` -> ``Gmf__Mod__Key``);
+  * Key Vault secret names are the secrets the generated app reads (the ``Key Vault secret NAME -> KEY``
+    lines of its Program.cs) when the solution is already in ``solution_root``, else the design record's
+    ``secret=True`` configuration (colons become ``--``, the .NET Key Vault convention);
+  * the app reads secrets itself (``AddAzureKeyVault`` with the managed identity), so the container gets
+    no secret environment variables and no Key Vault references. Its environment holds exactly the
+    configuration keys the app reads: ``Messaging__Mode``, ``Messaging__ServiceBus__FullyQualifiedNamespace``
+    and ``KeyVault__Uri``, plus the host/SDK variables ``ASPNETCORE_ENVIRONMENT`` and ``AZURE_CLIENT_ID``
+    (selects the user-assigned identity), plus design config keys present in the app's appsettings.json;
   * ingress is enabled when the application has a REST, HTTP or SOAP starter;
-  * Postgres databases come from the JDBC resources the design uses (``ConnectionStrings:<Resource>``).
+  * Postgres databases come from the JDBC resources the design uses (``ConnectionStrings:<Resource>`` of a JDBC resource; ``ConnectionStrings:ServiceBus`` is not a database).
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -31,6 +38,7 @@ from typing import Any, Literal
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import BaseModel
 
+from engine.dotnet_gen.generator import GenFile, solution_layout
 from engine.dotnet_gen.models import DesignRecord
 from engine.infra_gen import hcl
 from engine.ir.models import Application
@@ -102,15 +110,6 @@ def _mock_outputs(dep: str, secret_names: Sequence[str]) -> dict[str, Any]:
                 "client_id": "00000000-0000-0000-0000-000000000002",
                 "tenant_id": "00000000-0000-0000-0000-000000000003"}
     raise KeyError(dep)
-
-
-class GenFile(BaseModel):
-    """A generated file. Same shape as ``engine.dotnet_gen.generator.GenFile`` (Task 14)."""
-
-    path: str
-    content: str
-    origin: Literal["code", "agent"] = "code"
-    activity_id: str | None = None
 
 
 class EnvProfile(BaseModel):
@@ -227,14 +226,11 @@ class _Facts(BaseModel):
     topics: list[str]
     subscriptions: list[tuple[str, str]]  # (topic, subscription)
     inbound_queues: list[str]
-    messaging: bool
-    secret_names: list[str]
-    secret_envs: list[tuple[str, str]]  # (env var name, key vault secret name)
-    plain_env: dict[str, str]
+    secret_names: list[str]  # Key Vault secret names the app reads
+    plain_env: dict[str, str]  # design config keys the app's appsettings.json carries
     databases: list[str]
     connection_strings: list[tuple[str, str]]  # (resource name, database)
     ingress: bool
-    projects: list[tuple[str, str]]  # (name, kind)
 
 
 def _dedupe(items: Sequence[Any]) -> list[Any]:
@@ -245,22 +241,50 @@ def _as_list(design: DesignRecord | Sequence[DesignRecord]) -> list[DesignRecord
     return [design] if isinstance(design, DesignRecord) else list(design)
 
 
-def _substvar_values(app: Application) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for sv in app.substvars:
-        name = sv.name
-        if name.startswith("//") and "//" in name[2:]:
-            name = name[2:].split("//", 1)[1]
-        values[name] = sv.value
-    return values
-
-
 def _sub_name(raw: str) -> str:
     """Subscription entity names are letters, digits, dots, dashes and underscores (50 at most)."""
     return re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-.")[:50] or "subscription"
 
 
-def _facts(app: Application, designs: list[DesignRecord], solution: str) -> _Facts:
+_KV_SECRET_LINE = re.compile(r"^\s*//\s+Key Vault secret (\S+) -> (\S+)\s*$", re.MULTILINE)
+
+
+def _flatten(node: Any, prefix: str = "") -> dict[str, str]:
+    """appsettings.json as ``Section:Key`` -> text for every leaf."""
+    if isinstance(node, dict):
+        out: dict[str, str] = {}
+        for k, v in node.items():
+            out.update(_flatten(v, f"{prefix}:{k}" if prefix else k))
+        return out
+    return {prefix: json.dumps(node) if not isinstance(node, str) else node}
+
+
+def _app_contract(root: Path, solution: str) -> tuple[list[str] | None, dict[str, str] | None]:
+    """What the generated app reads, when the solution is already in ``root``.
+
+    Returns (Key Vault secret names listed in Program.cs, flattened appsettings.json); ``None`` for
+    a part that is not there, in which case the design record is the source.
+    """
+    api = root / solution_layout(solution)["projects"]["api"]["folder"]
+    secrets: list[str] | None = None
+    settings: dict[str, str] | None = None
+    program = api / "Program.cs"
+    if program.is_file():
+        secrets = [m.group(1) for m in _KV_SECRET_LINE.finditer(program.read_text(encoding="utf-8"))]
+    appsettings = api / "appsettings.json"
+    if appsettings.is_file():
+        try:
+            settings = _flatten(json.loads(appsettings.read_text(encoding="utf-8")))
+        except ValueError:
+            settings = None
+    return secrets, settings
+
+
+def _alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _facts(app: Application, designs: list[DesignRecord], solution: str, root: Path) -> _Facts:
     queues: list[str] = []
     topics: list[str] = []
     subs: list[tuple[str, str]] = []
@@ -277,30 +301,34 @@ def _facts(app: Application, designs: list[DesignRecord], solution: str) -> _Fac
                 topic, _, sub = e.name.rpartition("/")
                 topics.append(topic)
                 subs.append((topic, _sub_name(sub)))
-    values = _substvar_values(app)
-    secrets: dict[str, str] = {}  # key vault name -> env var name
+    app_secrets, app_settings = _app_contract(root, solution)
+    # Secrets: the app's own list when generated, else the design's. Service Bus is reached with the
+    # managed identity, so a ConnectionStrings:ServiceBus entry is never a secret to provision.
+    design_secrets: dict[str, str] = {}  # key -> kv name
     plain: dict[str, str] = {}
-    conn: list[tuple[str, str]] = []
     for d in designs:
         for c in d.config:
             if c.secret:
-                secrets.setdefault(secret_name(c.key), env_var_name(c.key))
-                if c.key.startswith("ConnectionStrings:"):
-                    res = c.key.split(":", 1)[1]
-                    conn.append((res, database_name(res)))
-            else:
-                plain.setdefault(env_var_name(c.key), values.get(c.substvar, ""))
-    databases = _dedupe([db for _, db in conn])
-    if not databases:
-        databases = _dedupe([database_name(r.name) for r in app.resources if r.kind == "jdbc"])
+                if c.key == "ConnectionStrings:ServiceBus":
+                    continue
+                if c.substvar.startswith("resource:") and not c.key.startswith("ConnectionStrings:"):
+                    continue  # JMS and JDBC credentials the generated code does not read
+                design_secrets.setdefault(c.key, secret_name(c.key))
+            elif app_settings is not None and c.key in app_settings:
+                plain.setdefault(env_var_name(c.key), app_settings[c.key])
+    secret_names = _dedupe(sorted(app_secrets if app_secrets is not None else design_secrets.values()))
+    secret_keys = {n: n.replace("--", ":") for n in secret_names}
+    # Databases: ConnectionStrings:<Resource> that names a JDBC resource of the application.
+    jdbc = {_alnum(r.name): r.name for r in app.resources if r.kind == "jdbc"}
+    conn: list[tuple[str, str]] = []
+    for key in sorted(secret_keys.values()):
+        if key.startswith("ConnectionStrings:"):
+            res = key.split(":", 1)[1]
+            if _alnum(res) in jdbc:
+                conn.append((res, database_name(res)))
+    if not conn:
         conn = [(r.name, database_name(r.name)) for r in app.resources if r.kind == "jdbc"]
-    if not databases:
-        databases = [database_name(app.id.replace(".", "_"))]
-    layout = designs[0].solution.projects if designs else []
-    projects = [(p.name, p.kind) for p in layout] or [
-        (f"{solution}.{suffix}", kind)
-        for suffix, kind in (("Api", "api"), ("Core", "core"), ("Infrastructure", "infrastructure"))
-    ]
+    databases = _dedupe([db for _, db in conn]) or [database_name(app.id.replace(".", "_"))]
     return _Facts(
         app_id=app.id,
         app_slug=slugify(app.id),
@@ -309,19 +337,28 @@ def _facts(app: Application, designs: list[DesignRecord], solution: str) -> _Fac
         topics=_dedupe(topics),
         subscriptions=_dedupe(subs),
         inbound_queues=_dedupe(inbound),
-        messaging=any(d.messaging for d in designs),
-        secret_names=sorted(secrets),
-        secret_envs=sorted((env, name) for name, env in secrets.items()),
+        secret_names=secret_names,
         plain_env=dict(sorted(plain.items())),
         databases=databases,
         connection_strings=_dedupe(conn),
         ingress=any(p.starter and p.starter.kind in _API_STARTERS for p in app.processes),
-        projects=projects,
     )
 
 
 def _ref(dep: str, output: str) -> hcl.Expr:
     return hcl.Expr(f"dependency.{dep}.outputs.{output}")
+
+
+def _app_env(f: _Facts) -> dict[str, Any]:
+    """Environment of the deployed app: exactly the configuration keys it reads (see module docstring)."""
+    env: dict[str, Any] = {
+        "ASPNETCORE_ENVIRONMENT": "Production",
+        "KeyVault__Uri": _ref("key_vault", "vault_uri"),
+        "Messaging__Mode": "ServiceBus",
+        "Messaging__ServiceBus__FullyQualifiedNamespace": _ref("service_bus", "fqdn"),
+    }
+    env.update(f.plain_env)
+    return env
 
 
 def _module_inputs(module: str, env: str, f: _Facts, n: _Names, p: EnvProfile) -> dict[str, Any]:
@@ -359,16 +396,9 @@ def _module_inputs(module: str, env: str, f: _Facts, n: _Names, p: EnvProfile) -
     image = hcl.interp(
         f'${{dependency.container_registry.outputs.login_server}}/{f.app_slug}:${{get_env("IMAGE_TAG", "latest")}}'
     )
-    env_vars: dict[str, Any] = {
-        "ASPNETCORE_ENVIRONMENT": "Production",
-        "AZURE_CLIENT_ID": _ref("identity", "client_id"),
-        "KeyVault__Uri": _ref("key_vault", "vault_uri"),
-    }
-    if f.messaging:
-        env_vars["Messaging__Mode"] = "ServiceBus"
-        env_vars["Messaging__ServiceBus__FullyQualifiedNamespace"] = _ref("service_bus", "fqdn")
-    env_vars.update(f.plain_env)
     if module == "container_app":
+        # AZURE_CLIENT_ID selects the user-assigned identity for DefaultAzureCredential (Azure SDK variable).
+        env_vars = {**_app_env(f), "AZURE_CLIENT_ID": _ref("identity", "client_id")}
         out = {
             "name": n.ca,
             "environment_name": n.cae,
@@ -384,25 +414,21 @@ def _module_inputs(module: str, env: str, f: _Facts, n: _Names, p: EnvProfile) -
             "memory": p.memory,
             "min_replicas": max(p.min_replicas, 1 if f.inbound_queues else 0),
             "max_replicas": p.max_replicas,
-            "app_insights_connection_string": _ref("monitoring", "app_insights_connection_string"),
-            "env_vars": env_vars,
-            "secrets": [{"env_name": e, "secret_name": s.lower(), "key_vault_secret_name": s}
-                        for e, s in f.secret_envs],
-            "key_vault_secret_ids": _ref("key_vault", "secret_ids"),
+            "env_vars": dict(sorted(env_vars.items())),
         }
         if f.inbound_queues:
             out["service_bus_namespace_name"] = _ref("service_bus", "namespace_name")
             out["scale_queues"] = [{"queue_name": q, "message_count": 10} for q in f.inbound_queues]
         return out
-    # aks_workload
+    # aks_workload: same configuration keys; the workload identity webhook injects AZURE_CLIENT_ID.
     return {
         "name": f.app_slug,
         "cluster_name": hcl.Expr(f'get_env("AKS_CLUSTER_NAME", "aks-{f.app_slug}-{env}")'),
         "cluster_resource_group_name": hcl.Expr(
             f'get_env("AKS_CLUSTER_RESOURCE_GROUP", "rg-aks-{slugify(env)}")'),
-        "resource_group_name": rg,
         "identity_id": _ref("identity", "id"),
         "identity_client_id": _ref("identity", "client_id"),
+        "container_registry_id": _ref("container_registry", "id"),
         "namespace": f.app_slug,
         "service_account_name": f.app_slug,
         "image": image,
@@ -410,7 +436,7 @@ def _module_inputs(module: str, env: str, f: _Facts, n: _Names, p: EnvProfile) -
         "ingress_enabled": f.ingress,
         "external_ingress": True,
         "target_port": TARGET_PORT,
-        "env_vars": env_vars,
+        "env_vars": _app_env(f),
     }
 
 
@@ -442,6 +468,24 @@ def _ensure_newline(text: str) -> str:
     return text if text.endswith("\n") else text + "\n"
 
 
+def _prune_stale(root: Path, app_slug: str, keep: set[str]) -> None:
+    """Remove live units and local files an earlier run wrote for this app but this run does not.
+
+    Covers environments dropped from ``envs`` and the module swapped out by a changed ``runtime``.
+    Other applications' units and every file outside the generated set are left alone.
+    """
+    live = root / "infra" / "live"
+    stale = [p for p in live.glob(f"*/{app_slug}/**/terragrunt.hcl")] if live.is_dir() else []
+    stale.append(root / "infra" / "local" / "initdb" / "01-databases.sql")
+    for path in stale:
+        if path.is_file() and path.relative_to(root).as_posix() not in keep:
+            path.unlink()
+            for parent in path.parents:
+                if parent == root or any(parent.iterdir()):
+                    break
+                parent.rmdir()
+
+
 def generate_infra(
     app: Application,
     design: DesignRecord | Sequence[DesignRecord],
@@ -456,12 +500,18 @@ def generate_infra(
 
     ``design`` is one design record or several (one per migrated process of the application);
     their messaging and configuration are merged. ``solution_name`` is the PascalCase solution
-    (``GmfCredit``): the image runs ``<solution_name>.Api.dll``. Returns the files written, sorted by path.
+    (``GmfCredit``): paths and the image entry point follow ``dotnet_gen.generator.solution_layout``
+    (``src/GmfCredit.Api/GmfCredit.Api.csproj``, ``GmfCredit.Api.dll``). When the generated solution is
+    already in ``solution_root`` its Program.cs and appsettings.json decide which secrets and plain
+    keys the deployment carries. Returns the files written, sorted by path; units of this application
+    that an earlier run wrote for other environments or the other runtime are removed.
     """
     if runtime not in _RUNTIME_MODULE:
         raise ValueError(f"unknown runtime {runtime!r}")
+    root = Path(solution_root)
     designs = _as_list(design)
-    facts = _facts(app, designs, solution_name)
+    facts = _facts(app, designs, solution_name, root)
+    layout = solution_layout(solution_name)
     jenv = _jinja()
     files: dict[str, str] = {}
 
@@ -474,15 +524,18 @@ def generate_infra(
     # Terragrunt live tree.
     h = short_hash(app.id)
     flat = facts.app_slug.replace("-", "")
-    files["infra/live/terragrunt.hcl"] = jenv.get_template("live/terragrunt.hcl.j2").render(
-        app_id=app.id, app_slug=facts.app_slug, location=location,
-        state_resource_group=f"rg-{facts.app_slug}-tfstate",
-        state_storage_account=_fit(f"st{flat}tfstate", h, 24, sep=""),
-        state_container="tfstate",
-    )
+    state = {
+        "resource_group": f"rg-{facts.app_slug}-tfstate",
+        "storage_account": _fit(f"st{flat}tfstate", h, 24, sep=""),
+        "container": "tfstate",
+    }
+    files["infra/live/root.hcl"] = jenv.get_template("live/root.hcl.j2").render(
+        app_id=app.id, app_slug=facts.app_slug, location=location, state=state)
+    files["infra/bootstrap/tfstate.sh"] = jenv.get_template("tfstate.sh.j2").render(
+        app_id=app.id, location=location, state=state)
     live_modules = (*_COMMON_MODULES, _RUNTIME_MODULE[runtime])
     unit_template = jenv.get_template("live/env_module.hcl.j2")
-    env_names = [slugify(e) for e in envs]
+    env_names = _dedupe([slugify(e) for e in envs])
     for env in env_names:
         profile = _PROFILES.get(env, _PROFILES["test"])
         names = _names(facts.app_slug, env, app.id)
@@ -497,10 +550,11 @@ def generate_infra(
     )
 
     # Container image and local run.
-    api = next((n for n, k in facts.projects if k == "api"), f"{solution_name}.Api")
-    restore = [n for n, k in facts.projects if k in ("core", "infrastructure")] + [api]
+    projects = layout["projects"]
+    restore = [projects[k] for k in ("core", "infrastructure", "api")]
     files["Dockerfile"] = jenv.get_template("Dockerfile.j2").render(
-        solution=solution_name, api_project=api, restore_projects=_dedupe(restore))
+        solution=solution_name, sln=layout["solution"], restore_projects=restore,
+        api_csproj=layout["api_project"], api_dll=layout["api_dll"])
     files[".dockerignore"] = (TEMPLATES / "dockerignore").read_text(encoding="utf-8")
     files["docker-compose.override.yml"] = jenv.get_template("compose.override.yml.j2").render(
         solution=solution_name, databases=facts.databases, connection_strings=facts.connection_strings)
@@ -519,15 +573,16 @@ def generate_infra(
             "needs_ado": f"Apply_{prev}" if prev else "Image",
         })
     ctx = {
-        "app_id": app.id, "app_slug": facts.app_slug, "sln": f"{solution_name}.sln",
+        "app_id": app.id, "app_slug": facts.app_slug, "sln": layout["solution"],
         "image_name": facts.app_slug, "envs": pipeline_envs,
         "terraform_version": TERRAFORM_VERSION, "terragrunt_version": TERRAGRUNT_VERSION,
+        "tfstate_script": "infra/bootstrap/tfstate.sh",
     }
     files[f".github/workflows/{facts.app_slug}.yml"] = jenv.get_template(
         "github_workflow.yml.j2").render(**ctx)
     files["azure-pipelines.yml"] = jenv.get_template("azure-pipelines.yml.j2").render(**ctx)
 
-    root = Path(solution_root)
+    _prune_stale(root, facts.app_slug, set(files))
     out: list[GenFile] = []
     for rel in sorted(files):
         content = _ensure_newline(files[rel])

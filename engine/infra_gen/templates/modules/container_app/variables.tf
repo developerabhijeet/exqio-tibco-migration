@@ -93,32 +93,9 @@ variable "http_concurrent_requests" {
 }
 
 variable "env_vars" {
-  description = "Plain environment variables, from the non-secret configuration keys."
+  description = "Environment variables: the app's configuration keys (Messaging__Mode, KeyVault__Uri, ...). Secrets are not passed here: the app reads them from Key Vault (AddAzureKeyVault) with the managed identity."
   type        = map(string)
   default     = {}
-}
-
-variable "secrets" {
-  description = "Environment variables backed by Key Vault secrets."
-  type = list(object({
-    env_name              = string
-    secret_name           = string
-    key_vault_secret_name = string
-  }))
-  default = []
-}
-
-variable "key_vault_secret_ids" {
-  description = "Versionless Key Vault secret ids by secret name (output of the key_vault module)."
-  type        = map(string)
-  default     = {}
-}
-
-variable "app_insights_connection_string" {
-  description = "Application Insights connection string; empty disables the setting."
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 variable "service_bus_namespace_name" {

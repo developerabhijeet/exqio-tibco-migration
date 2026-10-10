@@ -13,11 +13,6 @@ variable "cluster_resource_group_name" {
   type        = string
 }
 
-variable "resource_group_name" {
-  description = "Resource group of the user-assigned identity."
-  type        = string
-}
-
 variable "identity_id" {
   description = "User-assigned identity id federated with the Kubernetes service account."
   type        = string
@@ -26,6 +21,12 @@ variable "identity_id" {
 variable "identity_client_id" {
   description = "Client id of the user-assigned identity."
   type        = string
+}
+
+variable "container_registry_id" {
+  description = "Registry id: the cluster's kubelet identity gets AcrPull here. Null skips the assignment."
+  type        = string
+  default     = null
 }
 
 variable "namespace" {

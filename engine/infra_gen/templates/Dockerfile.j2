@@ -5,15 +5,18 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Restore first so the package layer is cached until a project file changes.
-COPY *.sln Directory.Build.props* Directory.Packages.props* nuget.config* ./
+COPY [[ sln ]] Directory.Build.props* Directory.Packages.props* nuget.config* ./
 [% for project in restore_projects %]
-COPY [[ project ]]/[[ project ]].csproj [[ project ]]/
+COPY [[ project.csproj ]] [[ project.folder ]]/
 [% endfor %]
-RUN dotnet restore [[ api_project ]]/[[ api_project ]].csproj
+RUN dotnet restore [[ api_csproj ]]
 
+# Release for deployed images. The local compose file builds Debug, which keeps the development
+# endpoints (Auth:Mode=Development, /auth/dev-token) that Release builds compile out.
+ARG CONFIGURATION=Release
 COPY . .
-RUN dotnet publish [[ api_project ]]/[[ api_project ]].csproj \
-    --configuration Release --no-restore --output /app/publish /p:UseAppHost=false
+RUN dotnet publish [[ api_csproj ]] \
+    --configuration ${CONFIGURATION} --no-restore --output /app/publish /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
@@ -26,4 +29,4 @@ COPY --from=build /app/publish .
 
 # 1654 is the "app" user of the official .NET images. A numeric id lets Kubernetes verify runAsNonRoot.
 USER 1654
-ENTRYPOINT ["dotnet", "[[ api_project ]].dll"]
+ENTRYPOINT ["dotnet", "[[ api_dll ]]"]

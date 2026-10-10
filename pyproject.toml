@@ -38,6 +38,7 @@ include = ["engine*", "api*"]
 [tool.setuptools.package-data]
 "engine.knowledge" = ["schema.sql", "seed_patterns.yaml", "prompts/*.md"]
 "engine.agents" = ["prompts/*.md"]
+"engine.infra_gen" = ["templates/**/*", "templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "api/tests"]

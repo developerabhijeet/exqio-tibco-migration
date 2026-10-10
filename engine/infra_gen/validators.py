@@ -26,10 +26,15 @@ from pydantic import BaseModel, Field
 LOG_LIMIT = 4000
 TIMEOUT_S = 300
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Only failures that mean "the provider registry or network cannot be reached". A bare "Forbidden" or
+# "403" is deliberately not here: it can come from anywhere (a bad module source, a private registry
+# credential) and must not hide a real configuration error behind "cannot verify here".
 _REGISTRY_FAILURE = re.compile(
-    r"registry\.(?:terraform|opentofu)\.io|failed to request discovery document|"
+    r"could not connect to registry|"
+    r"registry\.(?:terraform\.io|opentofu\.org)|"
+    r"failed to request discovery document|"
     r"Failed to query available provider packages|Failed to resolve provider packages|"
-    r"dial tcp|no such host|i/o timeout|Forbidden|connection refused|network is unreachable",
+    r"dial tcp|no such host|i/o timeout|connection refused|network is unreachable",
     re.IGNORECASE,
 )
 

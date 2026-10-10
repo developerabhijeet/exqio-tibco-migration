@@ -4,7 +4,11 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "~> 4.69"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
     }
   }
 }
@@ -33,6 +37,15 @@ resource "azurerm_role_assignment" "deployer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+# Azure RBAC takes a while to propagate; creating secrets right after the role assignment can fail with 403.
+resource "time_sleep" "rbac_propagation" {
+  count = var.grant_deployer_secrets_officer ? 1 : 0
+
+  create_duration = var.rbac_propagation_wait
+
+  depends_on = [azurerm_role_assignment.deployer]
+}
+
 # Secret names come from the design record's secret configuration keys. Values are placeholders:
 # operators set the real values out of band, and Terraform never overwrites them afterwards.
 resource "azurerm_key_vault_secret" "this" {
@@ -44,7 +57,7 @@ resource "azurerm_key_vault_secret" "this" {
   content_type = "text/plain"
   tags         = var.tags
 
-  depends_on = [azurerm_role_assignment.deployer]
+  depends_on = [time_sleep.rbac_propagation]
 
   lifecycle {
     ignore_changes = [value]

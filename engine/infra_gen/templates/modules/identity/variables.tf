@@ -28,6 +28,12 @@ variable "service_bus_namespace_id" {
   type        = string
 }
 
+variable "rbac_propagation_wait" {
+  description = "Wait after the role assignments before outputs are released (RBAC propagation)."
+  type        = string
+  default     = "60s"
+}
+
 variable "tags" {
   description = "Tags applied to every resource."
   type        = map(string)

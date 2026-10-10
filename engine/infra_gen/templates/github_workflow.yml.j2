@@ -4,6 +4,7 @@
 # Repository or organization variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
 # (read-only identity used for plans). Each GitHub environment ([[ envs | map(attribute='name') | join(', ') ]]) overrides them
 # with its own deploy identity; add required reviewers to the "[[ envs[-1].name ]]" environment so apply waits for approval.
+# Before the first run create the state storage: bash [[ tfstate_script ]].
 # Secret: PG_ADMIN_PASSWORD. Optional variables: TF_STATE_RESOURCE_GROUP, TF_STATE_STORAGE_ACCOUNT.
 name: [[ app_slug ]]
 
@@ -21,7 +22,6 @@ concurrency:
 permissions:
   id-token: write
   contents: read
-  pull-requests: write
 
 env:
   DOTNET_VERSION: 10.0.x
@@ -121,7 +121,7 @@ jobs:
           path: ${{ runner.temp }}/plan.txt
 
   image:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [build-test, validate-infra]
     runs-on: ubuntu-latest
     environment: [[ envs[0].name ]]
@@ -154,7 +154,7 @@ jobs:
 
   apply-[[ env.name ]]:
     needs: [[ env.needs_gh ]]
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # Required reviewers on this GitHub environment hold the job until someone approves.
     environment: [[ env.name ]]

@@ -4,7 +4,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "~> 4.69"
     }
   }
 }
@@ -39,26 +39,6 @@ resource "azurerm_container_app" "this" {
     identity = var.identity_id
   }
 
-  # Secrets are resolved from Key Vault by the user-assigned identity; no secret value is stored here.
-  dynamic "secret" {
-    for_each = var.secrets
-
-    content {
-      name                = secret.value.secret_name
-      identity            = var.identity_id
-      key_vault_secret_id = var.key_vault_secret_ids[secret.value.key_vault_secret_name]
-    }
-  }
-
-  dynamic "secret" {
-    for_each = var.app_insights_connection_string == "" ? [] : [1]
-
-    content {
-      name  = "appinsights-connection-string"
-      value = var.app_insights_connection_string
-    }
-  }
-
   template {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
@@ -75,24 +55,6 @@ resource "azurerm_container_app" "this" {
         content {
           name  = env.key
           value = env.value
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.secrets
-
-        content {
-          name        = env.value.env_name
-          secret_name = env.value.secret_name
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.app_insights_connection_string == "" ? [] : [1]
-
-        content {
-          name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
-          secret_name = "appinsights-connection-string"
         }
       }
 

@@ -43,6 +43,12 @@ variable "grant_deployer_secrets_officer" {
   default     = true
 }
 
+variable "rbac_propagation_wait" {
+  description = "Wait after the deployer role assignment before secrets are created (RBAC propagation)."
+  type        = string
+  default     = "60s"
+}
+
 variable "secret_names" {
   description = "Secret names (letters, digits and dashes only). Two dashes stand for the colon of a .NET configuration key."
   type        = list(string)

@@ -4,7 +4,11 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = "~> 4.69"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
     }
   }
 }
@@ -41,4 +45,12 @@ resource "azurerm_role_assignment" "this" {
   role_definition_name = each.value.role
   principal_id         = azurerm_user_assigned_identity.this.principal_id
   principal_type       = "ServicePrincipal"
+}
+
+# Role assignments take a while to propagate. The unit is not finished until this sleep ends, and
+# Terragrunt applies the app unit only after the identity unit, so the app starts with working roles.
+resource "time_sleep" "rbac_propagation" {
+  create_duration = var.rbac_propagation_wait
+
+  depends_on = [azurerm_role_assignment.this]
 }

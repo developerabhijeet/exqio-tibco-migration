@@ -10,7 +10,8 @@ import pytest
 from engine.analysis.static_rules import run_static_rules
 from engine.domains import graph as graph_mod
 from engine.dotnet_gen import design as design_mod
-from engine.dotnet_gen.models import MessagingEntity
+from engine.dotnet_gen import generator as dotnet_generator
+from engine.dotnet_gen.models import ConfigMap, MessagingEntity
 from engine.infra_gen import generator, validators
 from engine.tibco_parser.scanner import scan_folder
 
@@ -47,6 +48,13 @@ def generated(estate, tmp_path_factory):
     return root, files
 
 
+def _env_names(hcl_text: str) -> set[str]:
+    """Names set in the ``env_vars = { ... }`` block of a generated unit."""
+    block = hcl_text[hcl_text.index("env_vars = {"):]
+    block = block[: block.index("\n  }\n")]
+    return set(re.findall(r"^\s{4}([A-Za-z_][A-Za-z0-9_]*)\s+=", block, re.MULTILINE))
+
+
 def _read(root: Path, rel: str) -> str:
     return (root / rel).read_text(encoding="utf-8")
 
@@ -56,7 +64,8 @@ def test_infra_file_set(generated):
     root, files = generated
     expected = {
         "Dockerfile", ".dockerignore", "docker-compose.override.yml", "azure-pipelines.yml",
-        f".github/workflows/{APP}.yml", "infra/live/terragrunt.hcl",
+        f".github/workflows/{APP}.yml", "infra/live/root.hcl",
+        "infra/bootstrap/tfstate.sh",
     }
     for module in MODULES:
         for name in ("main.tf", "variables.tf", "outputs.tf"):
@@ -136,22 +145,27 @@ def test_key_vault_secret_names_sanitised(estate, generated):
     names = re.findall(r'"([A-Za-z0-9-]+)"', hcl[hcl.index("secret_names"):])
     assert "ConnectionStrings--GMFFundingDB" in names
     assert "Gmf--DealerFunding--GmfDbUrl" in names
+    # JMS and JDBC credential rows the generated code does not read are not provisioned
+    assert not any("Password" in n for n in names)
     for n in names:
         assert re.fullmatch(r"[A-Za-z0-9-]{1,127}", n)
     # non-secret keys never reach Key Vault
     assert "EmsUser" not in hcl
 
 
-def test_container_app_env_secrets_and_ingress(generated):
+def test_container_app_env_and_ingress(generated):
     root, _ = generated
     hcl = _read(root, f"infra/live/dev/{APP}/container_app/terragrunt.hcl")
     assert "ingress_enabled" in hcl and "target_port" in hcl and "8080" in hcl
-    assert "Gmf__DealerFunding__GmfDbUrl" in hcl  # secret env var from Key Vault
-    assert "Gmf__DealerFunding__EmsUser" in hcl  # plain env var (non-secret config)
-    assert "dependency.key_vault.outputs" in hcl
-    assert "dependency.identity.outputs" in hcl
-    assert "dependency.monitoring.outputs" in hcl
-    assert "dependency.service_bus.outputs" in hcl
+    env = _env_names(hcl)
+    assert {"Messaging__Mode", "Messaging__ServiceBus__FullyQualifiedNamespace", "KeyVault__Uri"} <= env
+    assert 'Messaging__Mode' in hcl and '"ServiceBus"' in hcl
+    # the app reads secrets itself with the managed identity: no secret env vars, no Key Vault references
+    assert "secrets = [" not in hcl and "key_vault_secret" not in hcl
+    assert not any("Password" in n or "GmfDbUrl" in n for n in env)
+    for dep in ("key_vault", "identity", "monitoring", "service_bus"):
+        assert f"dependency.{dep}.outputs" in hcl or dep == "monitoring"
+    assert 'dependency "monitoring"' in hcl
 
 
 def test_postgres_databases_from_jdbc_resources(generated):
@@ -175,7 +189,10 @@ def test_dependencies_follow_brief(generated):
 
 def test_root_terragrunt(generated):
     root, _ = generated
-    hcl = _read(root, "infra/live/terragrunt.hcl")
+    hcl = _read(root, "infra/live/root.hcl")
+    assert not (root / "infra/live/terragrunt.hcl").exists()
+    unit = _read(root, f"infra/live/dev/{APP}/resource_group/terragrunt.hcl")
+    assert 'find_in_parent_folders("root.hcl")' in unit
     assert 'remote_state {' in hcl and 'backend = "azurerm"' in hcl
     assert '"${local.app}/${local.env}/${local.module}.tfstate"' in hcl
     assert 'generate "provider"' in hcl
@@ -188,7 +205,7 @@ def test_module_templates_pin_azurerm(generated):
         main = _read(root, f"infra/modules/{module}/main.tf")
         if module == "aks_workload":
             assert "kubernetes" in main
-        assert 'version = "~> 4.0"' in main, module
+        assert 'version = "~> 4.69"' in main, module
         assert "hashicorp/azurerm" in main
     identity = _read(root, "infra/modules/identity/main.tf")
     for role in ("AcrPull", "Key Vault Secrets User", "Azure Service Bus Data Owner"):
@@ -206,6 +223,7 @@ def test_dockerfile_targets_net10(generated):
     assert re.search(r"^USER\s+\S+", text, re.MULTILINE) and "USER root" not in text
     assert "EXPOSE 8080" in text
     assert text.count("FROM ") == 2
+    assert "ARG CONFIGURATION=Release" in text and "--configuration ${CONFIGURATION}" in text
     ignore = _read(root, ".dockerignore")
     assert "**/bin" in ignore and "**/obj" in ignore and "infra" in ignore
 
@@ -217,6 +235,7 @@ def test_compose_override(generated):
     assert "Messaging__Mode: InMemory" in text
     assert "ConnectionStrings__GMFFundingDB" in text
     assert '"8080:8080"' in text
+    assert "CONFIGURATION: Debug" in text and "Auth__Mode: Development" in text
 
 
 def test_pipelines(generated):
@@ -225,10 +244,15 @@ def test_pipelines(generated):
     assert "id-token: write" in gh and "azure/login@v2" in gh
     assert "terragrunt" in gh and "pull_request" in gh
     assert gh.count("environment: ") >= len(ENVS)
+    assert "pull-requests: write" not in gh
+    guard = "if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
+    assert gh.count(guard) == 1 + len(ENVS)  # image job and one apply job per environment
     assert "needs:" in gh
     ado = _read(root, "azure-pipelines.yml")
     for needle in ("DotNetCoreCLI", "AzureCLI", "terragrunt", "stage: Plan", "stage: Apply_prod"):
         assert needle in ado, needle
+    assert "publishTestResults: false" in ado and "--logger \"trx" in ado and "Agent.TempDirectory" in ado
+    assert "refs/heads/main" in ado
     # both parse as YAML
     import yaml
 
@@ -342,3 +366,131 @@ def test_validate_infra_passes(generated):
         assert m.init_ok, f"{m.name}: {m.log}"
         assert m.validate_ok, f"{m.name}: {m.log}"
     assert result.ok, result.notes
+
+
+# ------------------------------------------- against a really generated solution
+PROCESS = "dealerfunding.DealerFundingRequest"
+
+
+@pytest.fixture(scope="module")
+def solution(estate, tmp_path_factory):
+    """The .NET solution from Task 14's generator with the infrastructure generated beside it."""
+    app, _ = estate
+    root = tmp_path_factory.mktemp("full") / SOLUTION
+    assert "samples" not in root.parts
+    dotnet_generator.generate_solution(app, [PROCESS], {}, {}, {}, [], root)
+    record = _record_for(app)
+    files = generator.generate_infra(app, record, root, SOLUTION)
+    return root, files
+
+
+def _record_for(app):
+    graph = graph_mod.build_graph([app])
+    process = next(p for p in app.processes if p.id == PROCESS)
+    findings = run_static_rules(process, app.contracts, app.substvars)
+    return design_mod.build_design_skeleton(process, app, [], findings, graph_mod.io_card(process, app, graph))
+
+
+def test_dockerfile_copy_sources_exist_in_generated_solution(solution):
+    root, _ = solution
+    text = _read(root, "Dockerfile")
+    copies = [ln for ln in text.splitlines() if ln.startswith("COPY ") and "--from" not in ln]
+    assert len(copies) >= 5
+    checked = 0
+    for line in copies:
+        *sources, dest = line.split()[1:]
+        for src in sources:
+            if src == ".":
+                continue
+            matches = list(root.glob(src))
+            assert matches, f"COPY source {src!r} matches nothing in the generated solution"
+            checked += 1
+            if "*" not in src:
+                assert dest.endswith("/"), line
+    layout = dotnet_generator.solution_layout(SOLUTION)
+    assert layout["api_project"] in text and layout["api_dll"] in text
+    assert (root / layout["api_project"]).is_file()
+    assert f"src/{SOLUTION}.Api/{SOLUTION}.Api.csproj" in text
+    assert checked >= 5
+
+
+def test_env_vars_match_app_configuration(solution):
+    """Every configuration key the deployment sets is read by the generated code."""
+    root, _ = solution
+    sources = "\n".join(p.read_text(encoding="utf-8") for p in (root / "src").rglob("*.cs"))
+    host_or_sdk = {"ASPNETCORE_ENVIRONMENT", "AZURE_CLIENT_ID"}
+    for runtime_module in ("container_app",):
+        env = _env_names(_read(root, f"infra/live/dev/{APP}/{runtime_module}/terragrunt.hcl"))
+        assert {"Messaging__Mode", "Messaging__ServiceBus__FullyQualifiedNamespace", "KeyVault__Uri"} <= env
+        for name in sorted(env - host_or_sdk):
+            key = name.replace("__", ":")
+            assert f'"{key}"' in sources, f"{name} is set by the infrastructure but {key} is never read"
+    # secrets: exactly what the app announces in Program.cs, none invented
+    program = _read(root, f"src/{SOLUTION}.Api/Program.cs")
+    announced = sorted(re.findall(r"Key Vault secret (\S+) ->", program))
+    hcl = _read(root, f"infra/live/dev/{APP}/key_vault/terragrunt.hcl")
+    provisioned = sorted(re.findall(r'"([A-Za-z0-9-]+)"', hcl[hcl.index("secret_names"):]))
+    assert provisioned == announced and announced
+
+
+def test_aks_uses_same_configuration_keys(estate, tmp_path):
+    app, record = estate
+    aks = tmp_path / "aks"
+    dotnet_generator.generate_solution(app, [PROCESS], {}, {}, {}, [], aks)
+    generator.generate_infra(app, record, aks, SOLUTION, runtime="aks")
+    env = _env_names(_read(aks, f"infra/live/dev/{APP}/aks_workload/terragrunt.hcl"))
+    assert env == {"ASPNETCORE_ENVIRONMENT", "KeyVault__Uri", "Messaging__Mode",
+                   "Messaging__ServiceBus__FullyQualifiedNamespace"}
+    main = _read(aks, "infra/modules/aks_workload/main.tf")
+    assert "workload identity" in main.lower() and "read_only_root_filesystem" in main and "AcrPull" in main
+
+
+def test_service_bus_connection_string_is_not_a_database(estate, tmp_path):
+    app, record = estate
+    extra = record.model_copy(update={"config": [
+        *record.config,
+        ConfigMap(substvar="resource:GMFEMSConnection.jdbc_url", key="ConnectionStrings:ServiceBus", secret=True),
+    ]})
+    generator.generate_infra(app, extra, tmp_path, SOLUTION)
+    pg = _read(tmp_path, f"infra/live/dev/{APP}/postgres_flexible/terragrunt.hcl")
+    assert "servicebus" not in pg.lower()
+    kv = _read(tmp_path, f"infra/live/dev/{APP}/key_vault/terragrunt.hcl")
+    assert "ConnectionStrings--ServiceBus" not in kv
+    assert "ConnectionStrings__ServiceBus" not in _read(tmp_path, "docker-compose.override.yml")
+
+
+def test_regeneration_removes_stale_units(estate, tmp_path):
+    app, record = estate
+    generator.generate_infra(app, record, tmp_path, SOLUTION)
+    assert (tmp_path / f"infra/live/prod/{APP}/container_app/terragrunt.hcl").is_file()
+    other = tmp_path / "infra/live/dev/other-app/resource_group/terragrunt.hcl"
+    other.parent.mkdir(parents=True)
+    other.write_text("# another application\n", encoding="utf-8")
+    generator.generate_infra(app, record, tmp_path, SOLUTION, envs=("dev",), runtime="aks")
+    assert not (tmp_path / "infra/live/prod").exists()
+    assert not (tmp_path / "infra/live/test").exists()
+    assert not (tmp_path / f"infra/live/dev/{APP}/container_app").exists()
+    assert (tmp_path / f"infra/live/dev/{APP}/aks_workload/terragrunt.hcl").is_file()
+    assert other.is_file()  # other applications are not touched
+
+
+def test_tfstate_bootstrap_matches_root(generated):
+    root, _ = generated
+    script = _read(root, "infra/bootstrap/tfstate.sh")
+    hcl = _read(root, "infra/live/root.hcl")
+    for name in re.findall(r'"(stgmfcredittfstate\w+|rg-gmf-credit-tfstate)"', hcl):
+        assert name in script
+    assert "--allow-shared-key-access false" in script and "set -euo pipefail" in script
+
+
+def test_rbac_propagation_waits(generated):
+    root, _ = generated
+    assert "time_sleep" in _read(root, "infra/modules/key_vault/main.tf")
+    assert "time_sleep" in _read(root, "infra/modules/identity/main.tf")
+
+
+def test_bare_forbidden_is_not_registry_unreachable():
+    rx = validators._REGISTRY_FAILURE
+    assert not rx.search("Error: Forbidden: 403 from the module source")
+    assert rx.search("could not connect to registry.opentofu.org: Forbidden")
+    assert rx.search("Failed to query available provider packages")
