@@ -67,6 +67,16 @@ public sealed record DevTokenResponse(
     [property: JsonPropertyName("token_type")] string TokenType,
     [property: JsonPropertyName("expires_at")] DateTime ExpiresAt);
 
+/// <summary>
+/// Answer of POST /_bus/publish: <c>disposition</c> is <c>completed</c>, <c>dead_lettered</c> or
+/// <c>abandoned</c>; <c>messages_published</c> counts the messages the run published.
+/// </summary>
+public sealed record BusPublishResult(
+    [property: JsonPropertyName("disposition")] string Disposition,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("messages_published")] int MessagesPublished);
+
 /// <summary>Body of POST /_bus/publish: an entity, a JSON payload and optional JMS properties.</summary>
 public sealed record BusPublishRequest(string Entity, JsonElement Payload, Dictionary<string, string>? Properties)
 {

@@ -274,6 +274,20 @@ def test_dev_token_endpoint_only_in_development(solution):
     assert 'var swagger = builder.Environment.IsDevelopment() || builder.Configuration.GetValue("Swagger:Enabled", false);' in program
     assert "if (swagger)\n{\n    app.UseSwagger();" in program
     assert "JwtBearer" in program and "Auth:Mode" in program
+    # /_bus/publish answers one object with the disposition as a string; /_bus/messages stays a list
+    publish = program[program.index('"/_bus/publish"'):program.index('"/_bus/messages"')]
+    for disposition in ('"completed"', '"dead_lettered"', '"abandoned"'):
+        assert f"new BusPublishResult({disposition}" in publish
+    devtoken = _file(solution, "src/GmfCredit.Api/Auth/DevToken.cs").content
+    assert '[property: JsonPropertyName("messages_published")] int MessagesPublished' in devtoken
+    assert '[property: JsonPropertyName("disposition")] string Disposition' in devtoken
+    assert "Results.Ok(entity is null ? bus.Published : bus.PublishedTo(entity))" in program
+    # CORS for the web Verify tab, Development only
+    cors = program[program.index("const string DevelopmentCors"):]
+    assert cors.index("if (builder.Environment.IsDevelopment())") < cors.index("AddCors(")
+    assert 'GetSection("Cors:Origins")' in program and '"http://localhost:3000"' in program
+    assert "if (app.Environment.IsDevelopment())\n{\n    app.UseCors(DevelopmentCors);\n}" in program
+    assert program.index("app.UseCors(DevelopmentCors)") < program.index("app.UseAuthentication()")
     api = _file(solution, "GmfCredit.Api.csproj").content
     assert "'$(Configuration)' != 'Release'" in api and "EXIQO_DEV_ENDPOINTS" in api
     prod = json.loads(_file(solution, "src/GmfCredit.Api/appsettings.json").content)
@@ -282,6 +296,7 @@ def test_dev_token_endpoint_only_in_development(solution):
     assert set(prod["Auth"]["EntraId"]) >= {"Instance", "TenantId", "Audience"}
     assert dev["Auth"]["Mode"] == "Development" and len(dev["Auth"]["DevToken"]["SigningKey"]) >= 32
     assert dev["Messaging"]["Mode"] == "InMemory" and prod["Messaging"]["Mode"] == "ServiceBus"
+    assert dev["Cors"]["Origins"] == ["http://localhost:3000"] and "Cors" not in prod
 
 
 def test_configuration_contract_key_vault_and_service_bus(solution):

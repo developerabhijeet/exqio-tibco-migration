@@ -2243,6 +2243,7 @@ def gen_appsettings(sol: SolutionGen, pgs: list[ProcGen], clients: dict[str, dic
                                                      "Audience": f"{sol.app_name.lower()}-api",
                                                      "SigningKey": f"development-only-{seed}"}},
         "Swagger": {"Enabled": True},
+        "Cors": {"Origins": ["http://localhost:3000"]},
         "Messaging": {"Mode": "InMemory"},
         "KeyVault": {"Uri": ""},
         "ConnectionStrings": {},
