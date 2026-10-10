@@ -259,7 +259,7 @@ def test_engineer_reply(process: Process | None, user: str) -> dict:
             "using var scope = api.Services.CreateScope();",
             f"var service = scope.ServiceProvider.GetRequiredService<{stem}Service>();",
             f"var result = await service.ExecuteAsync(fixture.InputAs<{stem}Input>(), CancellationToken.None);",
-            "Assert.NotNull(result);",
+            'Assert.Equal((int?)fixture.Expected("output")?["status"], result.StatusCode);',
         ])
         tests.append({"method": m.group(1), "body": body})
     return {"tests": tests}

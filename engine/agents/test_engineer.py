@@ -66,8 +66,24 @@ REASON_LIMIT = 160
 _PLACEHOLDER = re.compile(r'Assert\.Fail\(\s*"no test body for ([^"]*)"\s*\)')
 _SIGNATURE = re.compile(r"^    public (?:async )?Task (\w+)\(\)\s*$")
 _TRAIT = re.compile(r'\[Trait\("(Rule|Branch)",\s*"([^"]*)"\)\]')
-_TRIVIAL = re.compile(r"Assert\.(?:True\(true\)|False\(false\))")
-_ASSERT_CALL = re.compile(r"\bAssert\.\w+\s*[<(]")
+# matched against _tight(code): whitespace around ".", "(", ")" and "," removed
+_FAIL = re.compile(r"\bAssert\.Fail\(")
+_TRIVIAL = re.compile(r"\bAssert\.(?:True\(true|False\(false)[,)]")
+# an Assert call in code (any whitespace): the method name, then the "(" that opens the arguments
+_ASSERT_AT = re.compile(r"\bAssert\s*\.\s*(\w+)\s*(?:<[^;()]*?>\s*)?\(")
+_COMPARISON = re.compile(r"==|!=|<=|>=|\s<\s|\s>\s")
+_NUMBER = re.compile(r"^-?\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?[mMdDfFuUlL]*$")
+_ENUM_MEMBER = re.compile(r"^[A-Z]\w*(?:\.[A-Z]\w*)*\.([A-Z]\w*)$")
+# Asserts that compare a value with an expected one; for these only the leading arguments
+# are compared (a precision, comparer or message argument is not an expected value).
+VALUE_ASSERTS: dict[str, int] = {
+    "Equal": 2, "NotEqual": 2, "StrictEqual": 2, "NotStrictEqual": 2, "Equivalent": 2,
+    "Contains": 2, "DoesNotContain": 2, "StartsWith": 2, "EndsWith": 2, "Matches": 2,
+    "DoesNotMatch": 2, "InRange": 3, "NotInRange": 3,
+}
+# the exception type argument is the expected value
+THROW_ASSERTS = frozenset({"Throws", "ThrowsAsync", "ThrowsAny", "ThrowsAnyAsync"})
+EXPECT_HINT = "assert the rule's expected value with Assert.Equal(<expected>, <value from the call>)"
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")
 _TYPE_DECL = re.compile(
     r"^\s*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*"
@@ -152,17 +168,69 @@ def _driven_types(stem: str) -> list[str]:
     return [f"{stem}{s}" for s in DRIVEN_SUFFIXES]
 
 
-def check_test_body(body: str, stem: str) -> str | None:
-    """Why ``body`` may not become a test body, or ``None`` when it may.
+def _tight(code: str) -> str:
+    """``code`` with the whitespace around ``.``, ``(``, ``)`` and ``,`` removed, so that
+    ``Assert . Fail ( "x" )`` reads as ``Assert.Fail("x")``."""
+    return re.sub(r"\s*([.(),])\s*", r"\1", code)
 
-    The body must call a method of ``<stem>Service``, ``<stem>Controller`` or ``<stem>Consumer``
-    (through a variable bound to that type or statically), hold an ``Assert.`` whose arguments
-    use the result of that call (or the call itself, as in ``Assert.ThrowsAsync``), and contain
-    no ``Assert.Fail(``, ``Assert.True(true)``, ``[Fact]``/``[Theory]``, ``#pragma warning
-    disable``, file reference outside the solution or unbalanced braces."""
+
+def _close(code: str, open_at: int) -> int:
+    """Index of the bracket closing the one at ``open_at`` in ``code`` (literals blanked), or
+    ``len(code)`` when it is not closed."""
+    depth = 0
+    for k in range(open_at, len(code)):
+        if code[k] in "([{":
+            depth += 1
+        elif code[k] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return k
+    return len(code)
+
+
+def _arguments(text: str, code: str, open_at: int) -> list[str]:
+    """The top-level arguments of the call whose ``(`` is at ``open_at``; ``code`` is ``text``
+    with literals blanked (same length)."""
+    end = _close(code, open_at)
+    out: list[str] = []
+    depth, start = 0, open_at + 1
+    for k in range(open_at + 1, end):
+        if code[k] in "([{":
+            depth += 1
+        elif code[k] in ")]}":
+            depth -= 1
+        elif code[k] == "," and depth == 0:
+            out.append(text[start:k])
+            start = k + 1
+    out.append(text[start:end])
+    return [a.strip() for a in out if a.strip()]
+
+
+def _comparison(text: str) -> tuple[str, str, str] | None:
+    """``(left, operator, right)`` of the first top-level comparison in ``text``, if any."""
+    code = code_only(text)
+    depth = 0
+    for k, ch in enumerate(code):
+        depth += (ch in "([{") - (ch in ")]}")
+        if depth:
+            continue
+        m = _COMPARISON.match(code, k)
+        if m:
+            return text[:k].strip(), m.group(0).strip(), text[m.end():].strip()
+    return None
+
+
+@dataclass
+class _BodyCheck:
+    reason: str | None
+    expected: list[str]  # the expected-value arguments of the accepted Assert calls
+
+
+def _analyse(body: str, stem: str) -> _BodyCheck:
+    """The checks behind :func:`check_test_body`, keeping the expected values it found."""
     code = code_only(body)
     if not code.strip():
-        return "the body is empty"
+        return _BodyCheck("the body is empty", [])
     for open_, close in ("{}", "()"):
         depth = 0
         for ch in code:
@@ -170,53 +238,183 @@ def check_test_body(body: str, stem: str) -> str | None:
             if depth < 0:
                 break
         if depth != 0:
-            return "the body has unbalanced braces or parentheses"
-    if re.search(r"\bAssert\.Fail\s*\(", code):
-        return "the body still calls Assert.Fail"
-    if _TRIVIAL.search(re.sub(r"\s+", "", code)):
-        return "the body asserts a constant; it must assert the behaviour"
+            return _BodyCheck("the body has unbalanced braces or parentheses", [])
+    tight = _tight(code)
+    if _FAIL.search(tight):
+        return _BodyCheck("the body still calls Assert.Fail", [])
+    if _TRIVIAL.search(tight):
+        return _BodyCheck("the body asserts a constant; it must assert the behavior", [])
     if _TEST_ATTR.search(code):
-        return "the body adds a [Fact] or [Theory] attribute"
+        return _BodyCheck("the body adds a [Fact] or [Theory] attribute", [])
     if _PRAGMA.search(code):
-        return "the body introduces #pragma warning disable"
+        return _BodyCheck("the body introduces #pragma warning disable", [])
     if _OUTSIDE.search(strip_comments(body)):
-        return "the body references a file outside the solution"
+        return _BodyCheck("the body references a file outside the solution", [])
     types = _driven_types(stem)
     type_alt = "|".join(re.escape(t) for t in types)
-    statements = _statements(body)
-    # a variable bound to an instance: "new T(...)", "GetRequiredService<T>()" or "T name = ..."
-    binding = re.compile(rf"\bnew\s+(?:{type_alt})\s*\(|<\s*(?:{type_alt})\s*>")
+    statements = [(st, code_only(st)) for st in _statements(body)]
+
+    # A variable holds an instance when its right-hand side is the construction itself:
+    # "new T(...)" (with an optional initializer), "...<T>()" or a "(T)" cast, optionally
+    # followed by "!", or when it is declared with the type. When a call follows the
+    # construction ("new T(x).ExecuteAsync(...)") the variable holds the call's result.
+    new_rhs = re.compile(rf"^new\s+(?:{type_alt})\s*\(")
+    factory_rhs = re.compile(rf"<\s*(?:{type_alt})\s*>\s*\(\s*\)$")
+    cast_rhs = re.compile(rf"^\(\s*(?:{type_alt})\s*\)")
+
+    def instance(rhs: str) -> bool:
+        r = rhs.strip().rstrip(";").rstrip().rstrip("!").rstrip()
+        if cast_rhs.match(r) or factory_rhs.search(r):
+            return True
+        m = new_rhs.match(r)
+        if m is None:
+            return False
+        rest = r[_close(r, m.end() - 1) + 1:].lstrip()
+        if rest.startswith("{"):
+            rest = rest[_close(rest, 0) + 1:].lstrip()
+        return rest.rstrip("!").strip() == ""
+
     bound: set[str] = set()
-    for st in statements:
-        m = re.search(rf"\b(?:{type_alt})\s+(\w+)\s*=(?!=)", st)
-        if m is None and binding.search(st):
-            m = re.search(r"\b(\w+)\s*=(?!=)", st)
+    for _, cs in statements:
+        m = re.search(rf"\b(?:{type_alt})\s+(\w+)\s*=(?![=>])", cs)
+        if m is None:
+            a = re.search(r"\b(\w+)\s*=(?![=>])", cs)
+            if a and instance(cs[a.end():]):
+                m = a
         if m:
             bound.add(m.group(1))
     receivers = "|".join([*types, *(re.escape(b) for b in bound)])
-    call = re.compile(rf"(?:\b(?:{receivers})|\bnew\s+(?:{type_alt})\s*\([^;]*?\))\s*\.\s*\w+\s*[<(]")
-    calling = [st for st in statements if call.search(st)]
+    call = re.compile(rf"(?:\b(?:{receivers})|\bnew\s+(?:{type_alt})\s*\([^;]*?\)(?:\s*\{{[^;]*?\}})?"
+                      rf"|<\s*(?:{type_alt})\s*>\s*\(\s*\))\s*\.\s*\w+\s*[<(]")
+    calling = [cs for _, cs in statements if call.search(cs)]
     if not calling:
-        return f"the body does not call the generated {', '.join(types)}"
+        return _BodyCheck(f"the body does not call the generated {', '.join(types)}", [])
     results: set[str] = set()
-    for st in calling:
-        m = re.search(r"\b(\w+)\s*=(?!=)", st.split("=>", 1)[0])
+    for cs in calling:
+        m = re.search(r"\b(\w+)\s*=(?!=)", cs.split("=>", 1)[0])
         if m and m.group(1) not in bound:
             results.add(m.group(1))
     for _ in range(3):  # values derived from a result count as results
-        for st in statements:
-            m = re.search(r"\b(\w+)\s*=(?!=)", st)
+        for _, cs in statements:
+            m = re.search(r"\b(\w+)\s*=(?!=)", cs)
             if m and m.group(1) not in results and m.group(1) not in bound and results \
-                    and re.search(rf"\b(?:{'|'.join(map(re.escape, results))})\b", st[m.end():]):
+                    and re.search(rf"\b(?:{'|'.join(map(re.escape, results))})\b", cs[m.end():]):
                 results.add(m.group(1))
-    for st in statements:
-        if not _ASSERT_CALL.search(st):
-            continue
-        if call.search(st):
+    result_ref = re.compile(rf"\b(?:{'|'.join(map(re.escape, results))})\b") if results else None
+
+    def dependent(arg: str) -> bool:
+        c = code_only(arg)
+        return bool(call.search(c) or (result_ref and result_ref.search(c)))
+
+    def independent(arg: str) -> bool:
+        c = code_only(arg).strip()
+        return bool(c) and not dependent(arg) and c not in ("null", "default", "default!") \
+            and c not in bound
+
+    expected: list[str] = []
+    weak: list[str] = []
+    selfish: list[str] = []
+    for st, cs in statements:
+        for m in _ASSERT_AT.finditer(cs):
+            name = m.group(1)
+            args = _arguments(st, cs, m.end() - 1)
+            if not any(dependent(a) for a in args):
+                continue  # does not look at the call result
+            if name in THROW_ASSERTS and "<" in cs[m.start():m.end()]:
+                expected.append(re.sub(r"\s+", "", cs[m.start():m.end()]).split("<", 1)[1][:-2])
+                continue
+            if name in ("True", "False"):
+                cmp = _comparison(args[0]) if args else None
+                if cmp is None:
+                    weak.append(f"Assert.{name}(<condition>)")
+                    continue
+                left, op, right = cmp
+                if op in ("==", "!=") and "null" in (code_only(left), code_only(right)):
+                    weak.append(f"Assert.{name}(x {op} null)")
+                    continue
+                operands = [left, right]
+            elif name in VALUE_ASSERTS:
+                operands = args[:VALUE_ASSERTS[name]]
+            else:
+                weak.append(f"Assert.{name}")
+                continue
+            if any(dependent(a) for a in operands):
+                found = [a for a in operands if independent(a)]
+                if found:
+                    expected += found
+                else:
+                    selfish.append(f"Assert.{name}")
+    if expected:
+        return _BodyCheck(None, expected)
+    if selfish:
+        return _BodyCheck(
+            f"{selfish[0]} compares values that all come from the generated call, so it cannot "
+            "fail; one argument must be the expected value (a literal, a named constant or a "
+            f"value from the scenario fixture): {EXPECT_HINT}", [])
+    if weak:
+        return _BodyCheck(
+            f"{weak[0]} does not compare the result with an expected value (presence, type, "
+            f"identity and bare conditions do not count): {EXPECT_HINT}", [])
+    return _BodyCheck(f"no Assert checks a value returned by the generated call; {EXPECT_HINT}",
+                      [])
+
+
+def check_test_body(body: str, stem: str) -> str | None:
+    """Why ``body`` may not become a test body, or ``None`` when it may.
+
+    The body must call a method of ``<stem>Service``, ``<stem>Controller`` or ``<stem>Consumer``
+    (through a variable bound to an instance of that type, on a ``new`` instance or statically).
+    At least one value-comparing Assert (``Equal``, ``Contains``, ``Assert.True(a == b)``, an
+    expected exception type, ...) must have an argument that uses the call result and an
+    argument that does not: a literal, a named constant or a value from the scenario fixture.
+    ``NotNull``, ``NotEmpty``, ``IsType``, ``IsAssignableFrom``, ``Same``, ``NotSame`` and null
+    checks do not count. The body must contain no ``Assert.Fail(``, ``Assert.True(true)``,
+    ``[Fact]``/``[Theory]``, ``#pragma warning disable``, file reference outside the solution
+    or unbalanced braces (whitespace around ``.`` and ``(`` does not matter)."""
+    return _analyse(body, stem).reason
+
+
+def _literal_found(arg: str, context: str) -> bool | None:
+    """Whether the literal ``arg`` appears in ``context``; ``None`` when ``arg`` is not a literal
+    that can be looked up (a fixture value, a named constant, a bool, a type)."""
+    a = arg.strip()
+    while a.startswith("(") and _close(code_only(a), 0) == len(a) - 1:
+        a = a[1:-1].strip()
+    if _NUMBER.match(a):
+        want = a.rstrip("mMdDfFuUlL").replace("_", "")
+        try:
+            value = float(want)
+        except ValueError:
             return None
-        if results and re.search(rf"\b(?:{'|'.join(map(re.escape, results))})\b", st):
+        return any(float(n) == value for n in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?", context))
+    if len(a) >= 2 and a[0] in "\"'" and a[-1] == a[0] and code_only(a) == a[0] + " " * (len(a) - 2) + a[0]:
+        return a[1:-1] in context
+    m = _ENUM_MEMBER.match(a)
+    if m and not re.search(r"\b(?:fixture|expected)\b", a, re.IGNORECASE):
+        return re.search(rf"\b{re.escape(m.group(1))}\b", context, re.IGNORECASE) is not None
+    return None
+
+
+def expected_value_warning(body: str, stem: str, context: str) -> str | None:
+    """A warning when the expected literals of an accepted ``body`` appear nowhere in
+    ``context`` (the rule text and citation, or the branch expression, and the fixtures).
+
+    Soft: a derived value (input 2 plus the rule's "+ 1" gives 3) is legitimate, so this never
+    rejects a body; it flags it for a person. ``None`` when the body is rejected anyway, when an
+    expected value is not a literal (a fixture value or a named constant) or when a literal is
+    found."""
+    check = _analyse(body, stem)
+    if check.reason is not None or not check.expected:
+        return None
+    literals: list[str] = []
+    for arg in check.expected:
+        found = _literal_found(arg, context)
+        if found is None or found:
             return None
-    return "no Assert checks a value returned by the generated call"
+        literals.append(arg.strip())
+    return (f"the expected value {', '.join(literals)} does not appear in the rule text, its "
+            "citation, the branch expression or the fixture; check that it is the expected value "
+            "the rule gives for this input")
 
 
 # ------------------------------------------------------------ splicing
@@ -227,17 +425,30 @@ def _indent(body: str) -> list[str]:
     return [("        " + ln) if ln.strip() else "" for ln in text.split("\n")]
 
 
-def _splice(lines: list[str], m: TestMethod, body: str) -> None:
-    """Replace the body of ``m`` in place; the signature gains ``async`` when the body awaits."""
+_TOP_RETURN = "        return Task.CompletedTask;"
+
+
+def _splice(lines: list[str], m: TestMethod, body: str, placeholder: bool = False) -> None:
+    """Replace the body of ``m`` in place.
+
+    An accepted body always becomes an ``async Task`` method (xUnit accepts it): a body that
+    does not await starts with ``await Task.CompletedTask;``, no return is ever appended, and a
+    top-level ``return Task.CompletedTask;`` becomes ``return;`` (dropped when it is the last
+    line). The ``[Fact]``/``[Theory]`` attributes and the method name are left alone. A
+    ``placeholder`` body (``Assert.Fail`` then ``return Task.CompletedTask;``) keeps a plain
+    ``Task`` signature."""
     new = _indent(body)
-    code = code_only("\n".join(new))
-    awaits = re.search(r"\bawait\b", code) is not None
-    sig = lines[m.start].replace("public async Task ", "public Task ")
-    if awaits:
-        sig = sig.replace("public Task ", "public async Task ")
-        new = [ln for ln in new if ln.strip() != "return Task.CompletedTask;"]
-    elif not re.search(r"\breturn\b", code):
-        new.append("        return Task.CompletedTask;")
+    sig = lines[m.start]
+    if placeholder:
+        sig = sig.replace("public async Task ", "public Task ")
+    else:
+        if "public async Task " not in sig:
+            sig = sig.replace("public Task ", "public async Task ")
+        while new and new[-1] == _TOP_RETURN:
+            new.pop()
+        new = ["        return;" if ln == _TOP_RETURN else ln for ln in new]
+        if not re.search(r"\bawait\b", code_only("\n".join(new))):
+            new.insert(0, "        await Task.CompletedTask;")
     lines[m.start] = sig
     lines[m.start + 2:m.end] = new
 
@@ -314,6 +525,14 @@ def _targets_block(f: GenFile, methods: list[TestMethod], process: Process,
     return "\n".join(out)
 
 
+def _expectation_text(m: TestMethod, process: Process, rules: list[Rule]) -> str:
+    """What the test of ``m`` should expect: the rule text and citations, or the branch."""
+    if m.kind == "rule":
+        return rules_block([r for r in rules if r.id == m.ref], include_rejected=True)
+    return "\n".join(f"{t.from_id} to {t.to_id} ({t.kind}): {t.expression or 'otherwise'}"
+                     for t in process.transitions if t.id == m.ref)
+
+
 def _signatures(solution: GeneratedSolution, process: Process) -> str:
     """Public declarations of the process's service, controller and consumer, and of the test
     helpers (TestDatabase, Support)."""
@@ -381,10 +600,12 @@ async def _fill_file(
     memory_items: list[MemoryItem],
     provider: Any,
     rejections: list[BuildRejection] | None,
+    warnings: list[dict[str, str]] | None,
 ) -> GenFile | None:
     stem = ident(process.name, "Process")
     methods = placeholder_methods(f.content)
     targeted = _rule_targets(rules, methods)
+    fixtures = _scenarios_block(solution, process, scenarios)
     system, user = render_prompt(
         "test_engineer",
         process_name=process.name,
@@ -392,7 +613,7 @@ async def _fill_file(
                               []),
         rules=rules_block(targeted),
         targets=_targets_block(f, methods, process, rules),
-        files=_scenarios_block(solution, process, scenarios),
+        files=fixtures,
         design=_signatures(solution, process),
         memory=memory_block(memory_items),
     )
@@ -436,10 +657,22 @@ async def _fill_file(
         if not pending:
             break
 
+    if warnings is not None:
+        for m in methods:
+            if m.name not in accepted:
+                continue
+            why = expected_value_warning(accepted[m.name], stem,
+                                         f"{_expectation_text(m, process, rules)}\n{fixtures}")
+            if why:
+                log.warning("test engineer warning %s::%s: %s", f.path, m.name, mask_sensitive(why))
+                warnings.append({"path": f.path, "method": m.name, "reason": why})
+
     lines = f.content.split("\n")
     for m in sorted(methods, key=lambda x: x.start, reverse=True):  # bottom up keeps indices
-        body = accepted.get(m.name) or _unfilled(m, reasons.get(m.name, "rejected"))
-        _splice(lines, m, body)
+        if m.name in accepted:
+            _splice(lines, m, accepted[m.name])
+        else:
+            _splice(lines, m, _unfilled(m, reasons.get(m.name, "rejected")), placeholder=True)
     text = "\n".join(lines)
     if accepted:
         text = _add_usings(text, list(accepted.values()), _type_index(solution))
@@ -460,6 +693,7 @@ async def fill_test_bodies(
     memory_items: list[MemoryItem],
     provider: Any,
     rejections: list[BuildRejection] | None = None,
+    warnings: list[dict[str, str]] | None = None,
 ) -> list[GenFile]:
     """Write the placeholder bodies of ``<Process>RulesTests.cs`` and ``<Process>BranchTests.cs``.
 
@@ -468,12 +702,16 @@ async def fill_test_bodies(
     method that now awaits and ``using`` lines for generated types the bodies name. A body still
     rejected stays ``Assert.Fail("no test body for <id>: <reason>")``. Returns only the test files
     whose content changed; ``solution`` is not modified. ``design`` is accepted for the common
-    agent signature; ownership comes from ``GenFile.process_id`` and the file names."""
+    agent signature; ownership comes from ``GenFile.process_id`` and the file names.
+
+    ``rejections`` collects the rejected replies; ``warnings`` collects ``{path, method, reason}``
+    for accepted bodies whose expected literal appears nowhere in the rule text, citation,
+    branch expression or fixtures (:func:`expected_value_warning`), for a person to check."""
     del design  # the test classes and their ids come from the files themselves
     out: list[GenFile] = []
     for f in _test_files(solution, process):
         changed = await _fill_file(f, solution, process, rules, scenarios, memory_items, provider,
-                                   rejections)
+                                   rejections, warnings)
         if changed is not None:
             out.append(changed)
     return out
