@@ -596,6 +596,22 @@ def test_compare_tier_threshold_change_is_intended(gmf, db, stubs, evaluator):
                    finding_process=DECISION).unexplained == 1
 
 
+def test_public_lineage_helpers():
+    import importlib
+
+    compare_mod = importlib.import_module("engine.parity.compare")
+
+    entry = compare_mod.LineageEntry(process_id="p.A", activity_id="Calc", trace_id="Calc")
+    lineage = {"output.fee": [entry]}
+    assert compare_mod.lineage_for("output.fee.amount", lineage) == [entry]
+    assert compare_mod.lineage_for("output.other", lineage) == []
+    finding = Finding(id="S1", severity="low", text="t", source="static",
+                      citations=[Citation(activity_id="Calc", kind="expression", text="x")])
+    assert compare_mod.touches(finding, [entry], "p.A")
+    assert not compare_mod.touches(finding, [entry], "p.B")
+    assert compare_mod._lineage_for is compare_mod.lineage_for and compare_mod._touches is compare_mod.touches
+
+
 def test_compare_numeric_double_fields(evaluator):
     expected = run(evaluator, DECISION, decision_request(752))
     # the evaluator marks number() division as XPath double; rows compare at the column scale

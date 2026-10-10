@@ -25,6 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from engine.child_env import child_env
 from engine.dotnet_gen.coverage import merge_cobertura
 from engine.dotnet_gen.trx import TestCase, parse_trx
 
@@ -160,14 +161,20 @@ def _count_cs(root: Path) -> int:
 
 # ------------------------------------------------------------------- runner
 class DotnetRunner:
-    def __init__(self, root: Path, dotnet: str | None = None, timeout_s: int = DEFAULT_TIMEOUT_S) -> None:
+    def __init__(self, root: Path, dotnet: str | None = None, timeout_s: int = DEFAULT_TIMEOUT_S,
+                 env: dict[str, str] | None = None) -> None:
+        """``env`` is passed to every step this runner starts (for example ``TEST_DATABASE_URL``
+        for the generated tests); a step's own ``env=`` is applied on top of it."""
         self.root = Path(root).resolve()
         self.dotnet = dotnet or find_dotnet() or "dotnet"
         self.timeout_s = timeout_s
+        self.extra_env: dict[str, str] = dict(env or {})
 
     # environment
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        env = dict(os.environ)
+        """The child environment: the allowlist from ``engine.child_env`` (the API's secrets are
+        not inherited), the dotnet CLI settings, the runner's ``env`` and then ``extra``."""
+        env = child_env()
         env.update({"DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1",
                     "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1", "MSBUILDDISABLENODEREUSE": "1",
                     "DOTNET_CLI_UI_LANGUAGE": "en"})
@@ -178,6 +185,7 @@ class DotnetRunner:
             env["PATH"] = f"{resolved.parent}{os.pathsep}{env.get('PATH', '')}"
         if not env.get("EXIQO_NUGET_CACHE") and NUGET_CACHE.is_dir():
             env["EXIQO_NUGET_CACHE"] = str(NUGET_CACHE)
+        env.update(self.extra_env)
         if extra:
             env.update(extra)
         return env
@@ -191,9 +199,10 @@ class DotnetRunner:
     def _target(self, project: str | None) -> str:
         return str(self.root / project) if project else str(self.solution())
 
-    def _run(self, args: list[str], timeout_s: int | None = None) -> tuple[int, str]:
+    def _run(self, args: list[str], timeout_s: int | None = None,
+             env: dict[str, str] | None = None) -> tuple[int, str]:
         try:
-            proc = subprocess.run([self.dotnet, *args], cwd=self.root, env=self.env(), capture_output=True,
+            proc = subprocess.run([self.dotnet, *args], cwd=self.root, env=self.env(env), capture_output=True,
                                   text=True, timeout=timeout_s or self.timeout_s, check=False)
         except FileNotFoundError as exc:
             return 127, f"dotnet not found: {exc}"
@@ -203,31 +212,32 @@ class DotnetRunner:
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
     # steps
-    def restore(self, project: str | None = None) -> StepResult:
-        code, log = self._run(["restore", self._target(project)])
+    def restore(self, project: str | None = None, env: dict[str, str] | None = None) -> StepResult:
+        code, log = self._run(["restore", self._target(project)], env=env)
         return StepResult(ok=code == 0, log=log)
 
-    def build(self, project: str | None = None, configuration: str = "Debug") -> BuildResult:
-        code, log = self._run(["build", self._target(project), "-c", configuration, "-nologo"])
+    def build(self, project: str | None = None, configuration: str = "Debug",
+              env: dict[str, str] | None = None) -> BuildResult:
+        code, log = self._run(["build", self._target(project), "-c", configuration, "-nologo"], env=env)
         warnings, errors = parse_build_log(log)
         return BuildResult(ok=code == 0, warnings=warnings, errors=errors, log=log, files=_count_cs(self.root))
 
-    def format_check(self, whitespace_only: bool = False) -> StepResult:
+    def format_check(self, whitespace_only: bool = False, env: dict[str, str] | None = None) -> StepResult:
         """``dotnet format --verify-no-changes``; ``whitespace_only`` runs the whitespace pass in
         folder mode, which needs no restore (usable where NuGet is unreachable)."""
         if whitespace_only:
             args = ["format", "whitespace", str(self.root), "--folder", "--verify-no-changes", "-v", "q"]
         else:
             args = ["format", str(self.solution()), "--verify-no-changes", "-v", "q"]
-        code, log = self._run(args)
+        code, log = self._run(args, env=env)
         return StepResult(ok=code == 0, log=log)
 
-    def test(self, project: str | None = None) -> TestRun:
+    def test(self, project: str | None = None, env: dict[str, str] | None = None) -> TestRun:
         results = self.root / "TestResults"
         shutil.rmtree(results, ignore_errors=True)
         args = ["test", self._target(project), "--logger", "trx;LogFileName=results.trx",
                 "--collect:XPlat Code Coverage", "--results-directory", str(results), "-nologo"]
-        code, log = self._run(args)
+        code, log = self._run(args, env=env)
         trx_files = sorted(results.rglob("*.trx"), key=lambda p: p.stat().st_mtime) if results.exists() else []
         cases: list[TestCase] = []
         for f in trx_files:

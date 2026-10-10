@@ -312,6 +312,22 @@ def test_validate_infra_fmt_failure(generated, tmp_path):
     assert result.fmt_ok is False and result.ok is False
 
 
+def test_validate_infra_scrubs_child_environment(generated, tmp_path, monkeypatch):
+    secrets = {"CLAUDE_CODE_OAUTH_TOKEN": "tok", "AZURE_OPENAI_API_KEY": "key", "APP_SECRET": "s3cret",
+               "LANGFUSE_SECRET_KEY": "lf", "DATABASE_URL": "postgresql://u:p@db/x"}
+    for k, v in secrets.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("TF_CLI_CONFIG_FILE", "/etc/tf.rc")
+    root, _ = generated
+    dump = tmp_path / "terraform.env"
+    tf = _fake_tool(tmp_path, "terraform", f'/usr/bin/env > "{dump}"\nexit 0\n')
+    validators.validate_infra(root, tf, None, env={"TEST_DATABASE_URL": "postgresql://t/x"})
+    child = dict(line.split("=", 1) for line in dump.read_text().splitlines() if "=" in line)
+    assert not set(secrets) & set(child)
+    assert child["TEST_DATABASE_URL"] == "postgresql://t/x"
+    assert child["TF_CLI_CONFIG_FILE"] == "/etc/tf.rc" and child["TF_IN_AUTOMATION"] == "1"
+
+
 def _real_tools():
     import toolchain  # scripts/toolchain.py, on sys.path via conftest
 

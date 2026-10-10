@@ -76,7 +76,7 @@ _SHARED = DecisionHint(
     choice="IDistributedCache (Redis) so every replica sees one value",
     alternatives=("IMemoryCache, correct only for a single instance", "A Postgres table with row locks"),
     reason="BW shared and job-shared variables live in one engine; App Service or AKS runs several "
-           "replicas, so in-process memory changes behaviour.",
+           "replicas, so in-process memory changes behavior.",
 )
 _FTP = DecisionHint(
     title="FTP transfer",
@@ -199,7 +199,7 @@ _P: list[PatternSpec] = [
                     choice="Postgres row lock (SELECT ... FOR UPDATE) when the section guards rows",
                     alternatives=("Redis distributed lock (DistributedLock.Redis)",
                                   "Postgres advisory lock"),
-                    reason="A BW critical section serialises one engine; several replicas need a lock "
+                    reason="A BW critical section serializes one engine; several replicas need a lock "
                            "that spans processes.")),
     PatternSpec("flow.parallel", "core", *_SERVICE, "{activity}Async", [],
                 "Task.WhenAll over one task per branch; branch failures handled per the error "

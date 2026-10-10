@@ -277,6 +277,56 @@ def test_unparseable_file_is_a_failure(tmp_path):
     assert not report.ok
 
 
+_DFR = "DealerFunding/Processes/dealerfunding/DealerFundingRequest.bwp"
+_INACTIVE = "LookupDealerToThrowDealerInactive"
+
+
+def _inactive_link_variant(tmp_path: Path, link_type: str | None):
+    """DealerFundingRequest with the ##otherwise## condition removed from the link beside the
+    conditional LookupDealerToLookupDeal, and its tibex:linkType set (``None`` = attribute absent)."""
+    import re
+
+    text = (GMF / _DFR).read_text(encoding="utf-8")
+    text, n = re.subn(rf'<bpws:source linkName="{_INACTIVE}">.*?</bpws:source>',
+                      f'<bpws:source linkName="{_INACTIVE}"/>', text, flags=re.DOTALL)
+    assert n == 1
+    attr = f' tibex:linkType="{link_type}"' if link_type else ""
+    text, n = re.subn(rf'(name="{_INACTIVE}"\s+tibex:label="") tibex:linkType="SUCCESSWITHNOCONDITION"',
+                      rf"\1{attr}", text)
+    assert n == 1
+    dst = tmp_path / _DFR
+    dst.parent.mkdir(parents=True)
+    dst.write_text(text, encoding="utf-8")
+    collector = CompletenessCollector()
+    proc = bw6.parse_bwp(dst, "DealerFunding", "gmf.credit", collector)
+    return _by_id(proc.transitions), collector.report()
+
+
+def _assumptions(report):
+    return [e for e in report.explained if e.reason.startswith("UNVERIFIED")]
+
+
+def test_explicit_success_link_beside_conditional_sibling_stays_success(tmp_path):
+    trans, report = _inactive_link_variant(tmp_path, "SUCCESS")
+    assert trans[_INACTIVE].kind == "success"
+    assert trans["LookupDealerToLookupDeal"].kind == "conditional"
+    assert _assumptions(report) == [] and report.ok
+
+
+def test_untyped_link_beside_conditional_sibling_is_otherwise_with_assumption(tmp_path):
+    trans, report = _inactive_link_variant(tmp_path, None)
+    assert trans[_INACTIVE].kind == "otherwise"
+    [item] = _assumptions(report)
+    assert _INACTIVE in item.reason and "otherwise" in item.reason
+    assert report.ok  # an assumption is reported, not an unknown element
+
+
+def test_successwithnocondition_link_is_otherwise(tmp_path):
+    trans, report = _inactive_link_variant(tmp_path, "SUCCESSWITHNOCONDITION")
+    assert trans[_INACTIVE].kind == "otherwise"
+    assert _assumptions(report) == []
+
+
 def test_collector_explain_is_recorded():
     _, collector = _parse("DealerFunding/Processes/dealerfunding/DealerFundingRequest.bwp")
     reasons = {e.path.rsplit("/", 1)[-1].split("[")[0]: e.reason for e in collector.report().explained}

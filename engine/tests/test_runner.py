@@ -75,6 +75,54 @@ def test_runner_environment_points_at_local_toolchain(tmp_path):
     assert env["DOTNET_ROOT"] == "/opt/x"
 
 
+SECRETS = {"CLAUDE_CODE_OAUTH_TOKEN": "tok", "AZURE_OPENAI_API_KEY": "key", "APP_SECRET": "s3cret",
+           "LANGFUSE_SECRET_KEY": "lf", "DATABASE_URL": "postgresql://u:p@db/x"}
+
+
+def _dump_env_tool(tmp_path: Path, name: str) -> tuple[str, Path]:
+    """A stand-in binary that writes its environment to a file and exits 0."""
+    dump = tmp_path / f"{name}.env"
+    tool = tmp_path / "bin" / name
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    tool.write_text(f'#!/bin/sh\n/usr/bin/env > "{dump}"\nexit 0\n')
+    tool.chmod(0o755)
+    return str(tool), dump
+
+
+def _read_env(dump: Path) -> dict[str, str]:
+    return dict(line.split("=", 1) for line in dump.read_text().splitlines() if "=" in line)
+
+
+def test_runner_environment_drops_api_secrets(tmp_path, monkeypatch):
+    for k, v in SECRETS.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    monkeypatch.setenv("NUGET_PACKAGES", "/n")
+    r = runner.DotnetRunner(tmp_path, dotnet="/opt/x/dotnet")
+    env = r.env({"TEST_DATABASE_URL": "postgresql://t/x"})
+    assert not set(SECRETS) & set(env)
+    assert env["TEST_DATABASE_URL"] == "postgresql://t/x"
+    assert env["HTTPS_PROXY"] == "http://proxy:3128" and env["LC_ALL"] == "C.UTF-8"
+    assert env["NUGET_PACKAGES"] == "/n" and env["PATH"].startswith("/opt/x")
+
+
+def test_runner_child_process_gets_scrubbed_environment(tmp_path, monkeypatch):
+    for k, v in SECRETS.items():
+        monkeypatch.setenv(k, v)
+    dotnet, dump = _dump_env_tool(tmp_path, "dotnet")
+    r = runner.DotnetRunner(tmp_path, dotnet=dotnet)
+    r.test(project="x.csproj", env={"TEST_DATABASE_URL": "postgresql://t/x"})
+    child = _read_env(dump)
+    assert not set(SECRETS) & set(child)
+    assert child["TEST_DATABASE_URL"] == "postgresql://t/x"
+    # the runner-wide env applies to every step (the repair loop calls build and test without arguments)
+    r = runner.DotnetRunner(tmp_path, dotnet=dotnet, env={"TEST_DATABASE_URL": "postgresql://t/y"})
+    r.build(project="x.csproj")
+    child = _read_env(dump)
+    assert child["TEST_DATABASE_URL"] == "postgresql://t/y" and not set(SECRETS) & set(child)
+
+
 # ----------------------------------------------------------------- dotnet needed
 @needs_dotnet
 def test_runner_resolves_dotnet_from_toolchain(tmp_path):

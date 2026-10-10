@@ -1,5 +1,13 @@
 """Parity evaluator: expected output derived from the TIBCO model (design spec section 6)."""
-from engine.parity.compare import LineageEntry, NoiseRule, NumericRule, build_lineage, compare
+from engine.parity.compare import (
+    LineageEntry,
+    NoiseRule,
+    NumericRule,
+    build_lineage,
+    compare,
+    lineage_for,
+    touches,
+)
 from engine.parity.evaluator import EvaluationError, Evaluator, UnsupportedActivity
 from engine.parity.scenarios import fill_expected, generate_and_evaluate, generate_scenarios
 from engine.parity.schema import SchemaIndex
@@ -21,4 +29,6 @@ __all__ = [
     "fill_expected",
     "generate_and_evaluate",
     "generate_scenarios",
+    "lineage_for",
+    "touches",
 ]

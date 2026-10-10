@@ -20,7 +20,10 @@ samples under samples/public):
   NOT reliable (Studio keeps stale names), so endpoints always come from the
   source and target elements. ``tibex:linkType`` is SUCCESS,
   SUCCESSWITHCONDITION, SUCCESSWITHNOCONDITION (the otherwise branch, condition
-  ``##otherwise##``) or ERROR.
+  ``##otherwise##``) or ERROR. An explicit SUCCESS stays an unconditional
+  success link even beside conditional siblings; a link with no linkType beside
+  conditional siblings is read as otherwise and reported as an UNVERIFIED
+  assumption in the completeness report's explained items.
 * Groups are ``bpws:scope`` nodes with ``tibex:group`` (localTransaction,
   iterate, ...) whose body holds ``groupStart`` and ``groupEnd`` marker elements.
   Markers are not activities: links from a groupStart become the group's
@@ -87,10 +90,10 @@ EXPLAINED: dict[str, str] = {
     ),
     "tibex:ProcessInfo": "process metadata (author, dates, product version, callable and stateless flags)",
     "tibex:ProcessInterface": "interface summary, duplicated by the Start/End variables and partner links",
-    "tibex:ProcessTemplateConfigurations": "Studio process template configuration; no runtime behaviour",
+    "tibex:ProcessTemplateConfigurations": "Studio process template configuration; no runtime behavior",
     "tibex:NamespaceRegistry": "Studio prefix registry for the mapper; namespaces are resolved from the XML itself",
-    "notation:Diagram": "GMF diagram layout only (positions, sizes, colours, fonts); no runtime meaning",
-    "bpws:extensions": "BPEL extension namespace declarations (mustUnderstand=no); no runtime behaviour",
+    "notation:Diagram": "GMF diagram layout only (positions, sizes, colors, fonts); no runtime meaning",
+    "bpws:extensions": "BPEL extension namespace declarations (mustUnderstand=no); no runtime behavior",
     "bpws:import": "schema namespace import; schema files are resolved by the contracts parser",
     "tibex:DesignExpression": "design-time copy of the adjacent bpws:transitionCondition kept for the Studio editor",
     "tibex:DesignNote": "Studio sticky note; documentation only",
@@ -1000,7 +1003,7 @@ class _BwpParser:
         if marker:
             kind = _TIBEX_GROUP_KIND.get(marker.lower()) or catalogue.group_kind(marker)
             if kind is None:
-                self._unknown_attr(el, f"tibex:group={marker!r} has no IR group kind; modelled as scope")
+                self._unknown_attr(el, f"tibex:group={marker!r} has no IR group kind; modeled as scope")
                 return "scope"
             return kind
         return {"bpws:forEach": "iterate", "bpws:repeatUntil": "loop", "bpws:while": "loop",
@@ -1184,7 +1187,15 @@ class _BwpParser:
             return "conditional", None
         if lt not in ("", "SUCCESS"):
             self._unknown_attr(rec.decl, f"tibex:linkType={rec.link_type!r} is not a known link type")
-        if any(s is not rec and s.condition and s.condition != _OTHERWISE for s in siblings):
+        # An explicit SUCCESS fires whenever the activity completes, whatever its siblings test; only
+        # SUCCESSWITHNOCONDITION (handled above) is the otherwise branch. Without a linkType the
+        # designer's intent is not stated, so a link beside conditional siblings is read as otherwise
+        # and the assumption is reported.
+        if not lt and any(s is not rec and s.condition and s.condition != _OTHERWISE for s in siblings):
+            self.collector.explain(
+                self._xpath(rec.decl),
+                f"UNVERIFIED: link {rec.name!r} has no tibex:linkType and a conditional sibling; "
+                "read as the otherwise branch (confirm in TIBCO Business Studio)")
             return "otherwise", None
         return "success", None
 

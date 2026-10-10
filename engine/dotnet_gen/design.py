@@ -558,7 +558,7 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
             native = act.native_type if act else r.canonical_type
             open_questions.append(OpenQuestion(
                 question=f"No .NET pattern for native type {native} (step {r.activity_id}).",
-                recommendation="Add a catalogue mapping before generation; until then the builder drafts "
+                recommendation="Add a catalog mapping before generation; until then the builder drafts "
                                f"the method and a reviewer checks it. {_NOT_A_DECISION}"))
         if r.pattern == "call.process" and r.activity_id not in ctx.calls:
             open_questions.append(OpenQuestion(
@@ -568,7 +568,7 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
         if f.decision == "ask":
             open_questions.append(OpenQuestion(
                 question=f"{f.id}: {f.text}",
-                recommendation="Keep the TIBCO behaviour in the generated code and record the business "
+                recommendation="Keep the TIBCO behavior in the generated code and record the business "
                                f"owner's answer before parity sign-off. {_NOT_A_DECISION}"))
         elif f.decision is None:
             open_questions.append(OpenQuestion(

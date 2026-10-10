@@ -82,7 +82,7 @@ _LAYOUT = {
 }
 EXPLAINED: dict[str, str] = {
     "pd:description": "process description; documentation only",
-    "pd:targetNamespace": "namespace for the schemas Studio generates for this process; no runtime behaviour",
+    "pd:targetNamespace": "namespace for the schemas Studio generates for this process; no runtime behavior",
     "pd:errorSchemas": "error schema declarations used by Generate Error at design time",
     "pd:label": "Studio sticky note; documentation only",
     "xsd:import": "schema namespace import; schema files are parsed as contracts (recorded in contracts_used)",
@@ -702,7 +702,7 @@ class _Bw5Parser:
         kind = kind or (catalogue.group_kind(native) if native else None)
         if kind is None:
             self._unknown_attr(cfg_el if cfg_el is not None else el,
-                               f"group type {group_type or native!r} has no IR group kind; modelled as scope")
+                               f"group type {group_type or native!r} has no IR group kind; modeled as scope")
             kind = "scope"
         group.kind = kind
 

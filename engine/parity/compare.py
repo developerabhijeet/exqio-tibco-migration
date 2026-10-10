@@ -200,8 +200,10 @@ def equal(a: Any, b: Any, rule: NumericRule | None = None) -> bool:
 Lineage = Mapping[str, Iterable["LineageEntry | str"]]
 
 
-def _lineage_for(path: str, lineage: Lineage) -> list[LineageEntry | str]:
-    """Lineage of ``path`` or of its nearest ancestor path present in ``lineage``."""
+def lineage_for(path: str, lineage: Lineage) -> list[LineageEntry | str]:
+    """Lineage of ``path`` or of its nearest ancestor path present in ``lineage``.
+
+    Public: the API's verify service uses it to tell data lineage from control lineage."""
     p = path
     while True:
         if p in lineage:
@@ -212,10 +214,11 @@ def _lineage_for(path: str, lineage: Lineage) -> list[LineageEntry | str]:
         p = p[:cut]
 
 
-def _touches(finding: Finding, entries: list[LineageEntry | str], process_id: str | None) -> bool:
+def touches(finding: Finding, entries: list[LineageEntry | str], process_id: str | None) -> bool:
     """A citation names an activity of ``process_id`` (the finding's process) in the lineage.
 
-    Plain-string entries (trace paths, unscoped) match on the last path segment.
+    Plain-string entries (trace paths, unscoped) match on the last path segment. Public: the API's
+    verify service uses it with ``lineage_for``.
     """
     for c in finding.citations:
         for e in entries:
@@ -225,6 +228,11 @@ def _touches(finding: Finding, entries: list[LineageEntry | str], process_id: st
             elif e == c.activity_id or e.endswith("/" + c.activity_id):
                 return True
     return False
+
+
+# The former private names, kept so existing imports keep working.
+_lineage_for = lineage_for
+_touches = touches
 
 
 class _Classifier:
@@ -248,9 +256,9 @@ class _Classifier:
         rule = self.rule(path)
         if equal(exp, act, rule):
             return FieldDiff(path=path, expected=exp, actual=act, status="match")
-        entries = _lineage_for(path, self.lineage)
+        entries = lineage_for(path, self.lineage)
         for f in self.fixes:
-            if not _touches(f, entries, self._process_of(f)):
+            if not touches(f, entries, self._process_of(f)):
                 continue
             if self.counterfactual is not None:
                 cf = self.counterfactual.get(path)

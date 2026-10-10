@@ -11,10 +11,11 @@ init fails, validate is skipped for the module and ``registry_unreachable`` is s
 tell "cannot verify here" from "the module is wrong". To validate offline, point
 ``TF_CLI_CONFIG_FILE`` at a CLI configuration with a ``provider_installation { filesystem_mirror {...} }``
 block (or set ``TF_PLUGIN_CACHE_DIR`` to a populated cache); both are inherited by the subprocesses.
+The subprocesses get the allowlisted environment from ``engine.child_env`` (``TF_*``, Terragrunt,
+proxy, CA and path variables) plus the caller's ``env``; the API's secrets are not inherited.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -22,6 +23,8 @@ import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+from engine.child_env import child_env
 
 LOG_LIMIT = 4000
 TIMEOUT_S = 300
@@ -131,23 +134,25 @@ def _validate_modules(
             result.modules.append(mod)
 
 
-def validate_infra(root: Path, terraform: str | None, terragrunt: str | None) -> InfraValidation:
-    """Run the infrastructure checks over ``root/infra`` with the given tool paths (``None`` = absent)."""
+def validate_infra(root: Path, terraform: str | None, terragrunt: str | None,
+                   env: dict[str, str] | None = None) -> InfraValidation:
+    """Run the infrastructure checks over ``root/infra`` with the given tool paths (``None`` = absent).
+
+    ``env`` is added to the allowlisted child environment of every tool run."""
     root = Path(root)
     infra = _infra_dir(root)
-    env = dict(os.environ)
-    env.update({"TF_IN_AUTOMATION": "1", "TF_INPUT": "0", "CHECKPOINT_DISABLE": "1"})
+    tool_env = child_env({"TF_IN_AUTOMATION": "1", "TF_INPUT": "0", "CHECKPOINT_DISABLE": "1", **(env or {})})
     result = InfraValidation(
         tools_present={"terraform": _present(terraform), "terragrunt": _present(terragrunt)}
     )
 
     if result.tools_present["terraform"]:
         assert terraform is not None
-        rc, log = _run([terraform, "fmt", "-check", "-recursive", "-no-color"], infra, env)
+        rc, log = _run([terraform, "fmt", "-check", "-recursive", "-no-color"], infra, tool_env)
         result.fmt_ok = rc == 0
         if not result.fmt_ok:
             result.notes.append(f"terraform fmt -check failed: {_tail(log)}")
-        _validate_modules(terraform, infra / "modules", env, result)
+        _validate_modules(terraform, infra / "modules", tool_env, result)
         if any(m.registry_unreachable for m in result.modules):
             result.registry_unreachable = True
             result.notes.append(
@@ -165,8 +170,8 @@ def validate_infra(root: Path, terraform: str | None, terragrunt: str | None) ->
     if result.tools_present["terragrunt"]:
         assert terragrunt is not None
         live = infra / "live"
-        args = _terragrunt_fmt_args(terragrunt, live if live.is_dir() else infra, env)
-        rc, log = _run([terragrunt, *args], live if live.is_dir() else infra, env)
+        args = _terragrunt_fmt_args(terragrunt, live if live.is_dir() else infra, tool_env)
+        rc, log = _run([terragrunt, *args], live if live.is_dir() else infra, tool_env)
         result.hclfmt_ok = rc == 0
         if not result.hclfmt_ok:
             result.notes.append(f"terragrunt {' '.join(args)} failed: {_tail(log)}")
