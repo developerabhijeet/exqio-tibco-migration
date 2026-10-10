@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/loan/servicing/account" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/loan/servicing/account" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Response body of GET /accounts/{accountNumber}.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="AccountSummary">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="accountNumber" type="xs:string"/>
+        <xs:element name="borrowerName" type="xs:string"/>
+        <xs:element name="maskedSsn" type="xs:string"/>
+        <xs:element name="principalBalance" type="xs:decimal"/>
+        <xs:element name="nextDueDate" type="xs:date"/>
+        <xs:element name="daysPastDue" type="xs:int"/>
+        <xs:element name="status" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

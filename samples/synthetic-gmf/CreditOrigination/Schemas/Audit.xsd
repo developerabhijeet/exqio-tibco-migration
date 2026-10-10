@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/audit" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/audit" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Origination audit trail event.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="AuditEvent">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="eventType" type="xs:string"/>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element minOccurs="0" name="ssn" type="xs:string"/>
+        <xs:element minOccurs="0" name="payload" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

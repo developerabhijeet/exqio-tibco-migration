@@ -11,3 +11,4 @@ web/.next/
 *.egg-info/
 .env
 .ruff_cache/
+/samples/synthetic-gmf.zip

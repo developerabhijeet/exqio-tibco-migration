@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jndi:namedResource xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:jms="http://xsd.tns.tibco.com/bw/models/sharedresource/jms" xmlns:jndi="http://xsd.tns.tibco.com/amf/models/sharedresource/jndi" xmi:id="_m3rPY1UMBJbUkm5w0zZZIw" name="loanservicing.GMFEMSConnection" type="jms:JMSConnectionFactory">
+  <jndi:configuration xsi:type="jms:JMSConnectionFactory" xmi:id="_otwiPYnLqnst_O2dRrzOtw" connectionFactoryType="Direct" messagingStyle="Generic" providerURL="tcp://localhost:7222" username="svc_bw_servicing" password="#!A1LOkunSeBRCQliQajEoJo01+1Kf1JdX" clientID="">
+    <substitutionBindings xmi:id="_JQ3R_OtPCYTv6nqIU8qRLw" template="providerURL" propName="EMS.PROVIDER.URL"/>
+    <substitutionBindings xmi:id="_AFkLDlkB6O9N-s7nrsTEyw" template="username" propName="EMS.USER"/>
+  </jndi:configuration>
+</jndi:namedResource>

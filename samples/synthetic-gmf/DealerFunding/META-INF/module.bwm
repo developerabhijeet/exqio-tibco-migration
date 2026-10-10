@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sca:composite xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:BW="http://xsd.tns.tibco.com/amf/models/sca/implementationtype/BW" xmlns:XMLSchema="http://www.w3.org/2001/XMLSchema" xmlns:compositeext="http://schemas.tibco.com/amx/3.0/compositeext" xmlns:rest="http://xsd.tns.tibco.com/bw/models/binding/rest" xmlns:sca="http://www.osoa.org/xmlns/sca/1.0" xmlns:scact="http://xsd.tns.tibco.com/amf/models/sca/componentType" xmlns:scaext="http://xsd.tns.tibco.com/amf/models/sca/extensions" xmi:id="_9_Gk7cWdLqNvfiao07KzLQ" targetNamespace="http://tns.tibco.com/bw/composite/DealerFunding" name="DealerFunding" compositeext:version="1.0.0" compositeext:formatVersion="2">
+  <sca:service xmi:id="_eZDHo1qnqR-pWRUrcSx5-Q" name="funding" promote="ComponentFundingStatusLookup/funding">
+    <sca:interface.wsdl xmi:id="_5VgA3l75G5xXoabgUeYAXQ" interface="http://xmlns.example.com/20200224151530PLT#wsdl.interface(funding)" scaext:wsdlLocation="../Processes/dealerfunding/FundingStatusLookup.bwp"/>
+    <scaext:binding xsi:type="rest:RestServiceBinding" xmi:id="_krkZuvRXmXff2AlRASryng" name="RestService" path="/funding/{dealId}" docBasePath="http://localhost:9082/DealerFunding" docResourcePath="Funding" basePath="/" connector="dealerfunding.FundingConnector" structuredData="true" technologyVersion="2.0" implementation="Service Descriptors/dealerfunding.FundingStatusLookup-funding.json">
+      <operation xmi:id="_47s2lXZxykGKSxZi5AFXMw" operationName="get" nickname="get-funding" httpMethod="GET" responseStyle="element" requestStyle="element">
+        <clientFormat>json</clientFormat>
+        <clientRequestFormat>json</clientRequestFormat>
+      </operation>
+      <parameters xmi:id="_vCnzIAUjhlTsoQCgIJHuZA">
+        <parameterDefinitions xmi:id="_ZNkos7btjxHo9gTDxV3gSw" name="dealId" type="string" parameterType="Path" required="true"/>
+      </parameters>
+      <advancedConfig xmi:id="_zhwr6fM6l29CZtUUBgbnng" blockingQueueSize="2147483647"/>
+    </scaext:binding>
+    <scact:bindingAdjunct xmi:id="_zyVXmPqPN4eD-rZhgiXdcA" bindingName="RestService"/>
+  </sca:service>
+  <sca:property xmi:id="_D4EPVVtFNbH0XlpO6eTv2A" name="BW.DEPLOYMENTUNIT.TYPE" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_0vwwamyFiXhkxrzIKu_gmg" name="BW.APPNODE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_-VIAsdajcVYy0x369QsY_Q" name="BW.DEPLOYMENTUNIT.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_jx-Kv99NlUm8fhf7soYuJA" name="BW.HOST.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_58SsN6t9MP5pro0y8J7dpg" name="BW.DOMAIN.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_y4JyM-jyGZfjcgoMgL_WPg" name="BW.DEPLOYMENTUNIT.VERSION" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_HjbmujsXF5i6oms_Cna0Yw" name="BW.APPSPACE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_DgzQsVV6mtbMp77XeQ6NqA" name="BW.MODULE.VERSION" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_goaG2aryGYv6UOySE8n-AA" name="BW.CLOUD.PORT" type="XMLSchema:int" scalable="true"/>
+  <sca:property xmi:id="_SuJM9jW7J49msJxoqfzxLA" name="BW.MODULE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_hiazJpRpL7mOdUaF5zJ-7w" name="GMF.DB.URL" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_L7j9_J3qWKAJk7_T0frnJw" name="GMF.DB.USER" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_j_5HAkBHGRryXnWfZp-8CQ" name="EMS.PROVIDER.URL" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_EZ1OSnZnpPjRgh3hNNeNtw" name="EMS.USER" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_JfUwCGbMOXujR1fD0-_stQ" name="FUNDING.HTTP.PORT" type="XMLSchema:int" publicAccess="true" scalable="true"/>
+  <sca:component xmi:id="_VZ7Fc8sPyIpmTZMNXv5X-w" name="ComponentDealerFundingRequest" compositeext:version="1.0.0.qualifier">
+    <scaext:implementation xsi:type="BW:BWComponentImplementation" xmi:id="_mEFvnoql6ZGY807z4mM3YQ" processName="dealerfunding.DealerFundingRequest"/>
+  </sca:component>
+  <sca:component xmi:id="_D0Dk5pu4ilVdNYG9HxBcxg" name="ComponentFundingStatusLookup" compositeext:version="1.0.0.qualifier">
+    <scaext:implementation xsi:type="BW:BWComponentImplementation" xmi:id="_oYAGRXHbdEcr054B59rx6Q" processName="dealerfunding.FundingStatusLookup"/>
+    <sca:service xmi:id="_hpv6neJH8S8b4DF0bV8m9A" name="funding">
+      <sca:interface.wsdl xmi:id="_uv0Kv2l3i-b8TKcxEtdYuQ" interface="http://xmlns.example.com/20200224151530PLT#wsdl.interface(funding)" scaext:wsdlLocation="../Processes/dealerfunding/FundingStatusLookup.bwp"/>
+    </sca:service>
+  </sca:component>
+</sca:composite>

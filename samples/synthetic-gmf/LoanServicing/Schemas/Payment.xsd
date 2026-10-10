@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/loan/servicing/payment" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/loan/servicing/payment" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Inbound loan payment, JMS queue gmf.payments.inbound (XML text body).</xs:documentation>
+  </xs:annotation>
+  <xs:element name="Payment">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="paymentId" type="xs:string"/>
+        <xs:element name="accountNumber" type="xs:string"/>
+        <xs:element name="amount" type="xs:decimal"/>
+        <xs:element name="receivedDate" type="xs:date"/>
+        <xs:element name="channel" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="LateFeeAssessment">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="lateFee" type="xs:decimal"/>
+        <xs:element name="daysLate" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="PaymentAllocation">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="feeApplied" type="xs:decimal"/>
+        <xs:element name="lateFeeApplied" type="xs:decimal"/>
+        <xs:element name="interestApplied" type="xs:decimal"/>
+        <xs:element name="principalApplied" type="xs:decimal"/>
+        <xs:element name="newFeesDue" type="xs:decimal"/>
+        <xs:element name="newAccruedInterest" type="xs:decimal"/>
+        <xs:element name="newPrincipalBalance" type="xs:decimal"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

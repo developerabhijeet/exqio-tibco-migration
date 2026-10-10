@@ -1,0 +1,648 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no" name="creditorigination.DecisionEngine"
+    suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20190321103344"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+    xmlns:ns1="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b330a219-6c99-5d32-8815-c1ec8044f3a6+input"
+    xmlns:ns2="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+    xmlns:ns3="http://www.tibco.com/namespaces/tnt/plugins/jdbc+6530d112-c9cc-5c6f-af66-6ca434b6a871+input"
+    xmlns:ns4="http://xmlns.gmfin.example/credit/origination/faults"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b330a219-6c99-5d32-8815-c1ec8044f3a6+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b330a219-6c99-5d32-8815-c1ec8044f3a6+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="applicationId" type="string"/>
+                        <element minOccurs="0" name="tier" type="string"/>
+                        <element minOccurs="0" name="decision" type="string"/>
+                        <element minOccurs="0" name="apr" type="decimal"/>
+                        <element minOccurs="0" name="approvedAmount" type="decimal"/>
+                        <element minOccurs="0" name="approvedTermMonths" type="int"/>
+                        <element minOccurs="0" name="dti" type="decimal"/>
+                        <element minOccurs="0" name="creditScore" type="int"/>
+                        <element minOccurs="0" name="singleBureau" type="boolean"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+            xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="jdbcUpdateActivityOutput">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="noOfUpdates" type="xs:int"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+6530d112-c9cc-5c6f-af66-6ca434b6a871+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+6530d112-c9cc-5c6f-af66-6ca434b6a871+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="applicationId" type="string"/>
+                        <element minOccurs="0" name="ssn" type="string"/>
+                        <element minOccurs="0" name="vin" type="string"/>
+                        <element minOccurs="0" name="dealerId" type="string"/>
+                        <element minOccurs="0" name="requestedAmount" type="decimal"/>
+                        <element minOccurs="0" name="requestedTermMonths" type="int"/>
+                        <element minOccurs="0" name="status" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="true" createdBy="bwdev01"
+        createdOn="Thu Mar 21 10:33:44 EDT 2019"
+        description="Tiering, DTI and term cap for retail installment contracts."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context=""
+        input="{http://xmlns.gmfin.example/credit/origination/decision}DecisionRequest"
+        output="{http://xmlns.gmfin.example/credit/origination/decision}DecisionResult"/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/decision"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/faults"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b330a219-6c99-5d32-8815-c1ec8044f3a6+input"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+6530d112-c9cc-5c6f-af66-6ca434b6a871+input"
+            prefix="tns3"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/decision"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/faults"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:DecisionRequest" name="Start"
+            sca-bpel:internal="true" tibex:parameter="in"/>
+        <bpws:variable element="ns0:DecisionResult" name="End-input"
+            sca-bpel:internal="true" tibex:parameter="out"/>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>creditorigination.GMFOriginationDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns0:DtiResult" name="ComputeDTI-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:DtiResult" name="ComputeDTI"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierA-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierA"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierB-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierB"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierC-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignTierC"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignDecline-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TierAssignment" name="AssignDecline"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns1:jdbcUpdateActivityInput"
+            name="RecordDecision-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:jdbcUpdateActivityOutput"
+            name="RecordDecision" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:jdbcUpdateActivityInput"
+            name="RecordApplication-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:jdbcUpdateActivityOutput"
+            name="RecordApplication" sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:MissingIncomeFault"
+            name="ThrowMissingIncome-input" sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="StartToThrowMissingIncome"
+                    tibex:label="Income missing"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="StartToComputeDTI" tibex:label=""
+                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="ComputeDTIToAssignTierA" tibex:label="Tier A"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="ComputeDTIToAssignTierB" tibex:label="Tier B"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="ComputeDTIToAssignTierC" tibex:label="Tier C"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="ComputeDTIToAssignDecline"
+                    tibex:label="Decline"
+                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="AssignTierAToRecordDecision"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="AssignTierBToRecordDecision"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="AssignTierCToRecordDecision"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="AssignDeclineToRecordDecision"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="RecordDecisionToRecordApplication"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="RecordApplicationToEnd"
+                    tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="0"
+                    name="Start"
+                    tibex:xpdlId="3b5e5d1a-8da1-5a88-9b75-dc0818288341"
+                    variable="Start"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="StartToThrowMissingIncome">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="string-length($Start/parameters/monthlyIncome) = 0 or number($Start/parameters/monthlyIncome) &lt;= 0"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[string-length($Start/parameters/monthlyIncome) = 0 or number($Start/parameters/monthlyIncome) <= 0]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="StartToComputeDTI">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <tibex:StartEvent xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:throw faultName="ns4:MissingIncomeFault"
+                faultVariable="ThrowMissingIncome-input"
+                name="ThrowMissingIncome"
+                tibex:xpdlId="c5aa16af-ee48-5aa1-ada8-c0097503e951">
+                <tibex:inputBindings>
+                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/credit/origination/faults&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;ThrowMissingIncome-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:MissingIncomeFault>&#xa;            &lt;tns1:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/applicationId&quot;/>&#xa;            &lt;/tns1:applicationId>&#xa;            &lt;tns1:message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;Monthly income is required to compute DTI&amp;quot;&quot;/>&#xa;            &lt;/tns1:message>&#xa;        &lt;/tns1:MissingIncomeFault>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                </tibex:inputBindings>
+                <bpws:targets>
+                    <bpws:target linkName="StartToThrowMissingIncome"/>
+                </bpws:targets>
+            </bpws:throw>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="ComputeDTI-input"
+                    name="ComputeDTI" outputVariable="ComputeDTI"
+                    tibex:xpdlId="75291377-dbde-545e-be57-3fd9abe0bbc0"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="StartToComputeDTI"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="ComputeDTIToAssignTierA">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="number($Start/parameters/creditScore) >= 740 and number($ComputeDTI/dti) &lt; 0.35"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[number($Start/parameters/creditScore) >= 740 and number($ComputeDTI/dti) < 0.35]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="ComputeDTIToAssignTierB">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="number($Start/parameters/creditScore) >= 680 and number($Start/parameters/creditScore) &lt;= 739"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[number($Start/parameters/creditScore) >= 680 and number($Start/parameters/creditScore) <= 739]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="ComputeDTIToAssignTierC">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="number($Start/parameters/creditScore) >= 620 and number($Start/parameters/creditScore) &lt;= 679 and number($ComputeDTI/dti) &lt; 0.45"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[number($Start/parameters/creditScore) >= 620 and number($Start/parameters/creditScore) <= 679 and number($ComputeDTI/dti) < 0.45]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="ComputeDTIToAssignDecline">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;ComputeDTI-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:DtiResult>&#xa;            &lt;dti>&#xa;                &lt;xsl:value-of select=&quot;number($Start/parameters/monthlyDebt) div number($Start/parameters/monthlyIncome)&quot;/>&#xa;            &lt;/dti>&#xa;        &lt;/tns:DtiResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:DtiResult"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="AssignTierA-input"
+                    name="AssignTierA" outputVariable="AssignTierA"
+                    tibex:xpdlId="7b502e90-ba44-529d-b055-eabe1837e466"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ComputeDTIToAssignTierA"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="AssignTierAToRecordDecision"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:template name=&quot;AssignTierA-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:TierAssignment>&#xa;            &lt;tier>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;A&amp;quot;&quot;/>&#xa;            &lt;/tier>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;APPROVED&amp;quot;&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;5.49&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedAmount&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedTermMonths&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;        &lt;/tns:TierAssignment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:TierAssignment"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="AssignTierB-input"
+                    name="AssignTierB" outputVariable="AssignTierB"
+                    tibex:xpdlId="6f746d29-5b8a-5f77-9a1e-10e94f7fdc7f"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ComputeDTIToAssignTierB"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="AssignTierBToRecordDecision"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:template name=&quot;AssignTierB-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:TierAssignment>&#xa;            &lt;tier>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;B&amp;quot;&quot;/>&#xa;            &lt;/tier>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;APPROVED&amp;quot;&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;7.99&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedAmount&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedTermMonths&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;        &lt;/tns:TierAssignment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:TierAssignment"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="AssignTierC-input"
+                    name="AssignTierC" outputVariable="AssignTierC"
+                    tibex:xpdlId="b7089f0a-7476-552d-a9e9-30a656e46bea"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ComputeDTIToAssignTierC"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="AssignTierCToRecordDecision"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:template name=&quot;AssignTierC-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:TierAssignment>&#xa;            &lt;tier>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;C&amp;quot;&quot;/>&#xa;            &lt;/tier>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;APPROVED&amp;quot;&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;12.49&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedAmount&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;if (number($Start/parameters/requestedTermMonths) > 72) then 72 else $Start/parameters/requestedTermMonths&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;        &lt;/tns:TierAssignment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:TierAssignment"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="AssignDecline-input"
+                    name="AssignDecline" outputVariable="AssignDecline"
+                    tibex:xpdlId="d1380900-d266-53a9-b2c0-a951b44c9c3e"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ComputeDTIToAssignDecline"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="AssignDeclineToRecordDecision"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:template name=&quot;AssignDecline-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:TierAssignment>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;DECLINED&amp;quot;&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;0&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;0&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;0&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;        &lt;/tns:TierAssignment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/decision"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:TierAssignment"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="RecordDecision-input"
+                    name="RecordDecision" outputVariable="RecordDecision"
+                    tibex:xpdlId="b330a219-6c99-5d32-8815-c1ec8044f3a6"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="AssignTierAToRecordDecision"/>
+                        <bpws:target linkName="AssignTierBToRecordDecision"/>
+                        <bpws:target linkName="AssignTierCToRecordDecision"/>
+                        <bpws:target linkName="AssignDeclineToRecordDecision"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="RecordDecisionToRecordApplication"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns2=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+b330a219-6c99-5d32-8815-c1ec8044f3a6+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierA&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierB&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierC&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignDecline&quot;/>&#xa;    &lt;xsl:template name=&quot;RecordDecision-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;assigned&quot; select=&quot;($AssignTierA, $AssignTierB, $AssignTierC, $AssignDecline)[1]&quot;/>&#xa;        &lt;tns2:jdbcUpdateActivityInput>&#xa;            &lt;applicationId>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/applicationId&quot;/>&#xa;            &lt;/applicationId>&#xa;            &lt;xsl:if test=&quot;$assigned/tier&quot;>&#xa;                &lt;tier>&#xa;                    &lt;xsl:value-of select=&quot;$assigned/tier&quot;/>&#xa;                &lt;/tier>&#xa;            &lt;/xsl:if>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;$assigned/decision&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;$assigned/apr&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$assigned/approvedAmount&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$assigned/approvedTermMonths&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;            &lt;dti>&#xa;                &lt;xsl:value-of select=&quot;$ComputeDTI/dti&quot;/>&#xa;            &lt;/dti>&#xa;            &lt;creditScore>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/creditScore&quot;/>&#xa;            &lt;/creditScore>&#xa;            &lt;singleBureau>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/singleBureau&quot;/>&#xa;            &lt;/singleBureau>&#xa;        &lt;/tns2:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                    <value sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="insert into gmf.decision&#xa;  (application_id, tier, decision, apr, approved_amount, approved_term_months, dti, credit_score, single_bureau, decided_at)&#xa;values (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="applicationId"/>
+                                        <PreparedParameters DataType="1"
+                                            DataTypeDisplayValue="CHAR"
+                                            ParameterName="tier"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="decision"/>
+                                        <PreparedParameters DataType="2"
+                                            DataTypeDisplayValue="NUMERIC"
+                                            ParameterName="apr"/>
+                                        <PreparedParameters DataType="2"
+                                            DataTypeDisplayValue="NUMERIC"
+                                            ParameterName="approvedAmount"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="approvedTermMonths"/>
+                                        <PreparedParameters DataType="2"
+                                            DataTypeDisplayValue="NUMERIC"
+                                            ParameterName="dti"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="creditScore"/>
+                                        <PreparedParameters DataType="16"
+                                            DataTypeDisplayValue="BOOLEAN"
+                                            ParameterName="singleBureau"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="RecordApplication-input"
+                    name="RecordApplication" outputVariable="RecordApplication"
+                    tibex:xpdlId="6530d112-c9cc-5c6f-af66-6ca434b6a871"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="RecordDecisionToRecordApplication"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="RecordApplicationToEnd"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns3=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+6530d112-c9cc-5c6f-af66-6ca434b6a871+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierA&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierB&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierC&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignDecline&quot;/>&#xa;    &lt;xsl:template name=&quot;RecordApplication-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:jdbcUpdateActivityInput>&#xa;            &lt;applicationId>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/applicationId&quot;/>&#xa;            &lt;/applicationId>&#xa;            &lt;ssn>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/ssn&quot;/>&#xa;            &lt;/ssn>&#xa;            &lt;vin>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/vin&quot;/>&#xa;            &lt;/vin>&#xa;            &lt;dealerId>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/dealerId&quot;/>&#xa;            &lt;/dealerId>&#xa;            &lt;requestedAmount>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedAmount&quot;/>&#xa;            &lt;/requestedAmount>&#xa;            &lt;requestedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$Start/parameters/requestedTermMonths&quot;/>&#xa;            &lt;/requestedTermMonths>&#xa;            &lt;status>&#xa;                &lt;xsl:value-of select=&quot;($AssignTierA, $AssignTierB, $AssignTierC, $AssignDecline)[1]/decision&quot;/>&#xa;            &lt;/status>&#xa;        &lt;/tns3:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                    <value sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="insert into gmf.credit_application&#xa;  (application_id, ssn, vin, dealer_id, requested_amount, requested_term_months, status, submitted_at)&#xa;values (?, ?, ?, ?, ?, ?, ?, current_timestamp)"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="applicationId"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="ssn"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="vin"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealerId"/>
+                                        <PreparedParameters DataType="2"
+                                            DataTypeDisplayValue="NUMERIC"
+                                            ParameterName="requestedAmount"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="requestedTermMonths"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="status"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="End-input" name="End"
+                    tibex:xpdlId="4df5a564-4c9a-587e-b3fe-393e13e84691"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="RecordApplicationToEnd"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ComputeDTI&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierA&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierB&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignTierC&quot;/>&#xa;    &lt;xsl:param name=&quot;AssignDecline&quot;/>&#xa;    &lt;xsl:template name=&quot;End-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;assigned&quot; select=&quot;($AssignTierA, $AssignTierB, $AssignTierC, $AssignDecline)[1]&quot;/>&#xa;        &lt;tns:DecisionResult>&#xa;            &lt;decision>&#xa;                &lt;xsl:value-of select=&quot;$assigned/decision&quot;/>&#xa;            &lt;/decision>&#xa;            &lt;xsl:if test=&quot;$assigned/tier&quot;>&#xa;                &lt;tier>&#xa;                    &lt;xsl:value-of select=&quot;$assigned/tier&quot;/>&#xa;                &lt;/tier>&#xa;            &lt;/xsl:if>&#xa;            &lt;apr>&#xa;                &lt;xsl:value-of select=&quot;$assigned/apr&quot;/>&#xa;            &lt;/apr>&#xa;            &lt;approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$assigned/approvedAmount&quot;/>&#xa;            &lt;/approvedAmount>&#xa;            &lt;approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$assigned/approvedTermMonths&quot;/>&#xa;            &lt;/approvedTermMonths>&#xa;            &lt;dti>&#xa;                &lt;xsl:value-of select=&quot;$ComputeDTI/dti&quot;/>&#xa;            &lt;/dti>&#xa;        &lt;/tns:DecisionResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.internal.end"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:internalactivities="http://ns.tibco.com/bw/core/internalactivity"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/core/internalactivity#//End"/>
+                                    <value xsi:type="internalactivities:End"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

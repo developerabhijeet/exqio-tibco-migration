@@ -1,0 +1,709 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no" name="loanservicing.PaymentPosting"
+    suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20200603094118"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://www.tibco.com/namespaces/tnt/plugins/jms+2a8d1ffe-17e9-5d10-a980-b2879089ad54+output"
+    xmlns:ns1="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+input"
+    xmlns:ns2="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+output"
+    xmlns:ns3="http://xmlns.gmfin.example/loan/servicing/payment"
+    xmlns:ns4="http://www.tibco.com/namespaces/tnt/plugins/jdbc+9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a+input"
+    xmlns:ns5="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+    xmlns:ns6="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b3ad2157-625b-5490-a3d9-6112ddf80748+input"
+    xmlns:ns7="http://www.tibco.com/pe/WriteToLogActivitySchema"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jms+2a8d1ffe-17e9-5d10-a980-b2879089ad54+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:body="http://xmlns.gmfin.example/loan/servicing/payment" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jms+2a8d1ffe-17e9-5d10-a980-b2879089ad54+output">
+            <import namespace="http://xmlns.gmfin.example/loan/servicing/payment"/>
+            <complexType name="JMSHeadersType">
+                <sequence>
+                    <element minOccurs="0" name="JMSDestination" type="string"/>
+                    <element minOccurs="0" name="JMSReplyTo" type="string"/>
+                    <element minOccurs="0" name="JMSDeliveryMode" type="string"/>
+                    <element minOccurs="0" name="JMSMessageID" type="string"/>
+                    <element minOccurs="0" name="JMSTimestamp" type="long"/>
+                    <element minOccurs="0" name="JMSExpiration" type="long"/>
+                    <element minOccurs="0" name="JMSRedelivered" type="boolean"/>
+                    <element minOccurs="0" name="JMSPriority" type="int"/>
+                    <element minOccurs="0" name="JMSCorrelationID" type="string"/>
+                    <element minOccurs="0" name="JMSType" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="ActivityOutput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="JMSHeaders" type="tns:JMSHeadersType"/>
+                        <element minOccurs="0" name="JMSProperties">
+                            <complexType>
+                                <sequence>
+                                    <element minOccurs="0" name="JMSXDeliveryCount" type="int"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                        <element minOccurs="0" name="Body">
+                            <complexType>
+                                <sequence>
+                                    <element ref="body:Payment"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="accountNumber" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="account_number" type="string"/>
+                    <element minOccurs="0" name="fees_due" type="decimal"/>
+                    <element minOccurs="0" name="accrued_interest" type="decimal"/>
+                    <element minOccurs="0" name="principal_balance" type="decimal"/>
+                    <element minOccurs="0" name="next_due_date" type="date"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="paymentId" type="string"/>
+                        <element minOccurs="0" name="accountNumber" type="string"/>
+                        <element minOccurs="0" name="amount" type="decimal"/>
+                        <element minOccurs="0" name="channel" type="string"/>
+                        <element minOccurs="0" name="receivedDate" type="date"/>
+                        <element minOccurs="0" name="feeApplied" type="decimal"/>
+                        <element minOccurs="0" name="lateFeeApplied" type="decimal"/>
+                        <element minOccurs="0" name="interestApplied" type="decimal"/>
+                        <element minOccurs="0" name="principalApplied" type="decimal"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+            xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="jdbcUpdateActivityOutput">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="noOfUpdates" type="xs:int"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b3ad2157-625b-5490-a3d9-6112ddf80748+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b3ad2157-625b-5490-a3d9-6112ddf80748+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="feesDue" type="decimal"/>
+                        <element minOccurs="0" name="accruedInterest" type="decimal"/>
+                        <element minOccurs="0" name="principalBalance" type="decimal"/>
+                        <element minOccurs="0" name="lastPaymentDate" type="date"/>
+                        <element minOccurs="0" name="accountNumber" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            xmlns:tns="http://www.tibco.com/pe/WriteToLogActivitySchema" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType name="LogParametersType">
+                <xs:sequence>
+                    <xs:element form="unqualified" minOccurs="0" name="msgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="loggerName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="logLevel" type="xs:string"/>
+                    <xs:element form="unqualified" name="message" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ActivityInput" type="tns:LogParametersType"/>
+        </xs:schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="false" createdBy="bwdev01"
+        createdOn="Wed Jun 03 09:41:18 EDT 2020"
+        description="Posts inbound payments: late fee, then fees, interest, principal."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context="" input="" output=""/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/loan/servicing/payment"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+input"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a+input"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+b3ad2157-625b-5490-a3d9-6112ddf80748+input"
+            prefix="tns3"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            prefix="tns4"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/loan/servicing/payment"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable name="jmsConnection" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/bw/models/sharedresource/jms}JMSConnectionFactory"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>loanservicing.GMFEMSConnection</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>loanservicing.GMFServicingDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns0:ActivityOutput" name="ReceivePayment"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns1:jdbcQueryActivityInput"
+            name="LoadAccount-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:resultSet" name="LoadAccount"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:LateFeeAssessment"
+            name="AssessLateFee-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:LateFeeAssessment" name="AssessLateFee"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:LateFeeAssessment" name="NoLateFee-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:LateFeeAssessment" name="NoLateFee"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:PaymentAllocation"
+            name="AllocatePayment-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:PaymentAllocation" name="AllocatePayment"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:jdbcUpdateActivityInput"
+            name="InsertPayment-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:jdbcUpdateActivityOutput"
+            name="InsertPayment" sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:jdbcUpdateActivityInput"
+            name="UpdateLoanAccount-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:jdbcUpdateActivityOutput"
+            name="UpdateLoanAccount" sca-bpel:internal="true"/>
+        <bpws:variable element="ns7:ActivityInput" name="LogPaymentPosted-input"
+            sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="ReceivePaymentToPostPaymentTransaction"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="PostPaymentTransactionToLogPaymentPosted"
+                    tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="60"
+                    name="ReceivePayment"
+                    tibex:xpdlId="2a8d1ffe-17e9-5d10-a980-b2879089ad54"
+                    variable="ReceivePayment"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="ReceivePaymentToPostPaymentTransaction"/>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <bwext:BWActivity activityTypeID="bw.jms.receive"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jms="http://ns.tibco.com/bw/palette/jms"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jms#//JMSReceiveMessage"/>
+                                    <value acknowledgeMode="1"
+                                        connectionReference="jmsConnection"
+                                        destination="gmf.payments.inbound"
+                                        messageSelector="PaymentChannel IN ('ACH', 'DEBIT', 'LOCKBOX')"
+                                        messageType="XMLText"
+                                        messagingStyle="Queue"
+                                        pollingInterval="2"
+                                        xsi:type="jms:JMSReceiveMessage">
+                                        <bodyEditorElement href="platform:/resource/LoanServicing/Schemas/Payment.xsd#//Payment;XSDElementDeclaration"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:scope name="PostPaymentTransaction"
+                tibex:group="localTransaction"
+                tibex:xpdlId="03f4d9d4-cc15-5a90-9eff-cde315f1bdf9">
+                <bpws:targets>
+                    <bpws:target linkName="ReceivePaymentToPostPaymentTransaction"/>
+                </bpws:targets>
+                <bpws:sources>
+                    <bpws:source linkName="PostPaymentTransactionToLogPaymentPosted"/>
+                </bpws:sources>
+                <bpws:flow name="flow1">
+                    <bpws:links>
+                        <bpws:link name="LoadAccountToAssessLateFee"
+                            tibex:label="Past 10-day grace"
+                            tibex:linkType="SUCCESSWITHCONDITION"/>
+                        <bpws:link name="LoadAccountToNoLateFee" tibex:label=""
+                            tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                        <bpws:link name="AssessLateFeeToAllocatePayment"
+                            tibex:linkType="SUCCESS"/>
+                        <bpws:link name="NoLateFeeToAllocatePayment"
+                            tibex:linkType="SUCCESS"/>
+                        <bpws:link name="AllocatePaymentToInsertPayment"
+                            tibex:linkType="SUCCESS"/>
+                        <bpws:link name="InsertPaymentToUpdateLoanAccount"
+                            tibex:linkType="SUCCESS"/>
+                    </bpws:links>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="LoadAccount-input"
+                            name="LoadAccount" outputVariable="LoadAccount"
+                            tibex:xpdlId="0175997e-5ee6-57b7-9d4b-5ef36f65cd22"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:sources>
+                                <bpws:source linkName="LoadAccountToAssessLateFee">
+                                    <tibex:DesignExpression>
+                                        <tibex:expression expression="days-from-duration(xsd:date($ReceivePayment/Body/tns:Payment/tns:receivedDate) - xsd:date($LoadAccount/Record[1]/next_due_date)) >= 10"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                    </tibex:DesignExpression>
+                                    <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[days-from-duration(xsd:date($ReceivePayment/Body/tns:Payment/tns:receivedDate) - xsd:date($LoadAccount/Record[1]/next_due_date)) >= 10]]></bpws:transitionCondition>
+                                </bpws:source>
+                                <bpws:source linkName="LoadAccountToNoLateFee">
+                                    <tibex:DesignExpression>
+                                        <tibex:expression expression="##otherwise##"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                    </tibex:DesignExpression>
+                                    <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                                </bpws:source>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:tns1=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+0175997e-5ee6-57b7-9d4b-5ef36f65cd22+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:template name=&quot;LoadAccount-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:jdbcQueryActivityInput>&#xa;            &lt;accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:accountNumber&quot;/>&#xa;            &lt;/accountNumber>&#xa;        &lt;/tns1:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                            <value maxRows="100"
+                                                sharedResourceProperty="jdbcProperty"
+                                                sqlStatement="select account_number, fees_due, accrued_interest, principal_balance, next_due_date, status&#xa;  from gmf.loan_account&#xa; where account_number = ?&#xa;   for update"
+                                                timeout="10"
+                                                xsi:type="jdbcPalette:JDBCQueryActivity">
+                                                <PreparedParameters DataType="12"
+                                                    DataTypeDisplayValue="VARCHAR"
+                                                    ParameterName="accountNumber"/>
+                                                <columnMetadata columnName="account_number"
+                                                    dataType="12"
+                                                    status="OptionalElement"
+                                                    typeName="varchar"/>
+                                                <columnMetadata columnName="fees_due"
+                                                    dataType="2"
+                                                    status="OptionalElement"
+                                                    typeName="numeric"/>
+                                                <columnMetadata columnName="accrued_interest"
+                                                    dataType="2"
+                                                    status="OptionalElement"
+                                                    typeName="numeric"/>
+                                                <columnMetadata columnName="principal_balance"
+                                                    dataType="2"
+                                                    status="OptionalElement"
+                                                    typeName="numeric"/>
+                                                <columnMetadata columnName="next_due_date"
+                                                    dataType="91"
+                                                    status="OptionalElement"
+                                                    typeName="date"/>
+                                                <columnMetadata columnName="status"
+                                                    dataType="12"
+                                                    status="OptionalElement"
+                                                    typeName="varchar"/>
+                                            </value>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="AssessLateFee-input"
+                            name="AssessLateFee" outputVariable="AssessLateFee"
+                            tibex:xpdlId="206069d7-b68d-5829-be01-b1feb71ce092"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="LoadAccountToAssessLateFee"/>
+                            </bpws:targets>
+                            <bpws:sources>
+                                <bpws:source linkName="AssessLateFeeToAllocatePayment"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:param name=&quot;LoadAccount&quot;/>&#xa;    &lt;xsl:template name=&quot;AssessLateFee-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:LateFeeAssessment>&#xa;            &lt;tns:lateFee>&#xa;                &lt;xsl:value-of select=&quot;25.00&quot;/>&#xa;            &lt;/tns:lateFee>&#xa;            &lt;tns:daysLate>&#xa;                &lt;xsl:value-of select=&quot;days-from-duration(xsd:date($ReceivePayment/Body/tns:Payment/tns:receivedDate) - xsd:date($LoadAccount/Record[1]/next_due_date))&quot;/>&#xa;            &lt;/tns:daysLate>&#xa;        &lt;/tns:LateFeeAssessment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                                    version="6.0.0.001"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                                    xmlns:ns3="http://xmlns.gmfin.example/loan/servicing/payment"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                            <value inputQName="ns3:LateFeeAssessment"
+                                                xsi:type="generalactivities:Mapper"/>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="NoLateFee-input"
+                            name="NoLateFee" outputVariable="NoLateFee"
+                            tibex:xpdlId="80727a3d-9fb4-5bc9-b0ef-9c5c99c1f691"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="LoadAccountToNoLateFee"/>
+                            </bpws:targets>
+                            <bpws:sources>
+                                <bpws:source linkName="NoLateFeeToAllocatePayment"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:param name=&quot;LoadAccount&quot;/>&#xa;    &lt;xsl:template name=&quot;NoLateFee-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:LateFeeAssessment>&#xa;            &lt;tns:lateFee>&#xa;                &lt;xsl:value-of select=&quot;0.00&quot;/>&#xa;            &lt;/tns:lateFee>&#xa;            &lt;tns:daysLate>&#xa;                &lt;xsl:value-of select=&quot;max((0, days-from-duration(xsd:date($ReceivePayment/Body/tns:Payment/tns:receivedDate) - xsd:date($LoadAccount/Record[1]/next_due_date))))&quot;/>&#xa;            &lt;/tns:daysLate>&#xa;        &lt;/tns:LateFeeAssessment>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                                    version="6.0.0.001"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                                    xmlns:ns3="http://xmlns.gmfin.example/loan/servicing/payment"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                            <value inputQName="ns3:LateFeeAssessment"
+                                                xsi:type="generalactivities:Mapper"/>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="AllocatePayment-input"
+                            name="AllocatePayment"
+                            outputVariable="AllocatePayment"
+                            tibex:xpdlId="4153689b-f650-5890-a8c1-282597e938d6"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="AssessLateFeeToAllocatePayment"/>
+                                <bpws:target linkName="NoLateFeeToAllocatePayment"/>
+                            </bpws:targets>
+                            <bpws:sources>
+                                <bpws:source linkName="AllocatePaymentToInsertPayment"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:param name=&quot;LoadAccount&quot;/>&#xa;    &lt;xsl:param name=&quot;AssessLateFee&quot;/>&#xa;    &lt;xsl:param name=&quot;NoLateFee&quot;/>&#xa;    &lt;xsl:template name=&quot;AllocatePayment-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;amount&quot; select=&quot;xsd:decimal($ReceivePayment/Body/tns:Payment/tns:amount)&quot;/>&#xa;        &lt;xsl:variable name=&quot;lateFee&quot; select=&quot;xsd:decimal(($AssessLateFee, $NoLateFee)[1]/tns:lateFee)&quot;/>&#xa;        &lt;xsl:variable name=&quot;fees&quot; select=&quot;xsd:decimal($LoadAccount/Record[1]/fees_due) + $lateFee&quot;/>&#xa;        &lt;xsl:variable name=&quot;interest&quot; select=&quot;xsd:decimal($LoadAccount/Record[1]/accrued_interest)&quot;/>&#xa;        &lt;xsl:variable name=&quot;feeApplied&quot; select=&quot;min(($amount, $fees))&quot;/>&#xa;        &lt;xsl:variable name=&quot;interestApplied&quot; select=&quot;min(($amount - $feeApplied, $interest))&quot;/>&#xa;        &lt;xsl:variable name=&quot;principalApplied&quot; select=&quot;$amount - $feeApplied - $interestApplied&quot;/>&#xa;        &lt;tns:PaymentAllocation>&#xa;            &lt;tns:feeApplied>&#xa;                &lt;xsl:value-of select=&quot;$feeApplied&quot;/>&#xa;            &lt;/tns:feeApplied>&#xa;            &lt;tns:lateFeeApplied>&#xa;                &lt;xsl:value-of select=&quot;min(($feeApplied, $lateFee))&quot;/>&#xa;            &lt;/tns:lateFeeApplied>&#xa;            &lt;tns:interestApplied>&#xa;                &lt;xsl:value-of select=&quot;$interestApplied&quot;/>&#xa;            &lt;/tns:interestApplied>&#xa;            &lt;tns:principalApplied>&#xa;                &lt;xsl:value-of select=&quot;$principalApplied&quot;/>&#xa;            &lt;/tns:principalApplied>&#xa;            &lt;tns:newFeesDue>&#xa;                &lt;xsl:value-of select=&quot;$fees - $feeApplied&quot;/>&#xa;            &lt;/tns:newFeesDue>&#xa;            &lt;tns:newAccruedInterest>&#xa;                &lt;xsl:value-of select=&quot;$interest - $interestApplied&quot;/>&#xa;            &lt;/tns:newAccruedInterest>&#xa;            &lt;tns:newPrincipalBalance>&#xa;                &lt;xsl:value-of select=&quot;xsd:decimal($LoadAccount/Record[1]/principal_balance) - $principalApplied&quot;/>&#xa;            &lt;/tns:newPrincipalBalance>&#xa;        &lt;/tns:PaymentAllocation>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                                    version="6.0.0.001"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                                    xmlns:ns3="http://xmlns.gmfin.example/loan/servicing/payment"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                            <value inputQName="ns3:PaymentAllocation"
+                                                xsi:type="generalactivities:Mapper"/>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="InsertPayment-input"
+                            name="InsertPayment" outputVariable="InsertPayment"
+                            tibex:xpdlId="9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="AllocatePaymentToInsertPayment"/>
+                            </bpws:targets>
+                            <bpws:sources>
+                                <bpws:source linkName="InsertPaymentToUpdateLoanAccount"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:tns2=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+9fc69bae-c4c7-542f-a4a1-1bf9d0e8160a+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:param name=&quot;AllocatePayment&quot;/>&#xa;    &lt;xsl:template name=&quot;InsertPayment-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:jdbcUpdateActivityInput>&#xa;            &lt;paymentId>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:paymentId&quot;/>&#xa;            &lt;/paymentId>&#xa;            &lt;accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:accountNumber&quot;/>&#xa;            &lt;/accountNumber>&#xa;            &lt;amount>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:amount&quot;/>&#xa;            &lt;/amount>&#xa;            &lt;channel>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:channel&quot;/>&#xa;            &lt;/channel>&#xa;            &lt;receivedDate>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:receivedDate&quot;/>&#xa;            &lt;/receivedDate>&#xa;            &lt;feeApplied>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:feeApplied&quot;/>&#xa;            &lt;/feeApplied>&#xa;            &lt;lateFeeApplied>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:lateFeeApplied&quot;/>&#xa;            &lt;/lateFeeApplied>&#xa;            &lt;interestApplied>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:interestApplied&quot;/>&#xa;            &lt;/interestApplied>&#xa;            &lt;principalApplied>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:principalApplied&quot;/>&#xa;            &lt;/principalApplied>&#xa;        &lt;/tns2:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                            <value sharedResourceProperty="jdbcProperty"
+                                                sqlStatement="insert into gmf.payment&#xa;  (payment_id, account_number, amount, channel, received_date, fee_applied, late_fee_applied, interest_applied, principal_applied, posted_at)&#xa;values (?, ?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)"
+                                                timeout="10"
+                                                xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                                <PreparedParameters DataType="12"
+                                                    DataTypeDisplayValue="VARCHAR"
+                                                    ParameterName="paymentId"/>
+                                                <PreparedParameters DataType="12"
+                                                    DataTypeDisplayValue="VARCHAR"
+                                                    ParameterName="accountNumber"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="amount"/>
+                                                <PreparedParameters DataType="12"
+                                                    DataTypeDisplayValue="VARCHAR"
+                                                    ParameterName="channel"/>
+                                                <PreparedParameters DataType="91"
+                                                    DataTypeDisplayValue="DATE"
+                                                    ParameterName="receivedDate"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="feeApplied"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="lateFeeApplied"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="interestApplied"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="principalApplied"/>
+                                            </value>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="UpdateLoanAccount-input"
+                            name="UpdateLoanAccount"
+                            outputVariable="UpdateLoanAccount"
+                            tibex:xpdlId="b3ad2157-625b-5490-a3d9-6112ddf80748"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="InsertPaymentToUpdateLoanAccount"/>
+                            </bpws:targets>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:tns3=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+b3ad2157-625b-5490-a3d9-6112ddf80748+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:param name=&quot;AllocatePayment&quot;/>&#xa;    &lt;xsl:template name=&quot;UpdateLoanAccount-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:jdbcUpdateActivityInput>&#xa;            &lt;feesDue>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:newFeesDue&quot;/>&#xa;            &lt;/feesDue>&#xa;            &lt;accruedInterest>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:newAccruedInterest&quot;/>&#xa;            &lt;/accruedInterest>&#xa;            &lt;principalBalance>&#xa;                &lt;xsl:value-of select=&quot;$AllocatePayment/tns:newPrincipalBalance&quot;/>&#xa;            &lt;/principalBalance>&#xa;            &lt;lastPaymentDate>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:receivedDate&quot;/>&#xa;            &lt;/lastPaymentDate>&#xa;            &lt;accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$ReceivePayment/Body/tns:Payment/tns:accountNumber&quot;/>&#xa;            &lt;/accountNumber>&#xa;        &lt;/tns3:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                            <value sharedResourceProperty="jdbcProperty"
+                                                sqlStatement="update gmf.loan_account&#xa;   set fees_due = ?, accrued_interest = ?, principal_balance = ?, last_payment_date = ?&#xa; where account_number = ?"
+                                                timeout="10"
+                                                xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="feesDue"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="accruedInterest"/>
+                                                <PreparedParameters DataType="2"
+                                                    DataTypeDisplayValue="NUMERIC"
+                                                    ParameterName="principalBalance"/>
+                                                <PreparedParameters DataType="91"
+                                                    DataTypeDisplayValue="DATE"
+                                                    ParameterName="lastPaymentDate"/>
+                                                <PreparedParameters DataType="12"
+                                                    DataTypeDisplayValue="VARCHAR"
+                                                    ParameterName="accountNumber"/>
+                                            </value>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                </bpws:flow>
+            </bpws:scope>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="LogPaymentPosted-input"
+                    name="LogPaymentPosted"
+                    tibex:xpdlId="c902d7b7-d3f3-5002-a1ad-db103873e3e5"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="PostPaymentTransactionToLogPaymentPosted"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/payment&quot; xmlns:tns4=&quot;http://www.tibco.com/pe/WriteToLogActivitySchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceivePayment&quot;/>&#xa;    &lt;xsl:template name=&quot;LogPaymentPosted-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns4:ActivityInput>&#xa;            &lt;msgCode>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;LS-200&amp;quot;&quot;/>&#xa;            &lt;/msgCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;concat('Payment ', $ReceivePayment/Body/tns:Payment/tns:paymentId, ' posted')&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns4:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.log"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Log"/>
+                                    <value controlBy="Application" role="Info"
+                                        suppressJobInfo="true"
+                                        xsi:type="generalactivities:Log"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

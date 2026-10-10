@@ -1,0 +1,204 @@
+{
+  "mappings": [
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "912-55-7781"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 744,
+          "referenceId": "TRA-7781-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "909-32-1184"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 715,
+          "referenceId": "TRA-1184-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "923-61-9042"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 655,
+          "referenceId": "TRA-9042-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "918-74-2290"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 779,
+          "referenceId": "TRA-2290-01",
+          "inquiries": 1
+        },
+        "fixedDelayMilliseconds": 2500
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "915-09-3378"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 602,
+          "referenceId": "TRA-3378-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "931-48-6610"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "error": "SERVICE_UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "priority": 10,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/credit-report/v1/score"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "TRANSUNION",
+          "score": 684,
+          "referenceId": "TRA-DEFAULT",
+          "inquiries": 0
+        }
+      }
+    }
+  ]
+}

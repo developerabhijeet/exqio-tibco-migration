@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/vehicle" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/vehicle" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Vehicle identification number validation (49 CFR 565 check digit).</xs:documentation>
+  </xs:annotation>
+  <xs:element name="VinValidationRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="vin" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="VinValidationResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="vin" type="xs:string"/>
+        <xs:element name="valid" type="xs:boolean"/>
+        <xs:element minOccurs="0" name="reason" type="xs:string"/>
+        <xs:element minOccurs="0" name="computedCheckDigit" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jndi:namedResource xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:http="http://xsd.tns.tibco.com/bw/models/sharedresource/httpclient" xmlns:jndi="http://xsd.tns.tibco.com/amf/models/sharedresource/jndi" xmi:id="_Iw-P-wnQRv95Rt_9rBh2gg" name="creditorigination.TransUnionClient" type="http:HttpClientConfiguration">
+  <jndi:configuration xsi:type="http:HttpClientConfiguration" xmi:id="_I2d13vB63v3K0IggvQxUwA" httpClientVersion="httpcomponents" cmdExecutionIsolationStrategy="THREAD" cmdExecutionIsolationTimeout="1000" cmdExecutionTimeoutEnabled="true" cmdExecutionIsolationInterruptOnTimeout="true" cmdExecutionIsolationSemaphoreMaxConcRequests="10" cmdCircuitBreakerRequestVolumeThreshold="20" cmdCircuitBreakerSleepWindow="5000" cmdCircuitBreakerErrorThresholdPercentage="50" cmdMetricsRollingStatsTime="10000" cmdMetricsRollingStatsNumBuckets="10" cmdMetricsHealthSnapshotInterval="500" cmdRequestLogEnabled="true" tpCoreSize="10" tpMaxQueueSize="-1" tpQueueSizeRejectionThreshold="5" tpKeepAliveTime="1">
+    <tcpDetails xmi:id="_p88ZS62C5jKEZWzeR122tA" port="8092">
+      <substitutionBindings xmi:id="_PekAPBWA6f-BIXtUVhTniQ" template="host" propName="TRANSUNION.HOST"/>
+      <substitutionBindings xmi:id="_WBW8cqSm7kfhxB5z0JjDMw" template="port" propName="TRANSUNION.PORT"/>
+    </tcpDetails>
+  </jndi:configuration>
+</jndi:namedResource>

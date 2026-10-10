@@ -1,0 +1,77 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "version": "1.0",
+    "title": "Funding",
+    "description": "Funding status for a dealer deal."
+  },
+  "host": "localhost:9082",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/funding/{dealId}": {
+      "get": {
+        "summary": "Funding status for a dealer deal.",
+        "description": "",
+        "operationId": "get-funding",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "dealId",
+            "in": "path",
+            "description": "",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "a FundingStatusResponse to be returned",
+            "schema": {
+              "$ref": "#/definitions/FundingStatusResponse"
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "FundingStatusResponse": {
+      "type": "object",
+      "properties": {
+        "dealId": {
+          "type": "string"
+        },
+        "fundingId": {
+          "type": "integer"
+        },
+        "dealerId": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "fundedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

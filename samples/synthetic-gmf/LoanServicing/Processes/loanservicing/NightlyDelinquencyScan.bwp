@@ -1,0 +1,520 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no"
+    name="loanservicing.NightlyDelinquencyScan" suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20200722190455"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://tns.tibco.com/bw/activity/timer/xsd/output"
+    xmlns:ns1="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0ac8ca3d-0d9f-594c-84a6-eba03da4bbe1+output"
+    xmlns:ns2="http://www.tibco.com/namespaces/tnt/plugins/jdbc+4858993a-0c11-5422-bafc-ebecc431c7c9+input"
+    xmlns:ns3="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+    xmlns:ns4="http://www.tibco.com/namespaces/tnt/plugins/jms+8998625c-1623-5f8e-af6c-ebfd0c160917+input"
+    xmlns:ns5="http://www.tibco.com/pe/WriteToLogActivitySchema"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://tns.tibco.com/bw/activity/timer/xsd/output"
+            xmlns:tns="http://tns.tibco.com/bw/activity/timer/xsd/output" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType name="TimerOutputSchemaType">
+                <xs:sequence>
+                    <xs:element name="Time" type="xs:long"/>
+                    <xs:element name="FormattedDate" type="xs:string"/>
+                    <xs:element name="Hour" type="xs:int"/>
+                    <xs:element name="Minute" type="xs:int"/>
+                    <xs:element name="Second" type="xs:int"/>
+                    <xs:element name="Week" type="xs:int"/>
+                    <xs:element name="Month" type="xs:int"/>
+                    <xs:element name="Year" type="xs:int"/>
+                    <xs:element name="Date" type="xs:int"/>
+                    <xs:element name="DayOfWeek" type="xs:int"/>
+                    <xs:element name="DayOfMonth" type="xs:int"/>
+                    <xs:element name="Millisecond" type="xs:int"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="TimerOutputSchema" type="tns:TimerOutputSchemaType"/>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0ac8ca3d-0d9f-594c-84a6-eba03da4bbe1+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0ac8ca3d-0d9f-594c-84a6-eba03da4bbe1+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="account_number" type="string"/>
+                    <element minOccurs="0" name="days_past_due" type="int"/>
+                    <element minOccurs="0" name="monthly_payment" type="decimal"/>
+                    <element minOccurs="0" name="first_name" type="string"/>
+                    <element minOccurs="0" name="last_name" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+            <element name="ForEachDelinquentAccount_Current_Element_Record" type="tns:RecordType"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+4858993a-0c11-5422-bafc-ebecc431c7c9+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+4858993a-0c11-5422-bafc-ebecc431c7c9+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="accountNumber" type="string"/>
+                        <element minOccurs="0" name="daysPastDue" type="int"/>
+                        <element minOccurs="0" name="amountPastDue" type="decimal"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+            xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="jdbcUpdateActivityOutput">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="noOfUpdates" type="xs:int"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jms+8998625c-1623-5f8e-af6c-ebfd0c160917+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:body="http://xmlns.gmfin.example/loan/servicing/collections" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jms+8998625c-1623-5f8e-af6c-ebfd0c160917+input">
+            <import namespace="http://xmlns.gmfin.example/loan/servicing/collections"/>
+            <element name="ActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="destinationQueue" type="string"/>
+                        <element minOccurs="0" name="JMSCorrelationID" type="string"/>
+                        <element minOccurs="0" name="JMSExpiration" type="long"/>
+                        <element minOccurs="0" name="JMSPriority" type="int"/>
+                        <element minOccurs="0" name="JMSType" type="string"/>
+                        <element minOccurs="0" name="Body">
+                            <complexType>
+                                <sequence>
+                                    <element ref="body:CollectionsReferral"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            xmlns:tns="http://www.tibco.com/pe/WriteToLogActivitySchema" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType name="LogParametersType">
+                <xs:sequence>
+                    <xs:element form="unqualified" minOccurs="0" name="msgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="loggerName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="logLevel" type="xs:string"/>
+                    <xs:element form="unqualified" name="message" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ActivityInput" type="tns:LogParametersType"/>
+        </xs:schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="false" createdBy="bwdev01"
+        createdOn="Wed Jul 22 19:04:55 EDT 2020"
+        description="Daily 02:00 scan: refers accounts 30+ days past due to collections."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context="" input="" output=""/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/loan/servicing/collections"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+4858993a-0c11-5422-bafc-ebecc431c7c9+input"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jms+8998625c-1623-5f8e-af6c-ebfd0c160917+input"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            prefix="tns3"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/loan/servicing/collections"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:TimerOutputSchema" name="DailyAt0200"
+            sca-bpel:internal="true"/>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>loanservicing.GMFServicingDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable name="jmsConnection" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/bw/models/sharedresource/jms}JMSConnectionFactory"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>loanservicing.GMFEMSConnection</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns1:resultSet" name="FindDelinquentAccounts"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:jdbcUpdateActivityInput"
+            name="RecordDelinquency-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:jdbcUpdateActivityOutput"
+            name="RecordDelinquency" sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:ActivityInput"
+            name="SendToCollections-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:ActivityInput" name="LogScanSummary-input"
+            sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="DailyAt0200ToFindDelinquentAccounts"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="FindDelinquentAccountsToForEachDelinquentAccount"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="ForEachDelinquentAccountToLogScanSummary"
+                    tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="60"
+                    name="DailyAt0200"
+                    tibex:xpdlId="3c5aaa3c-50ce-5b95-b41c-ffc2d1edbbae"
+                    variable="DailyAt0200"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="DailyAt0200ToFindDelinquentAccounts"/>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.timer"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Timer"/>
+                                    <value intervalUnit="Day" runOnce="false"
+                                        startTime="2020-08-01T02:00:00.000-0400"
+                                        timeInterval="1"
+                                        xsi:type="generalactivities:Timer"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension name="FindDelinquentAccounts"
+                    outputVariable="FindDelinquentAccounts"
+                    tibex:xpdlId="0ac8ca3d-0d9f-594c-84a6-eba03da4bbe1"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="DailyAt0200ToFindDelinquentAccounts"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="FindDelinquentAccountsToForEachDelinquentAccount"/>
+                    </bpws:sources>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                    <value maxRows="0"
+                                        sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="select la.account_number, la.days_past_due, la.monthly_payment, a.first_name, a.last_name&#xa;  from gmf.loan_account la&#xa;  join gmf.applicant a on a.applicant_id = la.applicant_id&#xa; where la.days_past_due >= 30&#xa;   and la.status = 'ACTIVE'&#xa; order by la.days_past_due desc"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                        <columnMetadata columnName="account_number"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="days_past_due"
+                                            dataType="4"
+                                            status="OptionalElement"
+                                            typeName="int4"/>
+                                        <columnMetadata columnName="monthly_payment"
+                                            dataType="2"
+                                            status="OptionalElement"
+                                            typeName="numeric"/>
+                                        <columnMetadata columnName="first_name"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="last_name"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:scope name="ForEachDelinquentAccount" tibex:group="iterate"
+                tibex:xpdlId="54028226-77b2-5463-931f-3386eaa22b7d">
+                <bpws:targets>
+                    <bpws:target linkName="FindDelinquentAccountsToForEachDelinquentAccount"/>
+                </bpws:targets>
+                <bpws:sources>
+                    <bpws:source linkName="ForEachDelinquentAccountToLogScanSummary"/>
+                </bpws:sources>
+                <bpws:forEach counterName="index" name="iterate" parallel="no"
+                    tibex:group="iterate">
+                    <tibex:DesignExpression name="variableList">
+                        <tibex:expression expression="$FindDelinquentAccounts/Record"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                    </tibex:DesignExpression>
+                    <bpws:startCounterValue><![CDATA[1]]></bpws:startCounterValue>
+                    <bpws:finalCounterValue expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[count($FindDelinquentAccounts/Record)]]></bpws:finalCounterValue>
+                    <bpws:scope name="innerScope">
+                        <bpws:variables>
+                            <bpws:variable element="ns1:ForEachDelinquentAccount_Current_Element_Record"
+                                name="currentElement" sca-bpel:internal="true"/>
+                        </bpws:variables>
+                        <bpws:flow name="flow1">
+                            <bpws:links>
+                                <bpws:link name="GroupStartToRecordDelinquency"
+                                    tibex:linkType="SUCCESS"/>
+                                <bpws:link name="RecordDelinquencyToSendToCollections"
+                                    tibex:linkType="SUCCESS"/>
+                            </bpws:links>
+                            <bpws:assign name="GroupStart"
+                                tibex:group="groupStart"
+                                tibex:xpdlId="293e4eea-e5b2-5d3e-83b2-f08e0e6e957b"
+                                validate="no">
+                                <bpws:sources>
+                                    <bpws:source linkName="GroupStartToRecordDelinquency"/>
+                                </bpws:sources>
+                                <bpws:copy>
+                                    <bpws:from expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[$FindDelinquentAccounts/Record[number($index)]]]></bpws:from>
+                                    <bpws:to variable="currentElement"/>
+                                </bpws:copy>
+                            </bpws:assign>
+                            <bpws:extensionActivity>
+                                <tibex:activityExtension inputVariable="RecordDelinquency-input"
+                                    name="RecordDelinquency"
+                                    outputVariable="RecordDelinquency"
+                                    tibex:xpdlId="4858993a-0c11-5422-bafc-ebecc431c7c9"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="GroupStartToRecordDelinquency"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="RecordDelinquencyToSendToCollections"/>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns1=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+4858993a-0c11-5422-bafc-ebecc431c7c9+input&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;currentElement&quot;/>&#xa;    &lt;xsl:template name=&quot;RecordDelinquency-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:jdbcUpdateActivityInput>&#xa;            &lt;accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$currentElement/account_number&quot;/>&#xa;            &lt;/accountNumber>&#xa;            &lt;daysPastDue>&#xa;                &lt;xsl:value-of select=&quot;$currentElement/days_past_due&quot;/>&#xa;            &lt;/daysPastDue>&#xa;            &lt;amountPastDue>&#xa;                &lt;xsl:value-of select=&quot;xsd:decimal($currentElement/monthly_payment) * ceiling(xsd:integer($currentElement/days_past_due) div 30)&quot;/>&#xa;            &lt;/amountPastDue>&#xa;        &lt;/tns1:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:config>
+                                        <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                            <activityConfig>
+                                                <properties name="config"
+                                                    xsi:type="activityconfig:EMFProperty">
+                                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                                    <value sharedResourceProperty="jdbcProperty"
+                                                        sqlStatement="insert into gmf.delinquency (account_number, days_past_due, amount_past_due, detected_at, status)&#xa;values (?, ?, ?, current_timestamp, 'REFERRED')"
+                                                        timeout="10"
+                                                        xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                                        <PreparedParameters DataType="12"
+                                                            DataTypeDisplayValue="VARCHAR"
+                                                            ParameterName="accountNumber"/>
+                                                        <PreparedParameters DataType="4"
+                                                            DataTypeDisplayValue="INTEGER"
+                                                            ParameterName="daysPastDue"/>
+                                                        <PreparedParameters DataType="2"
+                                                            DataTypeDisplayValue="NUMERIC"
+                                                            ParameterName="amountPastDue"/>
+                                                    </value>
+                                                </properties>
+                                            </activityConfig>
+                                        </bwext:BWActivity>
+                                    </tibex:config>
+                                </tibex:activityExtension>
+                            </bpws:extensionActivity>
+                            <bpws:extensionActivity>
+                                <tibex:activityExtension inputVariable="SendToCollections-input"
+                                    name="SendToCollections"
+                                    tibex:xpdlId="8998625c-1623-5f8e-af6c-ebfd0c160917"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="RecordDelinquencyToSendToCollections"/>
+                                    </bpws:targets>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/loan/servicing/collections&quot; xmlns:tns2=&quot;http://www.tibco.com/namespaces/tnt/plugins/jms+8998625c-1623-5f8e-af6c-ebfd0c160917+input&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;currentElement&quot;/>&#xa;    &lt;xsl:template name=&quot;SendToCollections-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:ActivityInput>&#xa;            &lt;JMSCorrelationID>&#xa;                &lt;xsl:value-of select=&quot;$currentElement/account_number&quot;/>&#xa;            &lt;/JMSCorrelationID>&#xa;            &lt;Body>&#xa;                &lt;tns:CollectionsReferral>&#xa;                    &lt;tns:accountNumber>&#xa;                        &lt;xsl:value-of select=&quot;$currentElement/account_number&quot;/>&#xa;                    &lt;/tns:accountNumber>&#xa;                    &lt;tns:borrowerName>&#xa;                        &lt;xsl:value-of select=&quot;concat($currentElement/first_name, ' ', $currentElement/last_name)&quot;/>&#xa;                    &lt;/tns:borrowerName>&#xa;                    &lt;tns:daysPastDue>&#xa;                        &lt;xsl:value-of select=&quot;$currentElement/days_past_due&quot;/>&#xa;                    &lt;/tns:daysPastDue>&#xa;                    &lt;tns:amountPastDue>&#xa;                        &lt;xsl:value-of select=&quot;xsd:decimal($currentElement/monthly_payment) * ceiling(xsd:integer($currentElement/days_past_due) div 30)&quot;/>&#xa;                    &lt;/tns:amountPastDue>&#xa;                    &lt;tns:referredAt>&#xa;                        &lt;xsl:value-of select=&quot;current-dateTime()&quot;/>&#xa;                    &lt;/tns:referredAt>&#xa;                    &lt;tns:caseCallbackUrl>&#xa;                        &lt;xsl:value-of select=&quot;&amp;quot;http://coll-api-prd01.gmfin.local:8443/collections/v1/cases&amp;quot;&quot;/>&#xa;                    &lt;/tns:caseCallbackUrl>&#xa;                &lt;/tns:CollectionsReferral>&#xa;            &lt;/Body>&#xa;        &lt;/tns2:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:config>
+                                        <bwext:BWActivity activityTypeID="bw.jms.send"
+                                            version="6.0.0.001"
+                                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                            xmlns:jms="http://ns.tibco.com/bw/palette/jms"
+                                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                            <activityConfig>
+                                                <properties name="config"
+                                                    xsi:type="activityconfig:EMFProperty">
+                                                    <type href="http://ns.tibco.com/bw/palette/jms#//JMSSendMessage"/>
+                                                    <value connectionReference="jmsConnection"
+                                                        deliveryMode="2"
+                                                        destination="gmf.collections.queue"
+                                                        expiration="0"
+                                                        messageType="XMLText"
+                                                        messagingStyle="Queue"
+                                                        priority="4"
+                                                        xsi:type="jms:JMSSendMessage">
+                                                        <bodyEditorElement href="platform:/resource/LoanServicing/Schemas/CollectionsReferral.xsd#//CollectionsReferral;XSDElementDeclaration"/>
+                                                    </value>
+                                                </properties>
+                                            </activityConfig>
+                                        </bwext:BWActivity>
+                                    </tibex:config>
+                                </tibex:activityExtension>
+                            </bpws:extensionActivity>
+                        </bpws:flow>
+                    </bpws:scope>
+                </bpws:forEach>
+            </bpws:scope>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="LogScanSummary-input"
+                    name="LogScanSummary"
+                    tibex:xpdlId="2b76f817-aa28-58e7-86d9-eddbb7175a46"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ForEachDelinquentAccountToLogScanSummary"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns3=&quot;http://www.tibco.com/pe/WriteToLogActivitySchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;FindDelinquentAccounts&quot;/>&#xa;    &lt;xsl:template name=&quot;LogScanSummary-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:ActivityInput>&#xa;            &lt;msgCode>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;LS-310&amp;quot;&quot;/>&#xa;            &lt;/msgCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;concat('Delinquency scan referred ', count($FindDelinquentAccounts/Record), ' accounts to collections')&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns3:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.log"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Log"/>
+                                    <value controlBy="Application" role="Info"
+                                        suppressJobInfo="true"
+                                        xsi:type="generalactivities:Log"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

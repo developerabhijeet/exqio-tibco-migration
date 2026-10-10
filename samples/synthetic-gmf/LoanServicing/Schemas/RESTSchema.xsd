@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://tns.tibco.com/bw/REST" targetNamespace="http://tns.tibco.com/bw/REST">
+
+	<complexType name="httpTransportHeaders">
+		<sequence>
+			<element form="unqualified" minOccurs="0" name="Accept" type="string"/>
+			<element form="unqualified" minOccurs="0" name="Accept-Encoding" type="string"/>
+			<element form="unqualified" minOccurs="0" name="Content-Type" type="string"/>
+			<element form="unqualified" minOccurs="0" name="Content-Length" type="string"/>
+			<element form="unqualified" minOccurs="0" name="Authorization" type="string"/>
+			<element form="unqualified" minOccurs="0" name="X-Correlation-Id" type="string"/>
+		</sequence>
+	</complexType>
+
+	<complexType name="faultType">
+		<sequence>
+			<element form="unqualified" name="statusCode" type="int"/>
+			<element form="unqualified" minOccurs="0" name="message" type="string"/>
+		</sequence>
+	</complexType>
+
+	<element name="httpHeaders" type="tns:httpTransportHeaders"/>
+	<element name="client4XXError" type="tns:faultType"/>
+	<element name="server5XXError" type="tns:faultType"/>
+</schema>

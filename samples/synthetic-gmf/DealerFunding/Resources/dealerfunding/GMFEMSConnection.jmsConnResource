@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jndi:namedResource xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:jms="http://xsd.tns.tibco.com/bw/models/sharedresource/jms" xmlns:jndi="http://xsd.tns.tibco.com/amf/models/sharedresource/jndi" xmi:id="_sfOI-abzDlzLfoD1Gg4PJw" name="dealerfunding.GMFEMSConnection" type="jms:JMSConnectionFactory">
+  <jndi:configuration xsi:type="jms:JMSConnectionFactory" xmi:id="_ewntwtTr_GQX3iedVXxdAw" connectionFactoryType="Direct" messagingStyle="Generic" providerURL="tcp://localhost:7222" username="svc_bw_funding" password="#!1tI16+hK5UnzKOBmz1goGQQox1TnrA0M" clientID="">
+    <substitutionBindings xmi:id="_Bg3DzGVY5lVRIutfGqMANA" template="providerURL" propName="EMS.PROVIDER.URL"/>
+    <substitutionBindings xmi:id="_bo6UE-EtUeM0DT9F58mtjQ" template="username" propName="EMS.USER"/>
+  </jndi:configuration>
+</jndi:namedResource>

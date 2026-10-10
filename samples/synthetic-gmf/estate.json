@@ -1,0 +1,583 @@
+{
+  "synthetic": true,
+  "note": "Synthetic GMF-style estate for the ExiQO Migrate demo. Original content; not a GM Financial artefact.",
+  "applications": [
+    {
+      "id": "gmf.credit",
+      "dialect": "bw6",
+      "folder": "gmf.credit.application",
+      "modules": [
+        "CreditOrigination",
+        "DealerFunding",
+        "LoanServicing"
+      ]
+    },
+    {
+      "id": "LegacyAddress",
+      "dialect": "bw5",
+      "folder": "LegacyAddress",
+      "modules": [
+        "LegacyAddress"
+      ]
+    }
+  ],
+  "queues": [
+    "gmf.dealer.funding.request",
+    "gmf.payments.inbound",
+    "gmf.collections.queue"
+  ],
+  "topics": [
+    "gmf.funding.events"
+  ],
+  "tables": [
+    "applicant",
+    "vehicle",
+    "credit_application",
+    "bureau_pull",
+    "decision",
+    "dealer",
+    "deal",
+    "funding",
+    "loan_account",
+    "payment",
+    "delinquency",
+    "audit_log"
+  ],
+  "processes": [
+    {
+      "id": "creditorigination.CreditApplicationIntake",
+      "module": "CreditOrigination",
+      "file": "CreditOrigination/Processes/creditorigination/CreditApplicationIntake.bwp",
+      "trigger": {
+        "kind": "rest",
+        "verb": "POST",
+        "path": "/applications"
+      },
+      "calls": [
+        "creditorigination.AuditLog",
+        "creditorigination.ValidateVIN",
+        "creditorigination.BureauOrchestrator",
+        "creditorigination.DecisionEngine"
+      ],
+      "rules": [
+        {
+          "id": "INT-R1",
+          "text": "The SSN must match NNN-NN-NNNN and must not start with 000 or 666; otherwise the request is rejected with HTTP 400.",
+          "where": {
+            "activity": "CallAuditLog",
+            "link": "CallAuditLogToCallValidateVIN"
+          }
+        },
+        {
+          "id": "INT-R2",
+          "text": "An application for an SSN that already has an application submitted in the last 30 days raises DuplicateApplicationFault (HTTP 409).",
+          "where": {
+            "activity": "CheckDuplicateApplication",
+            "link": "CheckDuplicateApplicationToThrowDuplicateApplication"
+          }
+        },
+        {
+          "id": "INT-R3",
+          "text": "Every request is audited before any validation, including requests that are later rejected.",
+          "where": {
+            "activity": "CallAuditLog"
+          }
+        },
+        {
+          "id": "INT-R4",
+          "text": "A VIN that fails ValidateVIN is rejected with HTTP 400.",
+          "where": {
+            "activity": "CallValidateVIN",
+            "link": "CallValidateVINToCheckDuplicateApplication"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "INT-F1",
+          "text": "Response field transUnionScore is declared in the response schema but never populated by the reply mapping.",
+          "where": {
+            "activity": "postOut",
+            "schema": "CreditOrigination/Schemas/CreditApplication.xsd",
+            "element": "CreditApplicationResponse/transUnionScore"
+          },
+          "static_rule": "S4",
+          "severity": "low"
+        }
+      ],
+      "tables_read": [
+        "credit_application"
+      ],
+      "tables_written": [],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "creditorigination.BureauOrchestrator",
+      "module": "CreditOrigination",
+      "file": "CreditOrigination/Processes/creditorigination/BureauOrchestrator.bwp",
+      "trigger": {
+        "kind": "subprocess"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "BUR-R1",
+          "text": "Equifax and TransUnion are pulled in parallel; the higher score wins (a tie selects Equifax).",
+          "where": {
+            "activity": "MergeScores"
+          }
+        },
+        {
+          "id": "BUR-R2",
+          "text": "When exactly one bureau responds, singleBureau is true and that bureau's score is used.",
+          "where": {
+            "activity": "MergeScores"
+          }
+        },
+        {
+          "id": "BUR-R3",
+          "text": "When neither bureau responds, BureauUnavailableFault is raised.",
+          "where": {
+            "activity": "ThrowBureauUnavailable",
+            "link": "MergeScoresToThrowBureauUnavailable"
+          }
+        },
+        {
+          "id": "BUR-R4",
+          "text": "Each bureau call times out after 1000 ms; the circuit opens at 50% errors over a 20-request window.",
+          "where": {
+            "resource": "CreditOrigination/Resources/creditorigination/EquifaxClient.httpClientResource"
+          }
+        }
+      ],
+      "findings": [],
+      "tables_read": [],
+      "tables_written": [
+        "bureau_pull"
+      ],
+      "queues_in": [],
+      "queues_out": [],
+      "endpoints": [
+        "EquifaxClient POST /consumer-credit/v2/scores",
+        "TransUnionClient POST /credit-report/v1/score"
+      ]
+    },
+    {
+      "id": "creditorigination.DecisionEngine",
+      "module": "CreditOrigination",
+      "file": "CreditOrigination/Processes/creditorigination/DecisionEngine.bwp",
+      "trigger": {
+        "kind": "subprocess"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "DEC-R1",
+          "text": "DTI is monthly debt divided by monthly income.",
+          "where": {
+            "activity": "ComputeDTI"
+          }
+        },
+        {
+          "id": "DEC-R2",
+          "text": "Tier A: score 740 or above and DTI below 0.35; APR 5.49.",
+          "where": {
+            "link": "ComputeDTIToAssignTierA"
+          }
+        },
+        {
+          "id": "DEC-R3",
+          "text": "Tier B: score 680 to 739; APR 7.99.",
+          "where": {
+            "link": "ComputeDTIToAssignTierB"
+          }
+        },
+        {
+          "id": "DEC-R4",
+          "text": "Tier C: score 620 to 679 and DTI below 0.45; APR 12.49; term capped at 72 months.",
+          "where": {
+            "link": "ComputeDTIToAssignTierC",
+            "activity": "AssignTierC"
+          }
+        },
+        {
+          "id": "DEC-R5",
+          "text": "Anything else is declined.",
+          "where": {
+            "link": "ComputeDTIToAssignDecline"
+          }
+        },
+        {
+          "id": "DEC-R6",
+          "text": "Missing or non-positive monthly income raises MissingIncomeFault.",
+          "where": {
+            "link": "StartToThrowMissingIncome"
+          }
+        }
+      ],
+      "findings": [],
+      "tables_read": [],
+      "tables_written": [
+        "decision",
+        "credit_application"
+      ],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "creditorigination.ValidateVIN",
+      "module": "CreditOrigination",
+      "file": "CreditOrigination/Processes/creditorigination/ValidateVIN.bwp",
+      "trigger": {
+        "kind": "subprocess"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "VIN-R1",
+          "text": "A VIN has 17 characters from the VIN alphabet (no I, O or Q).",
+          "where": {
+            "link": "StartToComputeCheckDigit"
+          }
+        },
+        {
+          "id": "VIN-R2",
+          "text": "Position 9 is the check digit: weighted sum of transliterated characters mod 11, with 10 written as X.",
+          "where": {
+            "activity": "ComputeCheckDigit"
+          }
+        }
+      ],
+      "findings": [],
+      "tables_read": [],
+      "tables_written": [],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "creditorigination.AuditLog",
+      "module": "CreditOrigination",
+      "file": "CreditOrigination/Processes/creditorigination/AuditLog.bwp",
+      "trigger": {
+        "kind": "subprocess"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "AUD-R1",
+          "text": "Every audit event is inserted into audit_log with its event type, application id and payload.",
+          "where": {
+            "activity": "WriteAuditRecord"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "AUD-F1",
+          "text": "The applicant SSN is written to audit_log in clear text.",
+          "where": {
+            "activity": "WriteAuditRecord",
+            "column": "ssn"
+          },
+          "static_rule": "S7",
+          "severity": "high"
+        }
+      ],
+      "tables_read": [],
+      "tables_written": [
+        "audit_log"
+      ],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "dealerfunding.DealerFundingRequest",
+      "module": "DealerFunding",
+      "file": "DealerFunding/Processes/dealerfunding/DealerFundingRequest.bwp",
+      "trigger": {
+        "kind": "jms",
+        "destination": "gmf.dealer.funding.request",
+        "selector": "MsgType = 'FUNDING_REQUEST'"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "DFR-R1",
+          "text": "The dealer must be ACTIVE; otherwise DealerInactiveFault is raised.",
+          "where": {
+            "link": "LookupDealerToLookupDeal"
+          }
+        },
+        {
+          "id": "DFR-R2",
+          "text": "The funding amount must be within 2% of the approved amount; otherwise a REJECTED event is published.",
+          "where": {
+            "link": "LookupDealToCheckExistingFunding"
+          }
+        },
+        {
+          "id": "DFR-R3",
+          "text": "A deal is funded once; a repeat request is logged and ignored.",
+          "where": {
+            "link": "CheckExistingFundingToInsertFunding"
+          }
+        },
+        {
+          "id": "DFR-R4",
+          "text": "A FUNDED event is published to topic gmf.funding.events after the funding row is written.",
+          "where": {
+            "activity": "PublishFundingEvent"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "DFR-F1",
+          "text": "Read-then-write on gmf.funding without a transaction group: two concurrent requests for one deal can both pass the existence check and fund twice.",
+          "where": {
+            "activities": [
+              "CheckExistingFunding",
+              "InsertFunding"
+            ]
+          },
+          "static_rule": "S1",
+          "severity": "high"
+        },
+        {
+          "id": "DFR-F2",
+          "text": "dealer_id is matched with LIKE and a trailing wildcard, so dealer D1002 also matches D10021.",
+          "where": {
+            "activity": "LookupDealer"
+          },
+          "static_rule": "S2",
+          "severity": "high"
+        }
+      ],
+      "tables_read": [
+        "dealer",
+        "deal",
+        "funding"
+      ],
+      "tables_written": [
+        "funding"
+      ],
+      "queues_in": [
+        "gmf.dealer.funding.request"
+      ],
+      "queues_out": [
+        "gmf.funding.events"
+      ]
+    },
+    {
+      "id": "dealerfunding.FundingStatusLookup",
+      "module": "DealerFunding",
+      "file": "DealerFunding/Processes/dealerfunding/FundingStatusLookup.bwp",
+      "trigger": {
+        "kind": "rest",
+        "verb": "GET",
+        "path": "/funding/{dealId}"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "FSL-R1",
+          "text": "Returns the funding row for the deal; HTTP 404 when none exists.",
+          "where": {
+            "link": "QueryFundingStatusTogetOut"
+          }
+        }
+      ],
+      "findings": [],
+      "tables_read": [
+        "funding"
+      ],
+      "tables_written": [],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "loanservicing.PaymentPosting",
+      "module": "LoanServicing",
+      "file": "LoanServicing/Processes/loanservicing/PaymentPosting.bwp",
+      "trigger": {
+        "kind": "jms",
+        "destination": "gmf.payments.inbound",
+        "selector": "PaymentChannel IN ('ACH', 'DEBIT', 'LOCKBOX')"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "PAY-R1",
+          "text": "A late fee of 25.00 is charged when the payment arrives after the 10-day grace period.",
+          "where": {
+            "link": "LoadAccountToAssessLateFee",
+            "activity": "AssessLateFee"
+          }
+        },
+        {
+          "id": "PAY-R2",
+          "text": "Payments are allocated to fees (including the late fee), then accrued interest, then principal.",
+          "where": {
+            "activity": "AllocatePayment"
+          }
+        },
+        {
+          "id": "PAY-R3",
+          "text": "Account read, payment insert and balance update run in one local transaction.",
+          "where": {
+            "group": "PostPaymentTransaction"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "PAY-F1",
+          "text": "The grace comparison uses >= 10 where the policy says the fee applies after 10 days (> 10): a payment on day 10 is charged.",
+          "where": {
+            "link": "LoadAccountToAssessLateFee"
+          },
+          "static_rule": null,
+          "severity": "medium"
+        }
+      ],
+      "tables_read": [
+        "loan_account"
+      ],
+      "tables_written": [
+        "payment",
+        "loan_account"
+      ],
+      "queues_in": [
+        "gmf.payments.inbound"
+      ],
+      "queues_out": []
+    },
+    {
+      "id": "loanservicing.AccountLookup",
+      "module": "LoanServicing",
+      "file": "LoanServicing/Processes/loanservicing/AccountLookup.bwp",
+      "trigger": {
+        "kind": "rest",
+        "verb": "GET",
+        "path": "/accounts/{accountNumber}"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "ACC-R1",
+          "text": "The SSN is masked to its last four digits in the response.",
+          "where": {
+            "activity": "getOut"
+          }
+        },
+        {
+          "id": "ACC-R2",
+          "text": "HTTP 404 when the account does not exist.",
+          "where": {
+            "link": "QueryAccountToReplyAccountNotFound"
+          }
+        }
+      ],
+      "findings": [],
+      "tables_read": [
+        "loan_account",
+        "applicant"
+      ],
+      "tables_written": [],
+      "queues_in": [],
+      "queues_out": []
+    },
+    {
+      "id": "loanservicing.NightlyDelinquencyScan",
+      "module": "LoanServicing",
+      "file": "LoanServicing/Processes/loanservicing/NightlyDelinquencyScan.bwp",
+      "trigger": {
+        "kind": "timer",
+        "start": "02:00",
+        "interval": "1 Day"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "NDS-R1",
+          "text": "Daily at 02:00, ACTIVE accounts 30 or more days past due are referred to collections, one message per account.",
+          "where": {
+            "activity": "FindDelinquentAccounts"
+          }
+        },
+        {
+          "id": "NDS-R2",
+          "text": "Each referral is recorded in delinquency with the amount past due (monthly payment times started 30-day periods).",
+          "where": {
+            "activity": "RecordDelinquency"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "NDS-F1",
+          "text": "The collections callback URL is hard-coded in the referral mapping instead of coming from a module property.",
+          "where": {
+            "activity": "SendToCollections",
+            "field": "caseCallbackUrl"
+          },
+          "static_rule": "S3",
+          "severity": "medium"
+        }
+      ],
+      "tables_read": [
+        "loan_account",
+        "applicant"
+      ],
+      "tables_written": [
+        "delinquency"
+      ],
+      "queues_in": [],
+      "queues_out": [
+        "gmf.collections.queue"
+      ]
+    },
+    {
+      "id": "LegacyAddressStandardize",
+      "module": "LegacyAddress",
+      "file": "LegacyAddress/LegacyAddressStandardize.process",
+      "trigger": {
+        "kind": "http",
+        "resource": "/AddressService.sharedhttp"
+      },
+      "calls": [],
+      "rules": [
+        {
+          "id": "LAS-R1",
+          "text": "Address lines, city and state are trimmed and upper-cased; the postal code is cut to 5 digits.",
+          "where": {
+            "activity": "Standardize Address"
+          }
+        },
+        {
+          "id": "LAS-R2",
+          "text": "The state code must be one of the 50 states or DC.",
+          "where": {
+            "transition": "Standardize Address -> Send HTTP Response"
+          }
+        }
+      ],
+      "findings": [
+        {
+          "id": "LAS-F1",
+          "text": "No otherwise transition after the state check: an invalid state ends the job without an HTTP response and the caller waits for its timeout.",
+          "where": {
+            "activity": "Standardize Address"
+          },
+          "static_rule": "S5",
+          "severity": "medium"
+        }
+      ],
+      "tables_read": [],
+      "tables_written": [],
+      "queues_in": [],
+      "queues_out": []
+    }
+  ]
+}

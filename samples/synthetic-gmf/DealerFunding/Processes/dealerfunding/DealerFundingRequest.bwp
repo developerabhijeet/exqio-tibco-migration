@@ -1,0 +1,828 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no" name="dealerfunding.DealerFundingRequest"
+    suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20200211082245"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://www.tibco.com/namespaces/tnt/plugins/jms+c3bf7250-bbb1-5684-bd4f-219e7be8f53f+output"
+    xmlns:ns1="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+input"
+    xmlns:ns10="http://www.tibco.com/namespaces/tnt/plugins/jms+7898e7cc-b9be-5a21-84cc-72238ea1787c+input"
+    xmlns:ns11="http://www.tibco.com/pe/WriteToLogActivitySchema"
+    xmlns:ns12="http://xmlns.gmfin.example/dealer/funding/faults"
+    xmlns:ns2="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+output"
+    xmlns:ns3="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+input"
+    xmlns:ns4="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+output"
+    xmlns:ns5="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+input"
+    xmlns:ns6="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+output"
+    xmlns:ns7="http://www.tibco.com/namespaces/tnt/plugins/jdbc+685fb02d-48d1-5e09-898e-e54a401e078e+input"
+    xmlns:ns8="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+    xmlns:ns9="http://www.tibco.com/namespaces/tnt/plugins/jms+982b449f-8076-5238-b5c2-133b7888a53c+input"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jms+c3bf7250-bbb1-5684-bd4f-219e7be8f53f+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:body="http://xmlns.gmfin.example/dealer/funding/request" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jms+c3bf7250-bbb1-5684-bd4f-219e7be8f53f+output">
+            <import namespace="http://xmlns.gmfin.example/dealer/funding/request"/>
+            <complexType name="JMSHeadersType">
+                <sequence>
+                    <element minOccurs="0" name="JMSDestination" type="string"/>
+                    <element minOccurs="0" name="JMSReplyTo" type="string"/>
+                    <element minOccurs="0" name="JMSDeliveryMode" type="string"/>
+                    <element minOccurs="0" name="JMSMessageID" type="string"/>
+                    <element minOccurs="0" name="JMSTimestamp" type="long"/>
+                    <element minOccurs="0" name="JMSExpiration" type="long"/>
+                    <element minOccurs="0" name="JMSRedelivered" type="boolean"/>
+                    <element minOccurs="0" name="JMSPriority" type="int"/>
+                    <element minOccurs="0" name="JMSCorrelationID" type="string"/>
+                    <element minOccurs="0" name="JMSType" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="ActivityOutput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="JMSHeaders" type="tns:JMSHeadersType"/>
+                        <element minOccurs="0" name="JMSProperties">
+                            <complexType>
+                                <sequence>
+                                    <element minOccurs="0" name="JMSXDeliveryCount" type="int"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                        <element minOccurs="0" name="Body">
+                            <complexType>
+                                <sequence>
+                                    <element ref="body:FundingRequest"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="dealerId" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="dealer_id" type="string"/>
+                    <element minOccurs="0" name="dealer_name" type="string"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="dealId" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="deal_id" type="string"/>
+                    <element minOccurs="0" name="dealer_id" type="string"/>
+                    <element minOccurs="0" name="approved_amount" type="decimal"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="dealId" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="funding_id" type="int"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+685fb02d-48d1-5e09-898e-e54a401e078e+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+685fb02d-48d1-5e09-898e-e54a401e078e+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="dealId" type="string"/>
+                        <element minOccurs="0" name="dealerId" type="string"/>
+                        <element minOccurs="0" name="amount" type="decimal"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+            xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="jdbcUpdateActivityOutput">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="noOfUpdates" type="xs:int"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jms+982b449f-8076-5238-b5c2-133b7888a53c+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:body="http://xmlns.gmfin.example/dealer/funding/event" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jms+982b449f-8076-5238-b5c2-133b7888a53c+input">
+            <import namespace="http://xmlns.gmfin.example/dealer/funding/event"/>
+            <element name="ActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="destinationQueue" type="string"/>
+                        <element minOccurs="0" name="JMSCorrelationID" type="string"/>
+                        <element minOccurs="0" name="JMSExpiration" type="long"/>
+                        <element minOccurs="0" name="JMSPriority" type="int"/>
+                        <element minOccurs="0" name="JMSType" type="string"/>
+                        <element minOccurs="0" name="Body">
+                            <complexType>
+                                <sequence>
+                                    <element ref="body:FundingEvent"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jms+7898e7cc-b9be-5a21-84cc-72238ea1787c+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:body="http://xmlns.gmfin.example/dealer/funding/event" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jms+7898e7cc-b9be-5a21-84cc-72238ea1787c+input">
+            <import namespace="http://xmlns.gmfin.example/dealer/funding/event"/>
+            <element name="ActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="destinationQueue" type="string"/>
+                        <element minOccurs="0" name="JMSCorrelationID" type="string"/>
+                        <element minOccurs="0" name="JMSExpiration" type="long"/>
+                        <element minOccurs="0" name="JMSPriority" type="int"/>
+                        <element minOccurs="0" name="JMSType" type="string"/>
+                        <element minOccurs="0" name="Body">
+                            <complexType>
+                                <sequence>
+                                    <element ref="body:FundingEvent"/>
+                                </sequence>
+                            </complexType>
+                        </element>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            xmlns:tns="http://www.tibco.com/pe/WriteToLogActivitySchema" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType name="LogParametersType">
+                <xs:sequence>
+                    <xs:element form="unqualified" minOccurs="0" name="msgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="loggerName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="logLevel" type="xs:string"/>
+                    <xs:element form="unqualified" name="message" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ActivityInput" type="tns:LogParametersType"/>
+        </xs:schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="false" createdBy="bwdev01"
+        createdOn="Tue Feb 11 08:22:45 EST 2020"
+        description="Funds a dealer deal from the funding request queue."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context="" input="" output=""/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/dealer/funding/request"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/dealer/funding/event"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/dealer/funding/faults"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+input"
+            prefix="tns3"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+input"
+            prefix="tns4"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+input"
+            prefix="tns5"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+685fb02d-48d1-5e09-898e-e54a401e078e+input"
+            prefix="tns6"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jms+982b449f-8076-5238-b5c2-133b7888a53c+input"
+            prefix="tns7"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jms+7898e7cc-b9be-5a21-84cc-72238ea1787c+input"
+            prefix="tns8"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/pe/WriteToLogActivitySchema"
+            prefix="tns9"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/dealer/funding/request"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/dealer/funding/event"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/dealer/funding/faults"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable name="jmsConnection" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/bw/models/sharedresource/jms}JMSConnectionFactory"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>dealerfunding.GMFEMSConnection</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>dealerfunding.GMFFundingDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns0:ActivityOutput" name="ReceiveFundingRequest"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns1:jdbcQueryActivityInput"
+            name="LookupDealer-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:resultSet" name="LookupDealer"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:jdbcQueryActivityInput"
+            name="LookupDeal-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:resultSet" name="LookupDeal"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:jdbcQueryActivityInput"
+            name="CheckExistingFunding-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:resultSet" name="CheckExistingFunding"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns7:jdbcUpdateActivityInput"
+            name="InsertFunding-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns8:jdbcUpdateActivityOutput"
+            name="InsertFunding" sca-bpel:internal="true"/>
+        <bpws:variable element="ns9:ActivityInput"
+            name="PublishFundingEvent-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns10:ActivityInput"
+            name="PublishFundingRejected-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns11:ActivityInput"
+            name="LogDuplicateFunding-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns12:DealerInactiveFault"
+            name="ThrowDealerInactive-input" sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="ReceiveFundingRequestToLookupDealer"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="LookupDealerToLookupDeal"
+                    tibex:label="Dealer active"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="LookupDealerToThrowDealerInactive"
+                    tibex:label="" tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="LookupDealToCheckExistingFunding"
+                    tibex:label="Within 2% of approved"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="LookupDealToPublishFundingRejected"
+                    tibex:label="" tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="CheckExistingFundingToInsertFunding"
+                    tibex:label="Not yet funded"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="CheckExistingFundingToLogDuplicateFunding"
+                    tibex:label="" tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="InsertFundingToPublishFundingEvent"
+                    tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="60"
+                    name="ReceiveFundingRequest"
+                    tibex:xpdlId="c3bf7250-bbb1-5684-bd4f-219e7be8f53f"
+                    variable="ReceiveFundingRequest"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="ReceiveFundingRequestToLookupDealer"/>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <bwext:BWActivity activityTypeID="bw.jms.receive"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jms="http://ns.tibco.com/bw/palette/jms"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jms#//JMSReceiveMessage"/>
+                                    <value acknowledgeMode="1"
+                                        connectionReference="jmsConnection"
+                                        destination="gmf.dealer.funding.request"
+                                        messageSelector="MsgType = 'FUNDING_REQUEST'"
+                                        messageType="XMLText"
+                                        messagingStyle="Queue"
+                                        pollingInterval="2"
+                                        xsi:type="jms:JMSReceiveMessage">
+                                        <bodyEditorElement href="platform:/resource/DealerFunding/Schemas/FundingRequest.xsd#//FundingRequest;XSDElementDeclaration"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="LookupDealer-input"
+                    name="LookupDealer" outputVariable="LookupDealer"
+                    tibex:xpdlId="8682d7ee-6a89-5652-80d7-b974b025dc0a"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ReceiveFundingRequestToLookupDealer"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="LookupDealerToLookupDeal">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="$LookupDealer/Record[1]/status = 'ACTIVE'"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[$LookupDealer/Record[1]/status = 'ACTIVE']]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="LookupDealerToThrowDealerInactive">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns3=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+8682d7ee-6a89-5652-80d7-b974b025dc0a+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;LookupDealer-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:jdbcQueryActivityInput>&#xa;            &lt;dealerId>&#xa;                &lt;xsl:value-of select=&quot;concat(normalize-space($ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId), '%')&quot;/>&#xa;            &lt;/dealerId>&#xa;        &lt;/tns3:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                    <value maxRows="100"
+                                        sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="select dealer_id, dealer_name, status&#xa;  from gmf.dealer&#xa; where dealer_id like ?"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealerId"/>
+                                        <columnMetadata columnName="dealer_id"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="dealer_name"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="status"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:throw faultName="ns12:DealerInactiveFault"
+                faultVariable="ThrowDealerInactive-input"
+                name="ThrowDealerInactive"
+                tibex:xpdlId="18248c83-ea49-5bce-87c7-fe0fd0ca7db9">
+                <tibex:inputBindings>
+                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns2=&quot;http://xmlns.gmfin.example/dealer/funding/faults&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:param name=&quot;LookupDealer&quot;/>&#xa;    &lt;xsl:template name=&quot;ThrowDealerInactive-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:DealerInactiveFault>&#xa;            &lt;tns2:dealerId>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId&quot;/>&#xa;            &lt;/tns2:dealerId>&#xa;            &lt;xsl:if test=&quot;$LookupDealer/Record[1]/status&quot;>&#xa;                &lt;tns2:status>&#xa;                    &lt;xsl:value-of select=&quot;$LookupDealer/Record[1]/status&quot;/>&#xa;                &lt;/tns2:status>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns2:message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;Dealer is not active for funding&amp;quot;&quot;/>&#xa;            &lt;/tns2:message>&#xa;        &lt;/tns2:DealerInactiveFault>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                </tibex:inputBindings>
+                <bpws:targets>
+                    <bpws:target linkName="LookupDealerToThrowDealerInactive"/>
+                </bpws:targets>
+            </bpws:throw>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="LookupDeal-input"
+                    name="LookupDeal" outputVariable="LookupDeal"
+                    tibex:xpdlId="2958f7bc-39d5-5adb-b89c-319296c25c15"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="LookupDealerToLookupDeal"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="LookupDealToCheckExistingFunding">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="abs(number($ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount) - number($LookupDeal/Record[1]/approved_amount)) &lt;= number($LookupDeal/Record[1]/approved_amount) * 0.02"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[abs(number($ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount) - number($LookupDeal/Record[1]/approved_amount)) <= number($LookupDeal/Record[1]/approved_amount) * 0.02]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="LookupDealToPublishFundingRejected">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns4=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+2958f7bc-39d5-5adb-b89c-319296c25c15+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;LookupDeal-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns4:jdbcQueryActivityInput>&#xa;            &lt;dealId>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId&quot;/>&#xa;            &lt;/dealId>&#xa;        &lt;/tns4:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                    <value maxRows="100"
+                                        sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="select deal_id, dealer_id, approved_amount, status&#xa;  from gmf.deal&#xa; where deal_id = ?"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealId"/>
+                                        <columnMetadata columnName="deal_id"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="dealer_id"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                        <columnMetadata columnName="approved_amount"
+                                            dataType="2"
+                                            status="OptionalElement"
+                                            typeName="numeric"/>
+                                        <columnMetadata columnName="status"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="PublishFundingRejected-input"
+                    name="PublishFundingRejected"
+                    tibex:xpdlId="7898e7cc-b9be-5a21-84cc-72238ea1787c"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="LookupDealToPublishFundingRejected"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/dealer/funding/event&quot; xmlns:tns8=&quot;http://www.tibco.com/namespaces/tnt/plugins/jms+7898e7cc-b9be-5a21-84cc-72238ea1787c+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;PublishFundingRejected-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns8:ActivityInput>&#xa;            &lt;Body>&#xa;                &lt;tns1:FundingEvent>&#xa;                    &lt;tns1:dealId>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId&quot;/>&#xa;                    &lt;/tns1:dealId>&#xa;                    &lt;tns1:dealerId>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId&quot;/>&#xa;                    &lt;/tns1:dealerId>&#xa;                    &lt;tns1:amount>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount&quot;/>&#xa;                    &lt;/tns1:amount>&#xa;                    &lt;tns1:status>&#xa;                        &lt;xsl:value-of select=&quot;&amp;quot;REJECTED&amp;quot;&quot;/>&#xa;                    &lt;/tns1:status>&#xa;                    &lt;tns1:reason>&#xa;                        &lt;xsl:value-of select=&quot;&amp;quot;AMOUNT_OUTSIDE_TOLERANCE&amp;quot;&quot;/>&#xa;                    &lt;/tns1:reason>&#xa;                    &lt;tns1:eventTime>&#xa;                        &lt;xsl:value-of select=&quot;current-dateTime()&quot;/>&#xa;                    &lt;/tns1:eventTime>&#xa;                &lt;/tns1:FundingEvent>&#xa;            &lt;/Body>&#xa;        &lt;/tns8:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jms.send"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jms="http://ns.tibco.com/bw/palette/jms"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jms#//JMSSendMessage"/>
+                                    <value connectionReference="jmsConnection"
+                                        deliveryMode="2"
+                                        destination="gmf.funding.events"
+                                        expiration="0" messageType="XMLText"
+                                        messagingStyle="Topic" priority="4"
+                                        xsi:type="jms:JMSSendMessage">
+                                        <bodyEditorElement href="platform:/resource/DealerFunding/Schemas/FundingEvent.xsd#//FundingEvent;XSDElementDeclaration"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="CheckExistingFunding-input"
+                    name="CheckExistingFunding"
+                    outputVariable="CheckExistingFunding"
+                    tibex:xpdlId="0c87cecd-e8bb-586a-b334-bd7edb8c67e0"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="LookupDealToCheckExistingFunding"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="CheckExistingFundingToInsertFunding">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="count($CheckExistingFunding/Record) = 0"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[count($CheckExistingFunding/Record) = 0]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="CheckExistingFundingToLogDuplicateFunding">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns5=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+0c87cecd-e8bb-586a-b334-bd7edb8c67e0+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;CheckExistingFunding-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns5:jdbcQueryActivityInput>&#xa;            &lt;dealId>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId&quot;/>&#xa;            &lt;/dealId>&#xa;        &lt;/tns5:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                    <value maxRows="100"
+                                        sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="select funding_id, status&#xa;  from gmf.funding&#xa; where deal_id = ?"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealId"/>
+                                        <columnMetadata columnName="funding_id"
+                                            dataType="4"
+                                            status="OptionalElement"
+                                            typeName="int4"/>
+                                        <columnMetadata columnName="status"
+                                            dataType="12"
+                                            status="OptionalElement"
+                                            typeName="varchar"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="LogDuplicateFunding-input"
+                    name="LogDuplicateFunding"
+                    tibex:xpdlId="919de727-e1c4-53d5-8280-b2d84f4ba5eb"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="CheckExistingFundingToLogDuplicateFunding"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns9=&quot;http://www.tibco.com/pe/WriteToLogActivitySchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;LogDuplicateFunding-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns9:ActivityInput>&#xa;            &lt;msgCode>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;DF-409&amp;quot;&quot;/>&#xa;            &lt;/msgCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;concat('Deal ', $ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId, ' already funded; request ignored')&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns9:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.log"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Log"/>
+                                    <value controlBy="Application" role="Warn"
+                                        suppressJobInfo="true"
+                                        xsi:type="generalactivities:Log"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="InsertFunding-input"
+                    name="InsertFunding" outputVariable="InsertFunding"
+                    tibex:xpdlId="685fb02d-48d1-5e09-898e-e54a401e078e"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="CheckExistingFundingToInsertFunding"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="InsertFundingToPublishFundingEvent"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns6=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+685fb02d-48d1-5e09-898e-e54a401e078e+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;InsertFunding-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:jdbcUpdateActivityInput>&#xa;            &lt;dealId>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId&quot;/>&#xa;            &lt;/dealId>&#xa;            &lt;dealerId>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId&quot;/>&#xa;            &lt;/dealerId>&#xa;            &lt;amount>&#xa;                &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount&quot;/>&#xa;            &lt;/amount>&#xa;        &lt;/tns6:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                    <value sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="insert into gmf.funding (deal_id, dealer_id, amount, status, funded_at)&#xa;values (?, ?, ?, 'FUNDED', current_timestamp)"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealId"/>
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="dealerId"/>
+                                        <PreparedParameters DataType="2"
+                                            DataTypeDisplayValue="NUMERIC"
+                                            ParameterName="amount"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="PublishFundingEvent-input"
+                    name="PublishFundingEvent"
+                    tibex:xpdlId="982b449f-8076-5238-b5c2-133b7888a53c"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="InsertFundingToPublishFundingEvent"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/dealer/funding/request&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/dealer/funding/event&quot; xmlns:tns7=&quot;http://www.tibco.com/namespaces/tnt/plugins/jms+982b449f-8076-5238-b5c2-133b7888a53c+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ReceiveFundingRequest&quot;/>&#xa;    &lt;xsl:template name=&quot;PublishFundingEvent-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns7:ActivityInput>&#xa;            &lt;Body>&#xa;                &lt;tns1:FundingEvent>&#xa;                    &lt;tns1:dealId>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealId&quot;/>&#xa;                    &lt;/tns1:dealId>&#xa;                    &lt;tns1:dealerId>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId&quot;/>&#xa;                    &lt;/tns1:dealerId>&#xa;                    &lt;tns1:amount>&#xa;                        &lt;xsl:value-of select=&quot;$ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount&quot;/>&#xa;                    &lt;/tns1:amount>&#xa;                    &lt;tns1:status>&#xa;                        &lt;xsl:value-of select=&quot;&amp;quot;FUNDED&amp;quot;&quot;/>&#xa;                    &lt;/tns1:status>&#xa;                    &lt;tns1:eventTime>&#xa;                        &lt;xsl:value-of select=&quot;current-dateTime()&quot;/>&#xa;                    &lt;/tns1:eventTime>&#xa;                &lt;/tns1:FundingEvent>&#xa;            &lt;/Body>&#xa;        &lt;/tns7:ActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jms.send"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jms="http://ns.tibco.com/bw/palette/jms"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jms#//JMSSendMessage"/>
+                                    <value connectionReference="jmsConnection"
+                                        deliveryMode="2"
+                                        destination="gmf.funding.events"
+                                        expiration="0" messageType="XMLText"
+                                        messagingStyle="Topic" priority="4"
+                                        xsi:type="jms:JMSSendMessage">
+                                        <bodyEditorElement href="platform:/resource/DealerFunding/Schemas/FundingEvent.xsd#//FundingEvent;XSDElementDeclaration"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/dealer/funding/event" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/dealer/funding/event" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Funding outcome event, JMS topic gmf.funding.events.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="FundingEvent">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="dealId" type="xs:string"/>
+        <xs:element name="dealerId" type="xs:string"/>
+        <xs:element name="amount" type="xs:decimal"/>
+        <xs:element name="status" type="xs:string"/>
+        <xs:element minOccurs="0" name="reason" type="xs:string"/>
+        <xs:element name="eventTime" type="xs:dateTime"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

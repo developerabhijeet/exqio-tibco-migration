@@ -1,0 +1,203 @@
+{
+  "mappings": [
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "912-55-7781"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 752,
+          "referenceId": "EQU-7781-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "909-32-1184"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 701,
+          "referenceId": "EQU-1184-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "923-61-9042"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 648,
+          "referenceId": "EQU-9042-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "918-74-2290"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 781,
+          "referenceId": "EQU-2290-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "915-09-3378"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 590,
+          "referenceId": "EQU-3378-01",
+          "inquiries": 1
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores",
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": {
+              "expression": "$.ssn",
+              "equalTo": "931-48-6610"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "error": "SERVICE_UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "priority": 10,
+      "metadata": {
+        "synthetic": true
+      },
+      "request": {
+        "method": "POST",
+        "urlPath": "/consumer-credit/v2/scores"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "bureau": "EQUIFAX",
+          "score": 690,
+          "referenceId": "EQU-DEFAULT",
+          "inquiries": 0
+        }
+      }
+    }
+  ]
+}

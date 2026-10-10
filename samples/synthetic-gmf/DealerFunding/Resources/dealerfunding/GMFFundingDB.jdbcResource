@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jndi:namedResource xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:jdbc="http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc" xmlns:jndi="http://xsd.tns.tibco.com/amf/models/sharedresource/jndi" xmlns:subject="http://xsd.tns.tibco.com/trinity/models/identity/subject" xmi:id="_o7OsbGkqVI4RplDwSLITyA" name="dealerfunding.GMFFundingDB" type="jdbc:JdbcDataSource">
+  <jndi:reference xmi:id="_-XfZg0M2RCcxkc7CofBl8w" key="subjectJndiName" type="subject:SubjectConfiguration" value=""/>
+  <jndi:configuration xsi:type="jdbc:JdbcDataSource" xmi:id="_aTCrpl0qvlHm9HA_VZ6prA" username="svc_bw_funding" password="#!kx53HADes6gfcqijKhXES2ti/6WDhTcG" maxConnections="10" loginTimeout="30">
+    <connectionConfig xsi:type="jdbc:NonXaConnection" xmi:id="_GXYJrBYM6WAVlnhrgj_QMA" jdbcDriver="org.postgresql.Driver" dbURL="jdbc:postgresql://localhost:5432/gmf">
+      <substitutionBindings xmi:id="_WGFNYFkRv3OAvaK4pix_nQ" template="dbURL" propName="GMF.DB.URL"/>
+    </connectionConfig>
+    <substitutionBindings xmi:id="_YccplqFymnJXAGkzCMFhNw" template="username" propName="GMF.DB.USER"/>
+  </jndi:configuration>
+</jndi:namedResource>

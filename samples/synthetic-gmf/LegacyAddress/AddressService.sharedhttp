@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:httpSharedResource xmlns:ns0="www.tibco.com/shared/HTTPConnection">
+    <config>
+        <Host>%%HttpHost%%</Host>
+        <serverType>Tomcat</serverType>
+        <HttpConnectionProperties>
+            <row>
+                <PropertyName>maxPostSize (bytes)</PropertyName>
+                <PropertyValue/>
+                <PropertyDefaultValue>2097152</PropertyDefaultValue>
+            </row>
+            <row>
+                <PropertyName>acceptCount</PropertyName>
+                <PropertyValue>100</PropertyValue>
+                <PropertyDefaultValue/>
+            </row>
+            <row>
+                <PropertyName>connectionTimeOut (ms)</PropertyName>
+                <PropertyValue>20000</PropertyValue>
+                <PropertyDefaultValue>60000</PropertyDefaultValue>
+            </row>
+        </HttpConnectionProperties>
+        <Port>%%AddressServicePort%%</Port>
+    </config>
+</ns0:httpSharedResource>

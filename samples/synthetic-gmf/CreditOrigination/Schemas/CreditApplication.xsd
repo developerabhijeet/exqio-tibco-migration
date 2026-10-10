@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/application" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/application" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Retail installment credit application, dealer channel. Request and response bodies of POST /applications.</xs:documentation>
+  </xs:annotation>
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <xs:element name="line1" type="xs:string"/>
+      <xs:element minOccurs="0" name="line2" type="xs:string"/>
+      <xs:element name="city" type="xs:string"/>
+      <xs:element name="state" type="xs:string"/>
+      <xs:element name="postalCode" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ApplicantType">
+    <xs:sequence>
+      <xs:element name="firstName" type="xs:string"/>
+      <xs:element name="lastName" type="xs:string"/>
+      <xs:element name="ssn" type="xs:string"/>
+      <xs:element name="dateOfBirth" type="xs:date"/>
+      <xs:element minOccurs="0" name="monthlyIncome" type="xs:decimal"/>
+      <xs:element name="monthlyDebt" type="xs:decimal"/>
+      <xs:element name="address" type="tns:AddressType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="VehicleType">
+    <xs:sequence>
+      <xs:element name="vin" type="xs:string"/>
+      <xs:element name="modelYear" type="xs:int"/>
+      <xs:element name="make" type="xs:string"/>
+      <xs:element name="model" type="xs:string"/>
+      <xs:element name="price" type="xs:decimal"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="CreditApplicationRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="dealerId" type="xs:string"/>
+        <xs:element name="applicant" type="tns:ApplicantType"/>
+        <xs:element name="vehicle" type="tns:VehicleType"/>
+        <xs:element name="requestedAmount" type="xs:decimal"/>
+        <xs:element name="requestedTermMonths" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="CreditApplicationResponse">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="decision" type="xs:string"/>
+        <xs:element minOccurs="0" name="tier" type="xs:string"/>
+        <xs:element minOccurs="0" name="apr" type="xs:decimal"/>
+        <xs:element minOccurs="0" name="approvedAmount" type="xs:decimal"/>
+        <xs:element minOccurs="0" name="approvedTermMonths" type="xs:int"/>
+        <xs:element minOccurs="0" name="creditScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="equifaxScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="transUnionScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="singleBureau" type="xs:boolean"/>
+        <xs:element name="decidedAt" type="xs:dateTime"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="ApplicantSnapshot">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="dealerId" type="xs:string"/>
+        <xs:element name="ssn" type="xs:string"/>
+        <xs:element name="firstName" type="xs:string"/>
+        <xs:element name="lastName" type="xs:string"/>
+        <xs:element name="dateOfBirth" type="xs:date"/>
+        <xs:element name="vin" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

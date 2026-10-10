@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/bureau" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/bureau" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Consumer credit bureau pulls (Equifax, TransUnion) for origination.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="BureauRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="ssn" type="xs:string"/>
+        <xs:element name="firstName" type="xs:string"/>
+        <xs:element name="lastName" type="xs:string"/>
+        <xs:element name="dateOfBirth" type="xs:date"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="BureauScoreRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="ssn" type="xs:string"/>
+        <xs:element name="firstName" type="xs:string"/>
+        <xs:element name="lastName" type="xs:string"/>
+        <xs:element name="dateOfBirth" type="xs:date"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="BureauScore">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="bureau" type="xs:string"/>
+        <xs:element name="score" type="xs:int"/>
+        <xs:element minOccurs="0" name="referenceId" type="xs:string"/>
+        <xs:element minOccurs="0" name="inquiries" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="BureauResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element minOccurs="0" name="equifaxScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="transUnionScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="selectedScore" type="xs:int"/>
+        <xs:element minOccurs="0" name="selectedBureau" type="xs:string"/>
+        <xs:element name="singleBureau" type="xs:boolean"/>
+        <xs:element name="bureauCount" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

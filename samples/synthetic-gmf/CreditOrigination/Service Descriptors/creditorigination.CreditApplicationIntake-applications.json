@@ -1,0 +1,184 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "version": "1.0",
+    "title": "Applications",
+    "description": "Submit a retail credit application from the dealer channel."
+  },
+  "host": "localhost:9081",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/applications": {
+      "post": {
+        "summary": "Submit a retail credit application from the dealer channel.",
+        "description": "",
+        "operationId": "post-applications",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "description": "",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CreditApplicationRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "a CreditApplicationResponse to be returned",
+            "schema": {
+              "$ref": "#/definitions/CreditApplicationResponse"
+            }
+          },
+          "400": {
+            "description": "Client error",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Address": {
+      "type": "object",
+      "properties": {
+        "line1": {
+          "type": "string"
+        },
+        "line2": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "postalCode": {
+          "type": "string"
+        }
+      }
+    },
+    "Applicant": {
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "ssn": {
+          "type": "string"
+        },
+        "dateOfBirth": {
+          "type": "string",
+          "format": "date"
+        },
+        "monthlyIncome": {
+          "type": "number"
+        },
+        "monthlyDebt": {
+          "type": "number"
+        },
+        "address": {
+          "$ref": "#/definitions/Address"
+        }
+      }
+    },
+    "Vehicle": {
+      "type": "object",
+      "properties": {
+        "vin": {
+          "type": "string"
+        },
+        "modelYear": {
+          "type": "integer"
+        },
+        "make": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        }
+      }
+    },
+    "CreditApplicationRequest": {
+      "type": "object",
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "dealerId": {
+          "type": "string"
+        },
+        "applicant": {
+          "$ref": "#/definitions/Applicant"
+        },
+        "vehicle": {
+          "$ref": "#/definitions/Vehicle"
+        },
+        "requestedAmount": {
+          "type": "number"
+        },
+        "requestedTermMonths": {
+          "type": "integer"
+        }
+      }
+    },
+    "CreditApplicationResponse": {
+      "type": "object",
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "apr": {
+          "type": "number"
+        },
+        "approvedAmount": {
+          "type": "number"
+        },
+        "approvedTermMonths": {
+          "type": "integer"
+        },
+        "creditScore": {
+          "type": "integer"
+        },
+        "equifaxScore": {
+          "type": "integer"
+        },
+        "transUnionScore": {
+          "type": "integer"
+        },
+        "singleBureau": {
+          "type": "boolean"
+        },
+        "decidedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

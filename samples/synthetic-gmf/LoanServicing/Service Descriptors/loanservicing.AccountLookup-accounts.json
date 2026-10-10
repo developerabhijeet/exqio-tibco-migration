@@ -1,0 +1,80 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "version": "1.0",
+    "title": "Accounts",
+    "description": "Loan account summary for servicing agents."
+  },
+  "host": "localhost:9083",
+  "basePath": "/",
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/accounts/{accountNumber}": {
+      "get": {
+        "summary": "Loan account summary for servicing agents.",
+        "description": "",
+        "operationId": "get-accounts",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "accountNumber",
+            "in": "path",
+            "description": "",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "a AccountSummary to be returned",
+            "schema": {
+              "$ref": "#/definitions/AccountSummary"
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "AccountSummary": {
+      "type": "object",
+      "properties": {
+        "accountNumber": {
+          "type": "string"
+        },
+        "borrowerName": {
+          "type": "string"
+        },
+        "maskedSsn": {
+          "type": "string"
+        },
+        "principalBalance": {
+          "type": "number"
+        },
+        "nextDueDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "daysPastDue": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/legacy/address" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/legacy/address" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Standardized US mailing address returned by the legacy address service.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="StandardizedAddress">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="line1" type="xs:string"/>
+        <xs:element minOccurs="0" name="line2" type="xs:string"/>
+        <xs:element name="city" type="xs:string"/>
+        <xs:element name="state" type="xs:string"/>
+        <xs:element name="postalCode" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

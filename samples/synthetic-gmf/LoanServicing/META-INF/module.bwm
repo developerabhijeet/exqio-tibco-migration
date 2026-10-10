@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sca:composite xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:BW="http://xsd.tns.tibco.com/amf/models/sca/implementationtype/BW" xmlns:XMLSchema="http://www.w3.org/2001/XMLSchema" xmlns:compositeext="http://schemas.tibco.com/amx/3.0/compositeext" xmlns:rest="http://xsd.tns.tibco.com/bw/models/binding/rest" xmlns:sca="http://www.osoa.org/xmlns/sca/1.0" xmlns:scact="http://xsd.tns.tibco.com/amf/models/sca/componentType" xmlns:scaext="http://xsd.tns.tibco.com/amf/models/sca/extensions" xmi:id="_YuV98euzo-BDwXtbt_R47A" targetNamespace="http://tns.tibco.com/bw/composite/LoanServicing" name="LoanServicing" compositeext:version="1.0.0" compositeext:formatVersion="2">
+  <sca:service xmi:id="_DXEbzceC974lTxBj-xT_fw" name="accounts" promote="ComponentAccountLookup/accounts">
+    <sca:interface.wsdl xmi:id="_y-iDS6jKQY-3XBCsiy8ocg" interface="http://xmlns.example.com/20200615113902PLT#wsdl.interface(accounts)" scaext:wsdlLocation="../Processes/loanservicing/AccountLookup.bwp"/>
+    <scaext:binding xsi:type="rest:RestServiceBinding" xmi:id="_k6L6m-KdMkUvcuMDnSY4ww" name="RestService" path="/accounts/{accountNumber}" docBasePath="http://localhost:9083/LoanServicing" docResourcePath="Accounts" basePath="/" connector="loanservicing.AccountsConnector" structuredData="true" technologyVersion="2.0" implementation="Service Descriptors/loanservicing.AccountLookup-accounts.json">
+      <operation xmi:id="_aYWqGAEQhioAaDaMhkhn-w" operationName="get" nickname="get-accounts" httpMethod="GET" responseStyle="element" requestStyle="element">
+        <clientFormat>json</clientFormat>
+        <clientRequestFormat>json</clientRequestFormat>
+      </operation>
+      <parameters xmi:id="_Zsc0G5S9Axk-iF8R60ys_w">
+        <parameterDefinitions xmi:id="_wSeByWGODkmlb2luhiwtrA" name="accountNumber" type="string" parameterType="Path" required="true"/>
+      </parameters>
+      <advancedConfig xmi:id="_4neRBHT_MBdyhP75Ligf7A" blockingQueueSize="2147483647"/>
+    </scaext:binding>
+    <scact:bindingAdjunct xmi:id="_CWRuGDUiR6-NW9sQdfkeoQ" bindingName="RestService"/>
+  </sca:service>
+  <sca:property xmi:id="_TKNUBJUw_PjLIBjVKB4TVg" name="BW.DEPLOYMENTUNIT.TYPE" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_rUU8HRY7pRsQ741d-n7rvA" name="BW.APPNODE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_1iO5iElU5uC9swIRTf9mRA" name="BW.DEPLOYMENTUNIT.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_Nfdrwk9jBfX_cJwhs2u1VQ" name="BW.HOST.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_4cd9owORpuaw_AX_S1O6eg" name="BW.DOMAIN.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_mRjt7wuT9UIBgE8V95V4KQ" name="BW.DEPLOYMENTUNIT.VERSION" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_Uhs9yCZE7X5xZGagHRzTMQ" name="BW.APPSPACE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_Vs8Tu3VAk69HE3HKiogfDw" name="BW.MODULE.VERSION" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_Tmbca6i5NxhrKX1CUJ6fMg" name="BW.CLOUD.PORT" type="XMLSchema:int" scalable="true"/>
+  <sca:property xmi:id="_qG0qIaToGoEiUKW8141y9w" name="BW.MODULE.NAME" type="XMLSchema:string" scalable="true"/>
+  <sca:property xmi:id="_NI_uZkVvJwXqSW6DhrX8FQ" name="GMF.DB.URL" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_J34j3CWO_SQBFMgLAWjKmQ" name="GMF.DB.USER" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_RTTRe37-ludL7MkkhBZXwA" name="EMS.PROVIDER.URL" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_KDtzjABA7ttjMC2P2R3dIA" name="EMS.USER" type="XMLSchema:string" publicAccess="true" scalable="true"/>
+  <sca:property xmi:id="_QxNkXchC9Tme-V4cqT5vtg" name="SERVICING.HTTP.PORT" type="XMLSchema:int" publicAccess="true" scalable="true"/>
+  <sca:component xmi:id="_dmjt-7JvcMivoUd-kCm1JQ" name="ComponentPaymentPosting" compositeext:version="1.0.0.qualifier">
+    <scaext:implementation xsi:type="BW:BWComponentImplementation" xmi:id="__hvhLwYcPAS0clfmGTjxkw" processName="loanservicing.PaymentPosting"/>
+  </sca:component>
+  <sca:component xmi:id="_woNNDPsbvwbpUIcfi2JYCQ" name="ComponentAccountLookup" compositeext:version="1.0.0.qualifier">
+    <scaext:implementation xsi:type="BW:BWComponentImplementation" xmi:id="_47ALBdgMozZ5aN09Til03Q" processName="loanservicing.AccountLookup"/>
+    <sca:service xmi:id="_cJkaBqrXZcUZxysIFxHucw" name="accounts">
+      <sca:interface.wsdl xmi:id="_QRp40ihIHZhmnzx6-VDGFw" interface="http://xmlns.example.com/20200615113902PLT#wsdl.interface(accounts)" scaext:wsdlLocation="../Processes/loanservicing/AccountLookup.bwp"/>
+    </sca:service>
+  </sca:component>
+  <sca:component xmi:id="_x9gHEiBdFPdXw_IBTXRnRA" name="ComponentNightlyDelinquencyScan" compositeext:version="1.0.0.qualifier">
+    <scaext:implementation xsi:type="BW:BWComponentImplementation" xmi:id="_n7xDOOFDerEVnvaItVSpUQ" processName="loanservicing.NightlyDelinquencyScan"/>
+  </sca:component>
+</sca:composite>

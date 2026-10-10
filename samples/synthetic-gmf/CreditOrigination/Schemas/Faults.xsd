@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/faults" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/faults" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Business faults raised by CreditOrigination processes.</xs:documentation>
+  </xs:annotation>
+  <xs:element name="DuplicateApplicationFault">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="existingApplicationId" type="xs:string"/>
+        <xs:element name="message" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="MissingIncomeFault">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="message" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="BureauUnavailableFault">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="applicationId" type="xs:string"/>
+        <xs:element name="message" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

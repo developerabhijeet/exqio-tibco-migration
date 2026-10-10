@@ -1,0 +1,20 @@
+SYNTHETIC ESTATE
+
+Everything under this folder is synthetic. It was written for the ExiQO Migrate demo
+(R Systems) to look like a GM Financial style TIBCO BusinessWorks estate. It is not a
+GM Financial artefact and contains no customer code, data or configuration.
+
+Layout follows the BusinessWorks 6.5 project format (BPEL with tibex extensions,
+module.bwm, META-INF/MANIFEST.MF, default.substvar, shared resources, XSD, Swagger
+JSON) plus one BusinessWorks 5 project. Names, SSNs (9xx area numbers, never issued),
+VINs, dealers, accounts, hosts and passwords are invented.
+
+Contents
+  gmf.credit.application/   BW6 application (modules CreditOrigination, DealerFunding,
+                            LoanServicing)
+  LegacyAddress/            BW5 project (LegacyAddressStandardize.process)
+  Database/                 PostgreSQL DDL and seed rows, schema gmf
+  Stubs/                    WireMock mappings for the Equifax and TransUnion stubs
+  estate.json               inventory of processes, triggers, rules and seeded findings
+
+The rules and findings listed in estate.json are seeded on purpose.

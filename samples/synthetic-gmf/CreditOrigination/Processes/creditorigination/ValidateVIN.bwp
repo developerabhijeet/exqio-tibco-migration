@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no" name="creditorigination.ValidateVIN"
+    suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20190315161250"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://xmlns.gmfin.example/credit/origination/vehicle"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="true" createdBy="bwdev01"
+        createdOn="Fri Mar 15 16:12:50 EDT 2019"
+        description="VIN length, alphabet and check digit (position 9)."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context=""
+        input="{http://xmlns.gmfin.example/credit/origination/vehicle}VinValidationRequest"
+        output="{http://xmlns.gmfin.example/credit/origination/vehicle}VinValidationResult"/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/vehicle"
+            prefix="tns"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/vehicle"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:VinValidationRequest" name="Start"
+            sca-bpel:internal="true" tibex:parameter="in"/>
+        <bpws:variable element="ns0:VinValidationResult" name="End-input"
+            sca-bpel:internal="true" tibex:parameter="out"/>
+        <bpws:variable element="ns0:VinValidationResult"
+            name="ComputeCheckDigit-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:VinValidationResult"
+            name="ComputeCheckDigit" sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:VinValidationResult"
+            name="RejectVinFormat-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:VinValidationResult" name="RejectVinFormat"
+            sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="StartToComputeCheckDigit"
+                    tibex:label="17 characters, VIN alphabet"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="StartToRejectVinFormat" tibex:label=""
+                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="ComputeCheckDigitToEnd"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="RejectVinFormatToEnd" tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="0"
+                    name="Start"
+                    tibex:xpdlId="aafe7323-c5e9-5961-a81b-72873d77606a"
+                    variable="Start"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="StartToComputeCheckDigit">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="string-length($Start/tns:vin) = 17 and matches($Start/tns:vin, '^[A-HJ-NPR-Z0-9]+$')"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[string-length($Start/tns:vin) = 17 and matches($Start/tns:vin, '^[A-HJ-NPR-Z0-9]+$')]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="StartToRejectVinFormat">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <tibex:StartEvent xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="ComputeCheckDigit-input"
+                    name="ComputeCheckDigit" outputVariable="ComputeCheckDigit"
+                    tibex:xpdlId="7300980a-2fd8-5090-a2d0-6f791af6429d"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="StartToComputeCheckDigit"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="ComputeCheckDigitToEnd"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/vehicle&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;ComputeCheckDigit-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;vin&quot; select=&quot;string($Start/tns:vin)&quot;/>&#xa;        &lt;xsl:variable name=&quot;values&quot; select=&quot;translate($vin, 'ABCDEFGHJKLMNPRSTUVWXYZ', '12345678123457923456789')&quot;/>&#xa;        &lt;xsl:variable name=&quot;weights&quot; select=&quot;(8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2)&quot;/>&#xa;        &lt;xsl:variable name=&quot;remainder&quot; select=&quot;xsd:integer(sum(for $i in 1 to 17 return xsd:integer(substring($values, $i, 1)) * $weights[$i])) mod 11&quot;/>&#xa;        &lt;xsl:variable name=&quot;expected&quot; select=&quot;if ($remainder = 10) then 'X' else string($remainder)&quot;/>&#xa;        &lt;tns:VinValidationResult>&#xa;            &lt;tns:vin>&#xa;                &lt;xsl:value-of select=&quot;$vin&quot;/>&#xa;            &lt;/tns:vin>&#xa;            &lt;tns:valid>&#xa;                &lt;xsl:value-of select=&quot;substring($vin, 9, 1) = $expected&quot;/>&#xa;            &lt;/tns:valid>&#xa;            &lt;xsl:if test=&quot;substring($vin, 9, 1) != $expected&quot;>&#xa;                &lt;tns:reason>&#xa;                    &lt;xsl:value-of select=&quot;&amp;quot;CHECK_DIGIT_MISMATCH&amp;quot;&quot;/>&#xa;                &lt;/tns:reason>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns:computedCheckDigit>&#xa;                &lt;xsl:value-of select=&quot;$expected&quot;/>&#xa;            &lt;/tns:computedCheckDigit>&#xa;        &lt;/tns:VinValidationResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/vehicle"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:VinValidationResult"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="RejectVinFormat-input"
+                    name="RejectVinFormat" outputVariable="RejectVinFormat"
+                    tibex:xpdlId="4938d2dc-1364-56b7-a6c1-ea52f827e2bb"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="StartToRejectVinFormat"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="RejectVinFormatToEnd"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/vehicle&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;RejectVinFormat-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:VinValidationResult>&#xa;            &lt;tns:vin>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:vin&quot;/>&#xa;            &lt;/tns:vin>&#xa;            &lt;tns:valid>&#xa;                &lt;xsl:value-of select=&quot;false()&quot;/>&#xa;            &lt;/tns:valid>&#xa;            &lt;tns:reason>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;INVALID_FORMAT&amp;quot;&quot;/>&#xa;            &lt;/tns:reason>&#xa;        &lt;/tns:VinValidationResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/vehicle"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:VinValidationResult"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="End-input" name="End"
+                    tibex:xpdlId="88a72296-c7fd-58b7-b2b7-bc0558b67615"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ComputeCheckDigitToEnd"/>
+                        <bpws:target linkName="RejectVinFormatToEnd"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/vehicle&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ComputeCheckDigit&quot;/>&#xa;    &lt;xsl:param name=&quot;RejectVinFormat&quot;/>&#xa;    &lt;xsl:template name=&quot;End-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;result&quot; select=&quot;($ComputeCheckDigit, $RejectVinFormat)[1]&quot;/>&#xa;        &lt;tns:VinValidationResult>&#xa;            &lt;tns:vin>&#xa;                &lt;xsl:value-of select=&quot;$result/tns:vin&quot;/>&#xa;            &lt;/tns:vin>&#xa;            &lt;tns:valid>&#xa;                &lt;xsl:value-of select=&quot;$result/tns:valid&quot;/>&#xa;            &lt;/tns:valid>&#xa;            &lt;xsl:if test=&quot;$result/tns:reason&quot;>&#xa;                &lt;tns:reason>&#xa;                    &lt;xsl:value-of select=&quot;$result/tns:reason&quot;/>&#xa;                &lt;/tns:reason>&#xa;            &lt;/xsl:if>&#xa;            &lt;xsl:if test=&quot;$result/tns:computedCheckDigit&quot;>&#xa;                &lt;tns:computedCheckDigit>&#xa;                    &lt;xsl:value-of select=&quot;$result/tns:computedCheckDigit&quot;/>&#xa;                &lt;/tns:computedCheckDigit>&#xa;            &lt;/xsl:if>&#xa;        &lt;/tns:VinValidationResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.internal.end"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:internalactivities="http://ns.tibco.com/bw/core/internalactivity"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/core/internalactivity#//End"/>
+                                    <value xsi:type="internalactivities:End"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

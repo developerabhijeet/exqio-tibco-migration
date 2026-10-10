@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/loan/servicing/collections" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://xmlns.gmfin.example/loan/servicing/collections" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Collections referral, JMS queue gmf.collections.queue (XML text body).</xs:documentation>
+  </xs:annotation>
+  <xs:element name="CollectionsReferral">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="accountNumber" type="xs:string"/>
+        <xs:element name="borrowerName" type="xs:string"/>
+        <xs:element name="daysPastDue" type="xs:int"/>
+        <xs:element name="amountPastDue" type="xs:decimal"/>
+        <xs:element name="referredAt" type="xs:dateTime"/>
+        <xs:element name="caseCallbackUrl" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

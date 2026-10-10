@@ -1,0 +1,681 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no"
+    name="creditorigination.CreditApplicationIntake" suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20190314093512"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://xmlns.example.com/20190314093512PLT"
+    xmlns:ns1="http://xmlns.gmfin.example/credit/origination/application"
+    xmlns:ns2="http://xmlns.gmfin.example/credit/origination/audit"
+    xmlns:ns3="http://xmlns.gmfin.example/credit/origination/vehicle"
+    xmlns:ns4="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+input"
+    xmlns:ns5="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+output"
+    xmlns:ns6="http://xmlns.gmfin.example/credit/origination/faults"
+    xmlns:ns7="http://xmlns.gmfin.example/credit/origination/bureau"
+    xmlns:ns8="http://xmlns.gmfin.example/credit/origination/decision"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <wsdl:definitions
+            targetNamespace="http://xmlns.example.com/20190314093512PLT"
+            xmlns:extns="http://tns.tibco.com/bw/REST"
+            xmlns:extns1="http://xmlns.gmfin.example/credit/origination/application"
+            xmlns:plnk="http://docs.oasis-open.org/wsbpel/2.0/plnktype"
+            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+            xmlns:tns="http://xmlns.example.com/20190314093512PLT"
+            xmlns:vprop="http://docs.oasis-open.org/wsbpel/2.0/varprop"
+            xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+            <plnk:partnerLinkType name="partnerLinkType">
+                <plnk:role name="use" portType="tns:applications"/>
+            </plnk:partnerLinkType>
+            <wsdl:import namespace="http://tns.tibco.com/bw/REST"/>
+            <wsdl:import namespace="http://xmlns.gmfin.example/credit/origination/application"/>
+            <wsdl:message name="postRequest">
+                <wsdl:part element="extns1:CreditApplicationRequest"
+                    name="item" tibex:hasMultipleNamespaces="false"/>
+                <wsdl:part element="extns:httpHeaders"
+                    name="httpHeaders" tibex:source="bw.rest"/>
+            </wsdl:message>
+            <wsdl:message name="postResponse">
+                <wsdl:part element="extns1:CreditApplicationResponse"
+                    name="item" tibex:hasMultipleNamespaces="false"/>
+            </wsdl:message>
+            <wsdl:message name="post4XXFaultMessage">
+                <wsdl:part element="extns:client4XXError" name="clientError"/>
+            </wsdl:message>
+            <wsdl:message name="post5XXFaultMessage">
+                <wsdl:part element="extns:server5XXError" name="serverError"/>
+            </wsdl:message>
+            <wsdl:portType name="applications"
+                tibex:bw.rest.apipath="/applications"
+                tibex:bw.rest.basepath="Applications"
+                tibex:bw.rest.resource="Service Descriptors/creditorigination.CreditApplicationIntake-applications.json"
+                tibex:bw.rest.resource.source="generated" tibex:source="bw.rest.service">
+                <wsdl:documentation>Submit a retail credit application.</wsdl:documentation>
+                <wsdl:operation name="post">
+                    <wsdl:input message="tns:postRequest" name="postInput"/>
+                    <wsdl:output message="tns:postResponse" name="postOutput"/>
+                    <wsdl:fault message="tns:post4XXFaultMessage" name="clientFault"/>
+                    <wsdl:fault message="tns:post5XXFaultMessage" name="serverFault"/>
+                </wsdl:operation>
+            </wsdl:portType>
+        </wsdl:definitions>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="ssn" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="application_id" type="string"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                    <element minOccurs="0" name="submitted_at" type="dateTime"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="false" createdBy="bwdev01"
+        createdOn="Thu Mar 14 09:35:12 EDT 2019"
+        description="Dealer channel credit application intake (POST /applications)."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context="" input="" output=""/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/application"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/audit"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/vehicle"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/bureau"
+            prefix="tns3"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/decision"
+            prefix="tns4"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/faults"
+            prefix="tns5"/>
+        <tibex:namespaceItem namespace="http://tns.tibco.com/bw/REST"
+            prefix="tns6"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+input"
+            prefix="tns7"/>
+        <tibex:namespaceItem namespace="http://xmlns.example.com/20190314093512PLT"
+            prefix="tns8"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://tns.tibco.com/bw/REST"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/application"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/audit"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/vehicle"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/bureau"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/decision"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/faults"/>
+    <bpws:partnerLinks>
+        <bpws:partnerLink myRole="use" name="applications"
+            partnerLinkType="ns0:partnerLinkType" sca-bpel:ignore="false"
+            sca-bpel:service="applications"/>
+    </bpws:partnerLinks>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:postRequest" name="post"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:postResponse" name="postOut-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>creditorigination.GMFOriginationDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns1:ApplicantSnapshot"
+            name="NormalizeApplicant-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns1:ApplicantSnapshot" name="NormalizeApplicant"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:AuditEvent" name="CallAuditLog-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:VinValidationRequest"
+            name="CallValidateVIN-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:VinValidationResult" name="CallValidateVIN"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:jdbcQueryActivityInput"
+            name="CheckDuplicateApplication-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:resultSet" name="CheckDuplicateApplication"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:DuplicateApplicationFault"
+            name="ThrowDuplicateApplication-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns7:BureauRequest"
+            name="CallBureauOrchestrator-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns7:BureauResult" name="CallBureauOrchestrator"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns8:DecisionRequest"
+            name="CallDecisionEngine-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns8:DecisionResult" name="CallDecisionEngine"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:post4XXFaultMessage"
+            name="ReplyInvalidSSN-input" sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:post4XXFaultMessage"
+            name="ReplyInvalidVIN-input" sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:post4XXFaultMessage"
+            name="ReplyDuplicate-input" sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:post4XXFaultMessage"
+            name="ReplyIncomplete-input" sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:post5XXFaultMessage"
+            name="ReplyServerError-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:DuplicateApplicationFault"
+            name="DuplicateApplicationFault" sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:MissingIncomeFault"
+            name="MissingIncomeFault" sca-bpel:internal="true"/>
+        <bpws:variable name="FaultName" sca-bpel:internal="true"
+            type="xsd:string"/>
+        <bpws:variable element="ns:FaultDetail" name="FaultDetails"
+            sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links/>
+            <bpws:pick createInstance="yes" name="pick"
+                tibex:xpdlId="52e65dec-91ea-5b45-8a80-0c9f41190723">
+                <bpws:onMessage operation="post" partnerLink="applications"
+                    portType="ns0:applications"
+                    tibex:xpdlId="98a323da-bf3a-5e2b-89d9-8141df103399"
+                    variable="post">
+                    <bpws:scope name="scope1">
+                        <bpws:faultHandlers>
+                            <bpws:catch faultElement="ns6:DuplicateApplicationFault"
+                                faultName="ns6:DuplicateApplicationFault"
+                                faultVariable="DuplicateApplicationFault"
+                                tibex:xpdlId="1526ccff-31da-547e-80b9-0d90f8d4d1b4">
+                                <bpws:scope name="flow3Scope">
+                                    <bpws:flow name="flow3">
+                                        <bpws:links/>
+                                        <bpws:reply faultName="clientFault"
+                                            name="ReplyDuplicate"
+                                            operation="post"
+                                            partnerLink="applications"
+                                            portType="ns0:applications"
+                                            tibex:xpdlId="15402259-5ed1-520d-9ec7-36eee677ada6"
+                                            variable="ReplyDuplicate-input">
+                                            <tibex:inputBindings>
+                                                <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns5=&quot;http://xmlns.gmfin.example/credit/origination/faults&quot; xmlns:tns6=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;DuplicateApplicationFault&quot;/>&#xa;    &lt;xsl:template name=&quot;ReplyDuplicate-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:client4XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;409&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;$DuplicateApplicationFault/tns5:message&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns6:client4XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                            </tibex:inputBindings>
+                                            <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns5="http://xmlns.gmfin.example/credit/origination/faults" xmlns:tns6="http://tns.tibco.com/bw/REST" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:param name="DuplicateApplicationFault"/&gt;&lt;xsl:template name="ReplyDuplicate-input" match="/"&gt;&lt;tns8:post4XXFaultMessage&gt;&lt;clientError&gt;&lt;tns6:client4XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="409"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="$DuplicateApplicationFault/tns5:message"/&gt;&lt;/message&gt;&lt;/tns6:client4XXError&gt;&lt;/clientError&gt;&lt;/tns8:post4XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                        </bpws:reply>
+                                    </bpws:flow>
+                                </bpws:scope>
+                            </bpws:catch>
+                            <bpws:catch faultElement="ns6:MissingIncomeFault"
+                                faultName="ns6:MissingIncomeFault"
+                                faultVariable="MissingIncomeFault"
+                                tibex:xpdlId="f8f451f5-32e3-522f-b90d-eaf986c1f1bc">
+                                <bpws:scope name="flow4Scope">
+                                    <bpws:flow name="flow4">
+                                        <bpws:links/>
+                                        <bpws:reply faultName="clientFault"
+                                            name="ReplyIncomplete"
+                                            operation="post"
+                                            partnerLink="applications"
+                                            portType="ns0:applications"
+                                            tibex:xpdlId="83193972-fd64-5d47-b5b0-31804689b230"
+                                            variable="ReplyIncomplete-input">
+                                            <tibex:inputBindings>
+                                                <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns5=&quot;http://xmlns.gmfin.example/credit/origination/faults&quot; xmlns:tns6=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;MissingIncomeFault&quot;/>&#xa;    &lt;xsl:template name=&quot;ReplyIncomplete-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:client4XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;422&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;$MissingIncomeFault/tns5:message&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns6:client4XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                            </tibex:inputBindings>
+                                            <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns5="http://xmlns.gmfin.example/credit/origination/faults" xmlns:tns6="http://tns.tibco.com/bw/REST" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:param name="MissingIncomeFault"/&gt;&lt;xsl:template name="ReplyIncomplete-input" match="/"&gt;&lt;tns8:post4XXFaultMessage&gt;&lt;clientError&gt;&lt;tns6:client4XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="422"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="$MissingIncomeFault/tns5:message"/&gt;&lt;/message&gt;&lt;/tns6:client4XXError&gt;&lt;/clientError&gt;&lt;/tns8:post4XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                        </bpws:reply>
+                                    </bpws:flow>
+                                </bpws:scope>
+                            </bpws:catch>
+                            <bpws:catchAll tibex:faultDetailsVar="FaultDetails"
+                                tibex:faultNameVar="FaultName"
+                                tibex:xpdlId="7269328b-c455-58c4-bdec-6ca66e0976b7">
+                                <bpws:scope name="flow2Scope">
+                                    <bpws:flow name="flow2">
+                                        <bpws:links/>
+                                        <bpws:reply faultName="serverFault"
+                                            name="ReplyServerError"
+                                            operation="post"
+                                            partnerLink="applications"
+                                            portType="ns0:applications"
+                                            tibex:xpdlId="17ad46e3-ef1c-5b02-a162-97312a2f84e8"
+                                            variable="ReplyServerError-input">
+                                            <tibex:inputBindings>
+                                                <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns6=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;FaultDetails&quot;/>&#xa;    &lt;xsl:template name=&quot;ReplyServerError-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:server5XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;503&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;$FaultDetails/Msg&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns6:server5XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                            </tibex:inputBindings>
+                                            <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns6="http://tns.tibco.com/bw/REST" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:param name="FaultDetails"/&gt;&lt;xsl:template name="ReplyServerError-input" match="/"&gt;&lt;tns8:post5XXFaultMessage&gt;&lt;serverError&gt;&lt;tns6:server5XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="503"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="$FaultDetails/Msg"/&gt;&lt;/message&gt;&lt;/tns6:server5XXError&gt;&lt;/serverError&gt;&lt;/tns8:post5XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                        </bpws:reply>
+                                    </bpws:flow>
+                                </bpws:scope>
+                            </bpws:catchAll>
+                        </bpws:faultHandlers>
+                        <bpws:flow name="flow1">
+                            <bpws:links>
+                                <bpws:link name="NormalizeApplicantToCallAuditLog"
+                                    tibex:linkType="SUCCESS"/>
+                                <bpws:link name="CallAuditLogToCallValidateVIN"
+                                    tibex:label="SSN format valid"
+                                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                                <bpws:link name="CallAuditLogToReplyInvalidSSN"
+                                    tibex:label=""
+                                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                                <bpws:link name="CallValidateVINToCheckDuplicateApplication"
+                                    tibex:label="VIN valid"
+                                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                                <bpws:link name="CallValidateVINToReplyInvalidVIN"
+                                    tibex:label=""
+                                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                                <bpws:link name="CheckDuplicateApplicationToThrowDuplicateApplication"
+                                    tibex:label="Duplicate within 30 days"
+                                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                                <bpws:link name="CheckDuplicateApplicationToCallBureauOrchestrator"
+                                    tibex:label=""
+                                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                                <bpws:link name="CallBureauOrchestratorToCallDecisionEngine"
+                                    tibex:linkType="SUCCESS"/>
+                                <bpws:link name="CallDecisionEngineTopostOut"
+                                    tibex:linkType="SUCCESS"/>
+                            </bpws:links>
+                            <bpws:empty name="OnMessageStart"
+                                tibex:constructor="onMessageStart"
+                                tibex:xpdlId="3493c97a-aa16-5e26-bb95-91fba7dee072"/>
+                            <bpws:empty name="OnMessageEnd"
+                                tibex:constructor="onMessageEnd"
+                                tibex:xpdlId="d88b5463-3492-537e-8310-2e093499c337"/>
+                            <bpws:extensionActivity>
+                                <tibex:activityExtension inputVariable="NormalizeApplicant-input"
+                                    name="NormalizeApplicant"
+                                    outputVariable="NormalizeApplicant"
+                                    tibex:xpdlId="9ee66ed5-9e66-5441-9c2d-27d22f5325fe"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:sources>
+                                        <bpws:source linkName="NormalizeApplicantToCallAuditLog"/>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;post.item&quot;/>&#xa;    &lt;xsl:template name=&quot;NormalizeApplicant-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:ApplicantSnapshot>&#xa;            &lt;tns:applicationId>&#xa;                &lt;xsl:value-of select=&quot;normalize-space($post.item/tns:applicationId)&quot;/>&#xa;            &lt;/tns:applicationId>&#xa;            &lt;tns:dealerId>&#xa;                &lt;xsl:value-of select=&quot;upper-case(normalize-space($post.item/tns:dealerId))&quot;/>&#xa;            &lt;/tns:dealerId>&#xa;            &lt;tns:ssn>&#xa;                &lt;xsl:value-of select=&quot;normalize-space($post.item/tns:applicant/tns:ssn)&quot;/>&#xa;            &lt;/tns:ssn>&#xa;            &lt;tns:firstName>&#xa;                &lt;xsl:value-of select=&quot;upper-case(normalize-space($post.item/tns:applicant/tns:firstName))&quot;/>&#xa;            &lt;/tns:firstName>&#xa;            &lt;tns:lastName>&#xa;                &lt;xsl:value-of select=&quot;upper-case(normalize-space($post.item/tns:applicant/tns:lastName))&quot;/>&#xa;            &lt;/tns:lastName>&#xa;            &lt;tns:dateOfBirth>&#xa;                &lt;xsl:value-of select=&quot;$post.item/tns:applicant/tns:dateOfBirth&quot;/>&#xa;            &lt;/tns:dateOfBirth>&#xa;            &lt;tns:vin>&#xa;                &lt;xsl:value-of select=&quot;upper-case(normalize-space($post.item/tns:vehicle/tns:vin))&quot;/>&#xa;            &lt;/tns:vin>&#xa;        &lt;/tns:ApplicantSnapshot>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:config>
+                                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                                            version="6.0.0.001"
+                                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                                            xmlns:ns1="http://xmlns.gmfin.example/credit/origination/application"
+                                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                            <activityConfig>
+                                                <properties name="config"
+                                                    xsi:type="activityconfig:EMFProperty">
+                                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                                    <value inputQName="ns1:ApplicantSnapshot"
+                                                        xsi:type="generalactivities:Mapper"/>
+                                                </properties>
+                                            </activityConfig>
+                                        </bwext:BWActivity>
+                                    </tibex:config>
+                                </tibex:activityExtension>
+                            </bpws:extensionActivity>
+                            <bpws:extensionActivity>
+                                <tibex:extActivity expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"
+                                    inputVariable="CallAuditLog-input"
+                                    name="CallAuditLog"
+                                    tibex:xpdlId="e78a4f42-8a05-58e0-af08-c4027cc8e134"
+                                    type="bw.generalactivities.callprocess"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="NormalizeApplicantToCallAuditLog"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="CallAuditLogToCallValidateVIN">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="matches($NormalizeApplicant/tns:ssn, '^[0-9]{3}-[0-9]{2}-[0-9]{4}$') and not(substring($NormalizeApplicant/tns:ssn, 1, 3) = ('000', '666'))"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[matches($NormalizeApplicant/tns:ssn, '^[0-9]{3}-[0-9]{2}-[0-9]{4}$') and not(substring($NormalizeApplicant/tns:ssn, 1, 3) = ('000', '666'))]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                        <bpws:source linkName="CallAuditLogToReplyInvalidSSN">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="##otherwise##"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/credit/origination/audit&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:param name=&quot;post.item&quot;/>&#xa;    &lt;xsl:template name=&quot;CallAuditLog-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:AuditEvent>&#xa;            &lt;tns1:eventType>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;APPLICATION_RECEIVED&amp;quot;&quot;/>&#xa;            &lt;/tns1:eventType>&#xa;            &lt;tns1:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:applicationId&quot;/>&#xa;            &lt;/tns1:applicationId>&#xa;            &lt;tns1:ssn>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:ssn&quot;/>&#xa;            &lt;/tns1:ssn>&#xa;            &lt;tns1:payload>&#xa;                &lt;xsl:value-of select=&quot;concat('dealer=', $NormalizeApplicant/tns:dealerId, ';vin=', $NormalizeApplicant/tns:vin, ';amount=', $post.item/tns:requestedAmount, ';term=', $post.item/tns:requestedTermMonths)&quot;/>&#xa;            &lt;/tns1:payload>&#xa;        &lt;/tns1:AuditEvent>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:CallProcess subProcessName="creditorigination.AuditLog"
+                                        xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                                </tibex:extActivity>
+                            </bpws:extensionActivity>
+                            <bpws:reply faultName="clientFault"
+                                name="ReplyInvalidSSN" operation="post"
+                                partnerLink="applications"
+                                portType="ns0:applications"
+                                tibex:xpdlId="46c6a1fd-7b26-5db8-a6af-ad36d0464f3c"
+                                variable="ReplyInvalidSSN-input">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns6=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:template name=&quot;ReplyInvalidSSN-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:client4XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;400&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;SSN must be formatted NNN-NN-NNNN&amp;quot;&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns6:client4XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns6="http://tns.tibco.com/bw/REST" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:template name="ReplyInvalidSSN-input" match="/"&gt;&lt;tns8:post4XXFaultMessage&gt;&lt;clientError&gt;&lt;tns6:client4XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="400"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="&amp;quot;SSN must be formatted NNN-NN-NNNN&amp;quot;"/&gt;&lt;/message&gt;&lt;/tns6:client4XXError&gt;&lt;/clientError&gt;&lt;/tns8:post4XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                <bpws:targets>
+                                    <bpws:target linkName="CallAuditLogToReplyInvalidSSN"/>
+                                </bpws:targets>
+                            </bpws:reply>
+                            <bpws:extensionActivity>
+                                <tibex:extActivity expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"
+                                    inputVariable="CallValidateVIN-input"
+                                    name="CallValidateVIN"
+                                    outputVariable="CallValidateVIN"
+                                    tibex:xpdlId="e5ccafa3-0c5a-59b2-9ead-f6180a818321"
+                                    type="bw.generalactivities.callprocess"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="CallAuditLogToCallValidateVIN"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="CallValidateVINToCheckDuplicateApplication">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="$CallValidateVIN/tns2:valid = 'true'"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[$CallValidateVIN/tns2:valid = 'true']]></bpws:transitionCondition>
+                                        </bpws:source>
+                                        <bpws:source linkName="CallValidateVINToReplyInvalidVIN">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="##otherwise##"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns2=&quot;http://xmlns.gmfin.example/credit/origination/vehicle&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:template name=&quot;CallValidateVIN-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:VinValidationRequest>&#xa;            &lt;tns2:vin>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:vin&quot;/>&#xa;            &lt;/tns2:vin>&#xa;        &lt;/tns2:VinValidationRequest>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:CallProcess subProcessName="creditorigination.ValidateVIN"
+                                        xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                                </tibex:extActivity>
+                            </bpws:extensionActivity>
+                            <bpws:reply faultName="clientFault"
+                                name="ReplyInvalidVIN" operation="post"
+                                partnerLink="applications"
+                                portType="ns0:applications"
+                                tibex:xpdlId="a1724c54-bc36-58ad-97e3-0521583da837"
+                                variable="ReplyInvalidVIN-input">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns2=&quot;http://xmlns.gmfin.example/credit/origination/vehicle&quot; xmlns:tns6=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;CallValidateVIN&quot;/>&#xa;    &lt;xsl:template name=&quot;ReplyInvalidVIN-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:client4XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;400&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;concat(&amp;quot;VIN rejected: &amp;quot;, $CallValidateVIN/tns2:reason)&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns6:client4XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns2="http://xmlns.gmfin.example/credit/origination/vehicle" xmlns:tns6="http://tns.tibco.com/bw/REST" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:param name="CallValidateVIN"/&gt;&lt;xsl:template name="ReplyInvalidVIN-input" match="/"&gt;&lt;tns8:post4XXFaultMessage&gt;&lt;clientError&gt;&lt;tns6:client4XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="400"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="concat(&amp;quot;VIN rejected: &amp;quot;, $CallValidateVIN/tns2:reason)"/&gt;&lt;/message&gt;&lt;/tns6:client4XXError&gt;&lt;/clientError&gt;&lt;/tns8:post4XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                <bpws:targets>
+                                    <bpws:target linkName="CallValidateVINToReplyInvalidVIN"/>
+                                </bpws:targets>
+                            </bpws:reply>
+                            <bpws:extensionActivity>
+                                <tibex:activityExtension inputVariable="CheckDuplicateApplication-input"
+                                    name="CheckDuplicateApplication"
+                                    outputVariable="CheckDuplicateApplication"
+                                    tibex:xpdlId="e938235c-8a55-5e6f-b182-62f9ebc65c69"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="CallValidateVINToCheckDuplicateApplication"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="CheckDuplicateApplicationToThrowDuplicateApplication">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="count($CheckDuplicateApplication/Record) > 0"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[count($CheckDuplicateApplication/Record) > 0]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                        <bpws:source linkName="CheckDuplicateApplicationToCallBureauOrchestrator">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="##otherwise##"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns7=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+e938235c-8a55-5e6f-b182-62f9ebc65c69+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:template name=&quot;CheckDuplicateApplication-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns7:jdbcQueryActivityInput>&#xa;            &lt;ssn>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:ssn&quot;/>&#xa;            &lt;/ssn>&#xa;        &lt;/tns7:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:config>
+                                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                            <activityConfig>
+                                                <properties name="config"
+                                                    xsi:type="activityconfig:EMFProperty">
+                                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                                    <value maxRows="100"
+                                                        sharedResourceProperty="jdbcProperty"
+                                                        sqlStatement="select application_id, status, submitted_at&#xa;  from gmf.credit_application&#xa; where ssn = ?&#xa;   and submitted_at >= current_timestamp - interval '30 days'"
+                                                        timeout="10"
+                                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                                        <PreparedParameters DataType="12"
+                                                            DataTypeDisplayValue="VARCHAR"
+                                                            ParameterName="ssn"/>
+                                                        <columnMetadata columnName="application_id"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="status"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="submitted_at"
+                                                            dataType="93"
+                                                            status="OptionalElement"
+                                                            typeName="timestamp"/>
+                                                    </value>
+                                                </properties>
+                                            </activityConfig>
+                                        </bwext:BWActivity>
+                                    </tibex:config>
+                                </tibex:activityExtension>
+                            </bpws:extensionActivity>
+                            <bpws:throw faultName="ns6:DuplicateApplicationFault"
+                                faultVariable="ThrowDuplicateApplication-input"
+                                name="ThrowDuplicateApplication"
+                                tibex:xpdlId="0260a13a-dc5f-568e-8815-8c3ced6f887f">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns5=&quot;http://xmlns.gmfin.example/credit/origination/faults&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:param name=&quot;CheckDuplicateApplication&quot;/>&#xa;    &lt;xsl:template name=&quot;ThrowDuplicateApplication-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns5:DuplicateApplicationFault>&#xa;            &lt;tns5:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:applicationId&quot;/>&#xa;            &lt;/tns5:applicationId>&#xa;            &lt;tns5:existingApplicationId>&#xa;                &lt;xsl:value-of select=&quot;$CheckDuplicateApplication/Record[1]/application_id&quot;/>&#xa;            &lt;/tns5:existingApplicationId>&#xa;            &lt;tns5:message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;Application already submitted for this SSN within 30 days&amp;quot;&quot;/>&#xa;            &lt;/tns5:message>&#xa;        &lt;/tns5:DuplicateApplicationFault>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <bpws:targets>
+                                    <bpws:target linkName="CheckDuplicateApplicationToThrowDuplicateApplication"/>
+                                </bpws:targets>
+                            </bpws:throw>
+                            <bpws:extensionActivity>
+                                <tibex:extActivity expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"
+                                    inputVariable="CallBureauOrchestrator-input"
+                                    name="CallBureauOrchestrator"
+                                    outputVariable="CallBureauOrchestrator"
+                                    tibex:xpdlId="2b852bbd-8410-54a4-a6b4-c541d2f3f8e6"
+                                    type="bw.generalactivities.callprocess"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="CheckDuplicateApplicationToCallBureauOrchestrator"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="CallBureauOrchestratorToCallDecisionEngine"/>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns3=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:template name=&quot;CallBureauOrchestrator-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:BureauRequest>&#xa;            &lt;tns3:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:applicationId&quot;/>&#xa;            &lt;/tns3:applicationId>&#xa;            &lt;tns3:ssn>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:ssn&quot;/>&#xa;            &lt;/tns3:ssn>&#xa;            &lt;tns3:firstName>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:firstName&quot;/>&#xa;            &lt;/tns3:firstName>&#xa;            &lt;tns3:lastName>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:lastName&quot;/>&#xa;            &lt;/tns3:lastName>&#xa;            &lt;tns3:dateOfBirth>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:dateOfBirth&quot;/>&#xa;            &lt;/tns3:dateOfBirth>&#xa;        &lt;/tns3:BureauRequest>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:CallProcess subProcessName="creditorigination.BureauOrchestrator"
+                                        xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                                </tibex:extActivity>
+                            </bpws:extensionActivity>
+                            <bpws:extensionActivity>
+                                <tibex:extActivity expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"
+                                    inputVariable="CallDecisionEngine-input"
+                                    name="CallDecisionEngine"
+                                    outputVariable="CallDecisionEngine"
+                                    tibex:xpdlId="be48188f-da4d-59ea-b30c-942d50a25627"
+                                    type="bw.generalactivities.callprocess"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:targets>
+                                        <bpws:target linkName="CallBureauOrchestratorToCallDecisionEngine"/>
+                                    </bpws:targets>
+                                    <bpws:sources>
+                                        <bpws:source linkName="CallDecisionEngineTopostOut"/>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns3=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:tns4=&quot;http://xmlns.gmfin.example/credit/origination/decision&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:param name=&quot;CallBureauOrchestrator&quot;/>&#xa;    &lt;xsl:param name=&quot;post.item&quot;/>&#xa;    &lt;xsl:template name=&quot;CallDecisionEngine-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns4:DecisionRequest>&#xa;            &lt;parameters>&#xa;                &lt;applicationId>&#xa;                    &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:applicationId&quot;/>&#xa;                &lt;/applicationId>&#xa;                &lt;ssn>&#xa;                    &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:ssn&quot;/>&#xa;                &lt;/ssn>&#xa;                &lt;dealerId>&#xa;                    &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:dealerId&quot;/>&#xa;                &lt;/dealerId>&#xa;                &lt;vin>&#xa;                    &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:vin&quot;/>&#xa;                &lt;/vin>&#xa;                &lt;creditScore>&#xa;                    &lt;xsl:value-of select=&quot;$CallBureauOrchestrator/tns3:selectedScore&quot;/>&#xa;                &lt;/creditScore>&#xa;                &lt;singleBureau>&#xa;                    &lt;xsl:value-of select=&quot;$CallBureauOrchestrator/tns3:singleBureau&quot;/>&#xa;                &lt;/singleBureau>&#xa;                &lt;xsl:if test=&quot;$post.item/tns:applicant/tns:monthlyIncome&quot;>&#xa;                    &lt;monthlyIncome>&#xa;                        &lt;xsl:value-of select=&quot;$post.item/tns:applicant/tns:monthlyIncome&quot;/>&#xa;                    &lt;/monthlyIncome>&#xa;                &lt;/xsl:if>&#xa;                &lt;monthlyDebt>&#xa;                    &lt;xsl:value-of select=&quot;$post.item/tns:applicant/tns:monthlyDebt&quot;/>&#xa;                &lt;/monthlyDebt>&#xa;                &lt;requestedAmount>&#xa;                    &lt;xsl:value-of select=&quot;$post.item/tns:requestedAmount&quot;/>&#xa;                &lt;/requestedAmount>&#xa;                &lt;requestedTermMonths>&#xa;                    &lt;xsl:value-of select=&quot;$post.item/tns:requestedTermMonths&quot;/>&#xa;                &lt;/requestedTermMonths>&#xa;            &lt;/parameters>&#xa;        &lt;/tns4:DecisionRequest>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:CallProcess subProcessName="creditorigination.DecisionEngine"
+                                        xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                                </tibex:extActivity>
+                            </bpws:extensionActivity>
+                            <bpws:reply name="postOut" operation="post"
+                                partnerLink="applications"
+                                portType="ns0:applications"
+                                tibex:xpdlId="bc88bfc3-ab9f-56de-ba3d-9c91a385c224"
+                                variable="postOut-input">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/application&quot; xmlns:tns3=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;NormalizeApplicant&quot;/>&#xa;    &lt;xsl:param name=&quot;CallBureauOrchestrator&quot;/>&#xa;    &lt;xsl:param name=&quot;CallDecisionEngine&quot;/>&#xa;    &lt;xsl:template name=&quot;postOut-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:CreditApplicationResponse>&#xa;            &lt;tns:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$NormalizeApplicant/tns:applicationId&quot;/>&#xa;            &lt;/tns:applicationId>&#xa;            &lt;tns:decision>&#xa;                &lt;xsl:value-of select=&quot;$CallDecisionEngine/decision&quot;/>&#xa;            &lt;/tns:decision>&#xa;            &lt;xsl:if test=&quot;$CallDecisionEngine/tier&quot;>&#xa;                &lt;tns:tier>&#xa;                    &lt;xsl:value-of select=&quot;$CallDecisionEngine/tier&quot;/>&#xa;                &lt;/tns:tier>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns:apr>&#xa;                &lt;xsl:value-of select=&quot;$CallDecisionEngine/apr&quot;/>&#xa;            &lt;/tns:apr>&#xa;            &lt;tns:approvedAmount>&#xa;                &lt;xsl:value-of select=&quot;$CallDecisionEngine/approvedAmount&quot;/>&#xa;            &lt;/tns:approvedAmount>&#xa;            &lt;tns:approvedTermMonths>&#xa;                &lt;xsl:value-of select=&quot;$CallDecisionEngine/approvedTermMonths&quot;/>&#xa;            &lt;/tns:approvedTermMonths>&#xa;            &lt;tns:creditScore>&#xa;                &lt;xsl:value-of select=&quot;$CallBureauOrchestrator/tns3:selectedScore&quot;/>&#xa;            &lt;/tns:creditScore>&#xa;            &lt;xsl:if test=&quot;$CallBureauOrchestrator/tns3:equifaxScore&quot;>&#xa;                &lt;tns:equifaxScore>&#xa;                    &lt;xsl:value-of select=&quot;$CallBureauOrchestrator/tns3:equifaxScore&quot;/>&#xa;                &lt;/tns:equifaxScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns:singleBureau>&#xa;                &lt;xsl:value-of select=&quot;$CallBureauOrchestrator/tns3:singleBureau&quot;/>&#xa;            &lt;/tns:singleBureau>&#xa;            &lt;tns:decidedAt>&#xa;                &lt;xsl:value-of select=&quot;current-dateTime()&quot;/>&#xa;            &lt;/tns:decidedAt>&#xa;        &lt;/tns:CreditApplicationResponse>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns="http://xmlns.gmfin.example/credit/origination/application" xmlns:tns3="http://xmlns.gmfin.example/credit/origination/bureau" xmlns:tns8="http://xmlns.example.com/20190314093512PLT" version="2.0"&gt;&lt;xsl:param name="NormalizeApplicant"/&gt;&lt;xsl:param name="CallBureauOrchestrator"/&gt;&lt;xsl:param name="CallDecisionEngine"/&gt;&lt;xsl:template name="postOut-input" match="/"&gt;&lt;tns8:postResponse&gt;&lt;item&gt;&lt;tns:CreditApplicationResponse&gt;&lt;tns:applicationId&gt;&lt;xsl:value-of select="$NormalizeApplicant/tns:applicationId"/&gt;&lt;/tns:applicationId&gt;&lt;tns:decision&gt;&lt;xsl:value-of select="$CallDecisionEngine/decision"/&gt;&lt;/tns:decision&gt;&lt;xsl:if test="$CallDecisionEngine/tier"&gt;&lt;tns:tier&gt;&lt;xsl:value-of select="$CallDecisionEngine/tier"/&gt;&lt;/tns:tier&gt;&lt;/xsl:if&gt;&lt;tns:apr&gt;&lt;xsl:value-of select="$CallDecisionEngine/apr"/&gt;&lt;/tns:apr&gt;&lt;tns:approvedAmount&gt;&lt;xsl:value-of select="$CallDecisionEngine/approvedAmount"/&gt;&lt;/tns:approvedAmount&gt;&lt;tns:approvedTermMonths&gt;&lt;xsl:value-of select="$CallDecisionEngine/approvedTermMonths"/&gt;&lt;/tns:approvedTermMonths&gt;&lt;tns:creditScore&gt;&lt;xsl:value-of select="$CallBureauOrchestrator/tns3:selectedScore"/&gt;&lt;/tns:creditScore&gt;&lt;xsl:if test="$CallBureauOrchestrator/tns3:equifaxScore"&gt;&lt;tns:equifaxScore&gt;&lt;xsl:value-of select="$CallBureauOrchestrator/tns3:equifaxScore"/&gt;&lt;/tns:equifaxScore&gt;&lt;/xsl:if&gt;&lt;tns:singleBureau&gt;&lt;xsl:value-of select="$CallBureauOrchestrator/tns3:singleBureau"/&gt;&lt;/tns:singleBureau&gt;&lt;tns:decidedAt&gt;&lt;xsl:value-of select="current-dateTime()"/&gt;&lt;/tns:decidedAt&gt;&lt;/tns:CreditApplicationResponse&gt;&lt;/item&gt;&lt;/tns8:postResponse&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                <bpws:targets>
+                                    <bpws:target linkName="CallDecisionEngineTopostOut"/>
+                                </bpws:targets>
+                            </bpws:reply>
+                        </bpws:flow>
+                    </bpws:scope>
+                </bpws:onMessage>
+            </bpws:pick>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

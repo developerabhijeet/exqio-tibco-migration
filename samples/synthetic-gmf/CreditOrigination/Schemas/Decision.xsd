@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xs:schema xmlns:tns="http://xmlns.gmfin.example/credit/origination/decision" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="unqualified" targetNamespace="http://xmlns.gmfin.example/credit/origination/decision" version="1.0">
+  <xs:annotation>
+    <xs:documentation>Credit decision interface. Local elements are unqualified (legacy contract shared with the decision rules team).</xs:documentation>
+  </xs:annotation>
+  <xs:element name="DecisionRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="parameters">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="applicationId" type="xs:string"/>
+              <xs:element name="ssn" type="xs:string"/>
+              <xs:element name="dealerId" type="xs:string"/>
+              <xs:element name="vin" type="xs:string"/>
+              <xs:element name="creditScore" type="xs:int"/>
+              <xs:element name="singleBureau" type="xs:boolean"/>
+              <xs:element minOccurs="0" name="monthlyIncome" type="xs:decimal"/>
+              <xs:element name="monthlyDebt" type="xs:decimal"/>
+              <xs:element name="requestedAmount" type="xs:decimal"/>
+              <xs:element name="requestedTermMonths" type="xs:int"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="DtiResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="dti" type="xs:decimal"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="TierAssignment">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element minOccurs="0" name="tier" type="xs:string"/>
+        <xs:element name="decision" type="xs:string"/>
+        <xs:element name="apr" type="xs:decimal"/>
+        <xs:element name="approvedAmount" type="xs:decimal"/>
+        <xs:element name="approvedTermMonths" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="DecisionResult">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="decision" type="xs:string"/>
+        <xs:element minOccurs="0" name="tier" type="xs:string"/>
+        <xs:element name="apr" type="xs:decimal"/>
+        <xs:element name="approvedAmount" type="xs:decimal"/>
+        <xs:element name="approvedTermMonths" type="xs:int"/>
+        <xs:element name="dti" type="xs:decimal"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

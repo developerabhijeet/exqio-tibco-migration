@@ -1,0 +1,727 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no"
+    name="creditorigination.BureauOrchestrator" suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20190318141007"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://xmlns.gmfin.example/credit/origination/bureau"
+    xmlns:ns1="activity.jsonRender.output+0ea08229-f3e7-5be2-8eee-f9d20ade8f66+ActivityOutputType"
+    xmlns:ns10="http://xmlns.gmfin.example/credit/origination/faults"
+    xmlns:ns2="http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput"
+    xmlns:ns3="http://tns.tibco.com/bw/activity/sendhttprequest/output+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityOutput"
+    xmlns:ns4="http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput"
+    xmlns:ns5="http://tns.tibco.com/bw/activity/sendhttprequest/output+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityOutput"
+    xmlns:ns6="activity.jsonParser.input+e00550fe-c489-5904-990b-591c61c1502e+ActivityInputType"
+    xmlns:ns7="activity.jsonParser.input+ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf+ActivityInputType"
+    xmlns:ns8="http://www.tibco.com/namespaces/tnt/plugins/jdbc+567520f8-c238-56d8-b4f1-a846df00ec4d+input"
+    xmlns:ns9="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <schema targetNamespace="activity.jsonRender.output+0ea08229-f3e7-5be2-8eee-f9d20ade8f66+ActivityOutputType"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="activity.jsonRender.output+0ea08229-f3e7-5be2-8eee-f9d20ade8f66+ActivityOutputType">
+            <complexType name="ActivityOutputClassType">
+                <sequence>
+                    <element form="unqualified" name="jsonString" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="ActivityOutputClass" type="tns:ActivityOutputClassType"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput">
+            <complexType name="inputHeadersType">
+                <sequence>
+                    <element minOccurs="0" name="Accept" type="string"/>
+                    <element minOccurs="0" name="Content-Type" type="string"/>
+                    <element minOccurs="0" name="X-Request-Id" type="string"/>
+                </sequence>
+            </complexType>
+            <complexType name="RequestActivityInput">
+                <sequence>
+                    <element minOccurs="0" name="Host" type="string"/>
+                    <element minOccurs="0" name="Port" type="int"/>
+                    <element minOccurs="0" name="Method" type="string"/>
+                    <element minOccurs="0" name="RequestURI" type="string"/>
+                    <element minOccurs="0" name="PostData" type="string"/>
+                    <element minOccurs="0" name="QueryString" type="string"/>
+                    <element minOccurs="0" name="Timeout" type="int"/>
+                    <element minOccurs="0" name="Headers" type="tns:inputHeadersType"/>
+                </sequence>
+            </complexType>
+            <element name="RequestActivityInput" type="tns:RequestActivityInput"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://tns.tibco.com/bw/activity/sendhttprequest/output+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityOutput"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://tns.tibco.com/bw/activity/sendhttprequest/output+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityOutput">
+            <complexType name="statusLineType">
+                <sequence>
+                    <element name="httpVersion" type="string"/>
+                    <element name="statusCode" type="int"/>
+                    <element name="reasonPhrase" type="string"/>
+                </sequence>
+            </complexType>
+            <complexType name="RequestActivityOutput">
+                <sequence>
+                    <element minOccurs="0" name="Header" type="string"/>
+                    <element minOccurs="0" name="statusLine" type="tns:statusLineType"/>
+                    <element minOccurs="0" name="asciiContent" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="RequestActivityOutput" type="tns:RequestActivityOutput"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput">
+            <complexType name="inputHeadersType">
+                <sequence>
+                    <element minOccurs="0" name="Accept" type="string"/>
+                    <element minOccurs="0" name="Content-Type" type="string"/>
+                    <element minOccurs="0" name="X-Request-Id" type="string"/>
+                </sequence>
+            </complexType>
+            <complexType name="RequestActivityInput">
+                <sequence>
+                    <element minOccurs="0" name="Host" type="string"/>
+                    <element minOccurs="0" name="Port" type="int"/>
+                    <element minOccurs="0" name="Method" type="string"/>
+                    <element minOccurs="0" name="RequestURI" type="string"/>
+                    <element minOccurs="0" name="PostData" type="string"/>
+                    <element minOccurs="0" name="QueryString" type="string"/>
+                    <element minOccurs="0" name="Timeout" type="int"/>
+                    <element minOccurs="0" name="Headers" type="tns:inputHeadersType"/>
+                </sequence>
+            </complexType>
+            <element name="RequestActivityInput" type="tns:RequestActivityInput"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://tns.tibco.com/bw/activity/sendhttprequest/output+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityOutput"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://tns.tibco.com/bw/activity/sendhttprequest/output+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityOutput">
+            <complexType name="statusLineType">
+                <sequence>
+                    <element name="httpVersion" type="string"/>
+                    <element name="statusCode" type="int"/>
+                    <element name="reasonPhrase" type="string"/>
+                </sequence>
+            </complexType>
+            <complexType name="RequestActivityOutput">
+                <sequence>
+                    <element minOccurs="0" name="Header" type="string"/>
+                    <element minOccurs="0" name="statusLine" type="tns:statusLineType"/>
+                    <element minOccurs="0" name="asciiContent" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="RequestActivityOutput" type="tns:RequestActivityOutput"/>
+        </schema>
+        <schema targetNamespace="activity.jsonParser.input+e00550fe-c489-5904-990b-591c61c1502e+ActivityInputType"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="activity.jsonParser.input+e00550fe-c489-5904-990b-591c61c1502e+ActivityInputType">
+            <complexType name="ActivityInputClassType">
+                <sequence>
+                    <element form="unqualified" name="jsonString" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="ActivityInputClass" type="tns:ActivityInputClassType"/>
+        </schema>
+        <schema targetNamespace="activity.jsonParser.input+ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf+ActivityInputType"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="activity.jsonParser.input+ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf+ActivityInputType">
+            <complexType name="ActivityInputClassType">
+                <sequence>
+                    <element form="unqualified" name="jsonString" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="ActivityInputClass" type="tns:ActivityInputClassType"/>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+567520f8-c238-56d8-b4f1-a846df00ec4d+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+567520f8-c238-56d8-b4f1-a846df00ec4d+input">
+            <element name="jdbcUpdateActivityInput">
+                <complexType>
+                    <sequence>
+                        <element minOccurs="0" name="applicationId" type="string"/>
+                        <element minOccurs="0" name="equifaxScore" type="int"/>
+                        <element minOccurs="0" name="transUnionScore" type="int"/>
+                        <element minOccurs="0" name="selectedScore" type="int"/>
+                        <element minOccurs="0" name="singleBureau" type="boolean"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc"
+            xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="jdbcUpdateActivityOutput">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="noOfUpdates" type="xs:int"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="true" createdBy="bwdev01"
+        createdOn="Mon Mar 18 14:10:07 EDT 2019"
+        description="Pulls Equifax and TransUnion in parallel and keeps the higher score."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context=""
+        input="{http://xmlns.gmfin.example/credit/origination/bureau}BureauRequest"
+        output="{http://xmlns.gmfin.example/credit/origination/bureau}BureauResult"/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/bureau"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/faults"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput"
+            prefix="tns3"/>
+        <tibex:namespaceItem namespace="activity.jsonParser.input+e00550fe-c489-5904-990b-591c61c1502e+ActivityInputType"
+            prefix="tns4"/>
+        <tibex:namespaceItem namespace="activity.jsonParser.input+ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf+ActivityInputType"
+            prefix="tns5"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+567520f8-c238-56d8-b4f1-a846df00ec4d+input"
+            prefix="tns6"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/bureau"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/credit/origination/faults"/>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:BureauRequest" name="Start"
+            sca-bpel:internal="true" tibex:parameter="in"/>
+        <bpws:variable element="ns0:BureauResult" name="End-input"
+            sca-bpel:internal="true" tibex:parameter="out"/>
+        <bpws:variable name="equifaxClient" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/bw/models/sharedresource/httpclient}HttpClientConfiguration"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>creditorigination.EquifaxClient</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable name="transUnionClient" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/bw/models/sharedresource/httpclient}HttpClientConfiguration"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>creditorigination.TransUnionClient</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>creditorigination.GMFOriginationDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns0:BureauScoreRequest"
+            name="RenderBureauRequest-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns1:ActivityOutputClass"
+            name="RenderBureauRequest" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:RequestActivityInput"
+            name="PullEquifax-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns3:RequestActivityOutput" name="PullEquifax"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns4:RequestActivityInput"
+            name="PullTransUnion-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns5:RequestActivityOutput" name="PullTransUnion"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns6:ActivityInputClass"
+            name="ParseEquifax-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:BureauScore" name="ParseEquifax"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns7:ActivityInputClass"
+            name="ParseTransUnion-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:BureauScore" name="ParseTransUnion"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:BureauResult" name="MergeScores-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns0:BureauResult" name="MergeScores"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns8:jdbcUpdateActivityInput"
+            name="RecordBureauPull-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns9:jdbcUpdateActivityOutput"
+            name="RecordBureauPull" sca-bpel:internal="true"/>
+        <bpws:variable element="ns10:BureauUnavailableFault"
+            name="ThrowBureauUnavailable-input" sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links>
+                <bpws:link name="StartToRenderBureauRequest"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="RenderBureauRequestToParallelBureauPulls"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="ParallelBureauPullsToMergeScores"
+                    tibex:linkType="SUCCESS"/>
+                <bpws:link name="MergeScoresToThrowBureauUnavailable"
+                    tibex:label="No bureau responded"
+                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                <bpws:link name="MergeScoresToRecordBureauPull" tibex:label=""
+                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                <bpws:link name="RecordBureauPullToEnd" tibex:linkType="SUCCESS"/>
+            </bpws:links>
+            <bpws:extensionActivity>
+                <tibex:receiveEvent createInstance="yes" eventTimeout="0"
+                    name="Start"
+                    tibex:xpdlId="bebe13cc-503c-565c-a38a-d2a9876ffdc5"
+                    variable="Start"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:sources>
+                        <bpws:source linkName="StartToRenderBureauRequest"/>
+                    </bpws:sources>
+                    <tibex:eventSource>
+                        <tibex:StartEvent xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"/>
+                    </tibex:eventSource>
+                </tibex:receiveEvent>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="RenderBureauRequest-input"
+                    name="RenderBureauRequest"
+                    outputVariable="RenderBureauRequest"
+                    tibex:xpdlId="0ea08229-f3e7-5be2-8eee-f9d20ade8f66"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="StartToRenderBureauRequest"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="RenderBureauRequestToParallelBureauPulls"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;RenderBureauRequest-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:BureauScoreRequest>&#xa;            &lt;tns:ssn>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:ssn&quot;/>&#xa;            &lt;/tns:ssn>&#xa;            &lt;tns:firstName>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:firstName&quot;/>&#xa;            &lt;/tns:firstName>&#xa;            &lt;tns:lastName>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:lastName&quot;/>&#xa;            &lt;/tns:lastName>&#xa;            &lt;tns:dateOfBirth>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:dateOfBirth&quot;/>&#xa;            &lt;/tns:dateOfBirth>&#xa;        &lt;/tns:BureauScoreRequest>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.restjson.JsonRender"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:restjson="http://ns.tibco.com/bw/palette/restjson"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/restjson#//JsonRender"/>
+                                    <value jsonOutputStyle="None"
+                                        schemaType="Xsd"
+                                        xsi:type="restjson:JsonRender">
+                                        <inputEditorElement href="platform:/resource/CreditOrigination/Schemas/Bureau.xsd#//BureauScoreRequest;XSDElementDeclaration"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:scope name="ParallelBureauPulls" tibex:group="layout"
+                tibex:xpdlId="fa5436e5-daf8-5193-8d63-22a21a54b704">
+                <bpws:targets>
+                    <bpws:target linkName="RenderBureauRequestToParallelBureauPulls"/>
+                </bpws:targets>
+                <bpws:sources>
+                    <bpws:source linkName="ParallelBureauPullsToMergeScores"/>
+                </bpws:sources>
+                <bpws:flow name="flow1">
+                    <bpws:links>
+                        <bpws:link name="PullEquifaxToParseEquifax"
+                            tibex:linkType="SUCCESS"/>
+                        <bpws:link name="PullEquifaxToEquifaxUnavailable"
+                            tibex:linkType="ERROR"/>
+                        <bpws:link name="PullTransUnionToParseTransUnion"
+                            tibex:linkType="SUCCESS"/>
+                        <bpws:link name="PullTransUnionToTransUnionUnavailable"
+                            tibex:linkType="ERROR"/>
+                    </bpws:links>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="PullEquifax-input"
+                            name="PullEquifax" outputVariable="PullEquifax"
+                            tibex:xpdlId="1ef829a4-692c-5246-8c25-c9ed4690b38a"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:sources>
+                                <bpws:source linkName="PullEquifaxToParseEquifax"/>
+                                <bpws:source linkName="PullEquifaxToEquifaxUnavailable"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:tns2=&quot;http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;RenderBureauRequest&quot;/>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;PullEquifax-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:RequestActivityInput>&#xa;            &lt;Method>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;POST&amp;quot;&quot;/>&#xa;            &lt;/Method>&#xa;            &lt;RequestURI>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;/consumer-credit/v2/scores&amp;quot;&quot;/>&#xa;            &lt;/RequestURI>&#xa;            &lt;PostData>&#xa;                &lt;xsl:value-of select=&quot;$RenderBureauRequest/jsonString&quot;/>&#xa;            &lt;/PostData>&#xa;            &lt;Headers>&#xa;                &lt;Accept>&#xa;                    &lt;xsl:value-of select=&quot;&amp;quot;application/json&amp;quot;&quot;/>&#xa;                &lt;/Accept>&#xa;                &lt;Content-Type>&#xa;                    &lt;xsl:value-of select=&quot;&amp;quot;application/json&amp;quot;&quot;/>&#xa;                &lt;/Content-Type>&#xa;                &lt;X-Request-Id>&#xa;                    &lt;xsl:value-of select=&quot;$Start/tns:applicationId&quot;/>&#xa;                &lt;/X-Request-Id>&#xa;            &lt;/Headers>&#xa;        &lt;/tns2:RequestActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.http.sendHTTPRequest"
+                                    version="6.0.0.20132205"
+                                    xmlns:RequestActivityInput="http://tns.tibco.com/bw/activity/sendhttprequest/input+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityInput"
+                                    xmlns:RequestActivityOutput="http://tns.tibco.com/bw/activity/sendhttprequest/output+1ef829a4-692c-5246-8c25-c9ed4690b38a+RequestActivityOutput"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:http="http://ns.tibco.com/bw/palette/http"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/http#//SendHTTPRequest"/>
+                                            <value httpClientResource="equifaxClient"
+                                                inputHeadersQName="RequestActivityInput:inputHeadersType"
+                                                outputHeadersQName="RequestActivityOutput:outputHeadersType"
+                                                postDataAs="String"
+                                                xsi:type="http:SendHTTPRequest"/>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="ParseEquifax-input"
+                            name="ParseEquifax" outputVariable="ParseEquifax"
+                            tibex:xpdlId="e00550fe-c489-5904-990b-591c61c1502e"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="PullEquifaxToParseEquifax"/>
+                            </bpws:targets>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns4=&quot;activity.jsonParser.input+e00550fe-c489-5904-990b-591c61c1502e+ActivityInputType&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;PullEquifax&quot;/>&#xa;    &lt;xsl:template name=&quot;ParseEquifax-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns4:ActivityInputClass>&#xa;            &lt;jsonString>&#xa;                &lt;xsl:value-of select=&quot;$PullEquifax/asciiContent&quot;/>&#xa;            &lt;/jsonString>&#xa;        &lt;/tns4:ActivityInputClass>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.restjson.JsonParser"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:restjson="http://ns.tibco.com/bw/palette/restjson"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/restjson#//JsonParser"/>
+                                            <value jsonInputStyle="None"
+                                                schemaType="Xsd"
+                                                xsi:type="restjson:JsonParser">
+                                                <outputEditorElement href="platform:/resource/CreditOrigination/Schemas/Bureau.xsd#//BureauScore;XSDElementDeclaration"/>
+                                            </value>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:empty name="EquifaxUnavailable"
+                        tibex:xpdlId="e00507f8-6421-543c-8101-94488ba500d0">
+                        <bpws:targets>
+                            <bpws:target linkName="PullEquifaxToEquifaxUnavailable"/>
+                        </bpws:targets>
+                    </bpws:empty>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="PullTransUnion-input"
+                            name="PullTransUnion"
+                            outputVariable="PullTransUnion"
+                            tibex:xpdlId="d889ad25-500f-53bf-bfc1-5a9078ecb776"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:sources>
+                                <bpws:source linkName="PullTransUnionToParseTransUnion"/>
+                                <bpws:source linkName="PullTransUnionToTransUnionUnavailable"/>
+                            </bpws:sources>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:tns3=&quot;http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;RenderBureauRequest&quot;/>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;PullTransUnion-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:RequestActivityInput>&#xa;            &lt;Method>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;POST&amp;quot;&quot;/>&#xa;            &lt;/Method>&#xa;            &lt;RequestURI>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;/credit-report/v1/score&amp;quot;&quot;/>&#xa;            &lt;/RequestURI>&#xa;            &lt;PostData>&#xa;                &lt;xsl:value-of select=&quot;$RenderBureauRequest/jsonString&quot;/>&#xa;            &lt;/PostData>&#xa;            &lt;Headers>&#xa;                &lt;Accept>&#xa;                    &lt;xsl:value-of select=&quot;&amp;quot;application/json&amp;quot;&quot;/>&#xa;                &lt;/Accept>&#xa;                &lt;Content-Type>&#xa;                    &lt;xsl:value-of select=&quot;&amp;quot;application/json&amp;quot;&quot;/>&#xa;                &lt;/Content-Type>&#xa;                &lt;X-Request-Id>&#xa;                    &lt;xsl:value-of select=&quot;$Start/tns:applicationId&quot;/>&#xa;                &lt;/X-Request-Id>&#xa;            &lt;/Headers>&#xa;        &lt;/tns3:RequestActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.http.sendHTTPRequest"
+                                    version="6.0.0.20132205"
+                                    xmlns:RequestActivityInput="http://tns.tibco.com/bw/activity/sendhttprequest/input+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityInput"
+                                    xmlns:RequestActivityOutput="http://tns.tibco.com/bw/activity/sendhttprequest/output+d889ad25-500f-53bf-bfc1-5a9078ecb776+RequestActivityOutput"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:http="http://ns.tibco.com/bw/palette/http"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/http#//SendHTTPRequest"/>
+                                            <value httpClientResource="transUnionClient"
+                                                inputHeadersQName="RequestActivityInput:inputHeadersType"
+                                                outputHeadersQName="RequestActivityOutput:outputHeadersType"
+                                                postDataAs="String"
+                                                xsi:type="http:SendHTTPRequest"/>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:extensionActivity>
+                        <tibex:activityExtension inputVariable="ParseTransUnion-input"
+                            name="ParseTransUnion"
+                            outputVariable="ParseTransUnion"
+                            tibex:xpdlId="ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf"
+                            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                            <bpws:targets>
+                                <bpws:target linkName="PullTransUnionToParseTransUnion"/>
+                            </bpws:targets>
+                            <tibex:inputBindings>
+                                <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns5=&quot;activity.jsonParser.input+ad85f7e2-7077-5e8f-bb04-7a39ece7c7cf+ActivityInputType&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;PullTransUnion&quot;/>&#xa;    &lt;xsl:template name=&quot;ParseTransUnion-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns5:ActivityInputClass>&#xa;            &lt;jsonString>&#xa;                &lt;xsl:value-of select=&quot;$PullTransUnion/asciiContent&quot;/>&#xa;            &lt;/jsonString>&#xa;        &lt;/tns5:ActivityInputClass>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                            </tibex:inputBindings>
+                            <tibex:config>
+                                <bwext:BWActivity activityTypeID="bw.restjson.JsonParser"
+                                    xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                    xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                    xmlns:restjson="http://ns.tibco.com/bw/palette/restjson"
+                                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                    <activityConfig>
+                                        <properties name="config"
+                                            xsi:type="activityconfig:EMFProperty">
+                                            <type href="http://ns.tibco.com/bw/palette/restjson#//JsonParser"/>
+                                            <value jsonInputStyle="None"
+                                                schemaType="Xsd"
+                                                xsi:type="restjson:JsonParser">
+                                                <outputEditorElement href="platform:/resource/CreditOrigination/Schemas/Bureau.xsd#//BureauScore;XSDElementDeclaration"/>
+                                            </value>
+                                        </properties>
+                                    </activityConfig>
+                                </bwext:BWActivity>
+                            </tibex:config>
+                        </tibex:activityExtension>
+                    </bpws:extensionActivity>
+                    <bpws:empty name="TransUnionUnavailable"
+                        tibex:xpdlId="4a40cc1c-dedc-5d81-ace0-9ad371075d7e">
+                        <bpws:targets>
+                            <bpws:target linkName="PullTransUnionToTransUnionUnavailable"/>
+                        </bpws:targets>
+                    </bpws:empty>
+                </bpws:flow>
+            </bpws:scope>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="MergeScores-input"
+                    name="MergeScores" outputVariable="MergeScores"
+                    tibex:xpdlId="f6b3972e-662d-5bf7-b805-d60b511fcf39"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="ParallelBureauPullsToMergeScores"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="MergeScoresToThrowBureauUnavailable">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="xsd:integer($MergeScores/tns:bureauCount) = 0"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[xsd:integer($MergeScores/tns:bureauCount) = 0]]></bpws:transitionCondition>
+                        </bpws:source>
+                        <bpws:source linkName="MergeScoresToRecordBureauPull">
+                            <tibex:DesignExpression>
+                                <tibex:expression expression="##otherwise##"
+                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                            </tibex:DesignExpression>
+                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                        </bpws:source>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:xsd=&quot;http://www.w3.org/2001/XMLSchema&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;ParseEquifax&quot;/>&#xa;    &lt;xsl:param name=&quot;ParseTransUnion&quot;/>&#xa;    &lt;xsl:template name=&quot;MergeScores-input&quot; match=&quot;/&quot;>&#xa;        &lt;xsl:variable name=&quot;equifax&quot; select=&quot;$ParseEquifax/tns:score&quot;/>&#xa;        &lt;xsl:variable name=&quot;transUnion&quot; select=&quot;$ParseTransUnion/tns:score&quot;/>&#xa;        &lt;tns:BureauResult>&#xa;            &lt;xsl:if test=&quot;exists($equifax)&quot;>&#xa;                &lt;tns:equifaxScore>&#xa;                    &lt;xsl:value-of select=&quot;$equifax&quot;/>&#xa;                &lt;/tns:equifaxScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;xsl:if test=&quot;exists($transUnion)&quot;>&#xa;                &lt;tns:transUnionScore>&#xa;                    &lt;xsl:value-of select=&quot;$transUnion&quot;/>&#xa;                &lt;/tns:transUnionScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;xsl:if test=&quot;exists(($equifax, $transUnion))&quot;>&#xa;                &lt;tns:selectedScore>&#xa;                    &lt;xsl:value-of select=&quot;max((xsd:integer($equifax), xsd:integer($transUnion)))&quot;/>&#xa;                &lt;/tns:selectedScore>&#xa;                &lt;tns:selectedBureau>&#xa;                    &lt;xsl:value-of select=&quot;if (empty($transUnion) or (exists($equifax) and xsd:integer($equifax) >= xsd:integer($transUnion))) then 'EQUIFAX' else 'TRANSUNION'&quot;/>&#xa;                &lt;/tns:selectedBureau>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns:singleBureau>&#xa;                &lt;xsl:value-of select=&quot;count(($equifax, $transUnion)) = 1&quot;/>&#xa;            &lt;/tns:singleBureau>&#xa;            &lt;tns:bureauCount>&#xa;                &lt;xsl:value-of select=&quot;count(($equifax, $transUnion))&quot;/>&#xa;            &lt;/tns:bureauCount>&#xa;        &lt;/tns:BureauResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.generalactivities.mapper"
+                            version="6.0.0.001"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:generalactivities="http://ns.tibco.com/bw/palette/generalactivities"
+                            xmlns:ns0="http://xmlns.gmfin.example/credit/origination/bureau"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/generalactivities#//Mapper"/>
+                                    <value inputQName="ns0:BureauResult"
+                                        xsi:type="generalactivities:Mapper"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:throw faultName="ns10:BureauUnavailableFault"
+                faultVariable="ThrowBureauUnavailable-input"
+                name="ThrowBureauUnavailable"
+                tibex:xpdlId="e86e3470-1729-55a1-b737-0bbd883c00cf">
+                <tibex:inputBindings>
+                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/credit/origination/faults&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:template name=&quot;ThrowBureauUnavailable-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:BureauUnavailableFault>&#xa;            &lt;tns1:applicationId>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:applicationId&quot;/>&#xa;            &lt;/tns1:applicationId>&#xa;            &lt;tns1:message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;Neither Equifax nor TransUnion returned a score&amp;quot;&quot;/>&#xa;            &lt;/tns1:message>&#xa;        &lt;/tns1:BureauUnavailableFault>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                </tibex:inputBindings>
+                <bpws:targets>
+                    <bpws:target linkName="MergeScoresToThrowBureauUnavailable"/>
+                </bpws:targets>
+            </bpws:throw>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="RecordBureauPull-input"
+                    name="RecordBureauPull" outputVariable="RecordBureauPull"
+                    tibex:xpdlId="567520f8-c238-56d8-b4f1-a846df00ec4d"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="MergeScoresToRecordBureauPull"/>
+                    </bpws:targets>
+                    <bpws:sources>
+                        <bpws:source linkName="RecordBureauPullToEnd"/>
+                    </bpws:sources>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; xmlns:tns6=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+567520f8-c238-56d8-b4f1-a846df00ec4d+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;Start&quot;/>&#xa;    &lt;xsl:param name=&quot;MergeScores&quot;/>&#xa;    &lt;xsl:template name=&quot;RecordBureauPull-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns6:jdbcUpdateActivityInput>&#xa;            &lt;applicationId>&#xa;                &lt;xsl:value-of select=&quot;$Start/tns:applicationId&quot;/>&#xa;            &lt;/applicationId>&#xa;            &lt;xsl:if test=&quot;$MergeScores/tns:equifaxScore&quot;>&#xa;                &lt;equifaxScore>&#xa;                    &lt;xsl:value-of select=&quot;$MergeScores/tns:equifaxScore&quot;/>&#xa;                &lt;/equifaxScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;xsl:if test=&quot;$MergeScores/tns:transUnionScore&quot;>&#xa;                &lt;transUnionScore>&#xa;                    &lt;xsl:value-of select=&quot;$MergeScores/tns:transUnionScore&quot;/>&#xa;                &lt;/transUnionScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;selectedScore>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:selectedScore&quot;/>&#xa;            &lt;/selectedScore>&#xa;            &lt;singleBureau>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:singleBureau&quot;/>&#xa;            &lt;/singleBureau>&#xa;        &lt;/tns6:jdbcUpdateActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.jdbc.update"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCUpdateActivity"/>
+                                    <value sharedResourceProperty="jdbcProperty"
+                                        sqlStatement="insert into gmf.bureau_pull&#xa;  (application_id, equifax_score, transunion_score, selected_score, single_bureau, pulled_at)&#xa;values (?, ?, ?, ?, ?, current_timestamp)"
+                                        timeout="10"
+                                        xsi:type="jdbcPalette:JDBCUpdateActivity">
+                                        <PreparedParameters DataType="12"
+                                            DataTypeDisplayValue="VARCHAR"
+                                            ParameterName="applicationId"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="equifaxScore"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="transUnionScore"/>
+                                        <PreparedParameters DataType="4"
+                                            DataTypeDisplayValue="INTEGER"
+                                            ParameterName="selectedScore"/>
+                                        <PreparedParameters DataType="16"
+                                            DataTypeDisplayValue="BOOLEAN"
+                                            ParameterName="singleBureau"/>
+                                    </value>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+            <bpws:extensionActivity>
+                <tibex:activityExtension inputVariable="End-input" name="End"
+                    tibex:xpdlId="32f147e3-65ff-5e15-aedc-a582376c9d4f"
+                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                    <bpws:targets>
+                        <bpws:target linkName="RecordBureauPullToEnd"/>
+                    </bpws:targets>
+                    <tibex:inputBindings>
+                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.gmfin.example/credit/origination/bureau&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;MergeScores&quot;/>&#xa;    &lt;xsl:template name=&quot;End-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns:BureauResult>&#xa;            &lt;xsl:if test=&quot;$MergeScores/tns:equifaxScore&quot;>&#xa;                &lt;tns:equifaxScore>&#xa;                    &lt;xsl:value-of select=&quot;$MergeScores/tns:equifaxScore&quot;/>&#xa;                &lt;/tns:equifaxScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;xsl:if test=&quot;$MergeScores/tns:transUnionScore&quot;>&#xa;                &lt;tns:transUnionScore>&#xa;                    &lt;xsl:value-of select=&quot;$MergeScores/tns:transUnionScore&quot;/>&#xa;                &lt;/tns:transUnionScore>&#xa;            &lt;/xsl:if>&#xa;            &lt;tns:selectedScore>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:selectedScore&quot;/>&#xa;            &lt;/tns:selectedScore>&#xa;            &lt;tns:selectedBureau>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:selectedBureau&quot;/>&#xa;            &lt;/tns:selectedBureau>&#xa;            &lt;tns:singleBureau>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:singleBureau&quot;/>&#xa;            &lt;/tns:singleBureau>&#xa;            &lt;tns:bureauCount>&#xa;                &lt;xsl:value-of select=&quot;$MergeScores/tns:bureauCount&quot;/>&#xa;            &lt;/tns:bureauCount>&#xa;        &lt;/tns:BureauResult>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                    </tibex:inputBindings>
+                    <tibex:config>
+                        <bwext:BWActivity activityTypeID="bw.internal.end"
+                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                            xmlns:internalactivities="http://ns.tibco.com/bw/core/internalactivity"
+                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                            <activityConfig>
+                                <properties name="config"
+                                    xsi:type="activityconfig:EMFProperty">
+                                    <type href="http://ns.tibco.com/bw/core/internalactivity#//End"/>
+                                    <value xsi:type="internalactivities:End"/>
+                                </properties>
+                            </activityConfig>
+                        </bwext:BWActivity>
+                    </tibex:config>
+                </tibex:activityExtension>
+            </bpws:extensionActivity>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>

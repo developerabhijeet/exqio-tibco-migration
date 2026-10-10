@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jndi:namedResource xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:httpconnector="http://xsd.tns.tibco.com/bw/models/sharedresource/httpconnector" xmlns:jndi="http://xsd.tns.tibco.com/amf/models/sharedresource/jndi" xmi:id="_Rre6mLUy4M2N95ZwJr9emg" name="creditorigination.ApplicationsConnector" type="httpconnector:HttpConnectorConfiguration">
+  <jndi:configuration xsi:type="httpconnector:HttpConnectorConfiguration" xmi:id="_QKobMaB2hJ0Xwx-uJNiaSA" port="9081">
+    <substitutionBindings xmi:id="_5wo5JMM3LiB5MchIB2Bixw" template="host" propName="BW.HOST.NAME"/>
+    <substitutionBindings xmi:id="_rBtPvhTTUPeJSVjNp3kB2w" template="port" propName="ORIGINATION.HTTP.PORT"/>
+  </jndi:configuration>
+</jndi:namedResource>

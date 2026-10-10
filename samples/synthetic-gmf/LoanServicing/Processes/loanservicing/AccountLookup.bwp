@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpws:process exitOnStandardFault="no" name="loanservicing.AccountLookup"
+    suppressJoinFailure="yes"
+    targetNamespace="http://xmlns.example.com/20200615113902"
+    xmlns:bpws="http://docs.oasis-open.org/wsbpel/2.0/process/executable"
+    xmlns:info="http://www.tibco.com/bw/process/info"
+    xmlns:ns="http://www.tibco.com/pe/EngineTypes"
+    xmlns:ns0="http://xmlns.example.com/20200615113902PLT"
+    xmlns:ns1="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+input"
+    xmlns:ns2="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+output"
+    xmlns:sca="http://docs.oasis-open.org/ns/opencsa/sca/200912"
+    xmlns:sca-bpel="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"
+    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+    xmlns:tibprop="http://ns.tibco.com/bw/property"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <tibex:Types>
+        <xs:schema attributeFormDefault="unqualified"
+            elementFormDefault="qualified"
+            targetNamespace="http://www.tibco.com/pe/EngineTypes"
+            xmlns:tns="http://www.tibco.com/pe/EngineTypes" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ErrorReport">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="FaultDetail">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="ActivityName" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="Data" type="tns:anydata"/>
+                    <xs:element form="unqualified" name="Msg" type="xs:string"/>
+                    <xs:element form="unqualified" name="MsgCode" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessStack" type="xs:string"/>
+                    <xs:element form="unqualified" name="StackTrace" type="xs:string"/>
+                    <xs:element form="unqualified" name="FullClass" type="xs:string"/>
+                    <xs:element form="unqualified" name="Class" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType block="extension restriction"
+                final="extension restriction" name="ProcessContext">
+                <xs:sequence>
+                    <xs:element form="unqualified" name="JobId" type="xs:string"/>
+                    <xs:element form="unqualified" name="ApplicationName" type="xs:string"/>
+                    <xs:element form="unqualified" name="EngineName" type="xs:string"/>
+                    <xs:element form="unqualified" name="ProcessInstanceId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="CustomJobId" type="xs:string"/>
+                    <xs:element form="unqualified" minOccurs="0" name="TrackingInfo" type="xs:string"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="anydata">
+                <xs:sequence>
+                    <xs:any namespace="##any" processContents="lax"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="ErrorReport" type="tns:ErrorReport"/>
+            <xs:element name="FaultDetail" type="tns:FaultDetail"/>
+            <xs:element name="ProcessContext" type="tns:ProcessContext"/>
+            <xs:element name="CorrelationValue" type="xs:string"/>
+        </xs:schema>
+        <wsdl:definitions
+            targetNamespace="http://xmlns.example.com/20200615113902PLT"
+            xmlns:extns="http://tns.tibco.com/bw/REST"
+            xmlns:extns2="http://xmlns.example.com/accounts/parameters"
+            xmlns:extns3="http://xmlns.gmfin.example/loan/servicing/account"
+            xmlns:plnk="http://docs.oasis-open.org/wsbpel/2.0/plnktype"
+            xmlns:tibex="http://www.tibco.com/bpel/2007/extensions"
+            xmlns:tns="http://xmlns.example.com/20200615113902PLT"
+            xmlns:vprop="http://docs.oasis-open.org/wsbpel/2.0/varprop"
+            xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+            <plnk:partnerLinkType name="partnerLinkType">
+                <plnk:role name="use" portType="tns:accounts"/>
+            </plnk:partnerLinkType>
+            <wsdl:import namespace="http://tns.tibco.com/bw/REST"/>
+            <wsdl:import namespace="http://xmlns.example.com/accounts/parameters"/>
+            <wsdl:import namespace="http://xmlns.gmfin.example/loan/servicing/account"/>
+            <wsdl:message name="getRequest">
+                <wsdl:part element="extns2:accountsGetParameters"
+                    name="parameters" tibex:source="bw.rest"/>
+                <wsdl:part element="extns:httpHeaders"
+                    name="httpHeaders" tibex:source="bw.rest"/>
+            </wsdl:message>
+            <wsdl:message name="getResponse">
+                <wsdl:part element="extns3:AccountSummary"
+                    name="item" tibex:hasMultipleNamespaces="false"/>
+            </wsdl:message>
+            <wsdl:message name="get4XXFaultMessage">
+                <wsdl:part element="extns:client4XXError" name="clientError"/>
+            </wsdl:message>
+            <wsdl:message name="get5XXFaultMessage">
+                <wsdl:part element="extns:server5XXError" name="serverError"/>
+            </wsdl:message>
+            <wsdl:portType name="accounts"
+                tibex:bw.rest.apipath="/accounts/{accountNumber}"
+                tibex:bw.rest.basepath="Accounts"
+                tibex:bw.rest.resource="Service Descriptors/loanservicing.AccountLookup-accounts.json"
+                tibex:bw.rest.resource.source="generated" tibex:source="bw.rest.service">
+                <wsdl:documentation>Loan account summary.</wsdl:documentation>
+                <wsdl:operation name="get">
+                    <wsdl:input message="tns:getRequest" name="getInput"/>
+                    <wsdl:output message="tns:getResponse" name="getOutput"/>
+                    <wsdl:fault message="tns:get4XXFaultMessage" name="clientFault"/>
+                    <wsdl:fault message="tns:get5XXFaultMessage" name="serverFault"/>
+                </wsdl:operation>
+            </wsdl:portType>
+        </wsdl:definitions>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+input"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+input">
+            <element name="jdbcQueryActivityInput">
+                <complexType>
+                    <sequence>
+                        <element name="accountNumber" type="string"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+        <schema elementFormDefault="unqualified"
+            targetNamespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+output"
+            xmlns="http://www.w3.org/2001/XMLSchema" xmlns:tns="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+output">
+            <complexType name="RecordType">
+                <sequence>
+                    <element minOccurs="0" name="account_number" type="string"/>
+                    <element minOccurs="0" name="principal_balance" type="decimal"/>
+                    <element minOccurs="0" name="next_due_date" type="date"/>
+                    <element minOccurs="0" name="days_past_due" type="int"/>
+                    <element minOccurs="0" name="status" type="string"/>
+                    <element minOccurs="0" name="first_name" type="string"/>
+                    <element minOccurs="0" name="last_name" type="string"/>
+                    <element minOccurs="0" name="ssn" type="string"/>
+                </sequence>
+            </complexType>
+            <element name="resultSet">
+                <complexType>
+                    <sequence>
+                        <element maxOccurs="unbounded" minOccurs="0" name="Record" type="tns:RecordType"/>
+                    </sequence>
+                </complexType>
+            </element>
+        </schema>
+    </tibex:Types>
+    <tibex:ProcessInfo callable="false" createdBy="bwdev01"
+        createdOn="Mon Jun 15 11:39:02 EDT 2020"
+        description="Account summary for servicing agents (GET /accounts/{accountNumber})."
+        extraErrorVars="true" modifiers="public"
+        productVersion="6.5.0 V63 2018-08-08" scalable="true" singleton="true"
+        stateless="true" type="IT"/>
+    <tibex:ProcessInterface context="" input="" output=""/>
+    <tibex:ProcessTemplateConfigurations/>
+    <notation:Diagram measurementUnit="Pixel" type="BWProcess"
+        xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <children type="2001">
+            <children type="5001"/>
+            <children type="3002">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <children type="3003">
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <element href="//0/@process"/>
+            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+        </children>
+        <styles xsi:type="notation:DiagramStyle"/>
+        <element href="//0"/>
+    </notation:Diagram>
+    <tibex:NamespaceRegistry enabled="true">
+        <tibex:namespaceItem namespace="http://xmlns.example.com/accounts/parameters"
+            prefix="tns"/>
+        <tibex:namespaceItem namespace="http://xmlns.gmfin.example/loan/servicing/account"
+            prefix="tns1"/>
+        <tibex:namespaceItem namespace="http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+input"
+            prefix="tns2"/>
+        <tibex:namespaceItem namespace="http://tns.tibco.com/bw/REST"
+            prefix="tns3"/>
+        <tibex:namespaceItem namespace="http://xmlns.example.com/20200615113902PLT"
+            prefix="tns4"/>
+    </tibex:NamespaceRegistry>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://tns.tibco.com/bw/REST"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.example.com/accounts/parameters"/>
+    <bpws:import importType="http://www.w3.org/2001/XMLSchema"
+        namespace="http://xmlns.gmfin.example/loan/servicing/account"/>
+    <bpws:partnerLinks>
+        <bpws:partnerLink myRole="use" name="accounts"
+            partnerLinkType="ns0:partnerLinkType" sca-bpel:ignore="false"
+            sca-bpel:service="accounts"/>
+    </bpws:partnerLinks>
+    <bpws:variables>
+        <bpws:variable element="ns:ProcessContext" name="_processContext"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:getRequest" name="get"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:getResponse" name="getOut-input"
+            sca-bpel:internal="true"/>
+        <bpws:variable element="ns:ErrorReport" name="_error"
+            sca-bpel:internal="true"/>
+        <bpws:variable name="jdbcProperty" sca-bpel:hotUpdate="false"
+            sca-bpel:privateProperty="true" sca-bpel:property="yes"
+            sca-bpel:sharedResourceType="{http://xsd.tns.tibco.com/amf/models/sharedresource/jdbc}JdbcDataSource"
+            type="xsd:string">
+            <bpws:from>
+                <bpws:literal>loanservicing.GMFServicingDB</bpws:literal>
+            </bpws:from>
+        </bpws:variable>
+        <bpws:variable element="ns1:jdbcQueryActivityInput"
+            name="QueryAccount-input" sca-bpel:internal="true"/>
+        <bpws:variable element="ns2:resultSet" name="QueryAccount"
+            sca-bpel:internal="true"/>
+        <bpws:variable messageType="ns0:get4XXFaultMessage"
+            name="ReplyAccountNotFound-input" sca-bpel:internal="true"/>
+    </bpws:variables>
+    <bpws:extensions>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.eclipse.org/gmf/runtime/1.0.2/notation"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bw/process/info"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca-bpel/200801"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://docs.oasis-open.org/ns/opencsa/sca/200912"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://ns.tibco.com/bw/property"/>
+        <bpws:extension mustUnderstand="no"
+            namespace="http://www.tibco.com/bpel/2007/extensions"/>
+    </bpws:extensions>
+    <bpws:scope name="scope">
+        <bpws:flow name="flow">
+            <bpws:links/>
+            <bpws:pick createInstance="yes" name="pick"
+                tibex:xpdlId="bb5f7a73-dffc-553c-8a9e-f94aafdf266b">
+                <bpws:onMessage operation="get" partnerLink="accounts"
+                    portType="ns0:accounts"
+                    tibex:xpdlId="3a091046-c752-5f77-a778-a2acf00ed9d1"
+                    variable="get">
+                    <bpws:scope name="scope1">
+                        <bpws:flow name="flow1">
+                            <bpws:links>
+                                <bpws:link name="QueryAccountTogetOut"
+                                    tibex:label="Found"
+                                    tibex:linkType="SUCCESSWITHCONDITION"/>
+                                <bpws:link name="QueryAccountToReplyAccountNotFound"
+                                    tibex:label=""
+                                    tibex:linkType="SUCCESSWITHNOCONDITION"/>
+                            </bpws:links>
+                            <bpws:empty name="OnMessageStart"
+                                tibex:constructor="onMessageStart"
+                                tibex:xpdlId="a567f6fe-4c3b-5919-b1e1-0f4c344b8e50"/>
+                            <bpws:empty name="OnMessageEnd"
+                                tibex:constructor="onMessageEnd"
+                                tibex:xpdlId="bc0b0be7-08cc-524c-8cbc-15683e104c3c"/>
+                            <bpws:extensionActivity>
+                                <tibex:activityExtension inputVariable="QueryAccount-input"
+                                    name="QueryAccount"
+                                    outputVariable="QueryAccount"
+                                    tibex:xpdlId="438307cf-96ba-589c-91af-ac753b336e24"
+                                    xmlns:tibex="http://www.tibco.com/bpel/2007/extensions">
+                                    <bpws:sources>
+                                        <bpws:source linkName="QueryAccountTogetOut">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="count($QueryAccount/Record) > 0"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[count($QueryAccount/Record) > 0]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                        <bpws:source linkName="QueryAccountToReplyAccountNotFound">
+                                            <tibex:DesignExpression>
+                                                <tibex:expression expression="##otherwise##"
+                                                    expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"/>
+                                            </tibex:DesignExpression>
+                                            <bpws:transitionCondition expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"><![CDATA[##otherwise##]]></bpws:transitionCondition>
+                                        </bpws:source>
+                                    </bpws:sources>
+                                    <tibex:inputBindings>
+                                        <tibex:inputBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns=&quot;http://xmlns.example.com/accounts/parameters&quot; xmlns:tns2=&quot;http://www.tibco.com/namespaces/tnt/plugins/jdbc+438307cf-96ba-589c-91af-ac753b336e24+input&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;get.parameters&quot;/>&#xa;    &lt;xsl:template name=&quot;QueryAccount-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns2:jdbcQueryActivityInput>&#xa;            &lt;accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$get.parameters/tns:accountNumber&quot;/>&#xa;            &lt;/accountNumber>&#xa;        &lt;/tns2:jdbcQueryActivityInput>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                            expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                    </tibex:inputBindings>
+                                    <tibex:config>
+                                        <bwext:BWActivity activityTypeID="bw.jdbc.JDBCQuery"
+                                            xmlns:activityconfig="http://tns.tibco.com/bw/model/activityconfig"
+                                            xmlns:bwext="http://tns.tibco.com/bw/model/core/bwext"
+                                            xmlns:jdbcPalette="http://ns.tibco.com/bw/palette/jdbc"
+                                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                                            <activityConfig>
+                                                <properties name="config"
+                                                    xsi:type="activityconfig:EMFProperty">
+                                                    <type href="http://ns.tibco.com/bw/palette/jdbc#//JDBCQueryActivity"/>
+                                                    <value maxRows="100"
+                                                        sharedResourceProperty="jdbcProperty"
+                                                        sqlStatement="select la.account_number, la.principal_balance, la.next_due_date, la.days_past_due, la.status,&#xa;       a.first_name, a.last_name, a.ssn&#xa;  from gmf.loan_account la&#xa;  join gmf.applicant a on a.applicant_id = la.applicant_id&#xa; where la.account_number = ?"
+                                                        timeout="10"
+                                                        xsi:type="jdbcPalette:JDBCQueryActivity">
+                                                        <PreparedParameters DataType="12"
+                                                            DataTypeDisplayValue="VARCHAR"
+                                                            ParameterName="accountNumber"/>
+                                                        <columnMetadata columnName="account_number"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="principal_balance"
+                                                            dataType="2"
+                                                            status="OptionalElement"
+                                                            typeName="numeric"/>
+                                                        <columnMetadata columnName="next_due_date"
+                                                            dataType="91"
+                                                            status="OptionalElement"
+                                                            typeName="date"/>
+                                                        <columnMetadata columnName="days_past_due"
+                                                            dataType="4"
+                                                            status="OptionalElement"
+                                                            typeName="int4"/>
+                                                        <columnMetadata columnName="status"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="first_name"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="last_name"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                        <columnMetadata columnName="ssn"
+                                                            dataType="12"
+                                                            status="OptionalElement"
+                                                            typeName="varchar"/>
+                                                    </value>
+                                                </properties>
+                                            </activityConfig>
+                                        </bwext:BWActivity>
+                                    </tibex:config>
+                                </tibex:activityExtension>
+                            </bpws:extensionActivity>
+                            <bpws:reply name="getOut" operation="get"
+                                partnerLink="accounts" portType="ns0:accounts"
+                                tibex:xpdlId="8df90c02-ca76-530c-a913-98e3d645a9c9"
+                                variable="getOut-input">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns1=&quot;http://xmlns.gmfin.example/loan/servicing/account&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:param name=&quot;QueryAccount&quot;/>&#xa;    &lt;xsl:template name=&quot;getOut-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns1:AccountSummary>&#xa;            &lt;tns1:accountNumber>&#xa;                &lt;xsl:value-of select=&quot;$QueryAccount/Record[1]/account_number&quot;/>&#xa;            &lt;/tns1:accountNumber>&#xa;            &lt;tns1:borrowerName>&#xa;                &lt;xsl:value-of select=&quot;concat($QueryAccount/Record[1]/first_name, ' ', $QueryAccount/Record[1]/last_name)&quot;/>&#xa;            &lt;/tns1:borrowerName>&#xa;            &lt;tns1:maskedSsn>&#xa;                &lt;xsl:value-of select=&quot;concat('***-**-', substring($QueryAccount/Record[1]/ssn, 8, 4))&quot;/>&#xa;            &lt;/tns1:maskedSsn>&#xa;            &lt;tns1:principalBalance>&#xa;                &lt;xsl:value-of select=&quot;$QueryAccount/Record[1]/principal_balance&quot;/>&#xa;            &lt;/tns1:principalBalance>&#xa;            &lt;tns1:nextDueDate>&#xa;                &lt;xsl:value-of select=&quot;$QueryAccount/Record[1]/next_due_date&quot;/>&#xa;            &lt;/tns1:nextDueDate>&#xa;            &lt;tns1:daysPastDue>&#xa;                &lt;xsl:value-of select=&quot;$QueryAccount/Record[1]/days_past_due&quot;/>&#xa;            &lt;/tns1:daysPastDue>&#xa;            &lt;tns1:status>&#xa;                &lt;xsl:value-of select=&quot;$QueryAccount/Record[1]/status&quot;/>&#xa;            &lt;/tns1:status>&#xa;        &lt;/tns1:AccountSummary>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns1="http://xmlns.gmfin.example/loan/servicing/account" xmlns:tns4="http://xmlns.example.com/20200615113902PLT" version="2.0"&gt;&lt;xsl:param name="QueryAccount"/&gt;&lt;xsl:template name="getOut-input" match="/"&gt;&lt;tns4:getResponse&gt;&lt;item&gt;&lt;tns1:AccountSummary&gt;&lt;tns1:accountNumber&gt;&lt;xsl:value-of select="$QueryAccount/Record[1]/account_number"/&gt;&lt;/tns1:accountNumber&gt;&lt;tns1:borrowerName&gt;&lt;xsl:value-of select="concat($QueryAccount/Record[1]/first_name, ' ', $QueryAccount/Record[1]/last_name)"/&gt;&lt;/tns1:borrowerName&gt;&lt;tns1:maskedSsn&gt;&lt;xsl:value-of select="concat('***-**-', substring($QueryAccount/Record[1]/ssn, 8, 4))"/&gt;&lt;/tns1:maskedSsn&gt;&lt;tns1:principalBalance&gt;&lt;xsl:value-of select="$QueryAccount/Record[1]/principal_balance"/&gt;&lt;/tns1:principalBalance&gt;&lt;tns1:nextDueDate&gt;&lt;xsl:value-of select="$QueryAccount/Record[1]/next_due_date"/&gt;&lt;/tns1:nextDueDate&gt;&lt;tns1:daysPastDue&gt;&lt;xsl:value-of select="$QueryAccount/Record[1]/days_past_due"/&gt;&lt;/tns1:daysPastDue&gt;&lt;tns1:status&gt;&lt;xsl:value-of select="$QueryAccount/Record[1]/status"/&gt;&lt;/tns1:status&gt;&lt;/tns1:AccountSummary&gt;&lt;/item&gt;&lt;/tns4:getResponse&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                <bpws:targets>
+                                    <bpws:target linkName="QueryAccountTogetOut"/>
+                                </bpws:targets>
+                            </bpws:reply>
+                            <bpws:reply faultName="clientFault"
+                                name="ReplyAccountNotFound" operation="get"
+                                partnerLink="accounts" portType="ns0:accounts"
+                                tibex:xpdlId="d8428e83-168f-5c36-8cf7-fba5709169f4"
+                                variable="ReplyAccountNotFound-input">
+                                <tibex:inputBindings>
+                                    <tibex:partBinding expression="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?>&#xa;&lt;xsl:stylesheet xmlns:xsl=&quot;http://www.w3.org/1999/XSL/Transform&quot; xmlns:tns3=&quot;http://tns.tibco.com/bw/REST&quot; version=&quot;2.0&quot;>&#xa;    &lt;xsl:template name=&quot;ReplyAccountNotFound-input&quot; match=&quot;/&quot;>&#xa;        &lt;tns3:client4XXError>&#xa;            &lt;statusCode>&#xa;                &lt;xsl:value-of select=&quot;404&quot;/>&#xa;            &lt;/statusCode>&#xa;            &lt;message>&#xa;                &lt;xsl:value-of select=&quot;&amp;quot;Account not found&amp;quot;&quot;/>&#xa;            &lt;/message>&#xa;        &lt;/tns3:client4XXError>&#xa;    &lt;/xsl:template>&#xa;&lt;/xsl:stylesheet>"
+                                        expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"/>
+                                </tibex:inputBindings>
+                                <tibex:inputBinding expressionLanguage="urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:tns3="http://tns.tibco.com/bw/REST" xmlns:tns4="http://xmlns.example.com/20200615113902PLT" version="2.0"&gt;&lt;xsl:template name="ReplyAccountNotFound-input" match="/"&gt;&lt;tns4:get4XXFaultMessage&gt;&lt;clientError&gt;&lt;tns3:client4XXError&gt;&lt;statusCode&gt;&lt;xsl:value-of select="404"/&gt;&lt;/statusCode&gt;&lt;message&gt;&lt;xsl:value-of select="&amp;quot;Account not found&amp;quot;"/&gt;&lt;/message&gt;&lt;/tns3:client4XXError&gt;&lt;/clientError&gt;&lt;/tns4:get4XXFaultMessage&gt;&lt;/xsl:template&gt;&lt;/xsl:stylesheet&gt;</tibex:inputBinding>
+                                <bpws:targets>
+                                    <bpws:target linkName="QueryAccountToReplyAccountNotFound"/>
+                                </bpws:targets>
+                            </bpws:reply>
+                        </bpws:flow>
+                    </bpws:scope>
+                </bpws:onMessage>
+            </bpws:pick>
+        </bpws:flow>
+    </bpws:scope>
+</bpws:process>
