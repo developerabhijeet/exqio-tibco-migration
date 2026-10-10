@@ -29,13 +29,22 @@ from engine.parity.predicates import (
     Atom,
     Resolver,
     get_path,
+    holds,
+    local_path,
     parse_condition,
     set_path,
     solve_path,
     to_decimal,
 )
 from engine.parity.schema import INT_TYPES, NUMBER_TYPES, SchemaIndex, XsdElement, starter_shape
-from engine.parity.seed import SeedData, snake
+from engine.parity.seed import (
+    SeedData,
+    SeedQuery,
+    parse_simple_select,
+    run_seed_query,
+    snake,
+    split_top,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from engine.parity.evaluator import Evaluator
@@ -258,6 +267,178 @@ def _branch_atoms(target: Transition, siblings: list[Transition]) -> Iterator[li
             yield positive + [a for a in combo if a is not None]
 
 
+
+# --- static branch prediction over the seed ---------------------------------------------------
+
+_FUNCS = {"normalize-space": lambda v: " ".join(v.split()), "upper-case": str.upper,
+          "lower-case": str.lower, "string": str, "tib:trim": str.strip}
+
+
+def _static_value(expr: str, data: dict[str, Any], resolver: Resolver) -> str | None:
+    """Value of a simple binding expression for an input (functions above, concat, literals,
+    input paths); None when it depends on anything else."""
+    e = expr.strip()
+    m = re.fullmatch(r"([\w:-]+)\((.*)\)", e, re.DOTALL)
+    if m and m.group(1) in _FUNCS:
+        inner = _static_value(m.group(2), data, resolver)
+        return None if inner is None else _FUNCS[m.group(1)](inner)
+    if m and m.group(1) == "concat":
+        parts = [_static_value(a, data, resolver) for a in split_top(m.group(2))]
+        return None if any(v is None for v in parts) else "".join(parts)
+    lit = re.fullmatch(r"'([^']*)'|\"([^\"]*)\"", e)
+    if lit:
+        return lit.group(1) if lit.group(1) is not None else lit.group(2)
+    target = resolver.resolve(e) if e.startswith("$") else None
+    if target is None:
+        return None
+    value = get_path(data, *target)
+    return None if value is None or isinstance(value, dict) else _text_value(value)
+
+
+def _text_value(value: Any) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+class _Predictor:
+    """Predict, without running anything, which links an input takes at each decision.
+
+    Conditions are decided from the input (through mapper aliases) and from simple JDBC
+    lookups simulated over the seed rows (``count($Q/Record) = 0``,
+    ``$Q/Record[1]/status = 'ACTIVE'``). Anything else is unknown, never guessed.
+    """
+
+    def __init__(self, ctx: _Ctx, resolver: Resolver) -> None:
+        self.ctx, self.resolver = ctx, resolver
+        self.lookups: dict[str, tuple[SeedQuery, list[str]]] = {}
+        if ctx.seed is None:
+            return
+        for a in ctx.process.activities:
+            if a.type != "jdbc.query":
+                continue
+            query = parse_simple_select(activity_sql(a) or "")
+            names = [p.get("name") for p in a.config.get("parameters") or []]
+            exprs = {b.target.split("/")[-1]: b.expression for b in a.input_bindings}
+            if query is not None and all(n in exprs for n in names):
+                var = "$" + (a.name.replace(" ", "-") if ctx.process.dialect == "bw5" else a.name)
+                self.lookups[var] = (query, [exprs[n] for n in names])
+
+    def _rows(self, var: str, data: dict[str, Any]) -> list[dict[str, Any]] | None:
+        query, exprs = self.lookups[var]
+        params = [_static_value(e, data, self.resolver) for e in exprs]
+        if any(v is None for v in params) or self.ctx.seed is None:
+            return None
+        return run_seed_query(self.ctx.seed, query, params)
+
+    def value(self, atom: Atom, data: dict[str, Any]) -> tuple[bool, Any]:
+        target = self.resolver.resolve(atom.path)
+        if target is not None:
+            return True, get_path(data, *target)
+        var, steps = local_path(atom.path)
+        if var not in self.lookups or not steps or steps[0] != "Record":
+            return False, None
+        rows = self._rows(var, data)
+        if rows is None:
+            return False, None
+        if atom.measure == "count" and steps == ("Record",):
+            return True, len(rows)
+        if len(steps) == 2 and re.search(r"/Record(\[1\])?/[^/]+$", atom.path):
+            return True, rows[0].get(steps[1]) if rows else None
+        return False, None
+
+    def truth(self, expression: str, data: dict[str, Any]) -> bool | None:
+        verdicts = []
+        for disjunct in parse_condition(expression):
+            known = [self.value(a, data) if a is not None else (False, None) for a in disjunct]
+            results = [holds(a, v) if ok and a is not None else None for a, (ok, v) in zip(disjunct, known, strict=True)]
+            if any(r is False for r in results):
+                verdicts.append(False)
+            elif all(r is True for r in results):
+                verdicts.append(True)
+            else:
+                verdicts.append(None)
+        if any(v is True for v in verdicts):
+            return True
+        return False if all(v is False for v in verdicts) else None
+
+    def taken(self, links: list[Transition], data: dict[str, Any]) -> set[str] | None:
+        """Links taken from one source (all true conditionals, else otherwise), or None."""
+        fired: set[str] = set()
+        for t in links:
+            if t.kind == "conditional":
+                verdict = self.truth(t.expression or "", data)
+                if verdict is None:
+                    return None
+                if verdict:
+                    fired.add(t.id)
+        if not fired:
+            fired = {t.id for t in links if t.kind == "otherwise"}
+        return fired | {t.id for t in links if t.kind == "success"}
+
+
+def success_links(process: Process) -> dict[str, str]:
+    """Per decision, the link of the main success path: the one branch that does not end in a
+    ``throw`` or a fault reply and reaches strictly more activities than the others. A
+    decision whose surviving branches tie (late fee vs no late fee) has none."""
+    failing = {a.id for a in process.activities
+               if a.type == "throw" or (a.type == "reply" and a.config.get("fault_name"))}
+    succ: dict[str, list[str]] = {}
+    for t in process.transitions:
+        if t.kind != "error":
+            succ.setdefault(t.from_id, []).append(t.to_id)
+
+    def reach(start: str) -> int:
+        seen, todo = set(), [start]
+        while todo:
+            n = todo.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            todo += succ.get(n, [])
+        return sum(1 for n in seen if n not in failing)
+
+    out: dict[str, str] = {}
+    by_source: dict[str, list[Transition]] = {}
+    for t in process.transitions:
+        by_source.setdefault(t.from_id, []).append(t)
+    for source, links in by_source.items():
+        if not any(t.kind == "conditional" for t in links):
+            continue
+        options = [(reach(t.to_id), t.id) for t in links
+                   if t.kind in ("conditional", "otherwise") and t.to_id not in failing]
+        options.sort(reverse=True)
+        if options and (len(options) == 1 or options[0][0] > options[1][0]):
+            out[source] = options[0][1]
+    return out
+
+
+def _by_source(process: Process) -> dict[str, list[Transition]]:
+    out: dict[str, list[Transition]] = {}
+    for t in process.transitions:
+        out.setdefault(t.from_id, []).append(t)
+    return out
+
+
+def choose_happy_variant(ctx: _Ctx, predictor: _Predictor, n_rows: int) -> int:
+    """The seed row whose input takes the most success links (predicted statically)."""
+    success = success_links(ctx.process)
+    links = _by_source(ctx.process)
+    best, best_score = 0, None
+    for k in range(n_rows):
+        data = happy_input(ctx, k)
+        score = 0
+        for source, link in success.items():
+            taken = predictor.taken(links[source], data)
+            if taken is not None:
+                score += 1 if link in taken else -1
+        if best_score is None or score > best_score:
+            best, best_score = k, score
+    return best
+
+
+def _seed_rows(seed: SeedData | None, cap: int = 10) -> int:
+    return min(max((len(r) for r in (seed.rows.values() if seed else [])), default=1), cap)
+
+
 def _scenario_id(process: Process, *parts: str) -> str:
     return ":".join([process.name, *parts])
 
@@ -286,10 +467,11 @@ def _http_targets(process: Process, app: Application, seen: set[str] | None = No
 
 
 def generate_scenarios(process: Process, contracts: list[Contract], app: Application,
-                       seed: SeedData | None = None, *, variant: int = 0) -> list[Scenario]:
+                       seed: SeedData | None = None, *, variant: int | None = None) -> list[Scenario]:
     """Static scenario set of one process (``expected`` is left empty, see ``fill_expected``).
 
-    * ``happy``: values from the request contract and seed row ``variant`` (ids reused so
+    * ``happy``: values from the request contract and seed row ``variant`` (default: the row
+      predicted to take the most main-path links, see :func:`success_links`; ids reused so
       lookups hit; keys of tables the process inserts into are fresh).
     * ``branch`` / ``fault``: one per conditional or otherwise transition whose predicate is
       solvable on the input (``fault`` when the transition leads to a ``throw``).
@@ -298,10 +480,28 @@ def generate_scenarios(process: Process, contracts: list[Contract], app: Applica
     schema = SchemaIndex(contracts)
     seed = seed if seed is not None else SeedData.for_app(app, process)
     ctx = _Ctx(process, app, schema, seed, starter_shape(process, app, schema), _written_tables(process, app))
+    resolver = Resolver(process)
+    predictor = _Predictor(ctx, resolver)
+    n_rows = _seed_rows(seed)
+    if variant is None:
+        variant = choose_happy_variant(ctx, predictor, n_rows)
     base = happy_input(ctx, variant)
+    links_by_source = _by_source(process)
+    for source, link_id in success_links(process).items():
+        # make the happy input take each success link it does not already take, when that is
+        # solvable on the input (e.g. a valid state code with no seed data)
+        links = links_by_source[source]
+        taken = predictor.taken(links, base)
+        if taken is not None and link_id in taken:
+            continue
+        target = next(t for t in links if t.id == link_id)
+        for atoms in _branch_atoms(target, links):
+            solved = _solve(ctx, resolver, base, atoms)
+            if solved is not None:
+                base = solved
+                break
     scenarios = [Scenario(id=_scenario_id(process, "happy"), process_id=process.id,
                           name="happy path", kind="happy", input=base)]
-    resolver = Resolver(process)
     throws = {a.id for a in process.activities if a.type == "throw"}
     seen_inputs: dict[str, list[dict[str, Any]]] = {"happy": [base], "branch": [], "fault": []}
     by_source: dict[str, list[Transition]] = {}
@@ -323,11 +523,23 @@ def generate_scenarios(process: Process, contracts: list[Contract], app: Applica
                 data = _solve(ctx, resolver, base, atoms)
                 if data is not None:
                     break
+            if data is None:
+                # not solvable on the input (a lookup result): the first seed row predicted
+                # to take exactly this link, the happy row first
+                for k in [variant] + [i for i in range(n_rows) if i != variant]:
+                    candidate = happy_input(ctx, k)
+                    taken = predictor.taken(branches, candidate)
+                    if taken is not None and taken - {x.id for x in branches if x.kind == "success"} == (
+                            {t.id} if t.to_id else set()):
+                        data = candidate
+                        break
             kind = "fault" if t.to_id in throws else "branch"
-            if data is None or data in seen_inputs[kind]:
-                continue  # de-duplicated by content within a kind only
+            if data is None:
+                continue
+            # every conditional link keeps its own scenario (traceability per link), even when
+            # its input equals another one; an otherwise path already taken is not repeated
             if t.kind == "otherwise" and any(data in v for v in seen_inputs.values()):
-                continue  # an otherwise path another scenario already takes (usually the happy one)
+                continue
             seen_inputs[kind].append(data)
             name = f"{t.from_id} -> {t.to_id}" if t.to_id else f"{t.from_id}: no condition holds"
             scenarios.append(Scenario(id=_scenario_id(process, kind, t.id), process_id=process.id,

@@ -22,7 +22,7 @@ from engine.parity.db import ScenarioDB
 from engine.parity.evaluator import Evaluator
 from engine.parity.models import ExpectedResult, Scenario, StubResponse
 from engine.parity.predicates import parse_condition
-from engine.parity.scenarios import generate_and_evaluate, generate_scenarios
+from engine.parity.scenarios import generate_and_evaluate, generate_scenarios, success_links
 from engine.parity.schema import SchemaIndex
 from engine.parity.seed import SeedData
 from engine.parity.sql import sql_write_payload
@@ -443,9 +443,41 @@ def test_generated_scenarios_cover_estate_processes(gmf, evaluator):
     assert happy.input["dealId"] == "DL-50003"  # the seed deal that is contracted and not funded
     assert [m.payload["status"] for m in effects(happy.expected, "message_published")] == ["FUNDED"]
     assert {s.id.split(":", 1)[1] for s in funding if s.kind != "happy"} == {
+        "branch:LookupDealerToLookupDeal",
+        "branch:CheckExistingFundingToInsertFunding",
         "branch:CheckExistingFundingToLogDuplicateFunding",
         "branch:LookupDealToPublishFundingRejected",
         "fault:LookupDealerToThrowDealerInactive"}
+
+
+def test_static_happy_path_takes_the_success_links(gmf, apps, evaluator):
+    """Without running anything the generator predicts lookups from the seed rows: the
+    DealerFunding happy path funds a contracted, unfunded deal (DL-50003, not the already
+    funded DL-50001), and the funding link gets its own branch scenario."""
+    proc = process(gmf, "DealerFundingRequest")
+    assert success_links(proc) == {"LookupDealer": "LookupDealerToLookupDeal",
+                                   "LookupDeal": "LookupDealToCheckExistingFunding",
+                                   "CheckExistingFunding": "CheckExistingFundingToInsertFunding"}
+    scenarios = generate_scenarios(proc, gmf.contracts, gmf)
+    by_id = {s.id.split(":", 1)[1]: s for s in scenarios}
+    assert by_id["happy"].input["dealId"] == "DL-50003"
+    assert by_id["branch:CheckExistingFundingToInsertFunding"].input["dealId"] == "DL-50003"
+    assert by_id["branch:CheckExistingFundingToLogDuplicateFunding"].input["dealId"] == "DL-50001"
+    kept = asyncio.run(_fill([by_id["happy"], by_id["branch:CheckExistingFundingToInsertFunding"],
+                              by_id["branch:CheckExistingFundingToLogDuplicateFunding"]], evaluator))
+    assert len(kept) == 3  # each took its link
+    assert [m.payload["status"] for m in effects(kept[0].expected, "message_published")] == ["FUNDED"]
+    # Intake: applicant 1 is a seeded 30-day duplicate, so the happy path skips to applicant 2;
+    # the duplicate fault scenario reuses applicant 1
+    intake = {s.id.split(":", 1)[1]: s for s in generate_scenarios(
+        process(gmf, "CreditApplicationIntake"), gmf.contracts, gmf)}
+    assert intake["happy"].input["body"]["applicant"]["ssn"] == "909-32-1184"
+    fault = intake["fault:CheckDuplicateApplicationToThrowDuplicateApplication"]
+    assert fault.input["body"]["applicant"]["ssn"] == "912-55-7781"
+    # no seed (BW5): the happy input is solved onto the success link (a valid state code)
+    legacy = apps["LegacyAddress"]
+    happy = generate_scenarios(legacy.processes[0], legacy.contracts, legacy)[0]
+    assert happy.kind == "happy" and happy.input["state"] == "AL"
 
 
 def test_schema_and_seed_helpers(gmf):
@@ -460,6 +492,14 @@ def test_schema_and_seed_helpers(gmf):
     assert seed.fresh_value("payment", "payment_id") == "PMT-0000985"
     assert seed.rows["dealer"][1] == {"dealer_id": "D1002", "dealer_name": "PRAIRIE STATE CHEVROLET",
                                       "state_code": "IL", "status": "SUSPENDED", "funding_account": "FA-0001002"}
+    from engine.parity.seed import parse_simple_select, run_seed_query
+
+    dup = parse_simple_select("select application_id from gmf.credit_application where ssn = ? "
+                              "and submitted_at >= current_timestamp - interval '30 days'")
+    assert [r["application_id"] for r in run_seed_query(seed, dup, ["912-55-7781"])] == ["CA-2026-000106"]
+    like = parse_simple_select("select dealer_id, status from gmf.dealer where dealer_id like ?")
+    assert [r["dealer_id"] for r in run_seed_query(seed, like, ["D1002%"])] == ["D10021", "D1002"]
+    assert parse_simple_select("select * from a join b on a.x = b.x where a.y = ?") is None
     verb, table, row, _ = sql_write_payload(
         "update gmf.loan_account set fees_due = ?, status = 'X' where account_number = ?", [1, "A"])
     assert (verb, table, row) == ("update", "loan_account", {"fees_due": 1, "status": "X",

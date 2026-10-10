@@ -106,6 +106,9 @@ def parse_atom(text: str) -> Atom | None:
     m = re.fullmatch(rf"matches\(\s*({_PATH})\s*,\s*'([^']*)'\s*\)", t)
     if m:
         return Atom("matches", m.group(1), "eq", m.group(2))
+    m = re.fullmatch(rf"contains\(\s*'([^']*)'\s*,\s*concat\(\s*'(\s*)'\s*,\s*({_PATH})\s*,\s*'\2'\s*\)\s*\)", t)
+    if m and m.group(2):  # contains(' AL AK ', concat(' ', $x, ' ')): membership in a word list
+        return Atom("in", m.group(3), "eq", tuple(m.group(1).split()))
     m = re.fullmatch(rf"({_PATH})\s*(!?=)\s*\(((?:\s*'[^']*'\s*,?)+)\)", t)
     if m:
         values = tuple(re.findall(r"'([^']*)'", m.group(3)))
@@ -118,6 +121,8 @@ def parse_atom(text: str) -> Atom | None:
         left, right, op = right, left, _MIRROR[op]
     measure, path = _operand(left)
     if path is None:
+        return None
+    if measure == "count" and not re.fullmatch(_NUM, right):
         return None
     if re.fullmatch(_NUM, right):
         value: Any = Decimal(right)
@@ -140,6 +145,9 @@ def _operand(text: str) -> tuple[str, str | None]:
     m = re.fullmatch(rf"string-length\(\s*({_PATH})\s*\)", t)
     if m:
         return "len", m.group(1)
+    m = re.fullmatch(rf"count\(\s*({_PATH})\s*\)", t)
+    if m:
+        return "count", m.group(1)
     m = re.fullmatch(rf"(?:string|normalize-space)\(\s*({_PATH})\s*\)", t)
     if m:
         return "str", m.group(1)
@@ -152,7 +160,7 @@ _TRANSPARENT = re.compile(
     r"^(?:normalize-space|upper-case|lower-case|string|number|tib:trim|xsd?:\w+)\((.*)\)$", re.DOTALL)
 
 
-def _local_path(path: str) -> tuple[str, tuple[str, ...]]:
+def local_path(path: str) -> tuple[str, tuple[str, ...]]:
     """``$X/tns:a/b[1]`` -> (``$X``, (``a``, ``b``))."""
     var, *steps = path.split("/")
     return var, tuple(re.sub(r"\[\d+\]$", "", s).split(":")[-1] for s in steps if s)
@@ -191,17 +199,17 @@ class Resolver:
                 base = prefix[:-2]
                 if path.startswith(base + "/"):
                     rest = path[len(base) + 1:].split("/", 1)
-                    steps = _local_path("$x/" + rest[1])[1] if len(rest) > 1 else ()
+                    steps = local_path("$x/" + rest[1])[1] if len(rest) > 1 else ()
                     return self.prefixes[prefix], steps
             elif path == prefix or path.startswith(prefix + "/"):
-                return self.prefixes[prefix], _local_path("$x" + path[len(prefix):])[1]
+                return self.prefixes[prefix], local_path("$x" + path[len(prefix):])[1]
         return None
 
     def resolve(self, path: str) -> tuple[str | None, tuple[str, ...]] | None:
         direct = self._starter(path)
         if direct is not None:
             return direct
-        var, steps = _local_path(path)
+        var, steps = local_path(path)
         return self.aliases.get((var, steps))
 
 
@@ -236,7 +244,7 @@ def solve_path(atoms: list[Atom], current: Any, integer: bool) -> tuple[bool, An
 
     Returns ``(True, REMOVE)`` when the field should be absent.
     """
-    if all(_holds(a, current) for a in atoms):
+    if all(holds(a, current) for a in atoms):
         return True, current
     candidates: list[Any] = []
     step = Decimal(1) if integer else Decimal("0.01")
@@ -264,7 +272,7 @@ def solve_path(atoms: list[Atom], current: Any, integer: bool) -> tuple[bool, An
     for c in candidates:
         if c is not REMOVE and isinstance(c, Decimal):
             c = int(c) if integer else c
-        if all(_holds(a, c) for a in atoms):
+        if all(holds(a, c) for a in atoms):
             return True, c
     return False, None
 
@@ -277,13 +285,15 @@ class _Remove:
 REMOVE = _Remove()
 
 
-def _holds(atom: Atom, value: Any) -> bool:
+def holds(atom: Atom, value: Any) -> bool:
     absent = value is None or value is REMOVE
     if atom.measure == "exists":
         return (not absent) == bool(atom.value)
     if atom.measure == "len":
         n = 0 if absent else len(str(value))
         return _cmp(Decimal(n), atom.op, atom.value)
+    if atom.measure == "count":  # value: the number of items (rows)
+        return _cmp(Decimal(0 if absent else int(value)), atom.op, atom.value)
     if absent:
         return atom.op == "ne" and atom.measure in ("str", "in")
     if atom.measure == "num":

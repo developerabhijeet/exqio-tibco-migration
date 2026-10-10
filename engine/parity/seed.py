@@ -6,6 +6,8 @@ get fresh values shaped like the seeded ones.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ from engine.ir.models import Application, Process
 _INSERT = re.compile(r"insert\s+into\s+([\w.]+)\s*\(([^)]*)\)\s*values\s*", re.IGNORECASE)
 
 
-def _split_top(text: str, sep: str = ",") -> list[str]:
+def split_top(text: str, sep: str = ",") -> list[str]:
     out, depth, quote, start = [], 0, False, 0
     i = 0
     while i < len(text):
@@ -70,9 +72,9 @@ class SeedData:
             cols = [c.strip() for c in m.group(2).split(",")]
             rest = text[m.end():]
             end = _statement_end(rest)
-            for tup in _split_top(rest[:end]):
+            for tup in split_top(rest[:end]):
                 if tup.startswith("(") and tup.endswith(")"):
-                    vals = [_sql_literal(v) for v in _split_top(tup[1:-1])]
+                    vals = [_sql_literal(v) for v in split_top(tup[1:-1])]
                     rows.setdefault(table, []).append(dict(zip(cols, vals, strict=False)))
         keys: dict[str, str] = {}
         for m in re.finditer(r"create\s+table\s+([\w.]+)\s*\((.*?)\);", schema_sql, re.IGNORECASE | re.DOTALL):
@@ -137,3 +139,106 @@ def estate_root(app: Application, process: Process | None = None) -> Path | None
 def snake(name: str) -> str:
     return re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", name).lower()
 
+
+
+# --- seed query simulation --------------------------------------------------------------------
+#
+# Lets the static scenario generator predict a JDBC lookup's result from the seed rows, for
+# the simple statements lookups use: ``select ... from T [alias] where c1 op ? [and c2 op ...]``
+# with ``op`` in ``= <> != < <= > >= like`` and right-hand sides ``?``, a literal, or a time
+# relative to the load date (``current_timestamp - interval '30 days'``, ``current_date + 20``).
+# Anything else (joins, order by, functions) is "unknown" (None), never a guess.
+
+_REL = re.compile(
+    r"^\s*(?:current_timestamp|current_date|now\(\))\s*(?:(?P<sign>[+-])\s*(?:interval\s+'(?P<n>-?\d+)\s*"
+    r"(?P<unit>day|days|hour|hours)'|(?P<days>-?\d+)))?\s*$", re.IGNORECASE)
+
+
+def relative_days(expr: Any) -> float | None:
+    """Offset in days from the load date of ``current_date + 20`` style seed values."""
+    if not isinstance(expr, str):
+        return None
+    m = _REL.match(expr)
+    if not m:
+        return None
+    if not m.group("sign"):
+        return 0.0
+    sign = -1 if m.group("sign") == "-" else 1
+    if m.group("days") is not None:
+        return sign * float(m.group("days"))
+    n = float(m.group("n"))
+    return sign * (n / 24 if m.group("unit").lower().startswith("hour") else n)
+
+
+@dataclass
+class SeedQuery:
+    table: str
+    conditions: list[tuple[str, str, str]]  # (column, operator, right-hand side text)
+
+
+_SELECT = re.compile(r"^\s*select\s+.+?\s+from\s+([\w.\"]+)(?:\s+(?:as\s+)?(\w+))?\s+where\s+(.+?)\s*;?\s*$",
+                     re.IGNORECASE | re.DOTALL)
+_COND = re.compile(r"^(?:\w+\.)?(\w+)\s*(<>|!=|<=|>=|=|<|>|\blike\b)\s*(.+)$", re.IGNORECASE | re.DOTALL)
+
+
+def parse_simple_select(sql: str) -> SeedQuery | None:
+    m = _SELECT.match(sql or "")
+    if not m or re.search(r"\b(join|order\s+by|group\s+by|union)\b", sql, re.IGNORECASE):
+        return None
+    where = re.sub(r"\bfor\s+update\b", "", m.group(3), flags=re.IGNORECASE)
+    conditions = []
+    for part in re.split(r"\s+and\s+", where.strip(), flags=re.IGNORECASE):
+        c = _COND.match(part.strip())
+        if not c:
+            return None
+        conditions.append((c.group(1).lower(), c.group(2).lower(), c.group(3).strip()))
+    return SeedQuery(m.group(1).replace('"', "").split(".")[-1].lower(), conditions)
+
+
+def _compare(left: Any, op: str, right: Any) -> bool | None:
+    if left is None or right is None:
+        return False
+    ld, rd = relative_days(left), relative_days(right)
+    if ld is not None or rd is not None:
+        if ld is None or rd is None:
+            return None
+        a, b = ld, rd
+    else:
+        try:
+            a, b = Decimal(str(left)), Decimal(str(right))
+        except InvalidOperation:
+            a, b = str(left), str(right)
+    if op == "like":
+        rx = "".join(".*" if ch == "%" else "." if ch == "_" else re.escape(ch) for ch in str(right))
+        return re.fullmatch(rx, str(left), re.DOTALL) is not None
+    return {"=": a == b, "<>": a != b, "!=": a != b, "<": a < b, "<=": a <= b, ">": a > b,
+            ">=": a >= b}[op]
+
+
+def run_seed_query(seed: SeedData, query: SeedQuery, params: list[Any]) -> list[dict[str, Any]] | None:
+    """The seed rows the query returns (seed order), or None when that cannot be decided."""
+    rows = seed.rows.get(query.table)
+    if rows is None:
+        return None
+    values = iter(params)
+    resolved = []
+    for col, op, rhs in query.conditions:
+        if rhs == "?":
+            value = next(values, None)
+            if value is None:
+                return None
+        else:
+            lit = re.fullmatch(r"'((?:[^']|'')*)'", rhs)
+            value = lit.group(1).replace("''", "'") if lit else (rhs if relative_days(rhs) is not None or
+                                                                   re.fullmatch(r"-?\d+(\.\d+)?", rhs) else None)
+            if value is None:
+                return None
+        resolved.append((col, op, value))
+    out = []
+    for row in rows:
+        verdicts = [_compare(row.get(col), op, value) for col, op, value in resolved]
+        if any(v is None for v in verdicts):
+            return None
+        if all(verdicts):
+            out.append(row)
+    return out
