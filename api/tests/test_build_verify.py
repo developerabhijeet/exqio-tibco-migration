@@ -28,6 +28,7 @@ import pytest
 from sqlalchemy import select
 
 from api.app.models import AzureConnection, Build, FieldDiff, Gate, JobEvent, ModelCall
+from api.app.models import Process as ProcessRow
 from api.app.models import Scenario as ScenarioRow
 from api.app.services import build as build_svc
 from api.app.services import readiness as readiness_svc
@@ -286,6 +287,10 @@ async def test_build_fails_without_dotnet_and_g4_disabled(client, app, monkeypat
     rules_file = next(c["file"] for c in tests["cases"] if c["kind"] == "rule")
     content = (await client.get(f"/builds/{build_id}/files/{rules_file}")).json()
     assert content["origin"] == "ai" and "GetRequiredService<FundingStatusLookupService>" in content["content"]
+    assert isinstance(build["builder"]["test_engineer"]["warnings"], list)
+    # the builder filled no production file, but the Test Engineer wrote tests: the test reviewer ran
+    assert build["builder"]["reviewers"] == ["test"]
+    assert build["review_findings"] == {"test": []}  # the fake reviewer finds nothing
     assert (await client.get(f"/builds/{build_id}/reviews")).json() == []
 
     infra = (await client.get(f"/builds/{build_id}/infra")).json()
@@ -685,16 +690,73 @@ def test_bus_messages_become_side_effects():
         "MsgType": "FUNDING_REQUEST", "Region": "US"}
 
 
-def test_intended_without_counterfactual_counts_as_unexplained():
-    from engine.parity.models import FieldDiff as Diff
-    from engine.parity.models import ParityReport
+UNCONFIRMED = "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"
 
-    report = ParityReport(scenario_id="s", parity=0.5, unexplained=0, fields=[
-        Diff(path="output.body.status", expected="FUNDED", actual="PENDING", status="intended", finding_id="F1"),
-        Diff(path="output.body.dealId", expected="D", actual="D", status="match")])
-    assert verify_svc.confirm_intended(report) == 1
-    assert report.fields[0].status == "defect" and report.fields[0].finding_id == "F1"
-    assert report.unexplained == 1
+
+async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypatch, tmp_path):
+    # every finding decided Fix: F1 cites QueryFundingStatus, which is in the body fields' lineage
+    pid, proc_id, build_id, _ = await _built(client, monkeypatch, decision="fix")
+    fixed = {f["finding_key"] for f in (await client.get(f"/processes/{proc_id}/analysis")).json()["findings"]
+             if f["decision"] == "fix"}
+    scenarios = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
+    answers = {s["input"]["parameters"]["dealId"]: s["expected"]["output"] for s in scenarios}
+    not_found = [s for s in scenarios if s["input"]["parameters"]["dealId"] == "DL-50003"]
+    assert len(not_found) == 1  # one scenario reads DL-50003: one differing field below
+    changed = json.loads(json.dumps(answers))
+    changed["DL-50003"]["body"]["message"] += " (reworded by the fix)"
+    stand_in = StandIn(changed, tmp_path / "service.log")
+    app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
+                                                      port=int(stand_in.url.rsplit(":", 1)[1]))
+    # G4 needs a compiling build (no NuGet here): record its approval so G5 depends on parity only
+    async with app.state.sessionmaker() as s:
+        proc = await s.get(ProcessRow, proc_id)
+        s.add(Gate(process_id=proc_id, gate="G4", state="approved", spec_hash=proc.spec_hash,
+                   decided_by="sme.vicky"))
+        await s.commit()
+    try:
+        job = await _wait_job(client, (await client.post(f"/builds/{build_id}/verify")).json()["job_id"])
+        assert job["status"] == "done", job
+        assert job["result"]["unexplained"] == 0
+        parity = (await client.get(f"/builds/{build_id}/parity")).json()
+        intended = [f for rep in parity["reports"] for f in rep["fields"] + rep["side_effects"]
+                    if f["status"] == "intended"]
+        assert [(f["path"], f["confirmed"]) for f in intended] == [("output.body.message", False)]
+        assert intended[0]["finding_id"] in fixed
+        assert all("confirmed" not in f for rep in parity["reports"] for f in rep["fields"]
+                   if f["status"] != "intended")
+        assert {rep["status"] for rep in parity["reports"]} == {"match"}
+        assert parity["unexplained"] == 0 and parity["intended"] == 1
+        assert parity["unconfirmed_intended"] == 1 and parity["counterfactual"] is False
+        assert parity["unconfirmed_note"] == UNCONFIRMED
+        note = f"1 intended difference(s) {UNCONFIRMED}"
+        g5 = (await _gates(client, proc_id))["G5"]
+        assert g5["enabled"] is True and g5["notes"] == [note], g5
+        assert (await _gates(client, proc_id))["G4"]["notes"] == []
+        rows = {row["key"]: row for row in (await client.get(f"/projects/{pid}/readiness")).json()["rows"]}
+        assert rows["swagger_parity"]["status"] == "met"
+        assert note in rows["swagger_parity"]["evidence"][0]["label"]
+
+        r = await client.post(f"/gates/{proc_id}/G5", json={"state": "approved", "note": "ok"}, headers=SME)
+        assert r.status_code == 200, r.text
+        assert r.json()["notes"] == [note]
+        audit = (await client.get(f"/processes/{proc_id}/audit")).json()
+        approved = next(a for a in audit if a["action"] == "gate approved" and a["gate"] == "G5")
+        assert approved["detail"]["unconfirmed_intended"] == 1
+
+        # a difference no fix touches (a field the model never produces has no lineage) is a defect
+        # and blocks G5
+        changed["DL-50003"]["body"]["unexpected"] = "only in .NET"
+        job = await _wait_job(client, (await client.post(f"/builds/{build_id}/verify")).json()["job_id"])
+        assert job["status"] == "done" and job["result"]["unexplained"] == 1
+        parity = (await client.get(f"/builds/{build_id}/parity")).json()
+        defects = [f for rep in parity["reports"] for f in rep["fields"] if f["status"] == "defect"]
+        assert [(f["path"], f["finding_id"]) for f in defects] == [("output.body.unexpected", None)]
+        assert parity["unconfirmed_intended"] == 1
+        g5 = (await _gates(client, proc_id))["G5"]
+        assert g5["state"] == "pending" and g5["enabled"] is False
+        assert "1 unexplained difference(s)" in g5["reason"]
+    finally:
+        await client.delete(f"/builds/{build_id}/run")
 
 
 def test_bus_publish_outcome_and_window():

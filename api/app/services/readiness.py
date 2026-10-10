@@ -25,7 +25,7 @@ from api.app.models import (
     Scenario,
     TestResult,
 )
-from api.app.services.evidence import latest_verify_runs
+from api.app.services.evidence import latest_verify_runs, unconfirmed_count, unconfirmed_text
 from api.app.services.knowledge import Knowledge
 
 EXPECTATIONS: list[tuple[str, str]] = [
@@ -169,7 +169,9 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         unexplained = sum(int((r.report or {}).get("unexplained") or 0) for r in runs)
         errors = sum(1 for r in runs if r.status == "error")
         b = next(b for b in builds if b.id == runs[0].build_id)
-        ev = [_ev("parity", f"/builds/{b.id}/parity", f"{len(runs)} scenario run(s), source: TIBCO model")]
+        unconfirmed = unconfirmed_count(runs)
+        ev = [_ev("parity", f"/builds/{b.id}/parity", f"{len(runs)} scenario run(s), source: TIBCO model"
+                  + (f"; {unconfirmed_text(unconfirmed)}" if unconfirmed else ""))]
         if unexplained == 0 and errors == 0:
             rows.append(_row("swagger_parity", "met", ev, None))
         else:

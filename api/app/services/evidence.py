@@ -5,7 +5,8 @@ the hashes a decision binds to.
 * G4 build: the latest build is bound to the approved design; compile passed; every approved
   rule has a test with a body (not "no test body"); every test passed.
 * G5 parity: the latest verify run of that build has no unexplained difference and no scenario
-  that could not run.
+  that could not run. Intended differences (a finding decided Fix touches the field's lineage)
+  are not confirmed by a TIBCO sandbox run; they do not block G5 and their count is a G5 note.
 * G6 deploy: a Terragrunt plan of that build, or connect-later acknowledged by an operations user
   with a note.
 
@@ -25,6 +26,7 @@ from api.app.models import Build, DesignRecord, Gate, Plan, Process, Rule, Scena
 APPROVED = ("approved", "edited")
 FINISHED_BUILDS = ("passed", "failed")
 PLAN_OK = ("planned", "acknowledged")
+UNCONFIRMED_NOTE = "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"
 
 
 def canonical_hash(data: Any) -> str:
@@ -60,6 +62,27 @@ def parity_hash(runs: list[ScenarioRun]) -> str | None:
     if not runs:
         return None
     return canonical_hash(sorted((r.scenario_id, r.report_hash or "") for r in runs))
+
+
+def unconfirmed_count(runs: list[ScenarioRun]) -> int:
+    """Intended differences of these runs that no TIBCO sandbox run confirmed."""
+    return sum(int((r.report or {}).get("unconfirmed_intended") or 0) for r in runs)
+
+
+def unconfirmed_text(n: int) -> str:
+    return f"{n} intended difference(s) {UNCONFIRMED_NOTE}"
+
+
+async def unconfirmed_intended(session: AsyncSession, process: Process) -> int:
+    """Unconfirmed intended differences in the latest verify run of the latest finished build."""
+    build = await latest_build(session, process.id)
+    return unconfirmed_count(await latest_verify_runs(session, build.id)) if build is not None else 0
+
+
+async def gate_notes(session: AsyncSession, process: Process) -> dict[str, list[str]]:
+    """Notes shown with a gate that do not block it: G5 carries the unconfirmed intended count."""
+    n = await unconfirmed_intended(session, process)
+    return {"G5": [unconfirmed_text(n)]} if n else {}
 
 
 async def latest_plan(session: AsyncSession, build_id: str) -> Plan | None:

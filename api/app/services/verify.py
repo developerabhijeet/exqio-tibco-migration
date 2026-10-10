@@ -15,6 +15,9 @@ the scenario goes to the running service (REST starters: an HTTP call with a dev
 JMS starters: ``POST /_bus/publish`` with the selector's properties, then ``GET /_bus/messages``
 and the database rows), and ``compare`` classifies every field: match, intended (a finding decided
 Fix touches the field's lineage), noise (reviewed rules: timestamps, generated ids) or defect.
+The engine cannot apply a Fix finding to the TIBCO model, so no counterfactual run exists: an
+intended field is stored with ``confirmed: false`` ("not confirmed: no TIBCO sandbox run; derived
+from the TIBCO model"), does not count as unexplained and does not block G5; only defects do.
 ``service_called`` side effects are not compared: the running service calls the real endpoints,
 not the evaluator's stubs.
 """
@@ -672,17 +675,21 @@ async def drive_jms(client: httpx.AsyncClient, proc: IRProcess, scenario: Engine
     return ExpectedResult(output={}, fault=fault), new
 
 
-def confirm_intended(report: ParityReport) -> int:
-    """No counterfactual run exists yet (there is no generic way to apply a Fix finding to the
-    model), so an ``intended`` difference is not confirmed: it becomes a defect that keeps its
-    finding id, and counts as unexplained. Returns how many were reclassified."""
-    n = 0
-    for d in report.fields + report.side_effects:
-        if d.status == "intended":
-            d.status = "defect"
-            n += 1
+def unconfirmed_intended(report: ParityReport) -> int:
+    """No counterfactual run exists (the engine cannot apply a Fix finding to the TIBCO model), so
+    an ``intended`` difference is not confirmed. It stays ``intended`` with its finding id and does
+    not count as unexplained (``unexplained`` counts defects only). Returns how many there are."""
     report.unexplained = sum(1 for d in report.fields + report.side_effects if d.status == "defect")
-    return n
+    return sum(1 for d in report.fields + report.side_effects if d.status == "intended")
+
+
+def report_json(report: ParityReport, extra: dict[str, Any]) -> dict[str, Any]:
+    """The stored per-run report: every ``intended`` field gains ``confirmed: false`` (the
+    engine's ``FieldDiff`` has no such field; it is added here)."""
+    out = report.model_dump(mode="json")
+    for key in ("fields", "side_effects"):
+        out[key] = [{**d, "confirmed": False} if d.get("status") == "intended" else d for d in out[key]]
+    return {**out, **extra}
 
 
 def applied_noise(report: ParityReport, rules: list[NoiseRule]) -> list[dict[str, str]]:
@@ -717,7 +724,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                          if str(r.settings.get("timeout_ms") or "").isdigit()}
     if fixes:
         await ctx.log(f"{len(fixes)} finding(s) decided Fix; without a counterfactual run a difference they touch "
-                      "is reported as a defect with the finding id (unconfirmed intended change)")
+                      f"is reported as intended and unconfirmed with the finding id ({evidence.UNCONFIRMED_NOTE})")
     app_name = next((p.stem for p in Path(build.output_dir or ".").glob("*.sln")), "App")
     await ctx.stage("run")
     results: list[dict[str, Any]] = []
@@ -764,7 +771,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                     report = compare(expected, actual, rules, fixes, lineage,
                                      scenario_id=key, finding_process=proc.id,
                                      side_effect_kinds=COMPARED_SIDE_EFFECTS)
-                    unconfirmed = confirm_intended(report)
+                    unconfirmed = unconfirmed_intended(report)
                     status = "match" if report.unexplained == 0 else "differs"
                     results.append({"scenario_id": scenario_id, "key": key, "status": status,
                                     "report": report, "expected": expected, "actual": actual, "error": None,
@@ -784,13 +791,13 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     async with ctx.sessionmaker() as s:
         for res in results:
             report: ParityReport | None = res["report"]
-            report_json = ({**report.model_dump(mode="json"), **res["extra"]} if report
-                           else {"scenario_id": res["key"], "error": res["error"]})
+            stored = (report_json(report, res["extra"]) if report
+                      else {"scenario_id": res["key"], "error": res["error"]})
             run = ScenarioRun(build_id=build_id, scenario_id=res["scenario_id"], job_id=ctx.job_id,
-                              status=res["status"], report=report_json,
+                              status=res["status"], report=stored,
                               expected=_result_json(res["expected"]), actual=_result_json(res["actual"]),
                               parity=report.parity if report else None,
-                              report_hash=evidence.canonical_hash(report_json))
+                              report_hash=evidence.canonical_hash(stored))
             s.add(run)
             await s.flush()
             if report is not None:
@@ -852,7 +859,8 @@ async def parity_view(session: AsyncSession, build: Build) -> dict[str, Any] | N
             "source": "model", "label": MODEL_LABEL, "reports": reports_out, "parity": summary["parity"],
             "unexplained": summary["unexplained"], "matched": summary["matched"], "compared": summary["compared"],
             "intended": summary["intended"], "errors": errors, "report_hash": evidence.parity_hash(runs),
-            "unconfirmed_intended": sum(int((r.report or {}).get("unconfirmed_intended") or 0) for r in runs),
+            "unconfirmed_intended": evidence.unconfirmed_count(runs),
+            "unconfirmed_note": evidence.UNCONFIRMED_NOTE,
             "counterfactual": False,
             "noise_rules": [n.model_dump() for n in DEFAULT_NOISE],
             "noise_rules_applied": _unique_rules(r.report or {} for r in runs)}

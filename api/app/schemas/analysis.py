@@ -130,6 +130,7 @@ class GateOut(BaseModel):
     decided_at: str | None
     note: str | None
     reset_reason: str | None
+    notes: list[str] = []  # shown with the gate, never blocking (G5: unconfirmed intended changes)
 
 
 class AnalysisOut(BaseModel):

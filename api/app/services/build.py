@@ -11,10 +11,14 @@ Order, each stage logged ``code`` or ``ai``:
 3b. test engineer (ai): writes the rule and branch test bodies the generator left as
    ``Assert.Fail("no test body ...")``; plain code checks each body (``check_test_body``); the
    inventory is recomputed after this stage and again after the repair loop, so ``has_body``
-   reflects the final files;
+   reflects the final files; accepted bodies whose expected value appears nowhere in the rule,
+   citation, branch or fixtures are kept as ``builder.test_engineer.warnings`` for a person;
 4. builder (ai): the Code Builder fills the bodies code left (skipped, with a log line, without a
    model);
-5. review (ai): equivalence, security and standards reviewers over the agent-written code;
+5. review (ai): equivalence, security and standards reviewers over the agent-written code, and
+   the test reviewer over the rule and branch tests; it runs when the Code Builder filled a file
+   or the Test Engineer wrote a test (then the production reviewers are shown no placeholder
+   code). Test findings are stored with the others (reviewer ``test``);
 6. restore, build, format, test: ``dotnet``; restore always runs, bounded to
    ``RESTORE_TIMEOUT_S``; a failure is annotated with the NuGet probe; a step that cannot run is
    recorded as failed with the reason (``dotnet`` absent, restore failed), never hidden;
@@ -48,10 +52,10 @@ from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.design import ai_logger
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import build_provider, model_call_recorder
-from engine.agents.builder import BuildRejection, fill_method_bodies
+from engine.agents.builder import BuildRejection, fill_method_bodies, is_test_path
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
-from engine.agents.reviewers import review_panel
+from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
 from engine.agents.test_engineer import fill_test_bodies
 from engine.dotnet_gen import runner as dotnet_runner
 from engine.dotnet_gen.generator import (
@@ -327,6 +331,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 3b. test engineer (ai)
     await ctx.stage(STAGES[3])
     te_rejections: list[BuildRejection] = []
+    te_warnings: list[dict[str, str]] = []
     te_filled: list[str] = []
     placeholders = [t for t in inventory if not t["has_body"] and t["kind"] in ("rule", "branch")]
     if provider is None:
@@ -341,7 +346,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             await ctx.log(f"migration memory unavailable: {exc}")
         try:
             written = await fill_test_bodies(solution, proc, approved_rules, scenarios, design, te_memory,
-                                             provider, te_rejections)
+                                             provider, te_rejections, warnings=te_warnings)
         except (ProviderError, JsonOutputError) as exc:
             written = []
             await ctx.log(f"Test Engineer failed: {exc}", tag="ai")
@@ -354,6 +359,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                       "code checks", tag="ai")
         for r in te_rejections:
             await ctx.log(f"rejected {r.path} (attempt {r.attempt}): {r.reason}", tag="ai")
+        await ctx.log(f"Test Engineer: {len(te_warnings)} expected-value warning(s) for a person to check",
+                      tag="ai")
 
     # 4. builder (ai)
     await ctx.stage(STAGES[4])
@@ -385,17 +392,28 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 5. review panel (ai)
     await ctx.stage(STAGES[5])
     reviews: list[dict[str, Any]] = []
+    reviewers_run: list[str] = []
     if provider is None:
         await ctx.log("skipped: no model configured", tag="ai")
-    elif not filled_paths:
-        await ctx.log("skipped: no agent-written code to review", tag="ai")
+    elif not filled_paths and not te_filled:
+        await ctx.log("skipped: no agent-written code or tests to review", tag="ai")
     else:
+        # without code the builder filled, the production reviewers are shown no placeholder files
+        target = solution if filled_paths else solution.model_copy(update={"files": [
+            f for f in solution.files if f.origin != "agent" or is_test_path(f.path)]})
+        if not filled_paths:
+            await ctx.log("no agent-written production code: the production reviewers are shown no file; "
+                          "the test reviewer reviews the rule and branch tests", tag="ai")
         try:
-            found = await review_panel(solution, design, approved_rules, findings, provider, process=proc)
+            found = await review_panel(target, design, approved_rules, findings, provider, process=proc)
+            reviewers_run = ([*REVIEWERS] if filled_paths else []) + (
+                [TEST_REVIEWER] if reviewed_test_files(target, proc) else [])
             reviews = [r.model_dump() for r in found]
             triage = {t: sum(1 for r in found if r.triage == t) for t in ("patch", "defer", "decision")}
-            await ctx.log(f"review panel: {len(found)} finding(s): {triage['patch']} patch, {triage['defer']} "
-                          f"defer, {triage['decision']} decision needed", tag="ai")
+            tested = sum(1 for r in found if r.reviewer == TEST_REVIEWER)
+            await ctx.log(f"review panel ({', '.join(reviewers_run) or 'no reviewer had files'}): {len(found)} "
+                          f"finding(s), {tested} on tests: {triage['patch']} patch, {triage['defer']} defer, "
+                          f"{triage['decision']} decision needed", tag="ai")
         except (ProviderError, JsonOutputError) as exc:
             await ctx.log(f"review panel failed: {exc}", tag="ai")
 
@@ -563,7 +581,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                                                             {"path": r.path, "attempt": r.attempt, "reason": r.reason}
                                                             for r in rejections],
                      "provider": choice.name, "ai_available": provider is not None,
-                     "test_engineer": {"filled": te_filled, "rejections": [
+                     "reviewers": reviewers_run,
+                     "test_engineer": {"filled": te_filled, "warnings": te_warnings, "rejections": [
                          {"path": r.path, "attempt": r.attempt, "reason": r.reason} for r in te_rejections]}}
         b.infra_validation = vjson
         b.output_dir = str(solution.root)
@@ -624,6 +643,8 @@ async def build_view(session: AsyncSession, build: Build) -> dict[str, Any]:
             "finished_at": build.finished_at.isoformat() if build.finished_at else None,
             "error": build.error, "metrics": metrics_view(list(metrics)), "steps": build.steps or [],
             "repair": build.repair, "builder": build.builder, "infra_validation": build.infra_validation,
+            "review_findings": {name: [r for r in build.reviews or [] if r.get("reviewer") == name]
+                                for name in (build.builder or {}).get("reviewers") or []},
             "run": {"port": build.run_port, "pid": build.run_pid},
             "g4": next((g for g in gates if g["gate"] == "G4"), None)}
 

@@ -620,3 +620,90 @@ async def test_project_creation_seeds_rsi_patterns(client, app):
             break
         await asyncio.sleep(0.2)
     assert rows[0]["n"] > 0
+
+
+# ------------------------------------------------------------------ follow-up (partial first run, ir_hash)
+PARTIAL_RISK = "analysis is partial (risk reviewer failed); re-run analysis before approving G1"
+
+
+async def test_partial_first_run_keeps_the_analyst_output(client, app, monkeypatch):
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+
+    async def broken(*args, **kwargs):
+        raise ProviderError("risk model unavailable")
+
+    # a first run whose Risk Reviewer fails stores the analyst's rules and summary as partial
+    monkeypatch.setattr(analysis_svc, "review_risk", broken)
+    view = await _analyse(client, proc_id)
+    assert view["rules"] and all(r["citations"] for r in view["rules"])
+    assert view["summary"] and not view["summary"].startswith("Code-only analysis")
+    assert view["notice"] == analysis_svc.PARTIAL_NOTICE
+    assert "risk reviewer" in view["ai_reason"]
+    assert {f["source"] for f in view["findings"]} == {"static"}  # no AI finding without the reviewer
+    async with app.state.sessionmaker() as s:
+        run = await s.scalar(select(AnalysisRun).where(AnalysisRun.process_id == proc_id))
+    assert run.summary["failed_stages"] == ["risk reviewer"]
+    assert run.summary["summary_source"] == "model"
+
+    gates = {g["gate"]: g for g in (await client.get(f"/processes/{proc_id}/gates")).json()}
+    assert gates["G1"]["enabled"] is False and PARTIAL_RISK in gates["G1"]["reason"]
+    decided = await _decide_rules(client, view)
+    assert _gate(decided, "G1")["reason"] == PARTIAL_RISK  # the only reason left
+    r = await client.post(f"/gates/{proc_id}/G1", json={"state": "approved", "note": ""}, headers=SME)
+    assert r.status_code == 409 and PARTIAL_RISK in r.json()["detail"]
+    r = await client.post(f"/gates/{proc_id}/G1", json={"state": "rejected", "note": "partial"}, headers=SME)
+    assert r.status_code == 200 and r.json()["state"] == "rejected"  # rejection stays allowed
+
+    # a complete run clears the reason
+    monkeypatch.undo()
+    view = await _analyse(client, proc_id)
+    assert view["notice"] is None
+    assert any(f["source"] == "ai" for f in view["findings"])
+    assert "analysis is partial" not in (_gate(view, "G1")["reason"] or "")
+    async with app.state.sessionmaker() as s:
+        run = await s.scalar(select(AnalysisRun).where(AnalysisRun.process_id == proc_id)
+                             .order_by(AnalysisRun.created_at.desc()).limit(1))
+    assert run.summary["failed_stages"] == []
+
+
+async def test_failed_challenger_on_a_first_run_is_partial(client, app, monkeypatch):
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+
+    async def broken(*args, **kwargs):
+        raise ProviderError("challenger unavailable")
+
+    monkeypatch.setattr(analysis_svc, "challenge", broken)
+    view = await _analyse(client, proc_id)
+    assert view["rules"] and all(r["challenge"] is None for r in view["rules"])
+    assert view["notice"] == analysis_svc.PARTIAL_NOTICE
+    reason = "analysis is partial (challenger failed); re-run analysis before approving G1"
+    assert reason in _gate(view, "G1")["reason"]
+
+
+async def test_analysis_stores_the_hash_of_the_ir_it_analyzed(client, app, monkeypatch):
+    from api.app.services import gates as gate_svc
+
+    _, procs = await _scanned(client)
+    proc_id = procs[DFR]["id"]
+    async with app.state.sessionmaker() as s:
+        analyzed = gate_svc.ir_hash((await s.get(Process, proc_id)).ir)
+    review_risk = analysis_svc.review_risk
+
+    async def rescan_meanwhile(*args, **kwargs):
+        async with app.state.sessionmaker() as s:  # a rescan changes the IR while the job runs
+            row = await s.get(Process, proc_id)
+            row.ir = {**row.ir, "raw_xml_sha256": "changed-by-a-rescan"}
+            await s.commit()
+        return await review_risk(*args, **kwargs)
+
+    monkeypatch.setattr(analysis_svc, "review_risk", rescan_meanwhile)
+    view = await _analyse(client, proc_id)
+    async with app.state.sessionmaker() as s:
+        run = await s.scalar(select(AnalysisRun).where(AnalysisRun.process_id == proc_id))
+        current = gate_svc.ir_hash((await s.get(Process, proc_id)).ir)
+    assert run.summary["ir_hash"] == analyzed != current
+    assert view["ir_changed"] is True
+    gates = {g["gate"]: g for g in (await client.get(f"/processes/{proc_id}/gates")).json()}
+    assert gate_svc.IR_CHANGED in gates["G1"]["reason"]

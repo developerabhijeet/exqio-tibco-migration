@@ -4,7 +4,11 @@ Stages run in a fixed order, each tagged ``code`` or ``ai`` in the job log:
 static rules (code) -> analyst (ai) -> verifier (code) -> coverage (code) -> risk reviewer (ai)
 -> challenger (ai) -> persist (code). Without a model provider the ai stages log
 "skipped: code-only analysis: no model configured" and the result carries ``ai_available``
-false with the reason. A model stage that fails is logged and the job continues code only.
+false with the reason. A model stage that fails is logged and the job continues code only; the
+run is stored with ``PARTIAL_NOTICE`` and ``failed_stages`` (which keeps G1 disabled until a
+complete run). Only a failed Workflow Analyst with no earlier analysis to carry stores nothing.
+The run records the hash of the IR it analyzed (taken when the job starts), so a rescan during
+the job shows as "IR changed since analysis".
 
 Ids: rules are ``R1..Rn`` per process and keep their key across re-runs when the analyst's
 text is unchanged (matched on normalised text, against the analyst's original wording when the
@@ -65,7 +69,7 @@ log = logging.getLogger(__name__)
 
 STAGES = ("static rules", "analyst", "verifier", "coverage", "risk reviewer", "challenger", "persist")
 SKIPPED = f"skipped: {CODE_ONLY_NOTICE}"
-PARTIAL_NOTICE = "partial analysis: a model stage failed, see the job log"
+PARTIAL_NOTICE = gate_svc.PARTIAL_NOTICE
 UNVERIFIED_OWNER = "business SME"
 _WS = re.compile(r"\s+")
 
@@ -184,7 +188,8 @@ def analyse_job(process_id: str, settings: Settings, knowledge: Knowledge):
 
 
 class AnalysisFailed(Exception):
-    """A model stage failed and there is no earlier analysis to carry forward: nothing is stored."""
+    """The Workflow Analyst failed and there is no earlier analysis to carry forward: nothing is
+    stored. A later stage failing on a first run stores what succeeded as a partial analysis."""
 
 
 def _existing(rules: list[Rule], findings: list[Finding]) -> tuple[list[dict], list[dict]]:
@@ -224,6 +229,7 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
         app_row = await s.get(Application, row.application_id)
         project_id = row.project_id
         proc = IRProcess.model_validate(row.ir)
+        analyzed_ir_hash = gate_svc.ir_hash(row.ir)  # the IR this job analyzes, before any stage
         app = IRApplication.model_validate({**(app_row.ir if app_row else {}), "processes": []})
         rule_rows = await gate_svc.load_rules(s, process_id)
         finding_rows = await gate_svc.load_findings(s, process_id)
@@ -250,10 +256,12 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
             ctx.sessionmaker, job_id=ctx.job_id, project_id=project_id, process_id=process_id,
             primary_name=provider.primary.name, on_record=on_record)
     ai_errors: list[str] = []
+    failed_stages: list[str] = []
 
     def stage_failed(stage: str, exc: Exception) -> None:
         ai_errors.append(f"{stage}: {exc}")
-        if not has_previous:
+        failed_stages.append(stage)
+        if stage == "analyst" and not has_previous:
             raise AnalysisFailed(f"{stage} failed and there is no earlier analysis to keep, so nothing "
                                  f"was stored: {exc}") from exc
 
@@ -383,7 +391,8 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
     notice = CODE_ONLY_NOTICE if provider is None else (PARTIAL_NOTICE if ai_errors else None)
     meta = {"text": summary, "summary_source": summary_source, "technical": technical,
             "ai_available": ai_available, "ai_reason": ai_reason, "notice": notice,
-            "key_marks": marks, "full_run": full_run}
+            "key_marks": marks, "full_run": full_run, "failed_stages": failed_stages,
+            "ir_hash": analyzed_ir_hash}
     result = await _persist(ctx, process_id, choice.name, meta, rules, originals, findings, coverage,
                             snapshot, keep_decided=not full_run)
     await ctx.log(f"stored {result['rules']} rule(s), {result['findings']} finding(s), "
@@ -407,11 +416,12 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
                    keep_decided: bool) -> dict[str, Any]:
     """Store one analysis. The process row is locked, so a rule or finding decision cannot
     interleave; a rule the SME changed while the job ran keeps the SME's status and text. On a
-    code-only or partial run (``keep_decided``) no decided rule or finding is deleted."""
+    code-only or partial run (``keep_decided``) no decided rule or finding is deleted.
+    ``meta["ir_hash"]`` is the hash of the IR the job analyzed (the current one when absent)."""
     async with ctx.sessionmaker() as s:
         process = await s.get(Process, process_id, with_for_update=True)
         await gate_svc.reconcile(s, process)
-        meta = {**meta, "ir_hash": gate_svc.ir_hash(process.ir)}
+        meta = {**meta, "ir_hash": meta.get("ir_hash") or gate_svc.ir_hash(process.ir)}
         analysis = AnalysisRun(process_id=process_id, job_id=ctx.job_id, provider=provider_name,
                                static_only=not meta["ai_available"], summary=meta, verification={})
         s.add(analysis)
