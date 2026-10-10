@@ -1,0 +1,103 @@
+using System.Diagnostics.CodeAnalysis;
+
+namespace {{ app }}.Core.Tibco;
+
+/// <summary>A TIBCO link: its id and the steps it connects.</summary>
+public sealed record ProcessLink(string Id, string From, string To);
+
+/// <summary>
+/// TIBCO link semantics for processes that are not straight-line (parallel links, several conditional
+/// links on one step, error links, joins): a step runs once, when every incoming link is decided and at
+/// least one was taken; a step whose incoming links were all not taken is skipped and its outgoing links
+/// are not taken either (dead path elimination), so a join waits for every live predecessor.
+/// </summary>
+public sealed class ProcessFlow
+{
+    private readonly Dictionary<string, List<ProcessLink>> _incoming = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<ProcessLink>> _outgoing = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool> _taken = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _queued = new(StringComparer.Ordinal);
+    private readonly Queue<string> _ready = new();
+
+    public ProcessFlow(IEnumerable<ProcessLink> links)
+    {
+        ArgumentNullException.ThrowIfNull(links);
+        foreach (var link in links)
+        {
+            Add(_outgoing, link.From, link);
+            Add(_incoming, link.To, link);
+        }
+    }
+
+    /// <summary>Queues a step that has no incoming link (the starter).</summary>
+    public void Start(string step)
+    {
+        if (_queued.Add(step))
+        {
+            _ready.Enqueue(step);
+        }
+    }
+
+    /// <summary>The next step whose incoming links are all decided.</summary>
+    public bool TryNext([NotNullWhen(true)] out string? step) => _ready.TryDequeue(out step);
+
+    /// <summary>Records that <paramref name="step"/> ran and which of its outgoing links it took.</summary>
+    public void Complete(string step, IReadOnlyCollection<string> takenLinks)
+    {
+        ArgumentNullException.ThrowIfNull(takenLinks);
+        Finish(step, takenLinks);
+    }
+
+    private void Finish(string step, IReadOnlyCollection<string> takenLinks)
+    {
+        if (!_finished.Add(step))
+        {
+            return;
+        }
+
+        foreach (var link in Links(_outgoing, step))
+        {
+            _taken[link.Id] = takenLinks.Contains(link.Id);
+            Evaluate(link.To);
+        }
+    }
+
+    private void Evaluate(string step)
+    {
+        if (_queued.Contains(step) || _finished.Contains(step))
+        {
+            return;
+        }
+
+        var incoming = Links(_incoming, step);
+        if (incoming.Any(l => !_taken.ContainsKey(l.Id)))
+        {
+            return; // a predecessor has not run yet
+        }
+
+        if (incoming.Any(l => _taken[l.Id]))
+        {
+            _queued.Add(step);
+            _ready.Enqueue(step);
+        }
+        else
+        {
+            Finish(step, []); // dead path: no incoming link was taken
+        }
+    }
+
+    private static List<ProcessLink> Links(Dictionary<string, List<ProcessLink>> map, string step) =>
+        map.TryGetValue(step, out var links) ? links : [];
+
+    private static void Add(Dictionary<string, List<ProcessLink>> map, string step, ProcessLink link)
+    {
+        if (!map.TryGetValue(step, out var links))
+        {
+            links = [];
+            map[step] = links;
+        }
+
+        links.Add(link);
+    }
+}

@@ -6,29 +6,34 @@ namespace {{ app }}.Infrastructure.Messaging;
 
 /// <summary>
 /// In-memory bus for tests and local runs (<c>Messaging:Mode=InMemory</c>): delivery is synchronous,
-/// every message is recorded so tests and the verifier can read what a process published.
+/// every message is recorded, and dead-lettered messages are kept with their reason, so tests and the
+/// verifier can read what a process published and how each message was settled.
 /// </summary>
 public sealed class InMemoryMessageBus : IMessageBus
 {
     private static readonly IReadOnlyDictionary<string, string> NoProperties = new Dictionary<string, string>();
-    private readonly ConcurrentDictionary<string, List<Func<BusMessage, CancellationToken, Task>>> _handlers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, List<Func<BusMessage, CancellationToken, Task<BusOutcome>>>> _handlers = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<BusMessage> _published = new();
+    private readonly ConcurrentQueue<DeadLetteredMessage> _deadLettered = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<BusMessage>> _replies = new(StringComparer.Ordinal);
 
     /// <summary>Every message published or delivered, in order.</summary>
     public IReadOnlyList<BusMessage> Published => [.. _published];
 
+    /// <summary>Messages a consumer dead-lettered, with the reason (fault name, SelectorMismatch, ...).</summary>
+    public IReadOnlyList<DeadLetteredMessage> DeadLettered => [.. _deadLettered];
+
     /// <summary>Messages published to one entity (a queue or a topic name).</summary>
     public IReadOnlyList<BusMessage> PublishedTo(string entity) => [.. _published.Where(m => m.Entity == entity)];
 
-    public Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default)
+    public async Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default)
     {
         var body = JsonSerializer.Serialize(message, BusJson.Options);
-        return DeliverAsync(new BusMessage(entity, body, properties ?? NoProperties), cancellationToken);
+        await DeliverAsync(new BusMessage(entity, body, properties ?? NoProperties), cancellationToken);
     }
 
-    /// <summary>Records <paramref name="message"/> and hands it to the subscribers of its entity.</summary>
-    public async Task DeliverAsync(BusMessage message, CancellationToken cancellationToken = default)
+    /// <summary>Records <paramref name="message"/>, hands it to the subscribers of its entity and returns how each settled it.</summary>
+    public async Task<IReadOnlyList<BusOutcome>> DeliverAsync(BusMessage message, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         _published.Enqueue(message);
@@ -36,27 +41,36 @@ public sealed class InMemoryMessageBus : IMessageBus
             && _replies.TryRemove($"{message.Entity}|{correlationId}", out var waiter))
         {
             waiter.TrySetResult(message);
-            return;
+            return [];
         }
 
         if (!_handlers.TryGetValue(message.Entity, out var handlers))
         {
-            return;
+            return [];
         }
 
-        Func<BusMessage, CancellationToken, Task>[] snapshot;
+        Func<BusMessage, CancellationToken, Task<BusOutcome>>[] snapshot;
         lock (handlers)
         {
             snapshot = [.. handlers];
         }
 
+        var outcomes = new List<BusOutcome>();
         foreach (var handler in snapshot)
         {
-            await handler(message, cancellationToken).ConfigureAwait(false);
+            var outcome = await handler(message, cancellationToken);
+            if (outcome.Disposition == BusDisposition.DeadLetter)
+            {
+                _deadLettered.Enqueue(new DeadLetteredMessage(message, outcome.Reason ?? "DeadLettered", outcome.Description));
+            }
+
+            outcomes.Add(outcome);
         }
+
+        return outcomes;
     }
 
-    public Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
+    public Task<IAsyncDisposable> SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task<BusOutcome>> handler, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entity);
         var key = entity.Split('/')[0]; // topic/subscription: every subscription sees every topic message
@@ -66,7 +80,7 @@ public sealed class InMemoryMessageBus : IMessageBus
             handlers.Add(handler);
         }
 
-        return Task.CompletedTask;
+        return Task.FromResult<IAsyncDisposable>(new Subscription(handlers, handler));
     }
 
     public async Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default)
@@ -80,8 +94,8 @@ public sealed class InMemoryMessageBus : IMessageBus
             [BusMessage.ReplyToProperty] = replyTo,
             [BusMessage.CorrelationIdProperty] = correlationId,
         };
-        await PublishAsync(entity, message, properties, cancellationToken).ConfigureAwait(false);
-        return await waiter.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(entity, message, properties, cancellationToken);
+        return await waiter.Task.WaitAsync(timeout, cancellationToken);
     }
 
     public Task ReplyAsync<T>(BusMessage request, T message, CancellationToken cancellationToken = default)
@@ -100,4 +114,20 @@ public sealed class InMemoryMessageBus : IMessageBus
 
         return PublishAsync(replyTo, message, properties, cancellationToken);
     }
+
+    private sealed class Subscription(List<Func<BusMessage, CancellationToken, Task<BusOutcome>>> handlers, Func<BusMessage, CancellationToken, Task<BusOutcome>> handler) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            lock (handlers)
+            {
+                handlers.Remove(handler);
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
 }
+
+/// <summary>A message a consumer dead-lettered, with the reason and description it gave.</summary>
+public sealed record DeadLetteredMessage(BusMessage Message, string Reason, string? Description);

@@ -3,13 +3,14 @@ using System.Globalization;
 namespace {{ app }}.Core.Tibco;
 
 /// <summary>
-/// A value read from a TIBCO variable path, converted the way an XSLT <c>value-of</c> converts it:
-/// to its string form first, then to the type of the property it is assigned to. Generated
-/// mappings write <c>Target = TibValue.Of(source)</c> so a simple path compiles whatever the source
-/// and target types are; a value that does not convert raises <see cref="FormatException"/>.
+/// A value read from a TIBCO variable path, converted the way an XSLT <c>value-of</c> converts it: to
+/// its string form first, then explicitly to the type a mapping needs. Generated code uses it only when
+/// the source and target types differ (<c>TibValue.Of(row.Amount).AsString()</c>); every <c>AsX()</c>
+/// returns null instead of throwing, and a required target fails visibly with <see cref="Missing"/>.
 /// </summary>
 public readonly struct TibValue : IEquatable<TibValue>
 {
+    private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     private readonly object? _value;
 
     private TibValue(object? value) => _value = value;
@@ -17,77 +18,65 @@ public readonly struct TibValue : IEquatable<TibValue>
     /// <summary>Wraps a source value (null, a string, a number, a date or any formattable value).</summary>
     public static TibValue Of(object? value) => new(value);
 
+    /// <summary>True when the string value is empty (an absent or empty element).</summary>
+    public bool IsEmpty => AsString().Length == 0;
+
     /// <summary>The XPath string value: empty for null, invariant culture for numbers and dates.</summary>
-    public string Text => _value switch
+    public string AsString() => _value switch
     {
         null => string.Empty,
         string s => s,
         bool b => b ? "true" : "false",
-        DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture),
-        DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture),
-        DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        TimeOnly t => t.ToString("HH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture),
-        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+        DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFF", Invariant),
+        DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz", Invariant),
+        DateOnly d => d.ToString("yyyy-MM-dd", Invariant),
+        TimeOnly t => t.ToString("HH:mm:ss.FFFFFFF", Invariant),
+        IFormattable f => f.ToString(null, Invariant),
         _ => _value.ToString() ?? string.Empty,
     };
 
-    /// <summary>True when the string value is empty (an absent or empty element).</summary>
-    public bool IsEmpty => Text.Length == 0;
+    public int? AsInt() => int.TryParse(AsString(), NumberStyles.Integer, Invariant, out var v) ? v : null;
 
-    /// <summary>The value as a number, or null when it is not one (XPath NaN).</summary>
-    public decimal? Number => decimal.TryParse(Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : null;
+    public long? AsLong() => long.TryParse(AsString(), NumberStyles.Integer, Invariant, out var v) ? v : null;
 
-    public static implicit operator string(TibValue value) => value.Text;
+    public ulong? AsULong() => ulong.TryParse(AsString(), NumberStyles.Integer, Invariant, out var v) ? v : null;
 
-    public static implicit operator int(TibValue value) => int.Parse(value.Text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    public decimal? AsDecimal() => decimal.TryParse(AsString(), NumberStyles.Float, Invariant, out var v) ? v : null;
 
-    public static implicit operator int?(TibValue value) => value.IsEmpty ? null : (int)value;
+    public double? AsDouble() => double.TryParse(AsString(), NumberStyles.Float, Invariant, out var v) ? v : null;
 
-    public static implicit operator long(TibValue value) => long.Parse(value.Text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    public float? AsFloat() => float.TryParse(AsString(), NumberStyles.Float, Invariant, out var v) ? v : null;
 
-    public static implicit operator long?(TibValue value) => value.IsEmpty ? null : (long)value;
+    public bool? AsBool() => AsString() switch
+    {
+        "true" or "1" => true,
+        "false" or "0" => false,
+        _ => null,
+    };
 
-    public static implicit operator ulong(TibValue value) => ulong.Parse(value.Text, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    public DateTime? AsDateTime() => DateTime.TryParse(AsString(), Invariant, DateTimeStyles.RoundtripKind, out var v) ? v : null;
 
-    public static implicit operator ulong?(TibValue value) => value.IsEmpty ? null : (ulong)value;
+    public DateOnly? AsDateOnly()
+    {
+        var text = AsString();
+        return DateOnly.TryParse(text.Length >= 10 ? text[..10] : text, Invariant, out var v) ? v : null;
+    }
 
-    public static implicit operator decimal(TibValue value) => decimal.Parse(value.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
+    public TimeOnly? AsTimeOnly() => TimeOnly.TryParse(AsString(), Invariant, out var v) ? v : null;
 
-    public static implicit operator decimal?(TibValue value) => value.IsEmpty ? null : (decimal)value;
+    /// <summary>The error for a required target whose TIBCO value is empty or does not convert.</summary>
+    public static FormatException Missing(string field) =>
+        new($"The TIBCO mapping produced no valid value for the required field '{field}'.");
 
-    public static implicit operator double(TibValue value) => double.Parse(value.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
-
-    public static implicit operator double?(TibValue value) => value.IsEmpty ? null : (double)value;
-
-    public static implicit operator float(TibValue value) => float.Parse(value.Text, NumberStyles.Float, CultureInfo.InvariantCulture);
-
-    public static implicit operator float?(TibValue value) => value.IsEmpty ? null : (float)value;
-
-    public static implicit operator bool(TibValue value) => value.Text is "true" or "1";
-
-    public static implicit operator bool?(TibValue value) => value.IsEmpty ? null : (bool)value;
-
-    public static implicit operator DateTime(TibValue value) => DateTime.Parse(value.Text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-
-    public static implicit operator DateTime?(TibValue value) => value.IsEmpty ? null : (DateTime)value;
-
-    public static implicit operator DateOnly(TibValue value) => DateOnly.Parse(value.Text.Length >= 10 ? value.Text[..10] : value.Text, CultureInfo.InvariantCulture);
-
-    public static implicit operator DateOnly?(TibValue value) => value.IsEmpty ? null : (DateOnly)value;
-
-    public static implicit operator TimeOnly(TibValue value) => TimeOnly.Parse(value.Text, CultureInfo.InvariantCulture);
-
-    public static implicit operator TimeOnly?(TibValue value) => value.IsEmpty ? null : (TimeOnly)value;
-
-    public bool Equals(TibValue other) => string.Equals(Text, other.Text, StringComparison.Ordinal);
+    public bool Equals(TibValue other) => string.Equals(AsString(), other.AsString(), StringComparison.Ordinal);
 
     public override bool Equals(object? obj) => obj is TibValue other && Equals(other);
 
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Text);
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(AsString());
 
     public static bool operator ==(TibValue left, TibValue right) => left.Equals(right);
 
     public static bool operator !=(TibValue left, TibValue right) => !left.Equals(right);
 
-    public override string ToString() => Text;
+    public override string ToString() => AsString();
 }

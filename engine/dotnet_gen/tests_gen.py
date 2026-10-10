@@ -256,7 +256,7 @@ def rules_tests(ctx: TestContext, process: Process, rules: list[Rule]) -> str:
         if i:
             lines.append("")
         rid = _method_id(r.id)
-        name = _unique(f"{rid}_{g.slug(r.text)}".rstrip("_"), used)
+        name = _unique(g.method_name(rid, r.text, lower=True), used)
         text = g.one_line(r.text)
         cites = "; ".join(f"{c.activity_id} ({c.kind}): {g.one_line(c.text)}" for c in r.citations) or "none"
         lines += [f"    /// <summary>{g.xml_doc(f'{r.id}: {text}')}</summary>",
@@ -300,8 +300,8 @@ def branch_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]) 
             lines.append("")
         src, dst = names.get(t.from_id, t.from_id), names.get(t.to_id, t.to_id)
         when = f"when {g.one_line(t.expression or '')}" if t.kind == "conditional" else "otherwise"
-        words = f"when {g.slug(t.expression or '', 6)}" if t.kind == "conditional" else "otherwise"
-        name = _unique(_method_id(f"Branch_{g.ident(src)}_to_{g.ident(dst)}_{words.replace(' ', '_')}".rstrip("_")), used)
+        words = f"when {(t.expression or '').lower()}" if t.kind == "conditional" else "otherwise"
+        name = _unique(_method_id(g.method_name(f"Branch_{g.ident(src)}_to_{g.ident(dst)}", words)), used)
         sc = covered[t.id]
         line = f" (line {t.source_line})" if t.source_line else ""
         driver = f"Driven by scenario {sc.id}." if sc else "No scenario takes this link."
@@ -364,7 +364,7 @@ def scenario_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]
     used: set[str] = set()
     for s in scenarios:
         stem = scenario_stem(process, s)
-        name = _unique(_method_id(f"Scenario_{stem}"), used)
+        name = _unique(_method_id(g.method_name("Scenario", stem)), used)
         lines += [f"    /// <summary>{g.xml_doc(f'{s.kind} scenario {s.id}: {s.name}.')}</summary>",
                   f"    [Fact(DisplayName = {g.cs_string(f'{SCENARIO_PREFIX} [{s.id}] {g.one_line(s.name)}')})]",
                   f"    [Trait(\"Scenario\", {g.cs_string(s.id)})]",

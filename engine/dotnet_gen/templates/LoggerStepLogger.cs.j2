@@ -1,9 +1,13 @@
+using {{ app }}.Core.Contracts;
 using {{ app }}.Core.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace {{ app }}.Infrastructure.Diagnostics;
 
-/// <summary>TIBCO Log activity on ILogger: one structured entry per step, level from <c>logLevel</c>.</summary>
+/// <summary>
+/// TIBCO Log activity on ILogger: one structured entry per step, level from <c>logLevel</c>. SSN-shaped
+/// values and long account or card numbers in the message are masked (<see cref="Masking.MaskText"/>).
+/// </summary>
 public sealed class LoggerStepLogger(ILogger<LoggerStepLogger> logger) : IStepLogger
 {
     public void Write(string process, string step, StepLogEntry entry)
@@ -17,6 +21,6 @@ public sealed class LoggerStepLogger(ILogger<LoggerStepLogger> logger) : IStepLo
             "TRACE" => LogLevel.Trace,
             _ => LogLevel.Information,
         };
-        logger.Log(level, "{Process} {Step} {MsgCode} {Message}", process, step, entry.MsgCode, entry.Message);
+        logger.Log(level, "{Process} {Step} {MsgCode} {Message}", process, step, entry.MsgCode, Masking.MaskText(entry.Message));
     }
 }

@@ -15,6 +15,7 @@ src/GmfCredit.Core/Contracts/DealerFunding/Faults.cs
 src/GmfCredit.Core/Contracts/DealerFunding/FundingEvent.cs
 src/GmfCredit.Core/Contracts/DealerFunding/FundingRequest.cs
 src/GmfCredit.Core/Contracts/DealerFunding/FundingStatusLookupFunding.cs
+src/GmfCredit.Core/Contracts/Masking.cs
 src/GmfCredit.Core/Contracts/TibcoPathAttribute.cs
 src/GmfCredit.Core/Data/DealerFundingRequestData.cs
 src/GmfCredit.Core/Data/FundingStatusLookupData.cs
@@ -33,6 +34,7 @@ src/GmfCredit.Core/Services/FundingStatusLookupService.cs
 src/GmfCredit.Core/Services/FundingStatusLookupState.cs
 src/GmfCredit.Core/Services/ProcessResult.cs
 src/GmfCredit.Core/Tibco/AgentFill.cs
+src/GmfCredit.Core/Tibco/ProcessFlow.cs
 src/GmfCredit.Core/Tibco/TibValue.cs
 src/GmfCredit.Infrastructure/Diagnostics/LoggerStepLogger.cs
 src/GmfCredit.Infrastructure/GmfCredit.Infrastructure.csproj

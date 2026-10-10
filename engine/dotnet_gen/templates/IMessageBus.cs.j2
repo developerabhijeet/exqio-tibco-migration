@@ -12,8 +12,13 @@ public interface IMessageBus
     /// <summary>JMS Send or Publish: sends <paramref name="message"/> to a queue or topic.</summary>
     Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default);
 
-    /// <summary>JMS receive: calls <paramref name="handler"/> for every message on a queue, or on a topic (<c>topic/subscription</c>).</summary>
-    Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// JMS receive on a queue, or on a topic as <c>topic/subscription</c>. The handler settles each message:
+    /// it returns <see cref="BusOutcome.Completed"/> or a dead-letter outcome; an exception means a
+    /// transient failure, and the message is abandoned so the bus redelivers it. Dispose the returned
+    /// subscription to stop receiving.
+    /// </summary>
+    Task<IAsyncDisposable> SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task<BusOutcome>> handler, CancellationToken cancellationToken = default);
 
     /// <summary>JMS Request Reply: sends with a reply-to entity and waits for the correlated reply.</summary>
     Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default);
@@ -29,6 +34,24 @@ public sealed record BusMessage(string Entity, string Body, IReadOnlyDictionary<
     public const string ReplyToProperty = "ReplyTo";
 
     public const string CorrelationIdProperty = "CorrelationId";
+}
+
+/// <summary>How a consumer settles a message.</summary>
+public enum BusDisposition
+{
+    /// <summary>Processed: remove the message.</summary>
+    Complete,
+
+    /// <summary>Not processable as is (business fault, selector mismatch, invalid body): keep it on the dead-letter queue.</summary>
+    DeadLetter,
+}
+
+/// <summary>The settlement a consumer returns for one message.</summary>
+public sealed record BusOutcome(BusDisposition Disposition, string? Reason = null, string? Description = null)
+{
+    public static BusOutcome Completed { get; } = new(BusDisposition.Complete);
+
+    public static BusOutcome DeadLetter(string reason, string? description = null) => new(BusDisposition.DeadLetter, reason, description);
 }
 
 /// <summary>JSON settings shared by publishers and consumers (web defaults, numbers accepted as strings).</summary>

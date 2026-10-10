@@ -20,7 +20,7 @@ public sealed class DealerFundingRequestRulesTests
     /// <remarks>Citations: LookupDeal (condition): number($LookupDeal/Record[1]/approved_amount) * 0.02</remarks>
     [Fact(DisplayName = "R2 The funding amount must be within 2% of the approved deal amount.")]
     [Trait("Rule", "R2")]
-    public Task R2_the_funding_amount_must_be_within_2_of()
+    public Task R2_the_funding_amount_must_be_within_2_of_the_approved_deal_amount()
     {
         Assert.Fail("no test body for R2");
         return Task.CompletedTask;
@@ -30,7 +30,7 @@ public sealed class DealerFundingRequestRulesTests
     /// <remarks>Citations: CheckExistingFunding (sql): select funding_id, status; InsertFunding (sql): insert into gmf.funding</remarks>
     [Fact(DisplayName = "R3 A deal is funded at most once; a repeat request is logged as DF-409.")]
     [Trait("Rule", "R3")]
-    public Task R3_a_deal_is_funded_at_most_once_a()
+    public Task R3_a_deal_is_funded_at_most_once_a_repeat_request_is_logged_as_df_409()
     {
         Assert.Fail("no test body for R3");
         return Task.CompletedTask;

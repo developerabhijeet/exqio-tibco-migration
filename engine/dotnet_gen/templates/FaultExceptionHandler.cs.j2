@@ -1,3 +1,4 @@
+using {{ app }}.Core.Contracts;
 using {{ app }}.Core.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -6,7 +7,8 @@ namespace {{ app }}.Api.Errors;
 
 /// <summary>
 /// Maps the typed TIBCO fault exceptions to ProblemDetails (status 500, as an uncaught BW fault
-/// fails the job); the fault record is returned in the <c>fault</c> extension.
+/// fails the job); the fault record is returned in the <c>fault</c> extension with its sensitive
+/// fields masked (<see cref="Masking.MaskJson"/>).
 /// </summary>
 public sealed class FaultExceptionHandler(IProblemDetailsService problemDetails) : IExceptionHandler
 {
@@ -25,12 +27,12 @@ public sealed class FaultExceptionHandler(IProblemDetailsService problemDetails)
             Title = fault.FaultName,
             Detail = fault.Message,
         };
-        details.Extensions["fault"] = fault.FaultData;
+        details.Extensions["fault"] = Masking.MaskJson(fault.FaultData);
         return await problemDetails.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = httpContext,
             ProblemDetails = details,
             Exception = exception,
-        }).ConfigureAwait(false);
+        });
     }
 }

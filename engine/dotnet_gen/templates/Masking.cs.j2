@@ -1,0 +1,142 @@
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+
+namespace {{ app }}.Core.Contracts;
+
+/// <summary>Marks a property whose value is masked in ToString(), logs and error responses.</summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field, AllowMultiple = false, Inherited = true)]
+public sealed class SensitiveAttribute : Attribute
+{
+}
+
+/// <summary>
+/// Masking for sensitive fields (SSN, account and card numbers): every letter and digit except the
+/// last four becomes <c>*</c> and separators stay, so <c>909-32-1184</c> prints as <c>***-**-1184</c>.
+/// </summary>
+public static class Masking
+{
+    private static readonly HashSet<string> SensitiveNames = new(StringComparer.Ordinal)
+    {
+{% for n in names %}
+        "{{ n }}",
+{% endfor %}
+    };
+
+    private static readonly Regex SensitiveText = new(
+        @"\b\d{3}-\d{2}-\d{4}\b|\b(?:\d[ -]?){8,18}\d\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>True for a field name that holds a sensitive value (Ssn, accountNumber, card_number, ...).</summary>
+    public static bool IsSensitiveName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var normalized = new string(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        return SensitiveNames.Contains(normalized);
+    }
+
+    /// <summary>Masks one value, keeping its last four letters or digits and its separators.</summary>
+    public static string Mask(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value ?? string.Empty;
+        }
+
+        var keep = 4;
+        var chars = value.ToCharArray();
+        for (var i = chars.Length - 1; i >= 0; i--)
+        {
+            if (!char.IsLetterOrDigit(chars[i]))
+            {
+                continue;
+            }
+
+            if (keep > 0)
+            {
+                keep--;
+            }
+            else
+            {
+                chars[i] = '*';
+            }
+        }
+
+        return new string(chars);
+    }
+
+    /// <summary>Masks SSN-shaped values and long digit runs (account and card numbers) inside free text.</summary>
+    public static string MaskText(string? text) =>
+        string.IsNullOrEmpty(text) ? text ?? string.Empty : SensitiveText.Replace(text, m => Mask(m.Value));
+
+    /// <summary>A record printed like the compiler's ToString(), with [Sensitive] properties masked.</summary>
+    public static string ToMaskedString(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var type = value.GetType();
+        var builder = new StringBuilder(type.Name).Append(" { ");
+        var first = true;
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.GetIndexParameters().Length > 0 || property.Name == "EqualityContract")
+            {
+                continue;
+            }
+
+            if (!first)
+            {
+                builder.Append(", ");
+            }
+
+            first = false;
+            var raw = property.GetValue(value);
+            var sensitive = property.GetCustomAttribute<SensitiveAttribute>() is not null || IsSensitiveName(property.Name);
+            builder.Append(property.Name).Append(" = ").Append(sensitive ? Mask(Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture)) : raw);
+        }
+
+        return builder.Append(first ? "}" : " }").ToString();
+    }
+
+    /// <summary>The value as JSON with every sensitive field masked (for error responses and logs).</summary>
+    public static JsonNode? MaskJson(object? value)
+    {
+        var node = value is null ? null : JsonSerializer.SerializeToNode(value, value.GetType(), JsonOptions);
+        MaskNode(node);
+        return node;
+    }
+
+    private static void MaskNode(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var name in obj.Select(p => p.Key).ToList())
+                {
+                    if (IsSensitiveName(name) && obj[name] is JsonValue v)
+                    {
+                        obj[name] = Mask(v.ToString());
+                    }
+                    else
+                    {
+                        MaskNode(obj[name]);
+                    }
+                }
+
+                break;
+            case JsonArray array:
+                foreach (var item in array)
+                {
+                    MaskNode(item);
+                }
+
+                break;
+            default:
+                break;
+        }
+    }
+}

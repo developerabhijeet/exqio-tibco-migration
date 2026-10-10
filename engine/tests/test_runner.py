@@ -21,6 +21,7 @@ from engine.tibco_parser.scanner import scan_folder
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GMF = REPO_ROOT / "samples" / "synthetic-gmf"
 FSL = "dealerfunding.FundingStatusLookup"
+CAI = "creditorigination.CreditApplicationIntake"
 DFR = "dealerfunding.DealerFundingRequest"
 NUGET_SKIP = "NuGet unreachable: run `make nuget-cache` on a machine with NuGet access"
 
@@ -151,3 +152,62 @@ def test_run_service_waits_for_health_and_stops(tmp_path):
         handle.stop()
     assert handle.poll() is not None
     assert Path(handle.log_path).exists()
+
+
+PROBE = """
+using GmfCredit.Core.Contracts;
+using GmfCredit.Core.Data;
+using GmfCredit.Core.Tibco;
+
+Console.WriteLine("record=" + new CheckDuplicateApplicationInput { Ssn = "909-32-1184" });
+Console.WriteLine("text=" + Masking.MaskText("SSN 909-32-1184 account 4000123412341234 ok"));
+Console.WriteLine("json=" + Masking.MaskJson(new { accountNumber = "GMF-10000006", amount = 12.5m })!.ToJsonString());
+
+// diamond: A -> B (taken), A -> C (not taken), B -> D, C -> D: D runs once, after B
+var flow = new ProcessFlow([new("ab", "A", "B"), new("ac", "A", "C"), new("bd", "B", "D"), new("cd", "C", "D")]);
+var order = new List<string>();
+flow.Start("A");
+while (flow.TryNext(out var step))
+{
+    order.Add(step);
+    flow.Complete(step, step switch { "A" => ["ab"], "B" => ["bd"], "C" => ["cd"], _ => [] });
+}
+Console.WriteLine("diamond=" + string.Join(",", order));
+
+// parallel join: A -> B and A -> C (both taken), B -> D, C -> D: D waits for both
+flow = new ProcessFlow([new("ab", "A", "B"), new("ac", "A", "C"), new("bd", "B", "D"), new("cd", "C", "D")]);
+order.Clear();
+flow.Start("A");
+while (flow.TryNext(out var step))
+{
+    order.Add(step);
+    flow.Complete(step, step switch { "A" => ["ab", "ac"], "B" => ["bd"], "C" => ["cd"], _ => [] });
+}
+Console.WriteLine("join=" + string.Join(",", order));
+Console.WriteLine("tib=" + TibValue.Of("12.50").AsDecimal() + "|" + (TibValue.Of("x").AsInt() is null) + "|" + TibValue.Of(31500.00m).AsString());
+"""
+
+
+@needs_dotnet
+def test_core_runtime_masking_flow_and_values(tmp_path, apps):
+    """Runs generated Core code: masked ToString, ProcessFlow join semantics, explicit TibValue conversions."""
+    sol = _generate(apps, [CAI], tmp_path / "GmfCredit")
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    core = sol.root / "src" / "GmfCredit.Core" / "GmfCredit.Core.csproj"
+    (probe / "Probe.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n'
+        "    <TargetFramework>net10.0</TargetFramework>\n    <ImplicitUsings>enable</ImplicitUsings>\n"
+        "    <Nullable>enable</Nullable>\n  </PropertyGroup>\n  <ItemGroup>\n"
+        f'    <ProjectReference Include="{core}" />\n  </ItemGroup>\n</Project>\n')
+    (probe / "Program.cs").write_text(PROBE)
+    r = runner.DotnetRunner(probe)
+    code, log = r._run(["run", "--project", str(probe / "Probe.csproj")], timeout_s=600)
+    assert code == 0, log[-4000:]
+    out = dict(line.split("=", 1) for line in log.splitlines() if "=" in line and line.split("=", 1)[0].isalpha())
+    assert out["record"] == "CheckDuplicateApplicationInput { Ssn = ***-**-1184 }"
+    assert out["text"] == "SSN ***-**-1184 account ************1234 ok"
+    assert '"accountNumber":"***-****0006"' in out["json"] and '"amount":12.5' in out["json"]
+    assert out["diamond"] == "A,B,D"
+    assert out["join"] == "A,B,C,D"
+    assert out["tib"] == "12.50|True|31500.00"

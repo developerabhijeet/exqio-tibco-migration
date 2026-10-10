@@ -1,19 +1,23 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using {{ app }}.Core.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace {{ app }}.Infrastructure.Messaging;
 
 /// <summary>
 /// Azure Service Bus implementation of <see cref="IMessageBus"/> (<c>Messaging:Mode=ServiceBus</c>).
-/// Queues and topics keep their TIBCO names; a topic consumer subscribes as <c>topic/subscription</c>.
-/// A handler that throws abandons the message, so Service Bus redelivers it (JMS redelivery).
+/// Queues and topics keep their TIBCO names; a topic consumer subscribes as <c>topic/subscription</c>
+/// (the subscription rule carries the consumer's <c>SelectorFilter</c>, created by the infrastructure).
+/// Messages are settled explicitly (<c>AutoCompleteMessages = false</c>): completed or dead-lettered as
+/// the consumer decides; only an exception (a transient failure) abandons the message, and Service Bus
+/// then redelivers it up to the entity's MaxDeliveryCount before dead-lettering it.
 /// </summary>
-public sealed class ServiceBusMessageBus(ServiceBusClient client) : IMessageBus, IAsyncDisposable
+public sealed class ServiceBusMessageBus(ServiceBusClient client, ILogger<ServiceBusMessageBus> logger) : IMessageBus, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, ServiceBusSender> _senders = new(StringComparer.Ordinal);
-    private readonly ConcurrentBag<ServiceBusProcessor> _processors = [];
 
     public async Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default)
     {
@@ -40,33 +44,23 @@ public sealed class ServiceBusMessageBus(ServiceBusClient client) : IMessageBus,
             }
         }
 
-        await sender.SendMessageAsync(outgoing, cancellationToken).ConfigureAwait(false);
+        await sender.SendMessageAsync(outgoing, cancellationToken);
     }
 
-    public async Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
+    public async Task<IAsyncDisposable> SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task<BusOutcome>> handler, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entity);
         var parts = entity.Split('/', 2);
-        var processor = parts.Length == 2 ? client.CreateProcessor(parts[0], parts[1]) : client.CreateProcessor(entity);
-        processor.ProcessMessageAsync += async args =>
+        var options = new ServiceBusProcessorOptions { AutoCompleteMessages = false };
+        var processor = parts.Length == 2 ? client.CreateProcessor(parts[0], parts[1], options) : client.CreateProcessor(entity, options);
+        processor.ProcessMessageAsync += args => SettleAsync(args, parts[0], handler);
+        processor.ProcessErrorAsync += args =>
         {
-            var properties = args.Message.ApplicationProperties.ToDictionary(p => p.Key, p => Convert.ToString(p.Value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
-            if (!string.IsNullOrEmpty(args.Message.CorrelationId))
-            {
-                properties[BusMessage.CorrelationIdProperty] = args.Message.CorrelationId;
-            }
-
-            if (!string.IsNullOrEmpty(args.Message.ReplyTo))
-            {
-                properties[BusMessage.ReplyToProperty] = args.Message.ReplyTo;
-            }
-
-            await handler(new BusMessage(parts[0], args.Message.Body.ToString(), properties), args.CancellationToken).ConfigureAwait(false);
-            await args.CompleteMessageAsync(args.Message, args.CancellationToken).ConfigureAwait(false);
+            logger.LogError(args.Exception, "Service Bus error on {EntityPath} from {ErrorSource}", args.EntityPath, args.ErrorSource);
+            return Task.CompletedTask;
         };
-        processor.ProcessErrorAsync += _ => Task.CompletedTask;
-        _processors.Add(processor);
-        await processor.StartProcessingAsync(cancellationToken).ConfigureAwait(false);
+        await processor.StartProcessingAsync(cancellationToken);
+        return new Subscription(processor);
     }
 
     public Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default)
@@ -94,14 +88,54 @@ public sealed class ServiceBusMessageBus(ServiceBusClient client) : IMessageBus,
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var processor in _processors)
-        {
-            await processor.DisposeAsync().ConfigureAwait(false);
-        }
-
         foreach (var sender in _senders.Values)
         {
-            await sender.DisposeAsync().ConfigureAwait(false);
+            await sender.DisposeAsync();
+        }
+    }
+
+    private async Task SettleAsync(ProcessMessageEventArgs args, string entity, Func<BusMessage, CancellationToken, Task<BusOutcome>> handler)
+    {
+        var received = args.Message;
+        var properties = received.ApplicationProperties.ToDictionary(p => p.Key, p => Convert.ToString(p.Value, CultureInfo.InvariantCulture) ?? string.Empty);
+        if (!string.IsNullOrEmpty(received.CorrelationId))
+        {
+            properties[BusMessage.CorrelationIdProperty] = received.CorrelationId;
+        }
+
+        if (!string.IsNullOrEmpty(received.ReplyTo))
+        {
+            properties[BusMessage.ReplyToProperty] = received.ReplyTo;
+        }
+
+        BusOutcome outcome;
+        try
+        {
+            outcome = await handler(new BusMessage(entity, received.Body.ToString(), properties), args.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Transient failure on {Entity} (delivery {DeliveryCount}); message abandoned for redelivery", entity, received.DeliveryCount);
+            await args.AbandonMessageAsync(received, cancellationToken: args.CancellationToken);
+            return;
+        }
+
+        if (outcome.Disposition == BusDisposition.DeadLetter)
+        {
+            await args.DeadLetterMessageAsync(received, outcome.Reason ?? "DeadLettered", outcome.Description, args.CancellationToken);
+        }
+        else
+        {
+            await args.CompleteMessageAsync(received, args.CancellationToken);
+        }
+    }
+
+    private sealed class Subscription(ServiceBusProcessor processor) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await processor.StopProcessingAsync();
+            await processor.DisposeAsync();
         }
     }
 }

@@ -9,7 +9,9 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from engine.analysis.models import Rule
+from engine.dotnet_gen.csharp_contracts import pascal
 from engine.dotnet_gen.runner import BuildResult, TestRun
+from engine.dotnet_gen.trx import BRANCH_SUFFIX, RULES_SUFFIX, SCENARIO_SUFFIX, TestCase
 
 APPROVED = ("approved", "edited")
 
@@ -49,19 +51,31 @@ def _ratio(num: int, den: int) -> float | None:
 
 
 def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: BuildResult,
-                    format_ok: bool, infra_ok: bool | None) -> Metrics:
+                    format_ok: bool, infra_ok: bool | None, process: str | None = None) -> Metrics:
     """Metrics per spec 2.5 from the approved rules, the IR branch count and the runner results.
 
     ``build.files`` (C# files counted by ``DotnetRunner.build``) is the standards denominator.
+    ``process`` (a process id such as ``dealerfunding.DealerFundingRequest``, or its PascalCase name)
+    scopes rule and branch matching to that process's test classes, so rule ``R1`` of one process
+    never counts for ``R1`` of another; rules and branches are per process.
     """
+    scope = pascal(process.rsplit(".", 1)[-1]) if process else None
+
+    def mine(case: TestCase) -> bool:
+        if scope is None:
+            return True
+        parts = case.name.rsplit(".", 2)  # <namespace>.<Process>RulesTests.<method>
+        cls = parts[-2] if len(parts) >= 2 else ""
+        return any(cls == f"{scope}{suffix}" for suffix in (RULES_SUFFIX, BRANCH_SUFFIX, SCENARIO_SUFFIX))
+
     approved = [r.id for r in rules if r.status in APPROVED]
-    passing_rules = {c.rule_id for c in test_run.cases if c.rule_id and c.outcome == "passed"}
+    passing_rules = {c.rule_id for c in test_run.cases if c.rule_id and c.outcome == "passed" and mine(c)}
     carried = sum(1 for rid in approved if rid in passing_rules)
 
     total = len(test_run.cases)
     passed = sum(1 for c in test_run.cases if c.outcome == "passed")
 
-    passing_branches = {c.branch_id for c in test_run.cases if c.branch_id and c.outcome == "passed"}
+    passing_branches = {c.branch_id for c in test_run.cases if c.branch_id and c.outcome == "passed" and mine(c)}
     covered_branches = min(len(passing_branches), branches)
 
     files = max(build.files, 0)

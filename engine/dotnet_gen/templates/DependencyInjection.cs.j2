@@ -18,7 +18,7 @@ public static class InfrastructureServiceCollectionExtensions
             configuration.GetConnectionString("{{ c }}") ?? throw new InvalidOperationException("ConnectionStrings:{{ c }} is not configured.")));
 {% endfor %}
 
-        // Messaging: Azure Service Bus in production, in-memory for tests and local runs.
+        // Messaging: Azure Service Bus in production, in-memory for tests and local runs (Messaging:Mode).
         if (string.Equals(configuration["Messaging:Mode"], "InMemory", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<InMemoryMessageBus>();
@@ -26,11 +26,14 @@ public static class InfrastructureServiceCollectionExtensions
         }
         else
         {
+            // Managed identity (DefaultAzureCredential) on the namespace; no connection string.
             services.AddSingleton(_ => new ServiceBusClient(
-                configuration.GetConnectionString("ServiceBus") ?? throw new InvalidOperationException("ConnectionStrings:ServiceBus is not configured.")));
+                configuration["Messaging:ServiceBus:FullyQualifiedNamespace"] ?? throw new InvalidOperationException("Messaging:ServiceBus:FullyQualifiedNamespace is not configured."),
+                new DefaultAzureCredential()));
             services.AddSingleton<IMessageBus, ServiceBusMessageBus>();
         }
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IStepLogger, LoggerStepLogger>();
 {% for iface, impl in repositories %}
         services.AddSingleton<{{ iface }}, {{ impl }}>();

@@ -199,8 +199,14 @@ def test_solution_layout_and_projects(solution):
     packages = _file(solution, "Directory.Packages.props").content
     for pkg in ("Dapper", "Npgsql", "Swashbuckle.AspNetCore", "xunit", "Microsoft.NET.Test.Sdk",
                 "Testcontainers.PostgreSql", "Azure.Messaging.ServiceBus", "coverlet.collector",
-                "Microsoft.AspNetCore.Authentication.JwtBearer"):
+                "Microsoft.AspNetCore.Authentication.JwtBearer", "Azure.Identity",
+                "Azure.Extensions.AspNetCore.Configuration.Secrets"):
         assert f'Include="{pkg}"' in packages, pkg
+    layout = generator.solution_layout("GmfCredit")
+    assert layout["api_project"] == "src/GmfCredit.Api/GmfCredit.Api.csproj" and layout["api_dll"] == "GmfCredit.Api.dll"
+    for proj in layout["projects"].values():
+        assert proj["csproj"] in paths and proj["csproj"].startswith(proj["folder"] + "/")
+    assert layout["solution"] in paths
 
 
 def test_no_em_dash_and_no_unresolved_template(solution):
@@ -208,6 +214,8 @@ def test_no_em_dash_and_no_unresolved_template(solution):
         assert "—" not in f.content, f.path
         assert "{{" not in f.content or f.path.endswith(".json"), f.path
         assert "{%" not in f.content, f.path
+        assert "@Microsoft.KeyVault" not in f.content, f.path  # secrets arrive through the Key Vault provider
+        assert "ConfigureAwait" not in f.content, f.path
 
 
 def test_sql_verbatim_in_repository(solution, processes):
@@ -224,6 +232,8 @@ def test_sql_verbatim_in_repository(solution, processes):
         assert f"TIBCO: {act.name} line {act.source_line}" in repo
     assert "Rules: R1. Findings: S2-DealerFundingRequest-1 (kept). TIBCO: LookupDealer line 1014" in repo
     assert "@p0 = dealerId" in repo  # documented binding order
+    assert "TIBCO SQL: <c>select dealer_id, dealer_name, status from gmf.dealer where dealer_id like ?</c>" in repo
+    assert "TIBCO maxRows 100" in repo
 
 
 def test_named_parameters_skip_literals_and_comments():
@@ -231,6 +241,8 @@ def test_named_parameters_skip_literals_and_comments():
     assert generator.to_named_parameters(sql) == (
         "select '?', \"a?\" from t -- why?\n where a = @p0 and b = @p1 /* ? */ and c ?| array['x']")
     assert generator.to_named_parameters("x like '%' || ?") == "x like '%' || @p0"
+    # PgJDBC escapes the jsonb ? operator as ??; Npgsql wants the single operator
+    assert generator.to_named_parameters("select 1 where doc ?? 'k' and id = ?") == "select 1 where doc ? 'k' and id = @p0"
 
 
 def test_dev_token_endpoint_only_in_development(solution):
@@ -240,7 +252,10 @@ def test_dev_token_endpoint_only_in_development(solution):
     before = program[:idx]
     assert before.rfind("#if EXIQO_DEV_ENDPOINTS") > before.rfind("#endif")  # compiled out in Release
     assert "if (devAuth)" in before[before.rfind("#if EXIQO_DEV_ENDPOINTS"):]
+    assert "var devAuth = builder.Environment.IsDevelopment() && devAuthRequested;" in program  # allow-list
     assert '"/_bus/publish"' in program and '"/health"' in program and "UseSwaggerUI" in program
+    assert 'var swagger = builder.Environment.IsDevelopment() || builder.Configuration.GetValue("Swagger:Enabled", false);' in program
+    assert "if (swagger)\n{\n    app.UseSwagger();" in program
     assert "JwtBearer" in program and "Auth:Mode" in program
     api = _file(solution, "GmfCredit.Api.csproj").content
     assert "'$(Configuration)' != 'Release'" in api and "EXIQO_DEV_ENDPOINTS" in api
@@ -252,24 +267,27 @@ def test_dev_token_endpoint_only_in_development(solution):
     assert dev["Messaging"]["Mode"] == "InMemory" and prod["Messaging"]["Mode"] == "ServiceBus"
 
 
-def test_appsettings_secrets_are_key_vault_references(solution, designs):
+def test_configuration_contract_key_vault_and_service_bus(solution):
     prod = json.loads(_file(solution, "src/GmfCredit.Api/appsettings.json").content)
     dev = json.loads(_file(solution, "src/GmfCredit.Api/appsettings.Development.json").content)
-
-    def get(doc, key):
-        for part in key.split(":"):
-            doc = doc[part]
-        return doc
-
-    for row in designs[DFR].config:
-        value = get(prod, row.key)
-        if row.secret:
-            assert value.startswith("@Microsoft.KeyVault("), row.key
-            assert row.key.replace(":", "--") in value
-            assert not str(get(dev, row.key)).startswith("@Microsoft.KeyVault(")
-        else:
-            assert not str(value).startswith("@Microsoft.KeyVault(")
-    assert get(prod, "Gmf:DealerFunding:EmsProviderUrl") == "tcp://localhost:7222"
+    program = _file(solution, "src/GmfCredit.Api/Program.cs").content
+    di = _file(solution, "InfrastructureServiceCollectionExtensions.cs").content
+    # production: non-secret keys only, Key Vault and Service Bus by placeholder
+    assert prod["KeyVault"]["Uri"].startswith("https://<key-vault-name>")
+    assert prod["Messaging"] == {"Mode": "ServiceBus",
+                                 "ServiceBus": {"FullyQualifiedNamespace": "<service-bus-namespace>.servicebus.windows.net"}}
+    assert "ConnectionStrings" not in prod and "Gmf" not in prod  # secrets from Key Vault; EMS/JDBC substvars dropped
+    # development: local values, Key Vault off
+    assert dev["KeyVault"]["Uri"] == ""
+    assert dev["ConnectionStrings"]["GMFFundingDB"].startswith("Host=localhost;Port=5432;Database=gmf;")
+    # Program.cs adds Key Vault with DefaultAzureCredential and documents the secrets and dropped substvars
+    assert "builder.Configuration.AddAzureKeyVault(new Uri(keyVaultUri), new DefaultAzureCredential());" in program
+    assert "//     Key Vault secret ConnectionStrings--GMFFundingDB -> ConnectionStrings:GMFFundingDB" in program
+    assert "//     EMS.PROVIDER.URL: JMS connection setting: replaced by Azure Service Bus (Messaging:*)" in program
+    assert "//     GMF.DB.URL: JDBC setting: replaced by ConnectionStrings:GMFFundingDB" in program
+    # Service Bus through managed identity, no connection string
+    assert 'configuration["Messaging:ServiceBus:FullyQualifiedNamespace"]' in di and "new DefaultAzureCredential()" in di
+    assert 'GetConnectionString("ServiceBus")' not in di
 
 
 def test_mappings_keep_tibco_expressions(solution):
@@ -278,33 +296,97 @@ def test_mappings_keep_tibco_expressions(solution):
     assert f.origin == "agent"
     # simple path generated by code, with the expression as a comment above it
     assert "// TIBCO: DealerInactiveFault/dealerId = $ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId" in text
-    assert "DealerId = TibValue.Of(state.Input.Message.DealerId)," in text
-    assert "Status = TibValue.Of(state.LookupDealer.ElementAtOrDefault(0)?.Status)," in text
+    # same types: a direct assignment, no conversion helper
+    assert "DealerId = state.Input.Message.DealerId," in text
+    assert "Status = state.LookupDealer.FirstOrDefault()?.Status," in text
+    assert 'Message = "Dealer is not active for funding",' in text
+    assert "Amount = state.Input.Message.FundingAmount," in text
     # agent row: expression kept, body throws
     m = re.search(r"LookupDealerMapping\(DealerFundingRequestState state\)\n    \{\n(.*?)\n    \}", text, re.DOTALL)
     assert m, text
     assert "concat(normalize-space($ReceiveFundingRequest/Body/tns:FundingRequest/tns:dealerId), '%')" in m.group(1)
     assert 'throw new NotImplementedException("agent fills: LookupDealer");' in m.group(1)
     fsl = _file(solution, "Mappings/FundingStatusLookupMappings.cs").content
-    assert "DealId = TibValue.Of(state.Input.Parameters.DealId)," in fsl
+    assert "DealId = state.Input.Parameters.DealId," in fsl
+    assert "FundingId = state.QueryFundingStatus.FirstOrDefault()?.FundingId," in fsl
 
 
 def test_service_controller_consumer(solution):
     svc = _file(solution, "Services/FundingStatusLookupService.cs").content
-    assert 'case "QueryFundingStatus":' in svc and "repository.QueryFundingStatusAsync(" in svc
-    assert "FundingStatusLookupConditions.QueryFundingStatusTogetOut(state)" in svc
+    # straight-line: query, guard clause for the otherwise link, reply
+    assert "ProcessFlow" not in svc and "switch" not in svc
+    assert ("        if (!FundingStatusLookupConditions.QueryFundingStatusTogetOut(state))\n        {\n"
+            "            // Link QueryFundingStatusToReplyNotFound: otherwise\n") in svc
+    assert "return ProcessResult.FromError(FundingStatusLookupMappings.ReplyNotFoundMapping(state));" in svc
+    assert svc.rstrip().endswith("return new ProcessResult(200, FundingStatusLookupMappings.GetOutMapping(state));\n    }\n}")
+    dfr_svc = _file(solution, "Services/DealerFundingRequestService.cs").content
+    assert "ProcessFlow" not in dfr_svc
+    assert "throw new DealerInactiveFaultException(DealerFundingRequestMappings.ThrowDealerInactiveMapping(state));" in dfr_svc
     cond = _file(solution, "Rules/FundingStatusLookupConditions.cs").content
     assert "return state.QueryFundingStatus.Count > 0;" in cond
     ctl = _file(solution, "Controllers/FundingStatusLookupController.cs").content
     assert '[HttpGet("/funding/{dealId}")]' in ctl and "[Authorize]" in ctl
     consumer = _file(solution, "Messaging/DealerFundingRequestConsumer.cs").content
     assert 'public const string Entity = "gmf.dealer.funding.request";' in consumer
+    assert 'public const string SelectorFilter = "MsgType = \'FUNDING_REQUEST\'";' in consumer
     assert 'message.Properties.TryGetValue("MsgType", out var msgType)' in consumer
+    assert 'return BusOutcome.DeadLetter("SelectorMismatch", SelectorFilter);' in consumer  # queue: never completed
+    assert "catch (ProcessFaultException fault)" in consumer
+    assert "return BusOutcome.DeadLetter(fault.FaultName, fault.Message);" in consumer  # business fault: no retry
+    assert "await _subscription.DisposeAsync();" in consumer  # StopAsync stops the processor
+    assert "auto (acknowledged on receipt; a failed job was not redelivered)" in consumer
+    bus = _file(solution, "ServiceBusMessageBus.cs").content
+    assert "AutoCompleteMessages = false" in bus and "DeadLetterMessageAsync" in bus and "AbandonMessageAsync" in bus
+    assert 'logger.LogError(args.Exception, "Service Bus error on {EntityPath} from {ErrorSource}", args.EntityPath, args.ErrorSource);' in bus
+    assert "await processor.StopProcessingAsync();" in bus and "JMS redelivery" not in bus
     exc = _file(solution, "Exceptions/DealerInactiveFaultException.cs").content
     assert "public sealed class DealerInactiveFaultException" in exc and "DealerInactiveFault" in exc
     dfr = _file(solution, "Rules/DealerFundingRequestConditions.cs")
     assert dfr.origin == "agent"  # the 2% tolerance condition is left to the builder
-    assert 'TibValue.Of(state.LookupDealer.ElementAtOrDefault(0)?.Status).Text == "ACTIVE"' in dfr.content
+    assert 'return state.LookupDealer.FirstOrDefault()?.Status == "ACTIVE";' in dfr.content
+    tib = _file(solution, "Tibco/TibValue.cs").content
+    assert "implicit operator" not in tib and "public decimal? AsDecimal()" in tib
+
+
+@pytest.fixture(scope="module")
+def estate(tmp_path_factory, apps, app):
+    """CreditApplicationIntake (SSN fields), BureauOrchestrator (parallel links and a join) and
+    NightlyDelinquencyScan (timer), generated without scenarios."""
+    graph = graph_mod.build_graph(list(apps.values()))
+    procs = {p.id: p for p in app.processes}
+    pids = ["creditorigination.CreditApplicationIntake", "creditorigination.BureauOrchestrator",
+            "loanservicing.NightlyDelinquencyScan"]
+    designs = {pid: build_design_skeleton(procs[pid], app, [], [], graph_mod.io_card(procs[pid], app, graph))
+               for pid in pids}
+    return generator.generate_solution(app, pids, designs, {}, {}, [], tmp_path_factory.mktemp("estate") / "G")
+
+
+def test_sensitive_fields_masked(estate):
+    bureau = _file(estate, "Contracts/CreditOrigination/Bureau.cs").content
+    block = bureau[bureau.index("public sealed record BureauRequest"):]
+    block = block[: block.index("\n}\n")]
+    assert '    [Sensitive]\n    [JsonPropertyName("ssn")]' in block
+    assert "public override string ToString() => Masking.ToMaskedString(this);" in block
+    data = _file(estate, "Data/CreditApplicationIntakeData.cs").content
+    assert "using GmfCredit.Core.Contracts;" in data and "[Sensitive]\n    public string? Ssn { get; init; }" in data
+    assert "Masking.MaskText(entry.Message)" in _file(estate, "LoggerStepLogger.cs").content
+    assert 'details.Extensions["fault"] = Masking.MaskJson(fault.FaultData);' in _file(estate, "FaultExceptionHandler.cs").content
+
+
+def test_queue_form_for_parallel_links(estate):
+    svc = _file(estate, "Services/BureauOrchestratorService.cs").content
+    assert "var flow = new ProcessFlow(Links);" in svc
+    assert 'new("ParseEquifaxToMergeScores", "ParseEquifax", "MergeScores"),' in svc
+    assert "flow.Complete(" in svc and "pending.Enqueue" not in svc
+    assert "join" in svc.split("<remarks>", 1)[1].split("</remarks>", 1)[0]
+
+
+def test_timer_job_never_throws(estate):
+    job = _file(estate, "Jobs/NightlyDelinquencyScanJob.cs").content
+    assert "TimeProvider timeProvider, ILogger<NightlyDelinquencyScanJob> logger" in job
+    assert "new PeriodicTimer(interval, timeProvider)" in job and "Task.Delay(first - now, timeProvider, stoppingToken)" in job
+    assert "catch (Exception ex) when (ex is not OperationCanceledException)" in job  # each tick
+    assert 'logger.LogError(ex, "NightlyDelinquencyScan timer stopped");' in job  # nothing escapes ExecuteAsync
 
 
 def test_tests_generated_first(solution, processes, scenarios):
@@ -312,6 +394,10 @@ def test_tests_generated_first(solution, processes, scenarios):
     assert rules_cs.count("[Fact(") == 3  # approved and edited rules only
     assert '[Fact(DisplayName = "R1 A dealer must be ACTIVE to receive funding.")]' in rules_cs
     assert 'Assert.Fail("no test body for R1");' in rules_cs and "R4" not in rules_cs
+    assert "public Task R1_a_dealer_must_be_active_to_receive_funding()" in rules_cs
+    assert "public Task R2_the_funding_amount_must_be_within_2_of_the_approved_deal_amount()" in rules_cs
+    for name in re.findall(r"public Task (\w+)\(\)", rules_cs + _file(solution, "DealerFundingRequestBranchTests.cs").content):
+        assert len(name) <= 80, name
     branch = _file(solution, "DealerFundingRequestBranchTests.cs").content
     branches = tests_gen.branch_transitions(processes[DFR])
     assert len(branches) == 6
@@ -356,7 +442,10 @@ def test_parse_cobertura_sample():
     assert coverage.parse_cobertura(GOLDEN / "sample.cobertura.xml") == pytest.approx(0.625)
 
 
-def _case(name, outcome, rule=None, branch=None, scenario=None):
+def _case(name, outcome, rule=None, branch=None, scenario=None, process=None):
+    if process:
+        kind = "RulesTests" if rule else "BranchTests" if branch else "ScenarioTests"
+        name = f"GmfCredit.Tests.{process}{kind}.{name}"
     return TestCase(name=name, display_name=name, outcome=outcome, message="", rule_id=rule,
                     branch_id=branch, scenario_id=scenario, duration_ms=1.0)
 
@@ -384,6 +473,13 @@ def test_metrics_formulas():
     assert metrics.compute_metrics(rules, 4, run, build, False, True).standards_adherence == 0.0
     noisy = BuildResult(ok=True, warnings=40, errors=[], log="", files=12)
     assert metrics.compute_metrics(rules, 4, run, noisy, True, True).standards_adherence == 0.0
+    # scoped to one process: R1 of another process does not count
+    other = TestRun(ok=True, cases=[_case("x", "passed", rule="R1", process="FundingStatusLookup"),
+                                    _case("y", "passed", rule="R2", process="DealerFundingRequest"),
+                                    _case("z", "passed", branch="T1", process="FundingStatusLookup")],
+                    coverage_line=None, trx_path=None, log="")
+    scoped = metrics.compute_metrics(rules, 4, other, build, True, None, process=DFR)
+    assert scoped.rule_carry_forward == pytest.approx(1 / 3) and scoped.branch_coverage == 0.0
     empty = metrics.compute_metrics([], 0, TestRun(ok=True, cases=[], coverage_line=None, trx_path=None,
                                                    log=""), build, True, None)
     assert empty.rule_carry_forward is None and empty.test_pass_rate is None and empty.branch_coverage is None

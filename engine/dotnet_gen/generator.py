@@ -61,6 +61,8 @@ MANIFEST = ".exiqo/generated-files.txt"
 # Central package versions (Directory.Packages.props). Restored on a machine with NuGet access or
 # from the offline cache produced by `make nuget-cache`.
 PACKAGES: tuple[tuple[str, str], ...] = (
+    ("Azure.Extensions.AspNetCore.Configuration.Secrets", "1.3.2"),
+    ("Azure.Identity", "1.13.2"),
     ("Azure.Messaging.ServiceBus", "7.18.2"),
     ("Dapper", "2.1.66"),
     ("Microsoft.AspNetCore.Authentication.JwtBearer", "10.0.0"),
@@ -165,6 +167,17 @@ def slug(text: str, max_words: int = 8) -> str:
     return "_".join(words[:max_words])
 
 
+def method_name(prefix: str, text: str, limit: int = 80, lower: bool = False) -> str:
+    """``prefix_full_words_of_text`` cut at a word boundary so the identifier has at most ``limit`` chars."""
+    name = prefix
+    for word in re.findall(r"[A-Za-z0-9]+", text.lower() if lower else text):
+        cand = f"{name}_{word}"
+        if len(cand) > limit:
+            break
+        name = cand
+    return name
+
+
 def raw_string_literal(text: str, indent: int) -> str:
     """A C# raw string literal holding ``text`` exactly (newlines normalised to LF).
 
@@ -203,8 +216,9 @@ def to_named_parameters(sql: str) -> str:
     """Convert JDBC ``?`` placeholders to named Npgsql parameters ``@p0, @p1, ...`` in order.
 
     Left untouched: quoted literals (including ``E'...'``), quoted identifiers, ``--`` and nested
-    ``/* */`` comments, dollar-quoted strings and the jsonb operators ``?|`` and ``?&``. Everything
-    else is kept byte for byte, so replacing ``@pN`` back with ``?`` gives the TIBCO statement.
+    ``/* */`` comments, dollar-quoted strings and the jsonb operators ``?|`` and ``?&``. The PgJDBC
+    escape ``??`` becomes the single ``?`` operator Npgsql expects. Everything else is kept byte for
+    byte, so (without ``??``) replacing ``@pN`` back with ``?`` gives the TIBCO statement.
     """
     out: list[str] = []
     i, n, k = 0, len(sql), 0
@@ -234,6 +248,10 @@ def to_named_parameters(sql: str) -> str:
             j = n if close == -1 else close + len(m.group(0))
         elif c == "?":
             nxt = sql[i + 1:i + 3]
+            if nxt[:1] == "?":  # PgJDBC escape: ?? is a literal ? operator, not a placeholder
+                out.append("?")
+                i += 2
+                continue
             if nxt[:1] in ("|", "&") and nxt[1:2] != nxt[:1]:
                 out.append("?" + nxt[0])
                 i += 2
@@ -288,6 +306,16 @@ _REST_PARAM = {"integer": "int", "int": "int", "long": "long", "number": "decima
                "boolean": "bool", "bool": "bool"}
 
 
+# Field names masked in ToString(), logs and ProblemDetails (normalised: lower case, no _ or -).
+SENSITIVE_NAMES = frozenset({"ssn", "socialsecuritynumber", "taxid", "tin", "accountnumber", "acctnumber",
+                             "accountno", "cardnumber", "creditcardnumber", "cardno", "pan", "routingnumber",
+                             "iban", "bankaccountnumber"})
+
+
+def is_sensitive_name(name: str) -> bool:
+    return re.sub(r"[^a-z0-9]", "", name.lower()) in SENSITIVE_NAMES
+
+
 # ============================================================== record shapes
 @dataclass
 class PropShape:
@@ -299,6 +327,15 @@ class PropShape:
     child: RecShape | None = None
     enum: bool = False
     location: str = ""  # REST parameters: path, query or header
+    nullable: bool | None = None  # None: nullable when not required (contract records)
+
+    @property
+    def is_nullable(self) -> bool:
+        return self.nullable if self.nullable is not None else not self.required
+
+    @property
+    def sensitive(self) -> bool:
+        return is_sensitive_name(self.cs)
 
 
 @dataclass
@@ -373,6 +410,15 @@ _STRING_LIT = re.compile(r"""^("([^"]*)"|'([^']*)')$""")
 _NUMBER_LIT = re.compile(r"^-?\d+(\.\d+)?$")
 _HREF_ROOT = re.compile(r"#//([^;]+)")
 _API_KINDS = ("rest", "http", "soap")
+_NUM_SUFFIX = {"int": "", "long": "L", "ulong": "UL", "decimal": "m", "double": "d", "float": "f"}
+_AS = {"int": "AsInt", "long": "AsLong", "ulong": "AsULong", "decimal": "AsDecimal", "double": "AsDouble",
+       "float": "AsFloat", "bool": "AsBool", "DateTime": "AsDateTime", "DateOnly": "AsDateOnly",
+       "TimeOnly": "AsTimeOnly"}
+_NUMERIC = frozenset({"int", "long", "ulong", "decimal", "double", "float"})
+
+
+def _element(index: int) -> str:
+    return "FirstOrDefault()" if index == 0 else f"ElementAtOrDefault({index})"
 
 
 def _steps(path: str) -> list[tuple[str, int | None]] | None:
@@ -397,6 +443,7 @@ class Resolved:
     expr: str
     kind: Literal["scalar", "list", "record"]
     cs_type: str = "string"
+    nullable: bool = True
 
 
 @dataclass
@@ -587,7 +634,7 @@ class ProcGen:
                 if hit is None:
                     return None
                 index = (steps[0][1] or 1) - 1
-                return Resolved(f"state.{prop}.ElementAtOrDefault({index})?.{hit[0]}", "scalar", hit[1])
+                return Resolved(f"state.{prop}.{_element(index)}?.{hit[0]}", "scalar", hit[1], True)
             if act.type in ("mapper", "assign"):
                 target = self.target(act)
                 if target.shape is None or target.kind != "record" or self.map_origin(act) != "code":
@@ -608,31 +655,56 @@ class ProcGen:
                 return None
             expr += f"{'?.' if nullable else '.'}{prop.cs}"
             if prop.repeated:
-                expr += f".ElementAtOrDefault({(index or 1) - 1})"
+                expr += f".{_element((index or 1) - 1)}"
                 nullable = True
             elif index not in (None, 1):
                 return None
             else:
-                nullable = nullable or not prop.required
+                nullable = nullable or prop.is_nullable
             current = prop.child
             kind = "record" if prop.child else "scalar"
             cs_type = prop.cs_type
             if prop.enum:
                 cs_type = "enum"
-        return Resolved(expr, kind, cs_type)
+        return Resolved(expr, kind, cs_type, nullable)
 
-    def translate(self, expr: str) -> str | None:
-        """A simple path or literal as ``TibValue.Of(...)``; ``None`` when the agent must write it."""
+    def assign(self, expr: str, target_type: str, target_nullable: bool, field_name: str) -> str | None:
+        """C# for ``target = expr`` (a simple path or literal); ``None`` when the agent must write it.
+
+        Same type: a direct assignment. Different types: ``TibValue.Of(source).AsX()``, which converts
+        like XSLT ``value-of`` and returns null instead of throwing; a non-nullable target then fails
+        with ``TibValue.Missing(field)``, visibly, rather than taking a silent default.
+        """
         e = (expr or "").strip()
         m = _STRING_LIT.match(e)
-        if m:
-            return f"TibValue.Of({cs_string(m.group(2) if m.group(2) is not None else m.group(3))})"
-        if _NUMBER_LIT.match(e):
-            return f"TibValue.Of({cs_string(e)})"
-        r = self.resolve(e)
-        if r is None or r.kind != "scalar":
+        literal = (m.group(2) if m.group(2) is not None else m.group(3)) if m else (e if _NUMBER_LIT.match(e) else None)
+        if literal is not None:
+            if target_type == "string":
+                return cs_string(literal)
+            if target_type in _NUM_SUFFIX and _NUMBER_LIT.match(literal):
+                if target_type in ("int", "long", "ulong") and "." in literal:
+                    return None
+                return literal + _NUM_SUFFIX[target_type]
+            if target_type == "bool" and literal in ("true", "false", "1", "0"):
+                return "true" if literal in ("true", "1") else "false"
+            src, src_type, src_nullable = cs_string(literal), "string", False
+        else:
+            r = self.resolve(e)
+            if r is None or r.kind != "scalar":
+                return None
+            src, src_type, src_nullable = r.expr, r.cs_type, r.nullable
+        missing = f"TibValue.Missing({cs_string(field_name)})"
+        if src_type == target_type:
+            if target_nullable or not src_nullable:
+                return src
+            return f"{src} ?? string.Empty" if target_type == "string" else f"{src} ?? throw {missing}"
+        if target_type == "string":
+            return f"TibValue.Of({src}).AsString()"
+        conv = _AS.get(target_type)
+        if conv is None:
             return None
-        return f"TibValue.Of({r.expr})"
+        out = f"TibValue.Of({src}).{conv}()"
+        return out if target_nullable else f"{out} ?? throw {missing}"
 
     # ------------------------------------------------------------ jdbc
     def columns(self, act: Activity) -> list[tuple[str, str, str]]:
@@ -696,14 +768,16 @@ class ProcGen:
         segs = [[_local(s) for s in b.target.split("/") if s] for b in bindings]
         roots = {s[0] for s in segs if s}
         if act.type.startswith("jdbc."):
-            props = [PropShape(wire=name, cs=prop, cs_type=cs_type) for name, prop, cs_type in self.sql_params(act)]
+            props = [PropShape(wire=name, cs=prop, cs_type=cs_type, nullable=True)
+                     for name, prop, cs_type in self.sql_params(act)]
             return MapTarget("jdbc", self.input_type(act), RecShape(self.input_type(act), self.ns("Core.Data"), props), 1)
         if act.type == "reply" and roots and roots <= {"client4XXError", "server5XXError"}:
-            props = [PropShape("statusCode", "StatusCode", "int"), PropShape("message", "Message", "string")]
+            props = [PropShape("statusCode", "StatusCode", "int", nullable=False),
+                     PropShape("message", "Message", "string", nullable=True)]
             return MapTarget("error", "ErrorReply", RecShape("ErrorReply", self.ns("Core.Services"), props), 1)
         if act.type == "log":
-            props = [PropShape("message", "Message", "string"), PropShape("msgCode", "MsgCode", "string"),
-                     PropShape("loggerName", "LoggerName", "string"), PropShape("logLevel", "LogLevel", "string")]
+            props = [PropShape(w, ident(w), "string", nullable=True)
+                     for w in ("message", "msgCode", "loggerName", "logLevel")]
             return MapTarget("log", "StepLogEntry", RecShape("StepLogEntry", self.ns("Core.Diagnostics"), props), 1)
         if act.type in ("jms.send", "jms.publish", "jms.reply", "jms.request_reply"):
             bodies = {s[2] for s in segs if len(s) >= 3 and s[0] == "ActivityInput" and s[1] == "Body"}
@@ -770,7 +844,7 @@ class ProcGen:
                 b = its[0][1]
                 if prop.child is not None or prop.enum or prop.cs_type not in SCALARS:
                     return None
-                expr = self.translate(b.expression)
+                expr = self.assign(b.expression, prop.cs_type, prop.is_nullable, prop.wire)
                 if expr is None:
                     return None
                 lines += tibco_comment(b.target, b.expression, inner)
@@ -817,6 +891,52 @@ class SolutionGen:
 
 
 # ===================================================================== C# files
+_RECORD_START = re.compile(r"^public sealed record (\w+)$")
+_PROPERTY = re.compile(r"^    public (?:required )?\S+ (\w+) \{ get; init; \}$")
+TO_STRING = "public override string ToString() => Masking.ToMaskedString(this);"
+
+
+def _masked(text: str, app: str) -> str:
+    """``mask_records`` for a generated file outside the Contracts namespace (adds the using)."""
+    masked = mask_records(text)
+    if "[Sensitive]" not in masked:
+        return masked
+    using = f"using {app}.Core.Contracts;"
+    lines = masked.split("\n")
+    usings = [ln for ln in lines if ln.startswith("using ")]
+    rest = lines[len(usings):] if usings else lines
+    if not usings:
+        rest = ["", *rest]
+    merged = sorted({*usings, using}, key=lambda u: (not u.startswith("using System"), u))
+    return "\n".join(merged + rest)
+
+
+def mask_records(text: str) -> str:
+    """Mark sensitive properties of rendered records ``[Sensitive]`` and give those records a masking
+    ``ToString()``, so an SSN or account number never reaches a log in clear text."""
+    lines = text.split("\n")
+    out: list[str] = []
+    in_record, sensitive, attr_start = False, False, None
+    for line in lines:
+        if _RECORD_START.match(line):
+            in_record, sensitive, attr_start = True, False, None
+        elif in_record and line.startswith("    [") and attr_start is None:
+            attr_start = len(out)
+        elif in_record and (m := _PROPERTY.match(line)):
+            if is_sensitive_name(m.group(1)):
+                at = attr_start if attr_start is not None else len(out)
+                out.insert(at, "    [Sensitive]")
+                sensitive = True
+            attr_start = None
+        elif in_record and line == "}":
+            if sensitive:
+                out += ["", "    /// <summary>Prints the record with its sensitive fields masked.</summary>", f"    {TO_STRING}"]
+            in_record = False
+        elif in_record and not line.strip():
+            attr_start = None
+        out.append(line)
+    return "\n".join(out)
+
 def _usings(*names: str) -> str:
     system = sorted({n for n in names if n and (n == "System" or n.startswith("System."))})
     other = sorted({n for n in names if n and not (n == "System" or n.startswith("System."))})
@@ -979,8 +1099,13 @@ def gen_repository(pg: ProcGen) -> str:
         summary = f"TIBCO step {a.name} ({a.type}) on {pg.connections[a.id]}: the SQL statement is kept verbatim."
         member.append(f"    /// <summary>{xml_doc(summary)}</summary>")
         member.append(f"    /// <remarks>{xml_doc(pg.remarks(a.id, row))}")
+        member.append(f"    /// <para>TIBCO SQL: <c>{xml_doc(sql)}</c></para>")
         member.append(f"    /// <para>Parameters: the JDBC ? placeholders were converted at generation time to named "
-                      f"Npgsql parameters, bound in order: {xml_doc(binding)}.</para></remarks>")
+                      f"Npgsql parameters, bound in order: {xml_doc(binding)}.</para>")
+        if a.type == "jdbc.query" and max_rows.isdigit() and int(max_rows) > 0:
+            member.append(f"    /// <para>TIBCO maxRows {int(max_rows)}: rows past {int(max_rows)} are dropped after the "
+                          "query; the SQL stays verbatim, so add a LIMIT if the table can return many rows.</para>")
+        member[-1] += "</remarks>"
         ret = f"IReadOnlyList<{pg.row_type(a)}>" if a.type == "jdbc.query" else "int"
         arg = f"{pg.input_type(a)} input, " if params else ""
         member.append(f"    public async Task<{ret}> {method}Async({arg}CancellationToken cancellationToken)")
@@ -1002,7 +1127,7 @@ def gen_repository(pg: ProcGen) -> str:
         if a.type == "jdbc.query":
             member.append(f"        var rows = await connection.QueryAsync<{pg.row_type(a)}>(command);")
             if max_rows.isdigit() and int(max_rows) > 0:
-                member.append(f"        return [.. rows.Take({int(max_rows)})]; // TIBCO maxRows {int(max_rows)}")
+                member.append(f"        return [.. rows.Take({int(max_rows)})];")
             else:
                 member.append("        return [.. rows];")
         else:
@@ -1126,20 +1251,27 @@ def translate_condition(pg: ProcGen, expr: str) -> str | None:
         if left is None or left.kind != "scalar":
             return None
         op, rhs = m.group(2), m.group(3)
-        lhs = f"TibValue.Of({left.expr})"
+        as_text = left.expr if left.cs_type == "string" else f"TibValue.Of({left.expr}).AsString()"
         if rhs[0] in "'\"":
             if op not in ("=", "!="):
                 return None
-            return f"{lhs}.Text {_OPS[op]} {cs_string(rhs[1:-1])}"
+            literal = rhs[1:-1]
+            if literal == "" and left.cs_type == "string":
+                return f"{'' if op == '=' else '!'}string.IsNullOrEmpty({left.expr})"
+            return f"{as_text} {_OPS[op]} {cs_string(literal)}"
         if rhs.startswith("$"):
             right = pg.resolve(rhs)
             if right is None or right.kind != "scalar" or op not in ("=", "!="):
                 return None
-            return f"{lhs}.Text {_OPS[op]} TibValue.Of({right.expr}).Text"
-        return f"{lhs}.Number {_OPS[op]} {rhs}m"
+            return f"TibValue.Of({left.expr}).AsString() {_OPS[op]} TibValue.Of({right.expr}).AsString()"
+        fractional = "." in rhs
+        if left.cs_type in ("decimal", "double", "float") or (left.cs_type in _NUMERIC and not fractional):
+            suffix = {"decimal": "m", "float": "f"}.get(left.cs_type, "") if fractional else ""
+            return f"{left.expr} {_OPS[op]} {rhs}{suffix}"
+        return f"TibValue.Of({left.expr}).AsDecimal() {_OPS[op]} {rhs}m"
     r = pg.resolve(e)
     if r is not None and r.kind == "scalar":
-        return f"!TibValue.Of({r.expr}).IsEmpty"
+        return f"!string.IsNullOrEmpty({r.expr})" if r.cs_type == "string" else f"!TibValue.Of({r.expr}).IsEmpty"
     if r is not None and r.kind == "list":
         return f"{r.expr}.Count > 0"
     return None
@@ -1222,6 +1354,18 @@ class ServiceDeps:
     log: bool = False
 
 
+@dataclass
+class Step:
+    lines: list[str]  # statements, unindented
+    awaits: bool = False
+    terminal: str = ""  # "" | "throw" | "return"
+    origin: Origin = "code"
+    sets_result: bool = False
+
+
+RETURN = "@@RETURN@@"  # replaced by the method's final return statement
+
+
 def _exception_class(pg: ProcGen, act: Activity) -> str:
     row = pg.primary.get(act.id)
     if row and row.pattern == "throw":
@@ -1230,122 +1374,335 @@ def _exception_class(pg: ProcGen, act: Activity) -> str:
     return fault if fault.endswith("Exception") else f"{fault}Exception"
 
 
-def _step_action(pg: ProcGen, act: Activity, deps: ServiceDeps, pad: str) -> tuple[list[str], bool, bool, Origin]:
-    """(lines, awaits, terminal, origin) for one step."""
+def _step_header(pg: ProcGen, node_id: str) -> str:
+    act = pg.acts.get(node_id)
+    row = pg.primary.get(node_id)
+    if act is None:
+        g = pg.groups[node_id]
+        return f"// TIBCO: group {g.id} ({g.kind}) over {', '.join(g.member_ids)}."
+    line = f" line {act.source_line}" if act.source_line else ""
+    lineage = pg.remarks(node_id, row).split(". TIBCO:")[0]
+    return f"// TIBCO: {act.name} ({act.type}){line}. {lineage}."
+
+
+def _step(pg: ProcGen, node_id: str, deps: ServiceDeps, final: bool) -> Step:
+    """The statements of one step; ``final`` (no outgoing link) lets a reply return directly."""
+    act = pg.acts.get(node_id)
+    if act is None:
+        g = pg.groups[node_id]
+        what = f"group {g.id} ({g.kind}) over {', '.join(g.member_ids)}"
+        return Step([f"AgentFill.Required({cs_string(what)});"], origin="agent")
     t = act.type
     prop = pg.state_props[act.id]
     mapping = pg.map_row.get(act.id)
     mcall = f"{pg.name}Mappings.{mapping.method}(state)" if mapping else None
     method = ident(act.name or act.id)
-    if t in ("rest.receive", "http.receive", "soap.receive", "jms.receive", "timer.start", "mail.receive") and \
-            pg.starter and act.id == pg.starter.activity_id:
-        return [f"{pad}// Starter: the input is in state.Input."], False, False, "code"
+    if pg.starter and act.id == pg.starter.activity_id:
+        return Step([f"// Starter: the {'request' if pg.kind in _API_KINDS else 'input'} is in state.Input."])
     if t.startswith("jdbc."):
         deps.repository = True
         params = pg.sql_params(act)
         arg = (f"{mcall}, " if mcall else f"new {pg.input_type(act)}(), ") if params else ""
-        return [f"{pad}state.{prop} = await repository.{method}Async({arg}cancellationToken);"], True, False, "code"
+        return Step([f"state.{prop} = await repository.{method}Async({arg}cancellationToken);"], awaits=True)
     if t in ("jms.send", "jms.publish"):
         dest = str(act.config.get("destination") or (act.config.get("settings") or {}).get("destination") or "")
         if mcall is None or not dest:
-            return [f'{pad}AgentFill.Required({cs_string(f"{act.name} ({t})")});'], False, False, "agent"
+            return Step([f'AgentFill.Required({cs_string(f"{act.name} ({t})")});'], origin="agent")
         deps.bus = True
-        return [f"{pad}await bus.PublishAsync({cs_string(dest)}, {mcall}, cancellationToken: cancellationToken);"], True, False, "code"
+        return Step([f"await bus.PublishAsync({cs_string(dest)}, {mcall}, cancellationToken: cancellationToken);"],
+                    awaits=True)
     if t == "throw":
-        exc = _exception_class(pg, act)
-        arg = mcall or "null"
-        return [f"{pad}throw new {exc}({arg});"], False, True, "code"
-    if t == "reply" and pg.kind in _API_KINDS:
-        target = pg.target(act)
-        if target.kind == "error" and mcall:
-            return [f"{pad}result ??= ProcessResult.FromError({mcall});"], False, False, "code"
-        body = mcall or "null"
-        return [f"{pad}result ??= new ProcessResult(200, {body});"], False, False, "code"
+        return Step([f"throw new {_exception_class(pg, act)}({mcall or 'null'});"], terminal="throw")
     if t in ("reply", "end"):
-        if mcall:
-            return [f"{pad}result ??= new ProcessResult(200, {mcall});"], False, False, "code"
-        return [f"{pad}result ??= ProcessResult.Completed;"], False, False, "code"
+        if t == "reply" and pg.kind in _API_KINDS and mcall and pg.target(act).kind == "error":
+            value = f"ProcessResult.FromError({mcall})"
+        elif mcall:
+            value = f"new ProcessResult(200, {mcall})"
+        else:
+            value = "new ProcessResult(200, null)" if t == "reply" else "ProcessResult.Completed"
+        if final:
+            return Step([f"return {value};"], terminal="return")
+        return Step([f"result ??= {value};"], sets_result=True)
     if t == "log":
         if mcall is None:
-            return [f"{pad}// TIBCO log step without input."], False, False, "code"
+            return Step(["// TIBCO log step without input."])
         deps.log = True
-        return [f"{pad}log.Write({cs_string(pg.p.name)}, {cs_string(act.name)}, {mcall});"], False, False, "code"
+        return Step([f"log.Write({cs_string(pg.p.name)}, {cs_string(act.name)}, {mcall});"])
     if t in ("mapper", "assign"):
         if mcall is None:
-            return [f"{pad}// TIBCO {t} without bindings."], False, False, "code"
-        return [f"{pad}state.{prop} = {mcall};"], False, False, "code"
+            return Step([f"// TIBCO {t} without bindings."])
+        return Step([f"state.{prop} = {mcall};"])
     if t in ("noop", "catch", "confirm"):
-        return [f"{pad}// TIBCO {t}: no code; kept for lineage."], False, False, "code"
+        return Step([f"// TIBCO {t}: no code; kept for lineage."])
     if t == "call.process":
         target = next((c.target_process for c in pg.p.calls if c.activity_id == act.id), "")
         what = f"{act.name} (call {target or 'subprocess'})"
-        return [f"{pad}AgentFill.Required({cs_string(what)});"], False, False, "agent"
+        return Step([f"AgentFill.Required({cs_string(what)});"], origin="agent")
     row = pg.primary.get(act.id)
     where = f": {row.class_name}.{row.method}" if row else ""
-    return [f"{pad}AgentFill.Required({cs_string(f'{act.name} ({t}){where}')});"], False, False, "agent"
+    return Step([f"AgentFill.Required({cs_string(f'{act.name} ({t}){where}')});"], origin="agent")
+
+
+def _indent(lines: list[str], n: int = 4) -> list[str]:
+    pad = " " * n
+    return [f"{pad}{ln}" if ln else "" for ln in lines]
+
+
+def _flatten(blocks: list[list[str]]) -> list[str]:
+    out: list[str] = []
+    for b in blocks:
+        if not b:
+            continue
+        if out:
+            out.append("")
+        out += b
+    return out
+
+
+class _Structured:
+    """Straight-line C# for processes whose links form sequences and if/else regions.
+
+    Gives up (``build`` returns ``None``) on parallel links, several conditional links on one step,
+    error links, joins that are not the merge of an if/else, or links crossing a group boundary;
+    the queue form with ``ProcessFlow`` handles those.
+    """
+
+    EXIT = "\0exit"
+
+    def __init__(self, pg: ProcGen, deps: ServiceDeps, conds: dict[str, str]) -> None:
+        self.pg, self.deps, self.conds = pg, deps, conds
+        members = {m for g in pg.p.groups for m in g.member_ids}
+        handled = {aid for h in pg.p.fault_handlers for aid in h.activity_ids}
+        self.main = [n for n in [*pg.acts, *pg.groups] if n not in members and n not in handled]
+        main = set(self.main)
+        self.out: dict[str, list[Transition]] = {n: [] for n in self.main}
+        self.preds: dict[str, list[str]] = {n: [] for n in self.main}
+        self.ok = True
+        for t in pg.p.transitions:
+            a, b = t.from_id in main, t.to_id in main
+            if a and b:
+                self.out[t.from_id].append(t)
+                self.preds[t.to_id].append(t.from_id)
+                if t.kind == "error":
+                    self.ok = False
+            elif a != b:
+                self.ok = False
+        self.emitted: set[str] = set()
+        self.allowed: set[str] = set()
+        self.steps: list[Step] = []
+        self.ipdom = self._ipdoms() if self.ok else {}
+
+    def _ipdoms(self) -> dict[str, str | None]:
+        succ = {n: sorted({t.to_id for t in self.out[n]}) or [self.EXIT] for n in self.main}
+        everything = set(self.main) | {self.EXIT}
+        pdom: dict[str, set[str]] = {n: set(everything) for n in self.main}
+        pdom[self.EXIT] = {self.EXIT}
+        changed = True
+        while changed:
+            changed = False
+            for n in self.main:
+                new = {n} | set.intersection(*(pdom[s] for s in succ[n]))
+                if new != pdom[n]:
+                    pdom[n], changed = new, True
+        out: dict[str, str | None] = {}
+        for n in self.main:
+            strict = pdom[n] - {n}
+            d = next((x for x in sorted(strict) if pdom[x] == strict), None)
+            out[n] = None if d in (None, self.EXIT) else d
+        return out
+
+    def build(self) -> tuple[list[str], bool] | None:
+        if not self.ok:
+            return None
+        pg = self.pg
+        if pg.starter and pg.starter.activity_id in self.out:
+            starts = [pg.starter.activity_id]
+        else:
+            starts = [n for n in self.main if not self.preds[n]]
+        if len(starts) != 1:
+            return None
+        r = self.region(starts[0], None)
+        if r is None or set(self.main) - self.emitted:
+            return None
+        return _flatten(r[0]), r[1]
+
+    def region(self, node: str | None, stop: str | None) -> tuple[list[list[str]], bool] | None:
+        pg = self.pg
+        blocks: list[list[str]] = []
+        while node is not None and node != stop:
+            if node in self.emitted or (len(self.preds[node]) > 1 and node not in self.allowed):
+                return None
+            self.emitted.add(node)
+            outs = self.out[node]
+            st = _step(pg, node, self.deps, final=not outs)
+            self.steps.append(st)
+            block = [_step_header(pg, node), *st.lines]
+            if st.terminal:
+                if outs:
+                    return None
+                blocks.append(block)
+                return blocks, True
+            succ = [t for t in outs if t.kind == "success"]
+            cond = [t for t in outs if t.kind == "conditional"]
+            other = [t for t in outs if t.kind == "otherwise"]
+            if (succ and (cond or other)) or len(succ) > 1 or len(cond) > 1 or len(other) > 1:
+                return None
+            blocks.append(block)
+            if succ:
+                node = succ[0].to_id
+                continue
+            if not cond:
+                node = other[0].to_id if other else None
+                continue
+            c, o = cond[0], (other[0] if other else None)
+            merge = self.ipdom.get(node)
+            then_r = self.region(c.to_id, merge) if c.to_id != merge else ([], False)
+            else_r = (self.region(o.to_id, merge) if o.to_id != merge else ([], False)) if o else ([], False)
+            if then_r is None or else_r is None:
+                return None
+            call = f"{pg.name}Conditions.{self.conds[c.id]}(state)"
+            c_comment = f"// Link {c.id}: {one_line(c.expression or '')}"
+            o_comment = [f"// Link {o.id}: otherwise"] if o else \
+                ["// No otherwise link: when the condition is false the process ends here."]
+            then_lines, else_lines = _flatten(then_r[0]), _flatten(else_r[0])
+            if merge is not None:
+                if any(p not in self.emitted for p in self.preds[merge]):
+                    return None
+                self.allowed.add(merge)
+                if then_lines and else_lines:
+                    blocks.append([c_comment, f"if ({call})", "{", *_indent(then_lines), "}", "else", "{",
+                                   *_indent(o_comment + else_lines), "}"])
+                elif then_lines:
+                    blocks.append([c_comment, f"if ({call})", "{", *_indent(then_lines), "}"])
+                elif else_lines:
+                    blocks.append([c_comment, f"if (!{call})", "{", *_indent(o_comment + else_lines), "}"])
+                node = merge
+                continue
+            # no merge: both branches end the process; the shorter one becomes a guard clause
+            if len(else_lines) <= len(then_lines):
+                guard = o_comment + else_lines + ([] if else_r[1] else [RETURN])
+                blocks.append([c_comment, f"if (!{call})", "{", *_indent(guard), "}"])
+                return blocks + then_r[0], then_r[1]
+            guard = then_lines + ([] if then_r[1] else [RETURN])
+            blocks.append([c_comment, f"if ({call})", "{", *_indent(guard), "}"])
+            rest = [list(b) for b in else_r[0]]
+            rest[0] = o_comment + rest[0]
+            return blocks + rest, else_r[1]
+        return blocks, False
+
+
+def _queue_body(pg: ProcGen, deps: ServiceDeps, conds: dict[str, str]) -> tuple[list[str], list[Step]]:
+    """The general form: a ``ProcessFlow`` runs each step once all its live incoming links are decided."""
+    steps: list[Step] = []
+    handled = {aid for h in pg.p.fault_handlers for aid in h.activity_ids}
+    targets = {t.to_id for t in pg.p.transitions}
+    if pg.starter and pg.starter.activity_id in pg.acts:
+        starts = [pg.starter.activity_id]
+    else:
+        members = {m for g in pg.p.groups for m in g.member_ids}
+        starts = [a.id for a in pg.p.activities if a.id not in targets and a.id not in handled
+                  and a.id not in members] or [a.id for a in pg.p.activities[:1]]
+    lines = ["var flow = new ProcessFlow(Links);"]
+    lines += [f"flow.Start({cs_string(s)});" for s in starts]
+    lines += ["while (flow.TryNext(out var step))", "{", "    switch (step)", "    {"]
+    cases: list[list[str]] = []
+    for node_id in [*pg.acts, *pg.groups]:
+        st = _step(pg, node_id, deps, final=False)
+        steps.append(st)
+        outs = pg.outs.get(node_id, [])
+        succ = [t.id for t in outs if t.kind == "success"]
+        cond = [t for t in outs if t.kind == "conditional"]
+        other = [t.id for t in outs if t.kind == "otherwise"]
+        errors = [t.id for t in outs if t.kind == "error"]
+        header = [_step_header(pg, node_id)]
+        if node_id in handled:
+            header.append("// Runs in a TIBCO fault handler (see the catch blocks in ExecuteAsync).")
+        body: list[str] = []
+        if errors and not st.terminal:
+            err = ", ".join(cs_string(e) for e in errors)
+            body += ["try", "{", *_indent(st.lines), "}",
+                     "catch (Exception ex) when (ex is not OperationCanceledException)", "{",
+                     "    state.LastError = ex;", f"    flow.Complete({cs_string(node_id)}, [{err}]);",
+                     "    break;", "}", ""]
+        else:
+            body += st.lines
+        if st.terminal:
+            cases.append(header + [f"case {cs_string(node_id)}:"] + _indent(body))
+            continue
+        if not cond:
+            taken = ", ".join(cs_string(x) for x in succ + other)
+            body.append(f"flow.Complete({cs_string(node_id)}, [{taken}]);")
+        else:
+            var = f"taken{ident(node_id)}"
+            init = ", ".join(cs_string(x) for x in succ)
+            body.append(f"var {var} = new List<string> {{ {init} }};" if init else f"var {var} = new List<string>();")
+            for t in cond:
+                body += [f"// Link {t.id}: {one_line(t.expression or '')}",
+                         f"if ({pg.name}Conditions.{conds[t.id]}(state))", "{", f"    {var}.Add({cs_string(t.id)});", "}"]
+            if other:
+                body += [f"if ({var}.Count == {len(succ)})", "{"]
+                body += [f"    {var}.Add({cs_string(o)}); // otherwise" for o in other]
+                body.append("}")
+            body.append(f"flow.Complete({cs_string(node_id)}, {var});")
+        body.append("break;")
+        cases.append(header + [f"case {cs_string(node_id)}:"] + _indent(body))
+    switch: list[str] = []
+    for i, c in enumerate(cases):
+        if i:
+            switch.append("")
+        switch += c
+    switch += ["", "default:", '    throw new InvalidOperationException($"Unknown step {step}");']
+    lines += _indent(switch, 8) + ["    }", "}", "", RETURN]
+    return lines, steps
+
+
+def _links_field(pg: ProcGen) -> list[str]:
+    out = ["    /// <summary>The TIBCO links (id, from, to): a step runs once every live incoming link is decided.</summary>",
+           "    private static readonly ProcessLink[] Links =", "    ["]
+    out += [f"        new({cs_string(t.id)}, {cs_string(t.from_id)}, {cs_string(t.to_id)})," for t in pg.p.transitions]
+    out += ["    ];", ""]
+    return out
 
 
 def gen_service(pg: ProcGen) -> tuple[str, Origin]:
     deps = ServiceDeps()
     conds = condition_methods(pg)
-    origin: Origin = "code"
-    awaits = False
-    uses_result = False
-    pad = "                    "
-    cases: list[list[str]] = []
-    nodes: list[tuple[str, str]] = [(a.id, a.name) for a in pg.p.activities] + [(g.id, g.id) for g in pg.p.groups]
-    handled_ids = {aid for h in pg.p.fault_handlers for aid in h.activity_ids}
-    for node_id, node_name in nodes:
-        act = pg.acts.get(node_id)
-        row = pg.primary.get(node_id)
-        typ = act.type if act else f"group.{pg.groups[node_id].kind}"
-        line = f" line {act.source_line}" if act and act.source_line else ""
-        header = [f"                // TIBCO: {node_name} ({typ}){line}. {pg.remarks(node_id, row).split('. TIBCO:')[0]}.",
-                  f"                case {cs_string(node_id)}:"]
-        if act is None:
-            g = pg.groups[node_id]
-            members = ", ".join(g.member_ids)
-            action = [f'{pad}AgentFill.Required({cs_string(f"group {g.id} ({g.kind}) over {members}")});']
-            step_awaits, terminal, step_origin = False, False, "agent"
-        else:
-            action, step_awaits, terminal, step_origin = _step_action(pg, act, deps, pad)
-        if node_id in handled_ids:
-            header.insert(1, "                // Runs in a TIBCO fault handler (see the catch blocks below).")
-        if step_origin == "agent":
-            origin = "agent"
-        awaits = awaits or step_awaits
-        uses_result = uses_result or any("result ??=" in a for a in action)
-        outs = pg.outs.get(node_id, [])
-        errors = [t for t in outs if t.kind == "error"]
-        body: list[str] = []
-        if errors and not terminal:
-            body.append(f"{pad}try")
-            body.append(f"{pad}{{")
-            body += ["    " + a for a in action]
-            body.append(f"{pad}}}")
-            body.append(f"{pad}catch (Exception ex) when (ex is not OperationCanceledException)")
-            body.append(f"{pad}{{")
-            body.append(f"{pad}    // TIBCO error transition: {', '.join(t.id for t in errors)}")
-            body.append(f"{pad}    state.LastError = ex;")
-            for t in errors:
-                body.append(f"{pad}    pending.Enqueue({cs_string(t.to_id)});")
-            body.append(f"{pad}    break;")
-            body.append(f"{pad}}}")
-            body.append("")
-        else:
-            body += action
-        if terminal:
-            if [t for t in outs if t.kind != "error"]:
-                body.append(f"{pad}// Links after a throw never run: {', '.join(t.id for t in outs)}")
-            cases.append(header + body)
-            continue
-        body += _transition_lines(pg, node_id, outs, conds, pad)
-        body.append(f"{pad}break;")
-        cases.append(header + body)
+    structured = _Structured(pg, deps, conds)
+    built = structured.build()
+    if built is not None:
+        body, terminated = built
+        steps = structured.steps
+        if not terminated:
+            body = [*body, "", RETURN] if body else [RETURN]
+        queue = False
+    else:
+        deps = ServiceDeps()
+        body, steps = _queue_body(pg, deps, conds)
+        queue = True
+    awaits = any(s.awaits for s in steps)
+    uses_result = any(s.sets_result for s in steps)
+    origin: Origin = "agent" if any(s.origin == "agent" for s in steps) or pg.p.fault_handlers else "code"
+    final = "result ?? ProcessResult.Completed" if uses_result else "ProcessResult.Completed"
+    out_body: list[str] = []
+    for ln in body:
+        if ln.strip() == RETURN:
+            ln = ln.replace(RETURN, f"return {final};")
+        if not awaits:
+            m = re.match(r"^(\s*)return (.+);$", ln)
+            if m and not ln.strip().startswith("return Task."):
+                ln = f"{m.group(1)}return Task.FromResult({m.group(2)});"
+        out_body.append(ln)
+    prologue = []
+    if not awaits:
+        prologue.append("cancellationToken.ThrowIfCancellationRequested();")
+    if uses_result:
+        prologue.append("ProcessResult? result = null;")
+
     ctor: list[str] = []
-    uses_agent_fill = origin == "agent" or bool(pg.p.fault_handlers)
-    usings = [pg.ns("Core.Rules") if conds else "", pg.ns("Core.Mappings") if pg.map_row else "",
-              pg.ns("Core.Tibco") if uses_agent_fill else ""]
+    text_all = "\n".join(out_body)
+    usings = [pg.ns("Core.Rules") if conds and "Conditions." in text_all else "",
+              pg.ns("Core.Mappings") if "Mappings." in text_all else "",
+              pg.ns("Core.Tibco") if ("AgentFill." in text_all or queue or pg.p.fault_handlers) else ""]
     if deps.repository:
         ctor.append(f"I{pg.name}Repository repository")
         usings.append(pg.ns("Core.Data"))
@@ -1355,22 +1712,22 @@ def gen_service(pg: ProcGen) -> tuple[str, Origin]:
     if deps.log:
         ctor.append("IStepLogger log")
         usings.append(pg.ns("Core.Diagnostics"))
-    if any(pg.acts[a].type == "throw" for a in pg.acts):
+    if any(a.type == "throw" for a in pg.p.activities) or pg.p.fault_handlers:
         usings.append(pg.ns("Core.Exceptions"))
-    if pg.p.fault_handlers:
-        usings.append(pg.ns("Core.Exceptions"))
-        origin = "agent"
-    starts = [pg.starter.activity_id] if pg.starter and pg.starter.activity_id in pg.acts else \
-        [a.id for a in pg.p.activities if a.id not in {t.to_id for t in pg.p.transitions}
-         and a.id not in handled_ids] or [a.id for a in pg.p.activities[:1]]
     sig_ctor = f"({', '.join(ctor)})" if ctor else ""
+    form = ("Steps follow the TIBCO links through a ProcessFlow: a step runs once every live incoming link "
+            "is decided (joins wait for all live predecessors; a link not taken kills its path), conditional links "
+            "come from the generated conditions and an otherwise link is taken when no conditional link of its "
+            "step was.") if queue else \
+        ("The TIBCO links form sequences and if/else regions, so the process reads as straight-line code; "
+         "each if is a conditional link and its otherwise link, with the link ids in comments.")
     lines = [_usings(*usings).rstrip("\n"), "", f"namespace {pg.ns('Core.Services')};", "",
              f"/// <summary>The TIBCO process {xml_doc(pg.p.name)} ({xml_doc(pg.p.id)}) as a .NET service.</summary>",
-             ("/// <remarks>Steps run in the order the TIBCO links allow: a taken link queues its target, a step runs "
-              "once, conditional links are evaluated by the generated conditions and an otherwise link runs when no "
-              "conditional link of its step was taken. Parallel branches run one after the other.</remarks>"),
+             f"/// <remarks>{xml_doc(form)}</remarks>",
              f"public sealed class {pg.name}Service{sig_ctor}", "{"]
-    run_name = "RunStepsAsync" if pg.p.fault_handlers else "ExecuteAsync"
+    if queue:
+        lines += _links_field(pg)
+    mod = "async " if awaits else ""
     if pg.p.fault_handlers:
         lines += [f"    public async Task<ProcessResult> ExecuteAsync({pg.name}Input input, CancellationToken cancellationToken = default)",
                   "    {",
@@ -1387,84 +1744,18 @@ def gen_service(pg: ProcGen) -> tuple[str, Origin]:
             what = f"fault handler {h.fault_name or 'catch all'}: {names}"
             lines += ["        {", f"            // TIBCO fault handler {h.id}: {names}",
                       f"            AgentFill.Required({cs_string(what)});", "            throw;", "        }"]
-        lines += ["    }", ""]
-        lines.append(f"    private {'async ' if awaits else ''}Task<ProcessResult> {run_name}({pg.name}State state, CancellationToken cancellationToken)")
-        lines.append("    {")
+        lines += ["    }", "",
+                  f"    private {mod}Task<ProcessResult> RunStepsAsync({pg.name}State state, CancellationToken cancellationToken)",
+                  "    {"]
     else:
-        lines.append(f"    public {'async ' if awaits else ''}Task<ProcessResult> ExecuteAsync({pg.name}Input input, CancellationToken cancellationToken = default)")
-        lines.append("    {")
-        lines.append(f"        var state = new {pg.name}State(input);")
-    if not awaits:
-        lines.append("        cancellationToken.ThrowIfCancellationRequested();")
-    if uses_result:
-        lines.append("        ProcessResult? result = null;")
-    lines.append("        var pending = new Queue<string>();")
-    lines.append("        var done = new HashSet<string>(StringComparer.Ordinal);")
-    for s in starts:
-        lines.append(f"        pending.Enqueue({cs_string(s)});")
-    lines += ["        while (pending.TryDequeue(out var step))", "        {",
-              "            if (!done.Add(step))", "            {", "                continue;", "            }", "",
-              "            switch (step)", "            {"]
-    for i, c in enumerate(cases):
-        if i:
-            lines.append("")
-        lines += c
-    lines += ["", "                default:",
-              '                    throw new InvalidOperationException($"Unknown step {step}");',
-              "            }", "        }", ""]
-    final = "result ?? ProcessResult.Completed" if uses_result else "ProcessResult.Completed"
-    lines.append(f"        return {final};" if awaits else f"        return Task.FromResult({final});")
+        lines += [f"    public {mod}Task<ProcessResult> ExecuteAsync({pg.name}Input input, CancellationToken cancellationToken = default)",
+                  "    {", f"        var state = new {pg.name}State(input);"]
+    lines += _indent(prologue, 8)
+    if lines[-1].strip() != "{":
+        lines.append("")
+    lines += _indent(out_body, 8)
     lines += ["    }", "}"]
     return "\n".join(lines) + "\n", origin
-
-
-def _transition_lines(pg: ProcGen, node_id: str, outs: list[Transition], conds: dict[str, str], pad: str) -> list[str]:
-    succ = [t for t in outs if t.kind == "success"]
-    cond = [t for t in outs if t.kind == "conditional"]
-    other = [t for t in outs if t.kind == "otherwise"]
-    lines: list[str] = []
-    for t in succ:
-        lines.append(f"{pad}pending.Enqueue({cs_string(t.to_id)});")
-    cls = f"{pg.name}Conditions"
-    if len(cond) == 1:
-        t = cond[0]
-        lines.append(f"{pad}// Link {t.id}: {one_line(t.expression or '')}")
-        lines.append(f"{pad}if ({cls}.{conds[t.id]}(state))")
-        lines.append(f"{pad}{{")
-        lines.append(f"{pad}    pending.Enqueue({cs_string(t.to_id)});")
-        lines.append(f"{pad}}}")
-        if other:
-            lines.append(f"{pad}else")
-            lines.append(f"{pad}{{")
-            for o in other:
-                lines.append(f"{pad}    // Link {o.id}: otherwise")
-                lines.append(f"{pad}    pending.Enqueue({cs_string(o.to_id)});")
-            lines.append(f"{pad}}}")
-        lines.append("")
-    elif cond:
-        var = f"taken{ident(node_id)}"
-        lines.append(f"{pad}var {var} = false;")
-        for t in cond:
-            lines.append(f"{pad}// Link {t.id}: {one_line(t.expression or '')}")
-            lines.append(f"{pad}if ({cls}.{conds[t.id]}(state))")
-            lines.append(f"{pad}{{")
-            lines.append(f"{pad}    pending.Enqueue({cs_string(t.to_id)});")
-            lines.append(f"{pad}    {var} = true;")
-            lines.append(f"{pad}}}")
-            lines.append("")
-        if other:
-            lines.append(f"{pad}if (!{var})")
-            lines.append(f"{pad}{{")
-            for o in other:
-                lines.append(f"{pad}    // Link {o.id}: otherwise")
-                lines.append(f"{pad}    pending.Enqueue({cs_string(o.to_id)});")
-            lines.append(f"{pad}}}")
-            lines.append("")
-    else:
-        for o in other:
-            lines.append(f"{pad}// Link {o.id}: otherwise (no conditional link on this step)")
-            lines.append(f"{pad}pending.Enqueue({cs_string(o.to_id)});")
-    return lines
 
 
 # --------------------------------------------------------------- exceptions
@@ -1557,61 +1848,111 @@ def gen_controller(pg: ProcGen) -> str:
 _SELECTOR_ATOM = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*=\s*'([^']*)'\s*$")
 
 
+_ACK_MODES = {"1": "auto (acknowledged on receipt; a failed job was not redelivered)",
+              "2": "client (acknowledged by the process; unacknowledged messages were redelivered)",
+              "3": "dups-ok (lazy acknowledge)", "4": "no acknowledge",
+              "22": "explicit client", "23": "explicit client dups-ok", "24": "transacted"}
+
+
 def gen_consumer(pg: ProcGen) -> tuple[str, Origin]:
     cfg = pg.starter.config
+    settings = pg.starter_act.config.get("settings") if pg.starter_act and isinstance(pg.starter_act.config.get("settings"), dict) else {}
     dest = str(cfg.get("destination") or "")
     style = str(cfg.get("messaging_style") or "").lower()
-    entity = f"{dest}/{pg.p.name}" if style == "topic" else dest
+    topic = style == "topic"
+    entity = f"{dest}/{pg.p.name}" if topic else dest
     selector = str(cfg.get("selector") or "").strip()
+    ack = str(settings.get("acknowledgeMode") or "1")
     row = pg.primary.get(pg.starter.activity_id)
     origin: Origin = "code"
-    usings = ["System.Text.Json", pg.ns("Core.Messaging"), pg.ns("Core.Services"), "Microsoft.Extensions.Hosting"]
+    usings = ["System.Text.Json", pg.ns("Core.Exceptions"), pg.ns("Core.Messaging"), pg.ns("Core.Services"),
+              "Microsoft.Extensions.Hosting", "Microsoft.Extensions.Logging"]
     usings += _contract_usings(pg, pg.message_shape)
     mtype = pg.message_type()
-    body_note = (f"The TIBCO message body was {cfg.get('message_type') or 'XML text'}; on the bus it is JSON "
-                 "of the contract record.")
     accepts: list[str] = []
     if selector:
         atoms = re.split(r"(?i)\s+and\s+", selector)
         parsed = [_SELECTOR_ATOM.match(a) for a in atoms]
-        accepts.append(f"    // TIBCO selector: {selector}")
         if all(parsed):
             conds = []
             for m in parsed:
                 var = camel(m.group(1))
                 conds.append(f"message.Properties.TryGetValue({cs_string(m.group(1))}, out var {var}) && {var} == {cs_string(m.group(2))}")
-            accepts.append("    public static bool Accepts(BusMessage message)")
-            accepts.append("    {")
-            accepts.append("        ArgumentNullException.ThrowIfNull(message);")
-            accepts.append(f"        return {' && '.join(conds)};")
-            accepts.append("    }")
+            accepts += ["    /// <summary>The TIBCO selector, checked on every message (also on topics, behind the subscription rule).</summary>",
+                        "    public static bool Accepts(BusMessage message)", "    {",
+                        "        ArgumentNullException.ThrowIfNull(message);",
+                        f"        return {' && '.join(conds)};", "    }"]
         else:
             origin = "agent"
             usings.append(pg.ns("Core.Tibco"))
-            accepts.append("    public static bool Accepts(BusMessage message)")
-            accepts.append("    {")
-            accepts.append(f"        AgentFill.Required({cs_string(f'JMS selector of {pg.starter_act.name}')});")
-            accepts.append("        return message is not null;")
-            accepts.append("    }")
+            accepts += ["    /// <summary>The TIBCO selector; the code builder translates it (SelectorFilter is the verbatim form).</summary>",
+                        "    public static bool Accepts(BusMessage message)", "    {",
+                        f"        AgentFill.Required({cs_string(f'JMS selector of {pg.starter_act.name}: {selector}')});",
+                        "        return message is not null;", "    }"]
     else:
         accepts.append("    public static bool Accepts(BusMessage message) => message is not null;")
+    filter_doc = ("Service Bus SQL filter for the topic subscription rule (the TIBCO selector; JMS selectors "
+                  "and Service Bus SQL filters share the SQL-92 subset used here). Empty when there is no selector."
+                  if topic else
+                  "The TIBCO selector as a Service Bus SQL filter; a queue has no subscription rule, so a message "
+                  "that does not match is dead-lettered with reason SelectorMismatch. Empty when there is no selector.")
+    mismatch = ("A message the subscription rule let through that still fails the selector is dead-lettered."
+                if topic else
+                "TIBCO left non-matching messages on the queue for other receivers; a Service Bus queue cannot, "
+                "so they are dead-lettered for review instead of being completed and lost.")
+    settle = (f"TIBCO acknowledge mode: {_ACK_MODES.get(ack, ack)}. Here a message is settled after the process "
+              "ran: completed on success, dead-lettered on a business fault (reason = fault name), a selector "
+              "mismatch or an unreadable body, and abandoned for redelivery only on a transient error.")
     if mtype == "string":
-        deserialize = "        await HandleAsync(message.Body, cancellationToken);"
+        read = ["        var body = message.Body;"]
     else:
-        deserialize = (f"        var body = JsonSerializer.Deserialize<{mtype}>(message.Body, BusJson.Options)\n"
-                       f"            ?? throw new InvalidOperationException(\"Empty message on \" + Entity);\n"
-                       f"        await HandleAsync(body, cancellationToken);")
+        read = ["        " + mtype + "? body;",
+                "        try",
+                "        {",
+                f"            body = JsonSerializer.Deserialize<{mtype}>(message.Body, BusJson.Options);",
+                "        }",
+                "        catch (JsonException ex)",
+                "        {",
+                '            logger.LogWarning(ex, "Unreadable message on {Entity}; dead-lettered", Entity);',
+                '            return BusOutcome.DeadLetter("InvalidBody", ex.Message);',
+                "        }",
+                "",
+                "        if (body is null)",
+                "        {",
+                '            return BusOutcome.DeadLetter("InvalidBody", "empty message body");',
+                "        }"]
+    name = pg.starter_act.name if pg.starter_act else pg.starter.activity_id
+    body_note = (f"The TIBCO message body was {cfg.get('message_type') or 'XML text'}; on the bus it is JSON "
+                 "of the contract record.")
+    remarks = "".join([xml_doc(pg.remarks(pg.starter.activity_id, row)), f"<para>{xml_doc(settle)}</para>",
+                       f"<para>{xml_doc(mismatch)}</para>", f"<para>{xml_doc(body_note)}</para>"])
     lines = [_usings(*usings).rstrip("\n"), "", f"namespace {pg.ns('Infrastructure.Messaging')};", "",
-             f"/// <summary>{xml_doc(f'JMS starter {pg.starter_act.name} of {pg.p.name}: consumes {entity} through IMessageBus.')}</summary>",
-             f"/// <remarks>{xml_doc(pg.remarks(pg.starter.activity_id, row))}<para>{xml_doc(body_note)}</para></remarks>",
-             f"public sealed class {pg.name}Consumer(IMessageBus bus, {pg.name}Service service) : IHostedService",
+             f"/// <summary>{xml_doc(f'JMS starter {name} of {pg.p.name}: consumes {entity} through IMessageBus.')}</summary>",
+             f"/// <remarks>{remarks}</remarks>",
+             f"public sealed class {pg.name}Consumer(IMessageBus bus, {pg.name}Service service, ILogger<{pg.name}Consumer> logger) : IHostedService",
              "{",
-             f"    public const string Entity = {cs_string(entity)};", ""]
+             "    private IAsyncDisposable? _subscription;",
+             "",
+             f"    public const string Entity = {cs_string(entity)};",
+             "",
+             f"    /// <summary>{xml_doc(filter_doc)}</summary>",
+             f"    public const string SelectorFilter = {cs_string(selector)};",
+             ""]
     lines += accepts
     lines += ["",
-              "    public Task StartAsync(CancellationToken cancellationToken) => bus.SubscribeAsync(Entity, OnMessageAsync, cancellationToken);",
+              "    public async Task StartAsync(CancellationToken cancellationToken)",
+              "    {",
+              "        _subscription = await bus.SubscribeAsync(Entity, OnMessageAsync, cancellationToken);",
+              "    }",
               "",
-              "    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;",
+              "    public async Task StopAsync(CancellationToken cancellationToken)",
+              "    {",
+              "        if (_subscription is not null)",
+              "        {",
+              "            await _subscription.DisposeAsync();",
+              "            _subscription = null;",
+              "        }",
+              "    }",
               "",
               "    /// <summary>Runs the process for one message (the scenario tests call this directly).</summary>",
               f"    public Task HandleAsync({mtype} message, CancellationToken cancellationToken)",
@@ -1619,15 +1960,31 @@ def gen_consumer(pg: ProcGen) -> tuple[str, Origin]:
               f"        return service.ExecuteAsync(new {pg.name}Input(message), cancellationToken);",
               "    }",
               "",
-              "    private async Task OnMessageAsync(BusMessage message, CancellationToken cancellationToken)",
+              "    private async Task<BusOutcome> OnMessageAsync(BusMessage message, CancellationToken cancellationToken)",
               "    {",
               "        if (!Accepts(message))",
               "        {",
-              "            return;",
+              '            logger.LogWarning("Message on {Entity} does not match the selector {Selector}; dead-lettered", Entity, SelectorFilter);',
+              '            return BusOutcome.DeadLetter("SelectorMismatch", SelectorFilter);',
               "        }",
               ""]
-    lines += deserialize.split("\n")
-    lines += ["    }", "}"]
+    lines += read
+    lines += ["",
+              "        try",
+              "        {",
+              "            await HandleAsync(body, cancellationToken);",
+              "            return BusOutcome.Completed;",
+              "        }",
+              "        catch (ProcessFaultException fault)",
+              "        {",
+              "            // A business fault is not retried: redelivery would fault again.",
+              '            logger.LogWarning(fault, "Business fault {Fault} on {Entity}; dead-lettered", fault.FaultName, Entity);',
+              "            return BusOutcome.DeadLetter(fault.FaultName, fault.Message);",
+              "        }",
+              "",
+              "        // Any other exception is transient: the bus abandons the message and redelivers it.",
+              "    }",
+              "}"]
     return "\n".join(lines) + "\n", origin
 
 
@@ -1637,18 +1994,19 @@ def gen_job(pg: ProcGen) -> str:
     key = f"Jobs:{pg.name}"
     starter = pg.starter_act.name if pg.starter_act else pg.starter.activity_id
     summary = (f"Timer starter {starter} of {pg.p.name}: runs every {key}:Interval, first at {key}:Start "
-               f"(TIBCO: {cfg.get('interval') or cfg.get('start') or 'schedule'}).")
+               f"(TIBCO: {cfg.get('interval') or cfg.get('start') or 'schedule'}). A failed run is logged and the "
+               "next tick runs as scheduled; no exception leaves ExecuteAsync.")
     lines = [_usings("System.Globalization", pg.ns("Core.Services"), "Microsoft.Extensions.Configuration",
-                     "Microsoft.Extensions.Hosting").rstrip("\n"), "",
+                     "Microsoft.Extensions.Hosting", "Microsoft.Extensions.Logging").rstrip("\n"), "",
              f"namespace {pg.ns('Infrastructure.Jobs')};", "",
              f"/// <summary>{xml_doc(summary)}</summary>",
              f"/// <remarks>{xml_doc(pg.remarks(pg.starter.activity_id, row))}</remarks>",
-             f"public sealed class {pg.name}Job({pg.name}Service service, IConfiguration configuration) : BackgroundService",
+             f"public sealed class {pg.name}Job({pg.name}Service service, IConfiguration configuration, TimeProvider timeProvider, ILogger<{pg.name}Job> logger) : BackgroundService",
              "{",
              "    /// <summary>One run, as the timer fires it (the scenario tests call this directly).</summary>",
              "    public Task RunOnceAsync(CancellationToken cancellationToken)",
              "    {",
-             f"        return service.ExecuteAsync(new {pg.name}Input(DateTimeOffset.UtcNow), cancellationToken);",
+             f"        return service.ExecuteAsync(new {pg.name}Input(timeProvider.GetUtcNow()), cancellationToken);",
              "    }",
              "",
              "    protected override async Task ExecuteAsync(CancellationToken stoppingToken)",
@@ -1658,25 +2016,52 @@ def gen_job(pg: ProcGen) -> str:
              "            return;",
              "        }",
              "",
-             f'        var interval = TimeSpan.Parse(configuration["{key}:Interval"] ?? "1.00:00:00", CultureInfo.InvariantCulture);',
-             f'        var start = configuration["{key}:Start"];',
-             "        if (TimeOnly.TryParse(start, CultureInfo.InvariantCulture, out var at))",
+             "        try",
              "        {",
-             "            var now = DateTime.Now;",
-             "            var first = now.Date + at.ToTimeSpan();",
-             "            if (first <= now)",
+             f'            if (!TimeSpan.TryParse(configuration["{key}:Interval"], CultureInfo.InvariantCulture, out var interval) || interval <= TimeSpan.Zero)',
              "            {",
-             "                first += TimeSpan.FromDays(1);",
+             "                interval = TimeSpan.FromDays(1);",
+             f'                logger.LogWarning("{key}:Interval is missing or invalid; using {{Interval}}", interval);',
              "            }",
              "",
-             "            await Task.Delay(first - now, stoppingToken);",
-             "            await RunOnceAsync(stoppingToken);",
-             "        }",
+             f'            if (TimeOnly.TryParse(configuration["{key}:Start"], CultureInfo.InvariantCulture, out var at))',
+             "            {",
+             "                var now = timeProvider.GetLocalNow();",
+             "                var first = new DateTimeOffset(now.Date + at.ToTimeSpan(), now.Offset);",
+             "                if (first <= now)",
+             "                {",
+             "                    first = first.AddDays(1);",
+             "                }",
              "",
-             "        using var timer = new PeriodicTimer(interval);",
-             "        while (await timer.WaitForNextTickAsync(stoppingToken))",
+             "                await Task.Delay(first - now, timeProvider, stoppingToken);",
+             "                await RunTickAsync(stoppingToken);",
+             "            }",
+             "",
+             "            using var timer = new PeriodicTimer(interval, timeProvider);",
+             "            while (await timer.WaitForNextTickAsync(stoppingToken))",
+             "            {",
+             "                await RunTickAsync(stoppingToken);",
+             "            }",
+             "        }",
+             "        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)",
+             "        {",
+             "            // host shutdown",
+             "        }",
+             "        catch (Exception ex)",
+             "        {",
+             f'            logger.LogError(ex, "{pg.name} timer stopped");',
+             "        }",
+             "    }",
+             "",
+             "    private async Task RunTickAsync(CancellationToken stoppingToken)",
+             "    {",
+             "        try",
              "        {",
              "            await RunOnceAsync(stoppingToken);",
+             "        }",
+             "        catch (Exception ex) when (ex is not OperationCanceledException)",
+             "        {",
+             f'            logger.LogError(ex, "{pg.name} run failed; the next run follows the schedule");',
              "        }",
              "    }",
              "}"]
@@ -1754,10 +2139,6 @@ def gen_subprocess_stub(app: str, name: str, target: str) -> str:
 
 
 # ================================================================== appsettings
-def _kv_ref(key: str) -> str:
-    return f"@Microsoft.KeyVault(VaultName=<key-vault-name>;SecretName={key.replace(':', '--')})"
-
-
 def _set(doc: dict[str, Any], key: str, value: Any) -> None:
     parts = key.split(":")
     for part in parts[:-1]:
@@ -1799,7 +2180,48 @@ def _npgsql_from_jdbc(url: str, user: str) -> str:
     return f"Host={host};Port={port};Database={db};Username={user or 'postgres'};Password=change-me-local"
 
 
-def gen_appsettings(sol: SolutionGen, pgs: list[ProcGen], clients: dict[str, dict[str, Any]]) -> tuple[str, str]:
+def _references(pg: ProcGen, name: str) -> bool:
+    """True when a process step reads the substitution variable (``%%NAME%%``, a global variable path...)."""
+    text = json.dumps([[a.config, [b.expression for b in a.input_bindings]] for a in pg.p.activities],
+                      sort_keys=True, default=str)
+    return re.search(rf"(?<![\w.]){re.escape(name)}(?![\w.])", text) is not None
+
+
+def _not_carried_reason(sol: SolutionGen, pg: ProcGen, substvar: str, connections: set[str]) -> str:
+    resources = list(sol.application.resources)
+    if substvar.startswith("resource:"):
+        rname = substvar[len("resource:"):].rpartition(".")[0]
+        res = next((r for r in resources if r.name == rname), None)
+        if res is not None and res.kind == "jms":
+            return "JMS connection setting: replaced by Azure Service Bus (Messaging:*)"
+        if res is not None and res.kind == "jdbc":
+            return f"JDBC setting: replaced by ConnectionStrings:{ident(rname, 'Resource')}"
+        return "resource setting not read by the generated code"
+    bound_to = [(res, field_name) for res in resources
+                for field_name, var in ((res.settings.get("substitution_bindings") or {}) if isinstance(res.settings, dict) else {}).items()
+                if var == substvar]
+    used = [(res, f) for res, f in bound_to if res.kind != "jdbc" or ident(res.name, "Resource") in connections]
+    for res, field_name in used or bound_to:
+        if res.kind == "jms":
+            return "JMS connection setting: replaced by Azure Service Bus (Messaging:*)"
+        if res.kind == "jdbc":
+            db = ident(res.name, "Resource")
+            return f"JDBC setting: replaced by ConnectionStrings:{db}" if db in connections else \
+                "JDBC setting of a resource the selected processes do not use"
+        if res.kind == "http" and res.settings.get("role") == "server" and field_name in ("port", "host"):
+            return "HTTP listener address: set by the host (ASPNETCORE_URLS, container ingress)"
+        if res.kind == "http":
+            return f"HTTP client setting: carried as Clients:{ident(res.name)}:BaseAddress"
+    return "not read by the generated code"
+
+
+def gen_appsettings(sol: SolutionGen, pgs: list[ProcGen], clients: dict[str, dict[str, Any]]
+                    ) -> tuple[str, str, list[tuple[str, str]], list[tuple[str, str]]]:
+    """(appsettings.json, appsettings.Development.json, Key Vault secrets (name, key), substvars not carried).
+
+    Production holds non-secret keys only, plus placeholders for KeyVault:Uri and the Service Bus
+    namespace; secrets arrive from Key Vault (``--`` for ``:``). Development holds local values.
+    """
     app = sol.application
     prod: dict[str, Any] = {
         "Logging": {"LogLevel": {"Default": "Information", "Microsoft.AspNetCore": "Warning"}},
@@ -1807,9 +2229,10 @@ def gen_appsettings(sol: SolutionGen, pgs: list[ProcGen], clients: dict[str, dic
         "Auth": {"Mode": "Production", "EntraId": {"Instance": "https://login.microsoftonline.com/",
                                                    "TenantId": "<entra-tenant-id>",
                                                    "Audience": "api://<app-registration-client-id>"}},
-        "Messaging": {"Mode": "ServiceBus"},
-        "KeyVault": {"VaultName": "<key-vault-name>"},
-        "ConnectionStrings": {"ServiceBus": _kv_ref("ConnectionStrings:ServiceBus")},
+        "Swagger": {"Enabled": False},
+        "Messaging": {"Mode": "ServiceBus",
+                      "ServiceBus": {"FullyQualifiedNamespace": "<service-bus-namespace>.servicebus.windows.net"}},
+        "KeyVault": {"Uri": "https://<key-vault-name>.vault.azure.net/"},
         "Jobs": {"Enabled": True},
     }
     seed = hashlib.sha256(f"exiqo-dev:{app.id}".encode()).hexdigest()
@@ -1818,38 +2241,66 @@ def gen_appsettings(sol: SolutionGen, pgs: list[ProcGen], clients: dict[str, dic
         "Auth": {"Mode": "Development", "DevToken": {"Issuer": "exiqo-dev",
                                                      "Audience": f"{sol.app_name.lower()}-api",
                                                      "SigningKey": f"development-only-{seed}"}},
+        "Swagger": {"Enabled": True},
         "Messaging": {"Mode": "InMemory"},
+        "KeyVault": {"Uri": ""},
         "ConnectionStrings": {},
         "Jobs": {"Enabled": False},
     }
+    connections = {pg.connections[x] for pg in pgs for x in pg.connections}
     resources = {r.name: r for r in app.resources}
+    secrets: dict[str, str] = {}
+    not_carried: dict[str, str] = {}
     for pg in pgs:
         for row in pg.design.config:
-            if row.substvar.startswith("resource:"):
-                rname = row.substvar[len("resource:"):].rpartition(".")[0]
-                res = resources.get(rname)
-                if row.key.startswith("ConnectionStrings:"):
-                    local = _npgsql_from_jdbc(str((res.settings if res else {}).get("jdbc_url") or ""),
-                                              str((res.settings if res else {}).get("username") or ""))
-                else:
-                    local = "change-me-local"
-            else:
-                found = _substvar_value(app, pg.p.module, row.substvar)
-                value, typ = found if found else ("", "String")
-                local = _typed(value, typ) if value else "change-me-local"
-            _set(prod, row.key, _kv_ref(row.key) if row.secret else local)
+            if row.key.startswith("ConnectionStrings:"):
+                db = row.key.split(":", 1)[1]
+                if db not in connections:
+                    continue
+                res = resources.get(row.substvar[len("resource:"):].rpartition(".")[0])
+                settings = res.settings if res else {}
+                secrets[row.key.replace(":", "--")] = row.key
+                _set(dev, row.key, _npgsql_from_jdbc(str(settings.get("jdbc_url") or ""),
+                                                     str(settings.get("username") or "")))
+                continue
+            if row.substvar.startswith("resource:") or not _references(pg, row.substvar):
+                not_carried.setdefault(row.substvar, _not_carried_reason(sol, pg, row.substvar, connections))
+                continue
+            found = _substvar_value(app, pg.p.module, row.substvar)
+            value, typ = found if found else ("", "String")
+            local = _typed(value, typ) if value else "change-me-local"
             if row.secret:
+                secrets[row.key.replace(":", "--")] = row.key
                 _set(dev, row.key, local)
+            else:
+                _set(prod, row.key, local)
         if pg.kind == "timer":
             _set(prod, f"Jobs:{pg.name}:Interval", _interval(pg.starter.config))
             if pg.starter.config.get("start"):
                 _set(prod, f"Jobs:{pg.name}:Start", str(pg.starter.config.get("start")))
     for name, info in sorted(clients.items()):
         _set(prod, f"Clients:{name}:BaseAddress", info["base"])
-    return (json.dumps(prod, indent=2, ensure_ascii=False) + "\n", json.dumps(dev, indent=2, ensure_ascii=False) + "\n")
+    if not dev["ConnectionStrings"]:
+        del dev["ConnectionStrings"]
+    return (json.dumps(prod, indent=2, ensure_ascii=False) + "\n", json.dumps(dev, indent=2, ensure_ascii=False) + "\n",
+            sorted(secrets.items()), sorted(not_carried.items()))
 
 
 # ===================================================================== driver
+def solution_layout(app_name: str) -> dict[str, Any]:
+    """Paths of a generated solution, the layout contract with the infrastructure generator (Dockerfile,
+    pipelines): projects live under ``src/<App>.X/`` and ``tests/<App>.Tests/``."""
+    projects: dict[str, dict[str, str]] = {}
+    for kind, suffix, base in (("api", "Api", "src"), ("core", "Core", "src"),
+                               ("infrastructure", "Infrastructure", "src"), ("tests", "Tests", "tests")):
+        name = f"{app_name}.{suffix}"
+        projects[kind] = {"name": name, "folder": f"{base}/{name}", "csproj": f"{base}/{name}/{name}.csproj"}
+    return {"solution": f"{app_name}.sln", "projects": projects, "api_project": projects["api"]["csproj"],
+            "api_assembly": f"{app_name}.Api", "api_dll": f"{app_name}.Api.dll",
+            "test_project": projects["tests"]["csproj"]}
+
+
+
 def _as_map(value: Any, process_ids: list[str], process_of: Any) -> dict[str, list[Any]]:
     """Per-process lists from a dict keyed by process id, or from a flat list (assigned by citations)."""
     if isinstance(value, dict):
@@ -1927,11 +2378,10 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
             return
         files[path] = GenFile(path=path, content=content, origin=origin, activity_id=activity_id)
 
-    core, infra, api = f"src/{a}.Core", f"src/{a}.Infrastructure", f"src/{a}.Api"
-    tests = f"tests/{a}.Tests"
-    projects = [(f"{a}.Api", f"{api}/{a}.Api.csproj"), (f"{a}.Core", f"{core}/{a}.Core.csproj"),
-                (f"{a}.Infrastructure", f"{infra}/{a}.Infrastructure.csproj"),
-                (f"{a}.Tests", f"{tests}/{a}.Tests.csproj")]
+    layout = solution_layout(a)
+    folders = {k: v["folder"] for k, v in layout["projects"].items()}
+    core, infra, api, tests = folders["core"], folders["infrastructure"], folders["api"], folders["tests"]
+    projects = [(v["name"], v["csproj"]) for v in layout["projects"].values()]
     sln_projects = [{"name": n, "win_path": p.replace("/", "\\"),
                      "guid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"exiqo:{app.id}:{n}")).upper()}
                     for n, p in projects]
@@ -1947,6 +2397,8 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     add(f"{core}/Contracts/TibcoPathAttribute.cs", render("TibcoPathAttribute.cs.j2", app=a))
     add(f"{core}/Tibco/TibValue.cs", render("TibValue.cs.j2", app=a))
     add(f"{core}/Tibco/AgentFill.cs", render("AgentFill.cs.j2", app=a))
+    add(f"{core}/Tibco/ProcessFlow.cs", render("ProcessFlow.cs.j2", app=a))
+    add(f"{core}/Contracts/Masking.cs", render("Masking.cs.j2", app=a, names=sorted(SENSITIVE_NAMES)))
     add(f"{core}/Messaging/IMessageBus.cs", render("IMessageBus.cs.j2", app=a))
     add(f"{core}/Services/ProcessResult.cs", render("ProcessResult.cs.j2", app=a))
     add(f"{core}/Exceptions/ProcessFaultException.cs", render("ProcessFaultException.cs.j2", app=a))
@@ -1956,7 +2408,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     by_id = {c.id: c for c in app.contracts}
     for cid in contract_ids:
         plan = plans[cid]
-        add(f"{core}/{plan.file}", csharp_contracts.to_records(by_id[cid], plan.namespace, plan.reserved))
+        add(f"{core}/{plan.file}", mask_records(csharp_contracts.to_records(by_id[cid], plan.namespace, plan.reserved)))
 
     selected_names = {procs[pid].name for pid in process_ids}
     repositories, services, consumers, jobs = [], [], [], []
@@ -1967,7 +2419,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     resilience = {r.resource_id: r for pg in pgs for r in pg.design.resilience}
     for pg in pgs:
         n = pg.name
-        add(f"{core}/Services/{n}State.cs", gen_state(pg))
+        add(f"{core}/Services/{n}State.cs", _masked(gen_state(pg), a))
         service, service_origin = gen_service(pg)
         add(f"{core}/Services/{n}Service.cs", service, service_origin)
         services.append(f"{n}Service")
@@ -1978,7 +2430,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
             text, origin = gen_conditions(pg)
             add(f"{core}/Rules/{n}Conditions.cs", text, origin)
         if any(act.type.startswith("jdbc.") for act in pg.p.activities):
-            add(f"{core}/Data/{n}Data.cs", gen_data(pg))
+            add(f"{core}/Data/{n}Data.cs", _masked(gen_data(pg), a))
             add(f"{infra}/Repositories/{n}Repository.cs", gen_repository(pg),
                 "agent" if any(act.type == "jdbc.call" for act in pg.p.activities) else "code")
             repositories.append((f"I{n}Repository", f"{n}Repository"))
@@ -2044,16 +2496,17 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
         add(f"{infra}/Clients/{cls}.cs", gen_client(a, cls, members), "agent")
 
     # ---- Infrastructure
-    infra_packages = ["Azure.Messaging.ServiceBus", "Dapper", "Npgsql"]
+    infra_packages = ["Azure.Identity", "Azure.Messaging.ServiceBus", "Dapper", "Npgsql"]
     if any(c["resilience"] for c in clients.values()):
         infra_packages.append("Microsoft.Extensions.Http.Resilience")
     add(f"{infra}/{a}.Infrastructure.csproj", render("Infrastructure.csproj.j2", app=a, packages=infra_packages))
     add(f"{infra}/Messaging/InMemoryMessageBus.cs", render("InMemoryMessageBus.cs.j2", app=a))
     add(f"{infra}/Messaging/ServiceBusMessageBus.cs", render("ServiceBusMessageBus.cs.j2", app=a))
     add(f"{infra}/Diagnostics/LoggerStepLogger.cs", render("LoggerStepLogger.cs.j2", app=a))
-    di_usings = ["Azure.Messaging.ServiceBus", "Dapper", f"{a}.Core.Diagnostics", f"{a}.Core.Messaging",
+    di_usings = ["Azure.Identity", "Azure.Messaging.ServiceBus", "Dapper", f"{a}.Core.Diagnostics", f"{a}.Core.Messaging",
                  f"{a}.Core.Services", f"{a}.Infrastructure.Diagnostics", f"{a}.Infrastructure.Messaging",
-                 "Microsoft.Extensions.Configuration", "Microsoft.Extensions.DependencyInjection", "Npgsql"]
+                 "Microsoft.Extensions.Configuration", "Microsoft.Extensions.DependencyInjection",
+                 "Microsoft.Extensions.DependencyInjection.Extensions", "Npgsql"]
     if repositories:
         di_usings += [f"{a}.Core.Data", f"{a}.Infrastructure.Repositories"]
     if jobs:
@@ -2069,10 +2522,12 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
 
     # ---- Api
     add(f"{api}/{a}.Api.csproj", render("Api.csproj.j2", app=a, app_lower=a.lower()))
-    add(f"{api}/Program.cs", render("Program.cs.j2", app=a, app_id=app.id, title=f"{a} API"))
+
     add(f"{api}/Auth/DevToken.cs", render("DevToken.cs.j2", app=a))
     add(f"{api}/Errors/FaultExceptionHandler.cs", render("FaultExceptionHandler.cs.j2", app=a))
-    prod, dev = gen_appsettings(sol, pgs, clients)
+    prod, dev, secrets, not_carried = gen_appsettings(sol, pgs, clients)
+    add(f"{api}/Program.cs", render("Program.cs.j2", app=a, app_id=app.id, title=f"{a} API", secrets=secrets,
+                                    not_carried=not_carried))
     add(f"{api}/appsettings.json", prod)
     add(f"{api}/appsettings.Development.json", dev)
 
