@@ -1,7 +1,7 @@
 """Analysis models shared by the agents, the verifier and the API (design spec section 5).
 
-Created by Task 9 so the agents can be built first; Task 8 extends this file
-with ``VerificationResult``, ``CoverageItem`` and ``CoverageResult``.
+Created by Task 9 so the agents can be built first; Task 8 added
+``CitationFailure``, ``VerificationResult``, ``CoverageItem`` and ``CoverageResult``.
 """
 from typing import Literal
 
@@ -42,3 +42,30 @@ class Finding(BaseModel):
     decision: Literal["keep", "fix", "ask"] | None = None
     note: str | None = None
     business_impact: str | None = None
+
+
+class CitationFailure(BaseModel):
+    rule_id: str
+    citation: Citation
+    reason: str
+
+
+class VerificationResult(BaseModel):
+    """Citation-level tally: ``verified + len(failures) == total``."""
+
+    verified: int
+    total: int
+    failures: list[CitationFailure] = Field(default_factory=list)
+
+
+class CoverageItem(BaseModel):
+    kind: Literal["activity", "transition", "mapping"]
+    ref: str
+    covered_by: list[str] = Field(default_factory=list)
+    technical_reason: str | None = None
+
+
+class CoverageResult(BaseModel):
+    covered: int
+    total: int
+    items: list[CoverageItem] = Field(default_factory=list)
