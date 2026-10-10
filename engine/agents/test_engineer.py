@@ -9,6 +9,7 @@ G4 stays blocked for an honest reason.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import re
@@ -83,7 +84,21 @@ VALUE_ASSERTS: dict[str, int] = {
 }
 # the exception type argument is the expected value
 THROW_ASSERTS = frozenset({"Throws", "ThrowsAsync", "ThrowsAny", "ThrowsAnyAsync"})
-EXPECT_HINT = "assert the rule's expected value with Assert.Equal(<expected>, <value from the call>)"
+# Asserts whose single argument is checked against an implied expected value
+UNARY_ASSERTS: dict[str, str] = {"Null": "null", "Empty": "<empty>", "Single": "<one element>"}
+# Asserts that run an Assert per element of a collection, through a lambda parameter
+ELEMENT_ASSERTS = frozenset({"All", "Collection"})
+EXPECT_HINT = ("assert the expected value: Assert.Equal(<expected>, <value from the call>), "
+               "Assert.True/False(<condition on the call result>), "
+               "Assert.Empty/Single/Null(<value from the call>)")
+# a leading declaration or assignment: "var x =", "T x =", "using T x =" or "x ="
+_BINDING = re.compile(r"^\s*(?:(?:var|[\w<>?,\[\]\s]+)\s+)?(\w+)\s*=(?![=>])")
+# a leading tuple deconstruction: "var (a, b) =" or "(var a, var b) =" or "(a, b) ="
+_DECONSTRUCTION = re.compile(r"^\s*(?:var\s*)?\(([\w\s,]*)\)\s*=(?![=>])")
+_LAMBDA_PARAMS = re.compile(r"^\s*(?:async\s+)?(?:\(([\w\s,]*)\)|(\w+))\s*=>")
+_NULL_CHECK = re.compile(r"\bis\s+(?:not\s+)?null\b")
+_PRESENCE = re.compile(r"\.(ContainsKey|Any)\s*\(")
+_COMPLETED_RETURN = re.compile(r"\breturn\b[^;]*;")
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")
 _TYPE_DECL = re.compile(
     r"^\s*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*"
@@ -220,6 +235,91 @@ def _comparison(text: str) -> tuple[str, str, str] | None:
     return None
 
 
+def _binding(cs: str) -> tuple[list[str], int]:
+    """The names a statement (literals blanked) binds by a leading declaration, assignment or
+    tuple deconstruction, and where its right-hand side starts; ``([], 0)`` when it binds
+    nothing. An Assert statement never binds a name (an object initializer inside it is an
+    expected value)."""
+    if cs.lstrip().startswith("Assert"):
+        return [], 0
+    m = _DECONSTRUCTION.match(cs)
+    if m:
+        names = [p.split()[-1] for p in m.group(1).split(",") if p.strip()]
+        return names, m.end()
+    m = _BINDING.match(cs)
+    if m:
+        return [m.group(1)], m.end()
+    return [], 0
+
+
+def _unwrap(arg: str) -> str:
+    """``arg`` without the parentheses that enclose all of it."""
+    a = arg.strip()
+    while a.startswith("(") and _close(code_only(a), 0) == len(a) - 1:
+        a = a[1:-1].strip()
+    return a
+
+
+def _top_level_operands(text: str, ops: tuple[str, ...]) -> list[str]:
+    """``text`` split at the top-level occurrences of ``ops`` (``||`` and ``&&``)."""
+    code = code_only(text)
+    out: list[str] = []
+    depth, start, k = 0, 0, 0
+    while k < len(code):
+        ch = code[k]
+        depth += (ch in "([{") - (ch in ")]}")
+        if depth == 0 and any(code.startswith(op, k) for op in ops):
+            out.append(text[start:k])
+            k += 2
+            start = k
+            continue
+        k += 1
+    out.append(text[start:])
+    return out
+
+
+def _presence_check(cond: str) -> str | None:
+    """``ContainsKey`` or ``Any`` when the condition is a bare ``.ContainsKey(...)`` or ``.Any()``
+    call (presence, not a value); ``None`` otherwise."""
+    c = code_only(cond).rstrip()
+    last = None
+    for m in _PRESENCE.finditer(c):
+        last = m
+    if last is None or _close(c, last.end() - 1) != len(c) - 1:
+        return None
+    if last.group(1) == "ContainsKey" or not c[last.end():-1].strip():
+        return last.group(1)
+    return None
+
+
+def _lambda_blocks(code: str) -> list[tuple[int, int]]:
+    """``(open, close)`` of every ``=> { ... }`` lambda block in ``code`` (literals blanked)."""
+    stack: list[tuple[int, bool]] = []
+    out: list[tuple[int, int]] = []
+    for k, ch in enumerate(code):
+        if ch == "{":
+            stack.append((k, code[:k].rstrip().endswith("=>")))
+        elif ch == "}" and stack:
+            start, is_lambda = stack.pop()
+            if is_lambda:
+                out.append((start, k))
+    return out
+
+
+def _completed_returns(code: str) -> list[tuple[int, int, bool]]:
+    """``(start, end, exact)`` of each return statement outside a lambda block that names
+    ``Task.CompletedTask``; ``exact`` when it is ``return Task.CompletedTask;`` and nothing
+    else (the form :func:`_splice` rewrites to ``return;``)."""
+    blocks = _lambda_blocks(code)
+    out: list[tuple[int, int, bool]] = []
+    for m in _COMPLETED_RETURN.finditer(code):
+        if "CompletedTask" not in m.group(0) or any(a < m.start() < b for a, b in blocks):
+            continue
+        exact = re.sub(r"\s+", "", m.group(0)) == "returnTask.CompletedTask;"
+        out.append((m.start(), m.end(), exact))
+    return out
+
+
 @dataclass
 class _BodyCheck:
     reason: str | None
@@ -248,8 +348,15 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
         return _BodyCheck("the body adds a [Fact] or [Theory] attribute", [])
     if _PRAGMA.search(code):
         return _BodyCheck("the body introduces #pragma warning disable", [])
-    if _OUTSIDE.search(strip_comments(body)):
+    stripped = strip_comments(body)  # same length as code
+    if _OUTSIDE.search(stripped):
         return _BodyCheck("the body references a file outside the solution", [])
+    for start, end, exact in _completed_returns(code):
+        if not exact:
+            return _BodyCheck(
+                "the body returns Task.CompletedTask inside an expression "
+                f"({one_line(stripped[start:end])}), which does not compile in an async test "
+                "method; use a plain return", [])
     types = _driven_types(stem)
     type_alt = "|".join(re.escape(t) for t in types)
     statements = [(st, code_only(st)) for st in _statements(body)]
@@ -275,36 +382,58 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
         return rest.rstrip("!").strip() == ""
 
     bound: set[str] = set()
+    constructed: set[str] = set()  # built in the body with "new"
     for _, cs in statements:
         m = re.search(rf"\b(?:{type_alt})\s+(\w+)\s*=(?![=>])", cs)
-        if m is None:
-            a = re.search(r"\b(\w+)\s*=(?![=>])", cs)
-            if a and instance(cs[a.end():]):
-                m = a
+        names, rhs = _binding(cs)
         if m:
             bound.add(m.group(1))
+        elif names and instance(cs[rhs:]):
+            bound.update(names)
+        elif len(names) == 1 and re.match(r"^\s*new\b", cs[rhs:]):
+            constructed.add(names[0])
     receivers = "|".join([*types, *(re.escape(b) for b in bound)])
-    call = re.compile(rf"(?:\b(?:{receivers})|\bnew\s+(?:{type_alt})\s*\([^;]*?\)(?:\s*\{{[^;]*?\}})?"
-                      rf"|<\s*(?:{type_alt})\s*>\s*\(\s*\))\s*\.\s*\w+\s*[<(]")
+    receiver = (rf"(?:\b(?:{receivers})|\bnew\s+(?:{type_alt})\s*\([^;]*?\)(?:\s*\{{[^;]*?\}})?"
+                rf"|<\s*(?:{type_alt})\s*>\s*\(\s*\))")
+    call = re.compile(rf"{receiver}\s*\.\s*\w+\s*[<(]")
     calling = [cs for _, cs in statements if call.search(cs)]
     if not calling:
         return _BodyCheck(f"the body does not call the generated {', '.join(types)}", [])
+
+    def derive(names: set[str]) -> None:
+        """Add the names bound from a right-hand side that uses one of ``names``."""
+        for _ in range(3):
+            for _, cs in statements:
+                new_names, rhs = _binding(cs)
+                if new_names and names and not (set(new_names) <= names | bound) \
+                        and re.search(rf"\b(?:{'|'.join(map(re.escape, names))})\b", cs[rhs:]):
+                    names.update(n for n in new_names if n not in bound)
+
     results: set[str] = set()
     for cs in calling:
-        m = re.search(r"\b(\w+)\s*=(?!=)", cs.split("=>", 1)[0])
-        if m and m.group(1) not in bound:
-            results.add(m.group(1))
-    for _ in range(3):  # values derived from a result count as results
-        for _, cs in statements:
-            m = re.search(r"\b(\w+)\s*=(?!=)", cs)
-            if m and m.group(1) not in results and m.group(1) not in bound and results \
-                    and re.search(rf"\b(?:{'|'.join(map(re.escape, results))})\b", cs[m.end():]):
-                results.add(m.group(1))
+        results.update(n for n in _binding(cs)[0] if n not in bound)
+    derive(results)  # values derived from a result count as results
+    # State built in the body and passed to the generated type or the generated call: its
+    # value after the call is the call's effect, so an Assert on it looks at the call.
+    passed = re.compile(rf"(?:\bnew\s+(?:{type_alt})|{receiver}\s*\.\s*\w+\s*(?:<[^;()]*?>)?)\s*\(")
+    effects: set[str] = set()
+    for _, cs in statements:
+        for m in passed.finditer(cs):
+            inside = cs[m.end():_close(cs, m.end() - 1)]
+            effects.update(constructed & set(re.findall(r"\b\w+\b", inside)))
+    derive(effects)
+    effects -= results
     result_ref = re.compile(rf"\b(?:{'|'.join(map(re.escape, results))})\b") if results else None
+    effect_ref = re.compile(rf"\b(?:{'|'.join(map(re.escape, effects))})\b") if effects else None
+    element: set[str] = set()  # lambda parameters of an Assert.All/Collection over a result
 
     def dependent(arg: str) -> bool:
         c = code_only(arg)
-        return bool(call.search(c) or (result_ref and result_ref.search(c)))
+        return bool(call.search(c) or (result_ref and result_ref.search(c))
+                    or (element and re.search(rf"\b(?:{'|'.join(map(re.escape, element))})\b", c)))
+
+    def effect(arg: str) -> bool:
+        return bool(effect_ref and effect_ref.search(code_only(arg)))
 
     def independent(arg: str) -> bool:
         c = code_only(arg).strip()
@@ -315,35 +444,75 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
     weak: list[str] = []
     selfish: list[str] = []
     for st, cs in statements:
+        element.clear()
         for m in _ASSERT_AT.finditer(cs):
             name = m.group(1)
             args = _arguments(st, cs, m.end() - 1)
-            if not any(dependent(a) for a in args):
+            if not any(dependent(a) or effect(a) for a in args):
                 continue  # does not look at the call result
             if name in THROW_ASSERTS and "<" in cs[m.start():m.end()]:
                 expected.append(re.sub(r"\s+", "", cs[m.start():m.end()]).split("<", 1)[1][:-2])
                 continue
+            if name in ELEMENT_ASSERTS:
+                if dependent(args[0]) or effect(args[0]):
+                    for a in args[1:]:
+                        p = _LAMBDA_PARAMS.match(a)
+                        if p:
+                            element.update((p.group(1) or p.group(2) or "").replace(",", " ").split())
+                continue  # the Asserts inside the lambdas are checked through the parameter
             if name in ("True", "False"):
-                cmp = _comparison(args[0]) if args else None
+                cond = _unwrap(args[0]) if args else ""
+                parts = [code_only(p).strip() for p in _top_level_operands(cond, ("||", "&&"))]
+                if any(p in ("true", "false") for p in parts):
+                    return _BodyCheck(
+                        f"Assert.{name}({one_line(cond)}) joins a constant with || or &&, so it "
+                        f"asserts a constant; it must assert the behavior: {EXPECT_HINT}", [])
+                cmp = _comparison(cond)
                 if cmp is None:
-                    weak.append(f"Assert.{name}(<condition>)")
-                    continue
-                left, op, right = cmp
-                if op in ("==", "!=") and "null" in (code_only(left), code_only(right)):
-                    weak.append(f"Assert.{name}(x {op} null)")
-                    continue
-                operands = [left, right]
+                    if _NULL_CHECK.search(code_only(cond)):
+                        weak.append(f"Assert.{name}(x is null)")
+                        continue
+                    presence = _presence_check(cond)
+                    if presence:
+                        weak.append(f"Assert.{name}(x.{presence}(...))")
+                        continue
+                    operands = [cond, name.lower()]  # a condition on the result is compared with true/false
+                else:
+                    left, op, right = cmp
+                    if op in ("==", "!=") and "null" in (code_only(left), code_only(right)):
+                        weak.append(f"Assert.{name}(x {op} null)")
+                        continue
+                    operands = [left, right]
+            elif name in UNARY_ASSERTS:
+                operands = [args[0], UNARY_ASSERTS[name]]
             elif name in VALUE_ASSERTS:
                 operands = args[:VALUE_ASSERTS[name]]
+                codes = [code_only(a).strip() for a in operands]
+                if any(c.startswith("typeof") for c in codes) and any(c.endswith(".GetType()") for c in codes):
+                    weak.append(f"Assert.{name}(typeof(T), x.GetType())")
+                    continue
+                if "null" in codes:
+                    if name in ("Equal", "StrictEqual", "Equivalent"):
+                        operands = [a for a in operands if code_only(a).strip() != "null"] + ["null"]
+                    else:
+                        weak.append(f"Assert.{name}(null, x)")
+                        continue
             else:
                 weak.append(f"Assert.{name}")
                 continue
+            # the expected value an Assert implies (null, empty, one element, true/false)
+            implied = [a for a in operands if a in (*UNARY_ASSERTS.values(), "null", "true", "false")]
             if any(dependent(a) for a in operands):
-                found = [a for a in operands if independent(a)]
-                if found:
-                    expected += found
-                else:
-                    selfish.append(f"Assert.{name}")
+                found = implied + [a for a in operands if independent(a) and a not in implied]
+            elif any(effect(a) for a in operands):
+                found = implied + [a for a in operands
+                                   if independent(a) and not effect(a) and a not in implied]
+            else:
+                continue
+            if found:
+                expected += found
+            else:
+                selfish.append(f"Assert.{name}")
     if expected:
         return _BodyCheck(None, expected)
     if selfish:
@@ -354,7 +523,7 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
     if weak:
         return _BodyCheck(
             f"{weak[0]} does not compare the result with an expected value (presence, type, "
-            f"identity and bare conditions do not count): {EXPECT_HINT}", [])
+            f"identity and null checks do not count): {EXPECT_HINT}", [])
     return _BodyCheck(f"no Assert checks a value returned by the generated call; {EXPECT_HINT}",
                       [])
 
@@ -365,21 +534,25 @@ def check_test_body(body: str, stem: str) -> str | None:
     The body must call a method of ``<stem>Service``, ``<stem>Controller`` or ``<stem>Consumer``
     (through a variable bound to an instance of that type, on a ``new`` instance or statically).
     At least one value-comparing Assert (``Equal``, ``Contains``, ``Assert.True(a == b)``, an
-    expected exception type, ...) must have an argument that uses the call result and an
-    argument that does not: a literal, a named constant or a value from the scenario fixture.
-    ``NotNull``, ``NotEmpty``, ``IsType``, ``IsAssignableFrom``, ``Same``, ``NotSame`` and null
-    checks do not count. The body must contain no ``Assert.Fail(``, ``Assert.True(true)``,
-    ``[Fact]``/``[Theory]``, ``#pragma warning disable``, file reference outside the solution
-    or unbalanced braces (whitespace around ``.`` and ``(`` does not matter)."""
+    expected exception type, ...) must have an argument that uses the call result (or state
+    built in the body and passed to the generated type or call) and an argument that does not:
+    a literal, a named constant or a value from the scenario fixture. ``Assert.True/False`` of a
+    condition on the result compares it with ``true``/``false``; ``Null``, ``Empty``, ``Single``
+    and ``Equal(null, x)`` imply their expected value; an Assert inside an ``All``/``Collection``
+    lambda counts through the lambda parameter. ``NotNull``, ``NotEmpty``, ``IsType`` (also as
+    ``Equal(typeof(T), x.GetType())``), ``IsAssignableFrom``, ``Same``, ``NotSame``, null checks,
+    bare ``ContainsKey``/``Any()`` and a condition joined with a ``true``/``false`` literal do not
+    count. The body must contain no ``Assert.Fail(``, ``Assert.True(true)``, ``[Fact]``/
+    ``[Theory]``, ``#pragma warning disable``, file reference outside the solution, unbalanced
+    braces (whitespace around ``.`` and ``(`` does not matter) or a ``return`` of
+    ``Task.CompletedTask`` inside an expression (it cannot become ``return;``)."""
     return _analyse(body, stem).reason
 
 
 def _literal_found(arg: str, context: str) -> bool | None:
     """Whether the literal ``arg`` appears in ``context``; ``None`` when ``arg`` is not a literal
     that can be looked up (a fixture value, a named constant, a bool, a type)."""
-    a = arg.strip()
-    while a.startswith("(") and _close(code_only(a), 0) == len(a) - 1:
-        a = a[1:-1].strip()
+    a = _unwrap(arg)
     if _NUMBER.match(a):
         want = a.rstrip("mMdDfFuUlL").replace("_", "")
         try:
@@ -425,18 +598,33 @@ def _indent(body: str) -> list[str]:
     return [("        " + ln) if ln.strip() else "" for ln in text.split("\n")]
 
 
-_TOP_RETURN = "        return Task.CompletedTask;"
+def _plain_returns(new: list[str]) -> list[str]:
+    """``new`` with every ``return Task.CompletedTask;`` outside a lambda block rewritten to
+    ``return;`` (comments and literals are left alone; a line comment is dropped from the code
+    that is scanned, so columns before it are the same in both)."""
+    codes = [code_only(ln) for ln in new]
+    offsets = [0]
+    for c in codes[:-1]:
+        offsets.append(offsets[-1] + len(c) + 1)
+    out = list(new)
+    for start, end, exact in reversed(_completed_returns("\n".join(codes))):
+        if not exact:
+            continue
+        i = bisect.bisect_right(offsets, start) - 1
+        j = bisect.bisect_right(offsets, end - 1) - 1
+        out[i:j + 1] = [out[i][:start - offsets[i]] + "return;" + out[j][end - offsets[j]:]]
+    return out
 
 
 def _splice(lines: list[str], m: TestMethod, body: str, placeholder: bool = False) -> None:
     """Replace the body of ``m`` in place.
 
     An accepted body always becomes an ``async Task`` method (xUnit accepts it): a body that
-    does not await starts with ``await Task.CompletedTask;``, no return is ever appended, and a
-    top-level ``return Task.CompletedTask;`` becomes ``return;`` (dropped when it is the last
-    line). The ``[Fact]``/``[Theory]`` attributes and the method name are left alone. A
-    ``placeholder`` body (``Assert.Fail`` then ``return Task.CompletedTask;``) keeps a plain
-    ``Task`` signature."""
+    does not await starts with ``await Task.CompletedTask;``, no return is ever appended, and
+    every ``return Task.CompletedTask;`` outside a lambda block becomes ``return;`` (dropped
+    when it is the last line). The ``[Fact]``/``[Theory]`` attributes and the method name are
+    left alone. A ``placeholder`` body (``Assert.Fail`` then ``return Task.CompletedTask;``)
+    keeps a plain ``Task`` signature."""
     new = _indent(body)
     sig = lines[m.start]
     if placeholder:
@@ -444,9 +632,9 @@ def _splice(lines: list[str], m: TestMethod, body: str, placeholder: bool = Fals
     else:
         if "public async Task " not in sig:
             sig = sig.replace("public Task ", "public async Task ")
-        while new and new[-1] == _TOP_RETURN:
+        new = _plain_returns(new)
+        while new and new[-1].strip() == "return;":
             new.pop()
-        new = ["        return;" if ln == _TOP_RETURN else ln for ln in new]
         if not re.search(r"\bawait\b", code_only("\n".join(new))):
             new.insert(0, "        await Task.CompletedTask;")
     lines[m.start] = sig

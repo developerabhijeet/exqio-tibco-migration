@@ -933,7 +933,9 @@ async def test_test_engineer_rejects_trivial_assert(tmp_path):
 
 
 CALL = "var s = new LoanRatesService();\nvar result = await s.ExecuteAsync(null, default);\n"
-HINT = "assert the rule's expected value with Assert.Equal(<expected>, <value from the call>)"
+HINT = ("assert the expected value: Assert.Equal(<expected>, <value from the call>), "
+        "Assert.True/False(<condition on the call result>), "
+        "Assert.Empty/Single/Null(<value from the call>)")
 
 
 @pytest.mark.parametrize(("body", "reason"), [
@@ -953,6 +955,9 @@ HINT = "assert the rule's expected value with Assert.Equal(<expected>, <value fr
      "no Assert"),
     ("#pragma warning disable CS1998\nvar s = new LoanRatesService();\nvar r = s.Run();\nAssert.NotNull(r);",
      "pragma"),
+    # a return of Task.CompletedTask inside an expression cannot be rewritten to "return;"
+    (CALL + "Assert.Equal(3, result.Count);\nreturn result.Done ? Task.CompletedTask : Task.CompletedTask;",
+     "Task.CompletedTask"),
 ])
 def test_test_body_checks(body, reason):
     assert reason in (check_test_body(body, "LoanRates") or "")
@@ -1029,6 +1034,59 @@ def test_test_body_accepts_expected_value_assertions(body):
     assert check_test_body(body, "LoanRates") is None
 
 
+@pytest.mark.parametrize("body", [
+    # an object initializer inside the Assert is an expected value, not a derived result
+    CALL + "Assert.Equal(new LoanRatesOutput { Pulls = 3 }, result.Output);",
+    CALL + 'Assert.Equivalent(new { Pulls = 3, Tier = "A" }, result.Output);',
+    # a boolean expression over the call result is compared with true/false
+    CALL + 'Assert.True(result.Output!["approved"]!.GetValue<bool>());',
+    CALL + "Assert.False(result.IsSuccess);",
+    CALL + 'Assert.True(result.Rates.All(r => r.Tier == "A"));',
+    CALL + "Assert.True(result.Count>5);",
+    CALL + "Assert.True((result.Count == 3));",
+    # null, empty and one are expected values
+    CALL + "Assert.Empty(result.Rates);",
+    CALL + "Assert.Single(result.Rates);",
+    CALL + "Assert.Null(result.Error);",
+    CALL + "Assert.Equal(null, result.Error);",
+    # an Assert inside an All/Collection lambda counts through the lambda parameter
+    CALL + 'Assert.All(result.Rates, r => Assert.Equal("A", r.Tier));',
+    CALL + "Assert.Collection(result.Items, i => Assert.Equal(1, i.Id));",
+    # state passed into the service is checked after the call
+    ("var repo = new InMemoryLoanRatesRepository();\nvar s = new LoanRatesService(repo);\n"
+     "await s.ExecuteAsync(null, default);\nAssert.Equal(3, repo.Pulls);"),
+    ("var repo = new InMemoryLoanRatesRepository();\nvar s = new LoanRatesService();\n"
+     "await s.ExecuteAsync(repo, default);\nvar pulls = repo.Pulls;\nAssert.Equal(3, pulls);"),
+    # tuple deconstruction binds every name as a result
+    ("var s = new LoanRatesService();\nvar (status, body) = await s.ExecuteAsync(null, default);\n"
+     "Assert.Equal(200, status);"),
+    ("var s = new LoanRatesService();\n(var status, var body) = await s.ExecuteAsync(null, default);\n"
+     'Assert.Equal("ok", body);'),
+])
+def test_test_body_accepts_idiomatic_assertions(body):
+    assert check_test_body(body, "LoanRates") is None
+
+
+@pytest.mark.parametrize("body", [
+    CALL + "Assert.True(result.Output != null);",
+    CALL + "Assert.True(result.Output is not null);",
+    CALL + 'Assert.True(result.Output!.ContainsKey("x"));',
+    CALL + "Assert.True(result.Rates.Any());",
+    CALL + "Assert.True(true || result.Count == 3);",
+    CALL + "Assert.False(result.Count == 3 && false);",
+    CALL + "Assert.Equal(typeof(ProcessResult), result.GetType());",
+    CALL + "Assert.NotNull(result);",
+    CALL + "Assert.NotEqual(null, result.Error);",
+    "var s = new LoanRatesService();\nvar r = await s.ExecuteAsync(null, default);\nAssert.Equal(r, r);",
+    CALL + "Assert.All(result.Rates, r => Assert.NotNull(r.Tier));",
+    ("var repo = new InMemoryLoanRatesRepository();\nvar s = new LoanRatesService(repo);\n"
+     "await s.ExecuteAsync(null, default);\nAssert.Equal(repo.Pulls, repo.Pulls);"),
+])
+def test_test_body_rejects_presence_and_constant_conditions(body):
+    reason = check_test_body(body, "LoanRates") or ""
+    assert reason and reason.endswith(HINT), reason
+
+
 def test_expected_value_warning_is_soft():
     context = "- id=LoanRates:R1: Each request adds one to the pull counter.\n  cites: $start/pulls + 1"
     warning = expected_value_warning(R1_BODY, "LoanRates", context) or ""
@@ -1072,6 +1130,30 @@ async def test_test_engineer_splices_non_awaiting_bodies_as_async(tmp_path):
     # an awaiting body gets no extra await
     branch = _method_text(out[1].content, BRANCH)
     assert "await Task.CompletedTask;" not in branch
+
+
+async def test_test_engineer_splices_nested_completed_returns(tmp_path):
+    sol = te_solution(tmp_path)
+    nested = ("var s = new LoanRatesService(null!);\n"
+              "Func<Task> done = () => { return Task.CompletedTask; };\n"
+              "var result = s.Count(2);\n"
+              "if (result > 1) { return Task.CompletedTask; }\n"
+              "Assert.Equal(3, result);\n"
+              "return Task.CompletedTask;")
+    fake = FakeProvider([
+        _tests_reply(**{R1: nested, R2: R2_BODY}),
+        _tests_reply(**{BRANCH: BRANCH_BODY}),
+    ])
+    rp, _ = routed(fake)
+    out = await fill_test_bodies(sol, make_process(), make_rules(), [], make_design(), [], rp)
+    r1 = _method_text(out[0].content, R1)
+    assert f"public async Task {R1}()" in out[0].content
+    body = r1.split("    {\n", 1)[1].split("\n")
+    assert body[0] == "        await Task.CompletedTask;"
+    assert "        if (result > 1) { return; }" in body
+    assert "Func<Task> done = () => { return Task.CompletedTask; };" in r1  # the lambda is kept
+    assert r1.count("Task.CompletedTask") == 2  # the await and the lambda only
+    assert r1.rstrip().endswith("Assert.Equal(3, result);")  # the trailing return is dropped
 
 
 async def test_test_engineer_never_touches_non_test_files(tmp_path):
