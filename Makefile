@@ -9,7 +9,10 @@ setup:
 	@if [ -f web/package.json ]; then cd web && npm install; fi
 
 db:
-	docker compose up -d postgres
+	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+		docker compose up -d --wait postgres; \
+	else echo "docker not available: using the Postgres at DATABASE_URL"; fi
+	.venv/bin/alembic -c api/alembic.ini upgrade head
 
 api:
 	.venv/bin/uvicorn api.app.main:app --reload --port 8000
