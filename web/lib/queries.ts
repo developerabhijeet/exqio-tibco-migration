@@ -52,3 +52,14 @@ export const useScenarios = (processId: string | null) =>
     enabled: !!processId,
     retry: false,
   });
+
+export const useAudit = (processId: string | null) =>
+  useQuery({ queryKey: ["audit", processId], queryFn: () => api.audit(processId!), enabled: !!processId });
+
+export const useDesign = (processId: string | null) =>
+  useQuery({
+    queryKey: ["design", processId],
+    queryFn: () => api.design(processId!),
+    enabled: !!processId,
+    retry: false,
+  });

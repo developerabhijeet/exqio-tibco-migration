@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { useAnalysis, useXml } from "@/lib/queries";
 import { elementSpan } from "@/lib/xmlspan";
-import type { CanvasNode } from "@/lib/types";
+import { INSPECTOR_TABS, type CanvasNode, type InspectorTab } from "@/lib/types";
 import { Pill } from "@/components/ui/Pill";
 
 const CodeView = dynamic(() => import("./CodeView"), {
@@ -12,8 +12,8 @@ const CodeView = dynamic(() => import("./CodeView"), {
   loading: () => <div className="p-4 text-[13px] text-slate">Loading editor</div>,
 });
 
-const TABS = ["Config", "SQL", "Mappings", "Rules", "Findings", "XML"] as const;
-type Tab = (typeof TABS)[number];
+const TABS = INSPECTOR_TABS;
+type Tab = InspectorTab;
 
 function scalar(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -60,8 +60,20 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="rounded-btn bg-warm px-4 py-6 text-center text-[14px] text-slate">{children}</p>;
 }
 
-export function Inspector({ processId, node }: { processId: string; node: CanvasNode | null }) {
-  const [tab, setTab] = useState<Tab>("Config");
+export function Inspector({
+  processId,
+  node,
+  tab: controlledTab,
+  onTab,
+}: {
+  processId: string;
+  node: CanvasNode | null;
+  tab?: Tab;
+  onTab?: (t: Tab) => void;
+}) {
+  const [ownTab, setOwnTab] = useState<Tab>("Config");
+  const tab = controlledTab ?? ownTab;
+  const setTab = onTab ?? setOwnTab;
   const xml = useXml(processId);
   const analysis = useAnalysis(processId);
 

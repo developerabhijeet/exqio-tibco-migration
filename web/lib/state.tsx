@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useQueryClient } from "@tanstack/react-query";
 import { setApiUser } from "./api";
 import { subscribeJob } from "./sse";
-import type { JobEvent, UserName } from "./types";
+import type { InspectorTab, JobEvent, UserName } from "./types";
 import { USERS } from "./types";
 
 export const STEP_KEYS = ["upload", "discover", "validate", "design", "build", "verify", "deploy"] as const;
@@ -34,6 +34,16 @@ interface AppState {
   setDomainId: (id: string | null) => void;
   scan: ScanState | null;
   watchScan: (projectId: string, jobId: string) => void;
+  /** The canvas step selected in Discover, shared so Validate and Ask can jump to it. */
+  nodeId: string | null;
+  selectNode: (id: string | null) => void;
+  inspectorTab: InspectorTab;
+  setInspectorTab: (t: InspectorTab) => void;
+  /** Open a step on the canvas with its XML lines, remembering the step to come back to. */
+  jumpToStep: (activityId: string, processId?: string | null) => void;
+  returnTo: StepKey | null;
+  askOpen: boolean;
+  setAskOpen: (open: boolean) => void;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -59,8 +69,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const [user, setUserState] = useState<UserName>("sme.vicky");
   const [projectId, setProjectIdState] = useState<string | null>(null);
-  const [step, setStep] = useState<StepKey>("upload");
+  const [step, setStepState] = useState<StepKey>("upload");
   const [processId, setProcessId] = useState<string | null>(null);
+  const [nodeId, selectNode] = useState<string | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("Config");
+  const [returnTo, setReturnTo] = useState<StepKey | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
+  const processRef = useRef<string | null>(null);
+  useEffect(() => {
+    processRef.current = processId;
+  }, [processId]);
   const [domainId, setDomainId] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanState | null>(null);
   const unsubscribe = useRef<(() => void) | null>(null);
@@ -84,17 +102,35 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [qc],
   );
 
+  const setStep = useCallback((s: StepKey) => {
+    setReturnTo(null);
+    setStepState(s);
+  }, []);
+
   const setProjectId = useCallback((id: string | null) => {
     setProjectIdState(id);
     store("exiqo.project", id);
     setProcessId(null);
     setDomainId(null);
+    selectNode(null);
   }, []);
 
   const openProcess = useCallback((pid: string | null, did?: string | null) => {
+    if (pid !== processRef.current) selectNode(null);
     setProcessId(pid);
     if (did !== undefined) setDomainId(did);
   }, []);
+
+  const jumpToStep = useCallback(
+    (activityId: string, pid?: string | null) => {
+      if (pid) setProcessId(pid);
+      selectNode(activityId);
+      setInspectorTab("XML");
+      setReturnTo(step === "discover" ? null : step);
+      setStepState("discover");
+    },
+    [step],
+  );
 
   const watchScan = useCallback(
     (pid: string, jobId: string) => {
@@ -139,8 +175,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setDomainId,
       scan,
       watchScan,
+      nodeId,
+      selectNode,
+      inspectorTab,
+      setInspectorTab,
+      jumpToStep,
+      returnTo,
+      askOpen,
+      setAskOpen,
     }),
-    [user, setUser, projectId, setProjectId, step, processId, domainId, openProcess, scan, watchScan],
+    [
+      user,
+      setUser,
+      projectId,
+      setProjectId,
+      step,
+      setStep,
+      processId,
+      domainId,
+      openProcess,
+      scan,
+      watchScan,
+      nodeId,
+      inspectorTab,
+      jumpToStep,
+      returnTo,
+      askOpen,
+    ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

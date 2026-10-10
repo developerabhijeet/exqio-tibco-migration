@@ -35,13 +35,19 @@ function Inner({
   const [error, setError] = useState<string | null>(null);
   const flow = useReactFlow();
   const box = useRef<HTMLDivElement>(null);
+  // The selection can arrive before the layout (a citation opened the canvas on a step).
+  const selectedRef = useRef(selected);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   useEffect(() => {
     let live = true;
     layoutCanvas(canvas)
       .then((r) => {
         if (!live) return;
-        setNodes(r.nodes);
+        const sel = selectedRef.current;
+        setNodes(r.nodes.map((n) => (n.type === "container" ? n : { ...n, selected: n.id === sel })));
         setEdges(r.edges);
         requestAnimationFrame(async () => {
           await flow.fitView({ padding: 0.08, maxZoom: 1 });
@@ -51,6 +57,13 @@ function Inner({
             const b = flow.getNodesBounds(r.nodes.filter((n) => !n.parentId));
             const height = box.current?.clientHeight ?? 600;
             flow.setViewport({ x: 24 - b.x * MIN, y: (height - b.height * MIN) / 2 - b.y * MIN, zoom: MIN });
+          }
+          const target = sel ? flow.getInternalNode(sel) : undefined;
+          if (target) {
+            const { x, y } = target.internals.positionAbsolute;
+            const w = target.measured.width ?? 200;
+            const h = target.measured.height ?? 60;
+            await flow.setCenter(x + w / 2, y + h / 2, { zoom: flow.getViewport().zoom });
           }
         });
       })

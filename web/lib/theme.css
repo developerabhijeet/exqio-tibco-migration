@@ -96,3 +96,33 @@ body {
   opacity: 0;
   pointer-events: none;
 }
+
+/* Export PDF from the Design tab: the browser prints the record without the app chrome. */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+  header,
+  footer {
+    display: none !important;
+  }
+  body {
+    background: white;
+    font-size: 12px;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  .card {
+    break-inside: avoid;
+    border-color: #ccc;
+  }
+  .overflow-x-auto,
+  .overflow-y-auto {
+    overflow: visible !important;
+  }
+  table {
+    min-width: 0 !important;
+  }
+}

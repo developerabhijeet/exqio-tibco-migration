@@ -27,13 +27,15 @@ export default defineConfig({
   webServer: [
     {
       // The API with the fake provider; DATABASE_URL must point at a migrated database (make db).
-      command: "../.venv/bin/uvicorn api.app.main:app --port 8000",
+      command: ".venv/bin/uvicorn api.app.main:app --port 8000",
       cwd: "..",
       url: `${apiUrl}/health`,
       reuseExistingServer: true,
       timeout: 60_000,
       env: {
         PROVIDER: process.env.PROVIDER ?? "fake",
+        // Offline and deterministic: fastembed would try to download its model on first use.
+        EMBEDDINGS_BACKEND: process.env.EMBEDDINGS_BACKEND ?? "hash",
         DATABASE_URL: process.env.DATABASE_URL ?? "postgresql+asyncpg://exiqo:exiqo@localhost:5432/exiqo",
       },
     },

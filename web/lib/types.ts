@@ -1,5 +1,8 @@
 // Shapes returned by the ExiQO Migrate API (api/app/schemas, Tasks 17 to 19).
 
+export const INSPECTOR_TABS = ["Config", "SQL", "Mappings", "Rules", "Findings", "XML"] as const;
+export type InspectorTab = (typeof INSPECTOR_TABS)[number];
+
 export type StepStatus = "not_started" | "running" | "needs_review" | "approved" | "failed";
 
 export interface EvidenceRef {
@@ -216,31 +219,164 @@ export interface Gate {
   spec_hash?: string | null;
 }
 
+export interface Citation {
+  activity_id: string;
+  kind: string;
+  text: string;
+  verified?: boolean;
+  reason?: string | null;
+}
+
+export interface Challenge {
+  verdict: "agree" | "disagree" | string;
+  reason: string;
+  model?: string | null;
+}
+
+export type RuleStatus = "draft" | "approved" | "edited" | "rejected" | "unverified";
+
 export interface RuleView {
   id: string;
   rule_key?: string;
   text: string;
-  status?: string;
+  original_text?: string;
+  status?: RuleStatus | string;
   confidence?: number | null;
-  citations?: unknown[];
+  citations?: Citation[];
+  owner?: string | null;
+  memory_refs?: unknown[];
+  challenge?: Challenge | null;
+  updated_by?: string | null;
+  updated_at?: string | null;
 }
+
+export type FindingDecision = "keep" | "fix" | "ask";
 
 export interface FindingView {
   id: string;
   finding_key?: string;
   severity?: string;
   text: string;
-  decision?: string | null;
-  citations?: unknown[];
+  decision?: FindingDecision | string | null;
+  citations?: Citation[];
+  source?: "static" | "ai" | string;
+  business_impact?: string | null;
+  note?: string | null;
+  decided_by?: string | null;
+  decided_at?: string | null;
+}
+
+export interface VerificationFailure {
+  rule_id: string;
+  citation: Citation;
+  reason: string;
+}
+
+export interface Verification {
+  verified: number;
+  total: number;
+  passed?: boolean;
+  failures: VerificationFailure[];
+}
+
+export interface CoverageItem {
+  kind: string;
+  ref: string;
+  covered_by: string[];
+  technical_reason: string | null;
+}
+
+export interface Coverage {
+  covered: number;
+  total: number;
+  complete?: boolean;
+  items: CoverageItem[];
 }
 
 export interface AnalysisView {
+  process_id?: string;
   analysed?: boolean;
+  analysis_id?: string | null;
+  job_id?: string | null;
+  created_at?: string | null;
+  provider?: string | null;
+  ai_available?: boolean;
+  ai_reason?: string | null;
+  notice?: string | null;
+  static_only?: boolean;
   summary?: string | null;
   rules: RuleView[];
   findings: FindingView[];
+  verification?: Verification;
+  coverage?: Coverage;
   spec_hash?: string;
   gates?: Gate[];
+  blockers?: string[];
+}
+
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  project_id: string | null;
+  process_id: string | null;
+  actor: string;
+  actor_kind: string;
+  action: string;
+  gate: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface AskCitation {
+  id: string;
+  kind: string;
+  process_id: string | null;
+  text: string;
+  score?: number;
+}
+
+export interface AskAnswer {
+  text: string;
+  used_model: boolean;
+  citations: AskCitation[];
+}
+
+// Design record (engine/dotnet_gen/models.py DesignRecord, served by GET /processes/{id}/design).
+export interface DesignMappingRow {
+  activity_id: string;
+  activity_name: string;
+  canonical_type: string;
+  pattern: string;
+  project: string;
+  file: string;
+  class_name: string;
+  method: string;
+  rule_ids: string[];
+  finding_ids: string[];
+  origin: "code" | "agent" | "ai" | string;
+}
+
+export interface DesignProject {
+  name: string;
+  kind: string;
+  files: string[];
+}
+
+export interface DesignRecord {
+  process_id?: string;
+  spec_hash?: string;
+  solution: { name?: string; projects: DesignProject[] };
+  mapping: DesignMappingRow[];
+  contracts: { contract_id: string; record_names?: string[]; namespace?: string; file?: string }[];
+  config: { substvar: string; key: string; secret: boolean }[];
+  config_ignored: { substvar: string; reason: string }[];
+  messaging: { kind: string; name: string; direction: string }[];
+  resilience: { resource_id: string; timeout_ms?: number | null; retry?: unknown; breaker?: unknown }[];
+  sequence: { from_?: string; from?: string; to: string; label: string }[];
+  decisions: { title: string; choice: string; alternatives: string[]; reason: string }[];
+  open_questions: { question: string; recommendation: string }[];
+  expected_differences: { finding_id: string; description: string }[];
+  narrative: string | null;
+  design_hash: string;
 }
 
 export interface ScenarioView {

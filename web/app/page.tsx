@@ -5,6 +5,9 @@ import { Stepper } from "@/components/stepper/Stepper";
 import { UploadTab } from "@/components/tabs/upload/UploadTab";
 import { DiscoverTab } from "@/components/tabs/discover/DiscoverTab";
 import { LaterStep } from "@/components/tabs/LaterStep";
+import { ValidateTab } from "@/components/tabs/validate/ValidateTab";
+import { DesignTab } from "@/components/tabs/design/DesignTab";
+import { AskPanel } from "@/components/tabs/validate/AskPanel";
 import { Empty } from "@/components/ui/Empty";
 import { useProjects, useReport } from "@/lib/queries";
 import { STEP_KEYS, useAppState } from "@/lib/state";
@@ -29,7 +32,7 @@ export default function Home() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex items-end justify-between gap-4 print:hidden">
         <div>
           <p className="eyebrow">Project</p>
           <h1 className="screen-title">{project?.name ?? "No project selected"}</h1>
@@ -41,16 +44,23 @@ export default function Home() {
           </p>
         ) : null}
       </div>
-      <Stepper steps={steps} active={active} onSelect={(i) => setStep(STEP_KEYS[i])} />
+      <div className="print:hidden">
+        <Stepper steps={steps} active={active} onSelect={(i) => setStep(STEP_KEYS[i])} />
+      </div>
       {!projectId ? (
         <Empty title="No project yet">Create a project with New project in the top bar, then upload an estate.</Empty>
       ) : step === "upload" ? (
         <UploadTab />
       ) : step === "discover" ? (
         <DiscoverTab />
+      ) : step === "validate" ? (
+        <ValidateTab />
+      ) : step === "design" ? (
+        <DesignTab />
       ) : (
         <LaterStep step={steps[active]} />
       )}
+      <AskPanel key={projectId ?? "none"} />
     </div>
   );
 }

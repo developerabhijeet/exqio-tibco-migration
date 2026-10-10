@@ -1,11 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
-import { Info } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Info } from "lucide-react";
 import { useDomainList } from "@/lib/domains";
 import { useCanvas, useGraph, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
+import { STEP_LABELS } from "@/lib/steps";
 import { BandPill, Pill } from "@/components/ui/Pill";
 import { Empty } from "@/components/ui/Empty";
 import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
@@ -32,12 +33,24 @@ function ViewToggle() {
 }
 
 export function DiscoverTab() {
-  const { projectId, processId, domainId, openProcess, setDomainId } = useAppState();
+  const {
+    projectId,
+    processId,
+    domainId,
+    openProcess,
+    setDomainId,
+    nodeId,
+    selectNode: setNodeId,
+    inspectorTab,
+    setInspectorTab,
+    returnTo,
+    setStep,
+  } = useAppState();
+  const processView = useRef<HTMLDivElement>(null);
   const processes = useProcesses(projectId);
   const graph = useGraph(projectId);
   const { domains, editable } = useDomainList(projectId);
   const [filters, setFilters] = useState<GraphFilters>({ band: "all", status: "all" });
-  const [nodeId, setNodeId] = useState<string | null>(null);
   const [allEvidence, setAllEvidence] = useState(false);
   const canvas = useCanvas(processId);
 
@@ -51,7 +64,10 @@ export function DiscoverTab() {
     setDomainId(fromProcess && domains.some((d) => d.id === fromProcess) ? fromProcess : domains[0].id);
   }, [domainValue, domains, all, processId, setDomainId]);
 
-  useEffect(() => setNodeId(null), [processId]);
+  // Arriving from a citation (Validate or Ask): bring the canvas and the XML into view.
+  useEffect(() => {
+    if (returnTo && nodeId) processView.current?.scrollIntoView({ block: "start" });
+  }, [returnTo, nodeId]);
 
   const current = domains.find((d) => d.id === domainValue) ?? null;
   const inDomain = useMemo(
@@ -184,7 +200,12 @@ export function DiscoverTab() {
       </div>
 
       {proc ? (
-        <div className="space-y-4" data-testid="process-view">
+        <div ref={processView} className="scroll-mt-4 space-y-4" data-testid="process-view">
+          {returnTo ? (
+            <button type="button" className="btn-secondary" onClick={() => setStep(returnTo)}>
+              <ArrowLeft size={16} aria-hidden /> Back to {STEP_LABELS[returnTo]}
+            </button>
+          ) : null}
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0">
               <p className="label">{proc.application} · {proc.module} · {proc.dialect}</p>
@@ -200,7 +221,7 @@ export function DiscoverTab() {
             </div>
           </div>
           <ProcessCanvas canvas={canvas.data} loading={canvas.isLoading} selected={nodeId} onSelect={setNodeId} />
-          <Inspector processId={proc.id} node={node} />
+          <Inspector processId={proc.id} node={node} tab={inspectorTab} onTab={setInspectorTab} />
           <IOCard processId={proc.id} />
         </div>
       ) : (

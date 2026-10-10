@@ -1,6 +1,9 @@
 // Typed client over the ExiQO Migrate API. Every request carries the chosen user as X-User.
 import type {
   AnalysisView,
+  AskAnswer,
+  AuditEntry,
+  DesignRecord,
   Domain,
   EstateGraph,
   FileEntry,
@@ -106,8 +109,64 @@ export const api = {
   graph: (projectId: string) => optional<EstateGraph>(`/projects/${projectId}/graph`),
   gates: (processId: string) => optional<Gate[]>(`/processes/${processId}/gates`),
   analysis: (processId: string) => optional<AnalysisView>(`/processes/${processId}/analysis`),
+  analyse: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/analyse`, post()),
+  patchRule: (ruleId: string, body: { status?: "approved" | "rejected" | "draft"; text?: string }) =>
+    json<AnalysisView>(`/rules/${ruleId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  patchFinding: (findingId: string, body: { decision: string; note?: string | null }) =>
+    json<AnalysisView>(`/findings/${findingId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  decideGate: (processId: string, gate: string, state: "approved" | "rejected", note?: string) =>
+    json<Gate>(`/gates/${processId}/${gate}`, post({ state, note: note ?? null })),
+  audit: (processId: string) => json<AuditEntry[]>(`/processes/${processId}/audit`),
+  ask: (projectId: string, question: string) => json<AskAnswer>("/ask", post({ project_id: projectId, question })),
 
   // Task 19
+  generateDesign: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/design`, post()),
+  design: async (processId: string): Promise<DesignView | null> => {
+    const body = await optional<Record<string, unknown>>(`/processes/${processId}/design`);
+    return body ? toDesignView(body) : null;
+  },
   scenarios: (processId: string) => optional<ScenarioView[]>(`/processes/${processId}/scenarios`),
   settings: () => optional<Record<string, unknown>>("/settings"),
 };
+
+export interface DesignView {
+  record: DesignRecord;
+  created_at?: string | null;
+  job_id?: string | null;
+  ai_available?: boolean;
+  ai_reason?: string | null;
+  version?: number | null;
+  stale?: boolean;
+  stale_reason?: string | null;
+}
+
+/** The record either bare or wrapped as {record, ...meta}; lists default to empty. */
+function toDesignView(body: Record<string, unknown>): DesignView {
+  const raw = (body.record && typeof body.record === "object" ? body.record : body) as Partial<DesignRecord>;
+  const record: DesignRecord = {
+    ...raw,
+    solution: raw.solution ?? { projects: [] },
+    mapping: raw.mapping ?? [],
+    contracts: raw.contracts ?? [],
+    config: raw.config ?? [],
+    config_ignored: raw.config_ignored ?? [],
+    messaging: raw.messaging ?? [],
+    resilience: raw.resilience ?? [],
+    sequence: raw.sequence ?? [],
+    decisions: raw.decisions ?? [],
+    open_questions: raw.open_questions ?? [],
+    expected_differences: raw.expected_differences ?? [],
+    narrative: raw.narrative ?? null,
+    design_hash: raw.design_hash ?? "",
+  };
+  return {
+    record,
+    created_at: (body.created_at as string | undefined) ?? null,
+    job_id: (body.job_id as string | undefined) ?? null,
+    ai_available: body.ai_available as boolean | undefined,
+    ai_reason: (body.ai_reason as string | undefined) ?? null,
+    version: (body.version as number | undefined) ?? null,
+    stale: body.stale === true,
+    stale_reason: (body.stale_reason as string | undefined) ?? null,
+  };
+}

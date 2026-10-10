@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppStateProvider } from "@/lib/state";
+import { JobsProvider } from "@/lib/jobs";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
@@ -13,7 +14,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <AppStateProvider>{children}</AppStateProvider>
+      <AppStateProvider>
+        <JobsProvider>{children}</JobsProvider>
+      </AppStateProvider>
     </QueryClientProvider>
   );
 }
