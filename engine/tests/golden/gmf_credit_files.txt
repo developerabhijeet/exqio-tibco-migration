@@ -49,7 +49,12 @@ tests/GmfCredit.Tests/Database/seed.sql
 tests/GmfCredit.Tests/DealerFundingRequestBranchTests.cs
 tests/GmfCredit.Tests/DealerFundingRequestRulesTests.cs
 tests/GmfCredit.Tests/DealerFundingRequestScenarioTests.cs
+tests/GmfCredit.Tests/Fixtures/DealerFundingRequest/branch-CheckExistingFundingToInsertFunding.json
+tests/GmfCredit.Tests/Fixtures/DealerFundingRequest/branch-CheckExistingFundingToLogDuplicateFunding.json
+tests/GmfCredit.Tests/Fixtures/DealerFundingRequest/branch-LookupDealerToLookupDeal.json
 tests/GmfCredit.Tests/Fixtures/DealerFundingRequest/happy.json
+tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/branch-QueryFundingStatusToReplyNotFound.json
+tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/branch-QueryFundingStatusTogetOut.json
 tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/happy.json
 tests/GmfCredit.Tests/FundingStatusLookupBranchTests.cs
 tests/GmfCredit.Tests/FundingStatusLookupRulesTests.cs

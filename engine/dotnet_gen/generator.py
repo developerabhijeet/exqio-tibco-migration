@@ -85,6 +85,7 @@ class GenFile(BaseModel):
     content: str
     origin: Origin = "code"
     activity_id: str | None = None
+    process_id: str | None = None  # the process a per-process file belongs to; None for shared files
 
 
 class GeneratedSolution(BaseModel):
@@ -2369,14 +2370,22 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
 
     files: dict[str, GenFile] = {}
 
-    def add(path: str, content: str, origin: Origin = "code", activity_id: str | None = None) -> None:
+    def add(path: str, content: str, origin: Origin = "code", activity_id: str | None = None,
+            process_id: str | None = None) -> None:
         if any(path == r or path.startswith(r) for r in RESERVED_FOR_INFRA):
             raise ValueError(f"{path} is reserved for the infrastructure generator")
         if path in files:  # shared file (an exception or stub two processes need): first writer wins
+            update: dict[str, Any] = {}
             if origin == "agent" and files[path].origin == "code":
-                files[path] = files[path].model_copy(update={"origin": "agent"})
+                update["origin"] = "agent"
+            if files[path].process_id != process_id:
+                update["process_id"] = None  # needed by several processes: shared
+                update["activity_id"] = None
+            if update:
+                files[path] = files[path].model_copy(update=update)
             return
-        files[path] = GenFile(path=path, content=content, origin=origin, activity_id=activity_id)
+        files[path] = GenFile(path=path, content=content, origin=origin, activity_id=activity_id,
+                              process_id=process_id)
 
     layout = solution_layout(a)
     folders = {k: v["folder"] for k, v in layout["projects"].items()}
@@ -2416,37 +2425,42 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     generic: dict[tuple[str, str, str], list[tuple[str, str, str]]] = defaultdict(list)
     client_members: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     clients: dict[str, dict[str, Any]] = {}
+    owners: dict[str, set[str]] = defaultdict(set)  # aggregated class -> processes contributing to it
+
+    def owner(key: str) -> str | None:
+        return next(iter(owners[key])) if len(owners[key]) == 1 else None
     resilience = {r.resource_id: r for pg in pgs for r in pg.design.resilience}
     for pg in pgs:
         n = pg.name
-        add(f"{core}/Services/{n}State.cs", _masked(gen_state(pg), a))
+        add(f"{core}/Services/{n}State.cs", _masked(gen_state(pg), a), process_id=pg.p.id)
         service, service_origin = gen_service(pg)
-        add(f"{core}/Services/{n}Service.cs", service, service_origin)
+        add(f"{core}/Services/{n}Service.cs", service, service_origin, process_id=pg.p.id)
         services.append(f"{n}Service")
         if pg.map_row:
             text, origin = gen_mappings(pg)
-            add(f"{core}/Mappings/{n}Mappings.cs", text, origin)
+            add(f"{core}/Mappings/{n}Mappings.cs", text, origin, process_id=pg.p.id)
         if any(t.kind == "conditional" for t in pg.p.transitions):
             text, origin = gen_conditions(pg)
-            add(f"{core}/Rules/{n}Conditions.cs", text, origin)
+            add(f"{core}/Rules/{n}Conditions.cs", text, origin, process_id=pg.p.id)
         if any(act.type.startswith("jdbc.") for act in pg.p.activities):
-            add(f"{core}/Data/{n}Data.cs", _masked(gen_data(pg), a))
+            add(f"{core}/Data/{n}Data.cs", _masked(gen_data(pg), a), process_id=pg.p.id)
             add(f"{infra}/Repositories/{n}Repository.cs", gen_repository(pg),
-                "agent" if any(act.type == "jdbc.call" for act in pg.p.activities) else "code")
+                "agent" if any(act.type == "jdbc.call" for act in pg.p.activities) else "code", process_id=pg.p.id)
             repositories.append((f"I{n}Repository", f"{n}Repository"))
             connections |= {pg.connections[x] for x in pg.connections}
         for act in pg.p.activities:
             row = pg.primary.get(act.id)
             if act.type == "throw":
-                add(f"{core}/Exceptions/{_exception_class(pg, act)}.cs", gen_exception(pg, act), "code", act.id)
+                add(f"{core}/Exceptions/{_exception_class(pg, act)}.cs", gen_exception(pg, act), "code", act.id, process_id=pg.p.id)
             elif act.type == "call.process" and row:
                 target = next((c.target_process for c in pg.p.calls if c.activity_id == act.id), "")
                 tname = procs[target].name if target in procs else (target.rsplit(".", 1)[-1] or act.name)
                 if tname not in selected_names:
                     add(f"{core}/{row.file}", gen_subprocess_stub(a, ident(tname, "Process"), target or act.name),
-                        "agent", act.id)
+                        "agent", act.id, process_id=pg.p.id)
             elif act.type in _INVOKE and row:
                 client_members[row.class_name].append((row.method, act.name, pg.remarks(act.id, row)))
+                owners[f"client:{row.class_name}"].add(pg.p.id)
                 ref = str(act.config.get("resource_ref") or "")
                 res = sol.resources.get(ref)
                 settings = res.settings if res else {}
@@ -2470,16 +2484,17 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
                 proj = "core" if row.project.endswith(".Core") else "infrastructure"
                 generic[(proj, row.file, row.class_name)].append(
                     (ident(row.method.split("(")[0], "Run"), act.name, pg.remarks(act.id, row)))
+                owners[f"generic:{proj}:{row.file}"].add(pg.p.id)
         if pg.kind == "rest" or pg.kind == "http":
-            add(f"{api}/Controllers/{n}Controller.cs", gen_controller(pg), "code", pg.starter.activity_id)
+            add(f"{api}/Controllers/{n}Controller.cs", gen_controller(pg), "code", pg.starter.activity_id, process_id=pg.p.id)
         elif pg.kind == "soap":
-            add(f"{api}/Soap/{n}SoapService.cs", gen_soap_stub(pg), "agent", pg.starter.activity_id)
+            add(f"{api}/Soap/{n}SoapService.cs", gen_soap_stub(pg), "agent", pg.starter.activity_id, process_id=pg.p.id)
         elif pg.kind == "jms":
             text, origin = gen_consumer(pg)
-            add(f"{infra}/Messaging/{n}Consumer.cs", text, origin, pg.starter.activity_id)
+            add(f"{infra}/Messaging/{n}Consumer.cs", text, origin, pg.starter.activity_id, process_id=pg.p.id)
             consumers.append(f"{n}Consumer")
         elif pg.kind == "timer":
-            add(f"{infra}/Jobs/{n}Job.cs", gen_job(pg), "code", pg.starter.activity_id)
+            add(f"{infra}/Jobs/{n}Job.cs", gen_job(pg), "code", pg.starter.activity_id, process_id=pg.p.id)
             jobs.append(f"{n}Job")
     for (proj, file, cls), members in sorted(generic.items()):
         seen: dict[str, int] = {}
@@ -2491,9 +2506,10 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
         folder = "" if folder == "." else folder
         root_ns = f"{a}.Core" if proj == "core" else f"{a}.Infrastructure"
         base = core if proj == "core" else infra
-        add(f"{base}/{file}", gen_agent_class(a, root_ns, folder, cls, uniq), "agent")
+        add(f"{base}/{file}", gen_agent_class(a, root_ns, folder, cls, uniq), "agent",
+            process_id=owner(f"generic:{proj}:{file}"))
     for cls, members in sorted(client_members.items()):
-        add(f"{infra}/Clients/{cls}.cs", gen_client(a, cls, members), "agent")
+        add(f"{infra}/Clients/{cls}.cs", gen_client(a, cls, members), "agent", process_id=owner(f"client:{cls}"))
 
     # ---- Infrastructure
     infra_packages = ["Azure.Identity", "Azure.Messaging.ServiceBus", "Dapper", "Npgsql"]
@@ -2548,7 +2564,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     for pg in pgs:
         ctx = tests_gen.TestContext.from_proc(pg, sql_texts, schemas)
         for f in tests_gen.generate_tests(pg.p, pg.rules, pg.scenarios, pg.design, ctx):
-            add(f.path, f.content, f.origin, f.activity_id)
+            add(f.path, f.content, f.origin, f.activity_id, process_id=pg.p.id)
 
     ordered = [files[k] for k in sorted(files)]
     digest = hashlib.sha256()

@@ -403,7 +403,7 @@ def generate_tests(process: Process, rules: list[Rule], scenarios: list[Scenario
                          origin="code" if supported else "agent"))
     for s in scenarios:
         out.append(g.GenFile(path=f"{base}/{fixture_path(process, s)}", content=fixture_json(ctx, process, s)))
-    return out
+    return [f.model_copy(update={"process_id": process.id}) for f in out]
 
 
 def generate_test_support(app: str, schemas: list[str], sql_files: list[str], connections: list[str]) -> list[GenFile]:

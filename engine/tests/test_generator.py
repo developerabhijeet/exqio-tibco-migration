@@ -209,6 +209,23 @@ def test_solution_layout_and_projects(solution):
     assert layout["solution"] in paths
 
 
+def test_process_id_on_per_process_files(solution):
+    by = {f.path: f for f in solution.files}
+    for suffix, pid in (("Services/DealerFundingRequestService.cs", DFR), ("Services/DealerFundingRequestState.cs", DFR),
+                        ("Mappings/DealerFundingRequestMappings.cs", DFR), ("Rules/DealerFundingRequestConditions.cs", DFR),
+                        ("Data/DealerFundingRequestData.cs", DFR), ("Repositories/DealerFundingRequestRepository.cs", DFR),
+                        ("Messaging/DealerFundingRequestConsumer.cs", DFR), ("Exceptions/DealerInactiveFaultException.cs", DFR),
+                        ("DealerFundingRequestRulesTests.cs", DFR), ("DealerFundingRequestBranchTests.cs", DFR),
+                        ("DealerFundingRequestScenarioTests.cs", DFR), ("Fixtures/DealerFundingRequest/happy.json", DFR),
+                        ("Controllers/FundingStatusLookupController.cs", FSL), ("Services/FundingStatusLookupService.cs", FSL)):
+        assert _file(solution, suffix).process_id == pid, suffix
+    for shared in ("src/GmfCredit.Api/Program.cs", "Directory.Build.props", "GmfCredit.sln",
+                   "src/GmfCredit.Infrastructure/Messaging/ServiceBusMessageBus.cs",
+                   "src/GmfCredit.Infrastructure/InfrastructureServiceCollectionExtensions.cs",
+                   "tests/GmfCredit.Tests/TestDatabase.cs", "src/GmfCredit.Api/appsettings.json"):
+        assert by[shared].process_id is None, shared
+
+
 def test_no_em_dash_and_no_unresolved_template(solution):
     for f in solution.files:
         assert "—" not in f.content, f.path
