@@ -191,8 +191,9 @@ async def run_service(build_id: str, request: Request, session: SessionDep,
         except (RuntimeError, OSError, verify_svc.ScenarioDBUnavailable) as exc:
             raise HTTPException(status_code=409, detail=f"the service did not start: {exc}") from exc
         services[build_id] = info
-    build.run_port, build.run_pid = info.port, info.handle.pid
-    await session.commit()
+        # the row is written under the lock too, so a stop queued behind this start writes after it
+        build.run_port, build.run_pid = info.port, info.handle.pid
+        await session.commit()
     return verify_svc.run_status(info)
 
 
@@ -213,13 +214,14 @@ async def run_logs(build_id: str, request: Request, session: SessionDep) -> dict
 @router.delete("/builds/{build_id}/run")
 async def stop_service(build_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
     """Stop the build's service. Under the same per-build lock as the start, so a stop during a
-    start waits for it and stops the service it registered."""
+    start waits for it, stops the service it registered and clears the pid and port it wrote."""
     build = await _build(session, build_id)
     lock = request.app.state.start_locks.setdefault(build_id, asyncio.Lock())
     async with lock:
         info = request.app.state.services.pop(build_id, None)
         if info is not None:
             await asyncio.to_thread(info.stop)
-    build.run_port = build.run_pid = None
-    await session.commit()
+        await session.refresh(build)  # the start that held the lock committed pid and port
+        build.run_port = build.run_pid = None
+        await session.commit()
     return {"stopped": info is not None, "running": False}

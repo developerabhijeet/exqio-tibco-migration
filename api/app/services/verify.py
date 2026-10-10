@@ -33,6 +33,7 @@ import threading
 import time
 import urllib.parse
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,13 +53,14 @@ from api.app.services import evidence
 from api.app.services import gates as gate_svc
 from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.stub_server import StubServer, client_names
+from engine.analysis.models import Finding
 from engine.domains.discover import activity_sql, sql_tables
 from engine.dotnet_gen.generator import is_sensitive_name, solution_layout
 from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle, find_dotnet
 from engine.dotnet_gen.tests_gen import TestContext, _request
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
-from engine.parity.compare import NoiseRule, build_lineage, compare
+from engine.parity.compare import Lineage, NoiseRule, _lineage_for, _touches, build_lineage, compare
 from engine.parity.db import ScenarioDB
 from engine.parity.evaluator import EvaluationError, Evaluator
 from engine.parity.models import (
@@ -496,20 +498,38 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
         launching = asyncio.ensure_future(asyncio.to_thread(launch))
         handle: ServiceHandle = await asyncio.shield(launching)
     except asyncio.CancelledError:
-        # the launch thread cannot be interrupted: wait for it and stop the service it started
-        if launching is not None:
-            try:
-                started = await launching
-            except Exception:  # noqa: BLE001  the launch failed on its own: nothing to stop
-                started = None
-            if started is not None:
-                await asyncio.to_thread(started.stop)
-        cleanup()
+        # the launch thread cannot be interrupted: wait for it and stop the service it started. The
+        # wait is a task of its own, so a second cancellation while waiting returns here at once
+        # (the stubs and the port are released) and the task still stops the service.
+        try:
+            if launching is not None:
+                await asyncio.shield(_background(_stop_launched(launching)))
+        finally:
+            cleanup()
         raise
     except BaseException:
         cleanup()
         raise
     return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients)
+
+
+_BACKGROUND: set[asyncio.Task[Any]] = set()
+
+
+def _background(coro: Any) -> asyncio.Task[Any]:
+    """A task kept referenced until it finishes (the loop holds tasks weakly)."""
+    task = asyncio.ensure_future(coro)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return task
+
+
+async def _stop_launched(launching: asyncio.Future[ServiceHandle]) -> None:
+    try:
+        started = await launching
+    except Exception:  # noqa: BLE001  the launch failed on its own: nothing to stop
+        return
+    await asyncio.to_thread(started.stop)
 
 
 # ------------------------------------------------------------------ actual results
@@ -709,12 +729,43 @@ def unconfirmed_intended(report: ParityReport) -> int:
     return sum(1 for d in report.fields + report.side_effects if d.status == "intended")
 
 
-def report_json(report: ParityReport, extra: dict[str, Any]) -> dict[str, Any]:
-    """The stored per-run report: every ``intended`` field gains ``confirmed: false`` (the
-    engine's ``FieldDiff`` has no such field; it is added here)."""
+def control_only_touches(report: ParityReport, fixes: list[Finding], data_lineage: Lineage,
+                         control_lineage: Lineage, process_id: str) -> dict[str, str]:
+    """Defect path -> the id of a Fix finding whose citation is in the field's control-inclusive
+    lineage but not in its data lineage: the finding touches the field only through a branch
+    decision (the source of a conditional or otherwise link on the path), not as a producer of the
+    value. Without a counterfactual run that is not accepted as intended; the id is kept so the G5
+    approver can see which finding would explain the field once a TIBCO sandbox run exists."""
+    out: dict[str, str] = {}
+    for d in report.fields + report.side_effects:
+        if d.status != "defect":
+            continue
+        data = _lineage_for(d.path, data_lineage)
+        control = _lineage_for(d.path, control_lineage)
+        for f in fixes:
+            if _touches(f, control, process_id) and not _touches(f, data, process_id):
+                out[d.path] = f.id
+                break
+    return out
+
+
+def report_json(report: ParityReport, extra: dict[str, Any],
+                control_only: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The stored per-run report: every ``intended`` field gains ``confirmed: false``; a defect a
+    Fix finding touches only through a branch decision gains its ``finding_id`` and
+    ``via: "control"`` (the engine's ``FieldDiff`` has neither field; they are added here)."""
     out = report.model_dump(mode="json")
+    control_only = control_only or {}
+
+    def annotate(d: dict[str, Any]) -> dict[str, Any]:
+        if d.get("status") == "intended":
+            return {**d, "confirmed": False}
+        if d.get("status") == "defect" and d.get("path") in control_only:
+            return {**d, "finding_id": control_only[d["path"]], "via": "control"}
+        return d
+
     for key in ("fields", "side_effects"):
-        out[key] = [{**d, "confirmed": False} if d.get("status") == "intended" else d for d in out[key]]
+        out[key] = [annotate(d) for d in out[key]]
     return {**out, **extra}
 
 
@@ -757,8 +808,10 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     resource_names = {r.id: r.name for r in app.resources}
     timeouts = resource_timeouts(app)
     if fixes:
-        await ctx.log(f"{len(fixes)} finding(s) decided Fix; without a counterfactual run a difference they touch "
-                      f"is reported as intended and unconfirmed with the finding id ({evidence.UNCONFIRMED_NOTE})")
+        await ctx.log(f"{len(fixes)} finding(s) decided Fix; without a counterfactual run a difference in a field "
+                      f"they produce is reported as intended and unconfirmed with the finding id "
+                      f"({evidence.UNCONFIRMED_NOTE}); one they touch only through a branch decision stays a "
+                      "defect with the finding id")
     app_name = next((p.stem for p in Path(build.output_dir or ".").glob("*.sln")), "App")
     await ctx.stage("run")
     results: list[dict[str, Any]] = []
@@ -797,26 +850,34 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                     if info.stubs is not None:
                         effects += info.stubs.side_effects()
                     actual.side_effects = effects
+                    # classification uses the data lineage only: without a counterfactual run a Fix
+                    # finding explains a field it produces, not one it reaches through a branch
                     try:
-                        lineage = build_lineage(expected, app, proc.id)
+                        lineage = build_lineage(expected, app, proc.id, control=False)
+                        control_lineage = build_lineage(expected, app, proc.id)
                     except Exception:  # noqa: BLE001  lineage is best effort; no lineage means no "intended"
-                        lineage = {}
+                        lineage, control_lineage = {}, {}
                     rules = noise_rules_for(expected)
                     report = compare(expected, actual, rules, fixes, lineage,
                                      scenario_id=key, finding_process=proc.id,
                                      side_effect_kinds=COMPARED_SIDE_EFFECTS)
                     unconfirmed = unconfirmed_intended(report)
+                    control_only = control_only_touches(report, fixes, lineage, control_lineage, proc.id)
                     status = "match" if report.unexplained == 0 else "differs"
                     results.append({"scenario_id": scenario_id, "key": key, "status": status,
                                     "report": report, "expected": expected, "actual": actual, "error": None,
+                                    "control_only": control_only,
                                     "extra": {"unconfirmed_intended": unconfirmed, "counterfactual": False,
+                                              "control_only_defects": len(control_only),
                                               "noise_rules": applied_noise(report, rules)}})
-                    await ctx.log(f"{key}: parity {report.parity:.0%}, {report.unexplained} unexplained "
-                                  f"({time.monotonic() - started:.1f}s)")
+                    await ctx.log(f"{key}: parity {report.parity:.0%}, {report.unexplained} unexplained"
+                                  + (f" ({len(control_only)} touched only through a branch decision)"
+                                     if control_only else "")
+                                  + f" ({time.monotonic() - started:.1f}s)")
                 except Exception as exc:  # noqa: BLE001  one scenario failing never hides the others
                     results.append({"scenario_id": scenario_id, "key": key, "status": "error", "report": None,
                                     "expected": expected, "actual": None, "error": f"{type(exc).__name__}: {exc}",
-                                    "extra": {}})
+                                    "control_only": {}, "extra": {}})
                     await ctx.log(f"{key}: could not run: {type(exc).__name__}: {exc}")
         finally:
             db.close()
@@ -825,7 +886,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     async with ctx.sessionmaker() as s:
         for res in results:
             report: ParityReport | None = res["report"]
-            stored = (report_json(report, res["extra"]) if report
+            stored = (report_json(report, res["extra"], res["control_only"]) if report
                       else {"scenario_id": res["key"], "error": res["error"]})
             run = ScenarioRun(build_id=build_id, scenario_id=res["scenario_id"], job_id=ctx.job_id,
                               status=res["status"], report=stored,
@@ -839,7 +900,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                     for d in diffs:
                         s.add(FieldDiff(run_id=run.id, kind=kind_name, field=d.path, expected=_jsonable(d.expected),
                                         actual=_jsonable(d.actual), classification=d.status,
-                                        finding_key=d.finding_id))
+                                        finding_key=d.finding_id or res["control_only"].get(d.path)))
         process = await s.get(Process, row.id)
         rows_g = await gate_svc.gate_rows(s, row.id)
         reset = await gate_svc.reset_gates(s, process, rows_g, "G5", RESET_REASON, gate_svc.SYSTEM,
@@ -895,6 +956,7 @@ async def parity_view(session: AsyncSession, build: Build) -> dict[str, Any] | N
             "intended": summary["intended"], "errors": errors, "report_hash": evidence.parity_hash(runs),
             "unconfirmed_intended": evidence.unconfirmed_count(runs),
             "unconfirmed_note": evidence.UNCONFIRMED_NOTE,
+            "control_only_defects": evidence.control_only_count(runs),
             "counterfactual": False,
             "noise_rules": [n.model_dump() for n in DEFAULT_NOISE],
             "noise_rules_applied": _unique_rules(r.report or {} for r in runs)}

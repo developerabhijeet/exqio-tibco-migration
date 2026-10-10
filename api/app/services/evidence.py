@@ -5,8 +5,10 @@ the hashes a decision binds to.
 * G4 build: the latest build is bound to the approved design; compile passed; every approved
   rule has a test with a body (not "no test body"); every test passed.
 * G5 parity: the latest verify run of that build has no unexplained difference and no scenario
-  that could not run. Intended differences (a finding decided Fix touches the field's lineage)
-  are not confirmed by a TIBCO sandbox run; they do not block G5 and their count is a G5 note.
+  that could not run. Intended differences (a finding decided Fix cites an activity in the
+  field's data lineage) are not confirmed by a TIBCO sandbox run; they do not block G5 and their
+  count is a G5 note. A difference a Fix finding touches only through a branch decision (control
+  lineage) stays a defect and blocks G5 with its own reason.
 * G6 deploy: a Terragrunt plan of that build, or connect-later acknowledged by an operations user
   with a note.
 
@@ -27,6 +29,10 @@ APPROVED = ("approved", "edited")
 FINISHED_BUILDS = ("passed", "failed")
 PLAN_OK = ("planned", "acknowledged")
 UNCONFIRMED_NOTE = "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"
+CONTROL_ONLY_NOTE = ("touched only through a branch decision by a Fix finding; not accepted as intended "
+                     "without a TIBCO sandbox run")
+NUGET_MARKER = "NuGet unreachable"  # the restore log's note (``build.NUGET_DOWN``) starts with it
+NUGET_REMEDY = "NuGet unreachable: run `make nuget-cache` on a connected machine"
 
 
 def canonical_hash(data: Any) -> str:
@@ -73,6 +79,15 @@ def unconfirmed_text(n: int) -> str:
     return f"{n} intended difference(s) {UNCONFIRMED_NOTE}"
 
 
+def control_only_count(runs: list[ScenarioRun]) -> int:
+    """Defects of these runs that a Fix finding touches only through a branch decision."""
+    return sum(int((r.report or {}).get("control_only_defects") or 0) for r in runs)
+
+
+def control_only_text(n: int) -> str:
+    return f"{n} difference(s) {CONTROL_ONLY_NOTE}"
+
+
 async def unconfirmed_intended(session: AsyncSession, process: Process) -> int:
     """Unconfirmed intended differences in the latest verify run of the latest finished build."""
     build = await latest_build(session, process.id)
@@ -106,8 +121,10 @@ async def g4_blockers(session: AsyncSession, process: Process, build: Build | No
     step = build_step(build, "build")
     if not (step and step.get("ok")):
         restore = build_step(build, "restore")
-        why = "restore failed" if restore is not None and not restore.get("ok") else "build failed"
-        reasons.append(f"compile did not pass ({why})")
+        restore_failed = restore is not None and not restore.get("ok")
+        why = "restore failed" if restore_failed else "build failed"
+        remedy = f"; {NUGET_REMEDY}" if restore_failed and NUGET_MARKER in (restore.get("log") or "") else ""
+        reasons.append(f"compile did not pass ({why}){remedy}")
     tests = (await session.execute(select(TestResult).where(TestResult.build_id == build.id))).scalars().all()
     rules = (await session.execute(select(Rule).where(Rule.process_id == process.id))).scalars().all()
     approved = sorted({r.rule_key for r in rules if r.status in APPROVED})
@@ -152,6 +169,9 @@ async def evidence_reasons(session: AsyncSession, process: Process,
         errors = sum(1 for r in runs if r.status == "error")
         if unexplained:
             g5.append(f"{unexplained} unexplained difference(s) in the parity report")
+        control_only = control_only_count(runs)
+        if control_only:
+            g5.append(control_only_text(control_only))
         if errors:
             g5.append(f"{errors} scenario(s) could not run")
         out["G5"] = g5

@@ -32,6 +32,7 @@ from api.app.models import AzureConnection, Build, FieldDiff, Gate, JobEvent, Mo
 from api.app.models import Process as ProcessRow
 from api.app.models import Scenario as ScenarioRow
 from api.app.services import build as build_svc
+from api.app.services import evidence as evidence_svc
 from api.app.services import readiness as readiness_svc
 from api.app.services import verify as verify_svc
 from api.tests.conftest import TEST_DSN
@@ -305,6 +306,7 @@ async def test_build_fails_without_dotnet_and_g4_disabled(client, app, monkeypat
     g4 = (await _gates(client, proc_id))["G4"]
     assert g4["enabled"] is False
     assert "compile did not pass" in g4["reason"]
+    assert "NuGet" not in g4["reason"]  # the remedy is named only when the restore log carries the NuGet note
     assert "without a test body" not in g4["reason"]
     r = await client.post(f"/gates/{proc_id}/G4", json={"state": "approved", "note": ""}, headers=SME)
     assert r.status_code == 409
@@ -330,6 +332,7 @@ async def test_g4_disabled_when_restore_fails(client, app, monkeypatch):
     assert build["status"] == "failed"
     g4 = (await _gates(client, proc_id))["G4"]
     assert g4["enabled"] is False and "compile did not pass (restore failed)" in g4["reason"]
+    assert "NuGet unreachable: run `make nuget-cache` on a connected machine" in g4["reason"]  # the remedy
     tests = (await client.get(f"/builds/{build_id}/tests")).json()
     assert tests["summary"]["total"] > 0  # the tests exist as files
 
@@ -698,17 +701,24 @@ def test_bus_messages_become_side_effects():
 UNCONFIRMED = "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"
 
 
+CONTROL_ONLY = ("touched only through a branch decision by a Fix finding; not accepted as intended "
+                "without a TIBCO sandbox run")
+
+
 async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypatch, tmp_path):
-    # every finding decided Fix: F1 cites QueryFundingStatus, which is in the body fields' lineage
+    # every finding decided Fix: F1 cites QueryFundingStatus, the lookup that decides the branch. The
+    # found reply's body fields read its record (data lineage); the not-found reply's fields depend
+    # on it only through the otherwise link (control lineage).
     pid, proc_id, build_id, _ = await _built(client, monkeypatch, decision="fix")
     fixed = {f["finding_key"] for f in (await client.get(f"/processes/{proc_id}/analysis")).json()["findings"]
              if f["decision"] == "fix"}
     scenarios = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
     answers = {s["input"]["parameters"]["dealId"]: s["expected"]["output"] for s in scenarios}
+    found = [s for s in scenarios if s["input"]["parameters"]["dealId"] == "DL-50001"]
     not_found = [s for s in scenarios if s["input"]["parameters"]["dealId"] == "DL-50003"]
-    assert len(not_found) == 1  # one scenario reads DL-50003: one differing field below
+    assert len(found) == 2 and len(not_found) == 1  # two scenarios read DL-50001, one reads DL-50003
     changed = json.loads(json.dumps(answers))
-    changed["DL-50003"]["body"]["message"] += " (reworded by the fix)"
+    changed["DL-50001"]["body"]["status"] = "FUNDED (reworded by the fix)"  # produced from the lookup
     stand_in = StandIn(changed, tmp_path / "service.log")
     app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
                                                       port=int(stand_in.url.rsplit(":", 1)[1]))
@@ -725,15 +735,16 @@ async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypa
         parity = (await client.get(f"/builds/{build_id}/parity")).json()
         intended = [f for rep in parity["reports"] for f in rep["fields"] + rep["side_effects"]
                     if f["status"] == "intended"]
-        assert [(f["path"], f["confirmed"]) for f in intended] == [("output.body.message", False)]
-        assert intended[0]["finding_id"] in fixed
-        assert all("confirmed" not in f for rep in parity["reports"] for f in rep["fields"]
+        assert [(f["path"], f["confirmed"]) for f in intended] == [("output.body.status", False)] * 2
+        assert {f["finding_id"] for f in intended} <= fixed
+        assert all("confirmed" not in f and "via" not in f for rep in parity["reports"] for f in rep["fields"]
                    if f["status"] != "intended")
         assert {rep["status"] for rep in parity["reports"]} == {"match"}
-        assert parity["unexplained"] == 0 and parity["intended"] == 1
-        assert parity["unconfirmed_intended"] == 1 and parity["counterfactual"] is False
+        assert parity["unexplained"] == 0 and parity["intended"] == 2
+        assert parity["unconfirmed_intended"] == 2 and parity["counterfactual"] is False
+        assert parity["control_only_defects"] == 0
         assert parity["unconfirmed_note"] == UNCONFIRMED
-        note = f"1 intended difference(s) {UNCONFIRMED}"
+        note = f"2 intended difference(s) {UNCONFIRMED}"
         g5 = (await _gates(client, proc_id))["G5"]
         assert g5["enabled"] is True and g5["notes"] == [note], g5
         assert (await _gates(client, proc_id))["G4"]["notes"] == []
@@ -746,20 +757,45 @@ async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypa
         assert r.json()["notes"] == [note]
         audit = (await client.get(f"/processes/{proc_id}/audit")).json()
         approved = next(a for a in audit if a["action"] == "gate approved" and a["gate"] == "G5")
-        assert approved["detail"]["unconfirmed_intended"] == 1
+        assert approved["detail"]["unconfirmed_intended"] == 2
 
-        # a difference no fix touches (a field the model never produces has no lineage) is a defect
-        # and blocks G5
-        changed["DL-50003"]["body"]["unexpected"] = "only in .NET"
+        # a difference F1 touches only through the branch decision (the not-found message reads the
+        # request, not the lookup) stays a defect: it keeps the finding id, carries via "control",
+        # counts as unexplained and blocks G5 with its own reason
+        changed["DL-50003"]["body"]["message"] += " (reworded by the fix)"
         job = await _wait_job(client, (await client.post(f"/builds/{build_id}/verify")).json()["job_id"])
         assert job["status"] == "done" and job["result"]["unexplained"] == 1
         parity = (await client.get(f"/builds/{build_id}/parity")).json()
         defects = [f for rep in parity["reports"] for f in rep["fields"] if f["status"] == "defect"]
-        assert [(f["path"], f["finding_id"]) for f in defects] == [("output.body.unexpected", None)]
-        assert parity["unconfirmed_intended"] == 1
+        assert [(f["path"], f["via"]) for f in defects] == [("output.body.message", "control")]
+        assert defects[0]["finding_id"] in fixed and "confirmed" not in defects[0]
+        assert parity["unexplained"] == 1 and parity["control_only_defects"] == 1
+        assert parity["unconfirmed_intended"] == 2 and parity["intended"] == 2
+        async with app.state.sessionmaker() as s:
+            run_ids = [r.id for r in await evidence_svc.latest_verify_runs(s, build_id)]
+            diffs = (await s.execute(select(FieldDiff).where(FieldDiff.run_id.in_(run_ids),
+                                                             FieldDiff.field == "output.body.message"))
+                     ).scalars().all()
+        assert [(d.classification, d.finding_key) for d in diffs] == [("defect", defects[0]["finding_id"])]
         g5 = (await _gates(client, proc_id))["G5"]
         assert g5["state"] == "pending" and g5["enabled"] is False
         assert "1 unexplained difference(s)" in g5["reason"]
+        assert f"1 difference(s) {CONTROL_ONLY}" in g5["reason"]
+        assert g5["notes"] == [note]
+
+        # a difference no fix touches (a field the model never produces has no lineage) is a defect
+        # without a finding id
+        changed["DL-50003"]["body"]["unexpected"] = "only in .NET"
+        job = await _wait_job(client, (await client.post(f"/builds/{build_id}/verify")).json()["job_id"])
+        assert job["status"] == "done" and job["result"]["unexplained"] == 2
+        parity = (await client.get(f"/builds/{build_id}/parity")).json()
+        defects = {f["path"]: f for rep in parity["reports"] for f in rep["fields"] if f["status"] == "defect"}
+        assert defects["output.body.unexpected"]["finding_id"] is None
+        assert "via" not in defects["output.body.unexpected"]
+        assert defects["output.body.message"]["via"] == "control"
+        assert parity["unexplained"] == 2 and parity["control_only_defects"] == 1
+        g5 = (await _gates(client, proc_id))["G5"]
+        assert "2 unexplained difference(s)" in g5["reason"] and f"1 difference(s) {CONTROL_ONLY}" in g5["reason"]
     finally:
         await client.delete(f"/builds/{build_id}/run")
 
@@ -946,6 +982,23 @@ async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch,
     assert [s.stopped for s in _TrackedStubs.instances] == [True]
     assert verify_svc._RESERVED_PORTS == reserved
 
+    # a second cancellation while the handler waits for the launch: the stubs and the port are
+    # released at once and the service the launch returns is still stopped
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [s.stopped for s in _TrackedStubs.instances] == [True, True]
+    assert verify_svc._RESERVED_PORTS == reserved
+    for _ in range(50):  # the launch finishes after the handler returned
+        if len(handles) == 2 and handles[1].stopped:
+            break
+        await asyncio.sleep(0.1)
+    assert len(handles) == 2 and handles[1].stopped
+
 
 async def test_stop_waits_for_a_start_in_progress(client, app, monkeypatch, tmp_path):
     _, procs = await _scanned(client)
@@ -974,6 +1027,10 @@ async def test_stop_waits_for_a_start_in_progress(client, app, monkeypatch, tmp_
     assert stopped.json()["stopped"] is True
     assert build_id not in app.state.services and handle.poll() is not None
     assert (await client.get(f"/builds/{build_id}/run")).json()["running"] is False
+    # the build row is written under the same lock: the stop's null write lands after the start's
+    async with app.state.sessionmaker() as s:
+        row = await s.get(Build, build_id)
+        assert (row.run_pid, row.run_port) == (None, None)
 
 
 def test_unreadable_secret_is_reported():
