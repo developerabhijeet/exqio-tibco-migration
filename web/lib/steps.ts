@@ -1,13 +1,17 @@
 "use client";
 
 // Step status for the stepper. Upload and Discover come from the scan report and the domain list;
-// Validate to Deploy come from the open process's gates (G1 to G6) once the API exposes them,
-// and read "not started" otherwise.
+// Validate and Design come from the open process's gates (G1 to G3). Build, Verify and Deploy also
+// read their runs: a running job, the latest build's steps, the parity report and the plan, so a
+// failed or running build never reads "not started". Gate records decide "approved".
 import { useMemo } from "react";
 import { useDomainList } from "./domains";
 import { useAnalysis, useGates, useGraph, useProcesses, useReport } from "./queries";
+import { useBuild, useBuilds, useParity, usePlan } from "./buildQueries";
+import { useJob } from "./jobs";
+import type { BuildView, ParityView, PlanOut } from "./buildTypes";
 import { useAppState } from "./state";
-import type { Gate, StepState, StepStatus } from "./types";
+import type { EvidenceRef, Gate, StepState, StepStatus } from "./types";
 
 export const STEP_LABELS: Record<string, string> = {
   upload: "Upload",
@@ -53,6 +57,50 @@ function gateEvidence(g: Gate): string {
   return "pending";
 }
 
+const BUILD_STEPS = new Set(["restore", "build", "test"]);
+
+function latestStatus(
+  key: "build" | "verify" | "deploy",
+  gate: Gate | undefined,
+  jobRunning: boolean,
+  build: BuildView | null | undefined,
+  latestBuildStatus: string | undefined,
+  parity: ParityView | null | undefined,
+  plan: PlanOut | null | undefined,
+): { status: StepStatus; evidence: EvidenceRef[] } {
+  const evidence: EvidenceRef[] = [];
+  let fromRun: StepStatus = "not_started";
+  if (key === "build") {
+    const failedStep = build?.steps.find((s) => BUILD_STEPS.has(s.name) && !s.ok && !s.skipped);
+    if (latestBuildStatus === "queued" || latestBuildStatus === "running") fromRun = "running";
+    else if (failedStep || latestBuildStatus === "failed") fromRun = "failed";
+    else if (latestBuildStatus === "passed") fromRun = "needs_review";
+    if (build) {
+      evidence.push({
+        label: "Latest build",
+        detail: failedStep
+          ? `${build.status}: ${failedStep.name} failed`
+          : `${build.status}${build.build_hash ? `, build hash ${build.build_hash.slice(0, 12)}` : ""}`,
+      });
+    }
+  } else if (key === "verify" && parity) {
+    fromRun = parity.unexplained > 0 || parity.errors > 0 ? "failed" : "needs_review";
+    evidence.push({
+      label: "Parity report",
+      detail: `${parity.parity === null ? "no parity" : `${Math.round(parity.parity * 1000) / 10}%`}; ${parity.unexplained} unexplained, ${parity.errors} errors (${parity.label})`,
+    });
+  } else if (key === "deploy" && plan) {
+    fromRun = plan.status === "failed" ? "failed" : plan.status === "running" ? "running" : "needs_review";
+    evidence.push({ label: "Plan", detail: `${plan.status.replace("_", " ")}${plan.decided_by ? ` by ${plan.decided_by}` : ""}` });
+  }
+  // A running job wins; then the gate record; then what the latest run says.
+  let status: StepStatus = fromRun;
+  if (jobRunning) status = "running";
+  else if (gate?.state === "rejected") status = "failed";
+  else if (gate?.state === "approved") status = "approved";
+  return { status, evidence };
+}
+
 export function useStepStates(): StepState[] {
   const { projectId, processId, scan } = useAppState();
   const report = useReport(projectId);
@@ -60,6 +108,14 @@ export function useStepStates(): StepState[] {
   const { domains } = useDomainList(projectId);
   const graph = useGraph(projectId);
   const gates = useGates(processId);
+  const builds = useBuilds(processId);
+  const latest = builds.data?.[0] ?? null;
+  const build = useBuild(latest?.id ?? null);
+  const parity = useParity(latest?.id ?? null);
+  const plan = usePlan(latest?.id ?? null);
+  const buildJob = useJob("build", processId).stream;
+  const verifyJob = useJob("verify", processId).stream;
+  const planJob = useJob("plan", processId).stream;
   const analysis = useAnalysis(processId);
 
   return useMemo(() => {
@@ -108,14 +164,38 @@ export function useStepStates(): StepState[] {
       };
     };
 
+    const withRuns = (key: "build" | "verify" | "deploy", running: boolean): StepState => {
+      const base = later(key);
+      const gate = gateList.find((x) => x.gate === GATES_BY_STEP[key][0]);
+      const run = latestStatus(key, gate, running, build.data, latest?.status, parity.data, plan.data);
+      return { ...base, status: run.status, evidence: [...run.evidence, ...base.evidence] };
+    };
+
     return [
       { key: "upload", label: "Upload", status: upload, evidence: uploadEvidence },
       { key: "discover", label: "Discover", status: discover, evidence: discoverEvidence },
       later("validate"),
       later("design"),
-      later("build"),
-      later("verify"),
-      later("deploy"),
+      withRuns("build", buildJob?.status === "running"),
+      withRuns("verify", verifyJob?.status === "running"),
+      withRuns("deploy", planJob?.status === "running"),
     ];
-  }, [report.data, processes.data, processId, scan, projectId, domains, graph.data, gates.data, analysis.data]);
+  }, [
+    report.data,
+    processes.data,
+    processId,
+    scan,
+    projectId,
+    domains,
+    graph.data,
+    gates.data,
+    analysis.data,
+    latest,
+    build.data,
+    parity.data,
+    plan.data,
+    buildJob?.status,
+    verifyJob?.status,
+    planJob?.status,
+  ]);
 }

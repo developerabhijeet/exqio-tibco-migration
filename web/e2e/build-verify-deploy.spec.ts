@@ -108,6 +108,8 @@ test("build, verify and deploy FundingStatusLookup as far as this machine allows
   const g4 = await gate(page, "G4");
   await expect(g4.getByRole("button", { name: "Approve G4" })).toBeDisabled();
   await expect(g4).toContainText("restore failed");
+  // The stepper reads the failed build, not "not started".
+  await expect(page.getByTestId("step-build")).toContainText("failed");
 
   // ---------------------------------------------------------------- Verify
   await actAs(page, "qa.priya");
@@ -164,6 +166,8 @@ test("build, verify and deploy FundingStatusLookup as far as this machine allows
   await page.getByRole("button", { name: "Connect later" }).click();
   await expect(plan).toHaveAttribute("data-status", "acknowledged");
   await expect(plan).toContainText("ops.sam");
+  // An acknowledged connect-later with G6 pending needs review.
+  await expect(page.getByTestId("step-deploy")).toContainText("needs review");
   const apply = plan.getByRole("button", { name: "Apply" });
   await expect(apply).toBeDisabled();
   await expect(plan).toContainText("Apply is not part of this build");

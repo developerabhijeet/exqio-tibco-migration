@@ -87,6 +87,9 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
             qc.invalidateQueries({ queryKey: [q, processId] });
           }
           qc.invalidateQueries({ queryKey: ["processes"] });
+          // Build, verify and plan runs feed the stepper even when their tab is not open.
+          qc.invalidateQueries({ queryKey: ["builds", processId] });
+          for (const q of ["build", "parity", "plan"]) qc.invalidateQueries({ queryKey: [q] });
         }
         },
         {
