@@ -11,7 +11,7 @@ from engine.analysis.evidence import EvidenceIndex
 from engine.analysis.models import Citation, CoverageResult, Finding, Rule, VerificationResult
 from engine.analysis.static_rules import run_static_rules
 from engine.analysis.verifier import verify_citations
-from engine.ir.models import FaultHandler, Transition
+from engine.ir.models import FaultHandler, Group, Transition
 from engine.tibco_parser.scanner import scan_folder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -196,6 +196,19 @@ def test_static_s1_order_inside_group_matters(procs, apps):
     assert _by_rule(run_static_rules(proc, contracts, []), "S1") == []
 
 
+def test_static_s1_group_with_empty_entry_exit_lists_still_fires(procs, apps):
+    proc = procs["DealerFundingRequest"].model_copy(deep=True)
+    proc.groups.append(Group(id="Loop", kind="scope", member_ids=["InsertFunding"],
+                             config={"entry_ids": [], "exit_ids": []}))
+    for t in proc.transitions:
+        if t.id == "CheckExistingFundingToInsertFunding":
+            t.to_id = "Loop"
+        if t.id == "InsertFundingToPublishFundingEvent":
+            t.from_id = "Loop"
+    findings = run_static_rules(proc, apps["DealerFundingRequest"].contracts, [])
+    assert [_acts(f) for f in _by_rule(findings, "S1")] == [{"CheckExistingFunding", "InsertFunding"}]
+
+
 # ------------------------------------------------------------ evidence + verifier
 def test_evidence_index_kinds(procs):
     idx = EvidenceIndex(procs["DealerFundingRequest"])
@@ -367,6 +380,17 @@ def test_coverage_otherwise_edge_covered_via_source_condition(procs):
     assert items[("transition", "LookupDealerToLookupDeal")].covered_by == ["R-OTH"]
     assert items[("transition", "LookupDealerToThrowDealerInactive")].covered_by == ["R-OTH"]
     assert items[("transition", "LookupDealToPublishFundingRejected")].covered_by == []
+
+
+def test_coverage_ignores_citations_under_minimum_length(procs):
+    proc = procs["DealerFundingRequest"]
+    mapping = ("mapping", "PublishFundingRejected:ActivityInput/Body/FundingEvent/status")
+    short = Rule(id="R-TWO", text="t", confidence=1, citations=[
+        Citation(activity_id="PublishFundingRejected", kind="expression", text="ED")])  # inside "REJECTED"
+    ok = Rule(id="R-THREE", text="t", confidence=1, citations=[
+        Citation(activity_id="PublishFundingRejected", kind="expression", text="JEC")])
+    assert {(i.kind, i.ref): i for i in coverage_matrix(proc, [short], {}).items}[mapping].covered_by == []
+    assert {(i.kind, i.ref): i for i in coverage_matrix(proc, [ok], {}).items}[mapping].covered_by == ["R-THREE"]
 
 
 def test_finding_model_roundtrip():

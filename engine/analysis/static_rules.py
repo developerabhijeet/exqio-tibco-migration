@@ -132,7 +132,9 @@ class _Flow:
         if node in _seen:
             return []
         ids = grp.config.get(key)
-        if not isinstance(ids, list):
+        if not isinstance(ids, list) or not ids:
+            # missing or empty (the parser emits [] for a fully cyclic group): use all members,
+            # which can over-report S1 but never hides it
             ids = grp.member_ids
         out: list[str] = []
         for i in ids:
