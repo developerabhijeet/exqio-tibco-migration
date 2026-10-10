@@ -218,6 +218,9 @@ export interface Gate {
   note?: string | null;
   reset_reason?: string | null;
   spec_hash?: string | null;
+  design_hash?: string | null;
+  build_hash?: string | null;
+  evidence_hash?: string | null;
 }
 
 export interface Citation {

@@ -143,7 +143,7 @@ export function ValidateTab() {
                 gate={g("G2")}
                 name="G2"
                 started={!!a?.analysed}
-                hint="Every finding decided: keep behaviour, fix, or ask the business."
+                hint="Every finding decided: keep behavior, fix, or ask the business."
               />
             </div>
 

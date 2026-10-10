@@ -278,7 +278,7 @@ export function DesignTab() {
                   </Panel>
                   <Panel title="Expected differences" eyebrow="Findings decided Fix at G2" testId="expected-differences">
                     {rec.expected_differences.length === 0 ? (
-                      <p className="text-[14px] text-slate">None: the .NET service keeps the TIBCO behaviour everywhere.</p>
+                      <p className="text-[14px] text-slate">None: the .NET service keeps the TIBCO behavior everywhere.</p>
                     ) : (
                       <ul className="space-y-2 text-[14px]">
                         {rec.expected_differences.map((d) => (

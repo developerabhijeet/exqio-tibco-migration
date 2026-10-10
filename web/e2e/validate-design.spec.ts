@@ -42,9 +42,13 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
 
   // A citation chip jumps to the canvas step and its XML lines, and back.
   const firstRule = page.getByTestId("rule-card").first();
-  await firstRule.getByTestId("citation-chip").first().click();
+  const chip = firstRule.getByTestId("citation-chip").first();
+  const cited = await chip.getAttribute("data-activity");
+  expect(cited).toBeTruthy();
+  await chip.click();
   await expect(page.getByTestId("process-view")).toBeVisible();
   await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
+  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", cited!);
   await expect(page.getByTestId("xml-viewer").locator(".xml-hl-line").first()).toBeVisible();
   await page.getByRole("button", { name: "Back to Validate" }).click();
 
@@ -61,6 +65,16 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await expect(g1).toHaveAttribute("data-state", "approved");
   await expect(g1).toContainText("sme.vicky");
 
+  // The owner may reject an approved gate; the reason is required and shown; then approve again.
+  await g1.getByRole("button", { name: "Reject G1" }).click();
+  await expect(g1.getByRole("button", { name: "Confirm rejection" })).toBeDisabled();
+  await g1.getByLabel(/Reason for rejecting G1/).fill("R2 boundary needs a finance check first.");
+  await g1.getByRole("button", { name: "Confirm rejection" }).click();
+  await expect(g1).toHaveAttribute("data-state", "rejected");
+  await expect(g1.getByTestId("gate-G1-rejection")).toContainText("R2 boundary needs a finance check first.");
+  await g1.getByRole("button", { name: "Approve G1" }).click();
+  await expect(g1).toHaveAttribute("data-state", "approved");
+
   // Findings: fix the read-then-write, keep the LIKE match with a note, ask about the rest.
   const findings = page.getByTestId("finding-card");
   const s1 = findings.filter({ hasText: "Read-then-write" });
@@ -68,7 +82,7 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await expect(s1).toHaveAttribute("data-decision", "fix");
   const s2 = findings.filter({ hasText: "LIKE" });
   await s2.getByLabel("Note").fill("Dealer ids are exact today; keep the TIBCO match until the data is cleaned.");
-  await s2.getByRole("button", { name: "Keep behaviour" }).click();
+  await s2.getByRole("button", { name: "Keep behavior" }).click();
   await expect(s2).toHaveAttribute("data-decision", "keep");
   const total = await findings.count();
   for (let i = 0; i < total; i++) {
@@ -87,7 +101,13 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await page.getByRole("button", { name: "Which workflows read the funding table?" }).click();
   await expect(page.getByTestId("ask-answer")).toBeVisible();
   await expect(page.getByTestId("ask-citation").first()).toContainText("[1]");
+  // A citation that names a step opens it on the canvas.
+  const askCite = page.locator('[data-testid="ask-citation"]:not([data-step=""])').first();
+  const askStep = await askCite.getAttribute("data-step");
+  await askCite.click();
+  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
   await page.getByRole("button", { name: "Close Ask AI" }).click();
+  await page.getByRole("button", { name: "Back to Validate" }).click();
 
   // Design: generate the record as the architect and approve G3.
   await actAs(page, "architect.lee");
@@ -101,10 +121,28 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await expect(row.getByTestId("finding-badge")).toContainText("S2");
   await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/);
   await expect(page.getByTestId("sequence-diagram").locator("svg")).toBeVisible();
+  await expect(page.getByTestId("sequence-alt").first()).toBeVisible();
   const g3 = await gate(page, "G3");
   await g3.getByRole("button", { name: "Approve G3" }).click();
   await expect(g3).toHaveAttribute("data-state", "approved");
   await expect(g3).toContainText("architect.lee");
+  await expect(g3.getByTestId("gate-G3-design-hash")).toContainText(/design [0-9a-f]{12}/);
+
+  // Export PDF: in print the sequence scales to the page instead of being clipped.
+  await page.setViewportSize({ width: 720, height: 1000 });
+  await page.emulateMedia({ media: "print" });
+  const fit = await page.getByTestId("sequence-diagram").evaluate((el) => {
+    const box = el.querySelector(".sequence-scroll") as HTMLElement;
+    const svg = el.querySelector("svg") as SVGSVGElement;
+    return { scroll: box.scrollWidth, client: box.clientWidth, svg: svg.getBoundingClientRect().width };
+  });
+  expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
+  expect(fit.svg).toBeLessThanOrEqual(fit.client + 1);
+  const pdf = (await page.pdf({ format: "A4", printBackground: true })).toString("latin1");
+  expect((pdf.match(/\/Type\s*\/Page\b/g) ?? []).length).toBeGreaterThan(0);
+  expect(pdf).toMatch(/\/MediaBox\s*\[\s*0 0 59[56]\.\d+ 84[23]\.\d+\s*\]/); // A4 portrait
+  await page.emulateMedia({ media: "screen" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
   // Editing an approved rule reopens G1 and is on the audit trail.
   await actAs(page, "sme.vicky");
@@ -118,8 +156,15 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await expect(edited).toHaveAttribute("data-status", "edited");
   await expect(g1).toHaveAttribute("data-state", "needs_review");
   await expect(g1).toContainText("needs review");
+  await expect(await gate(page, "G2")).toHaveAttribute("data-state", "needs_review");
   await page.getByRole("button", { name: "Audit trail" }).click();
   const drawer = page.getByTestId("audit-drawer");
   await expect(drawer).toContainText("rule edited");
   await expect(drawer).toContainText("gate reset");
+  await expect(drawer).toContainText("gate rejected");
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+
+  // The design gate reopened too.
+  await page.getByTestId("step-design").click();
+  await expect(await gate(page, "G3")).toHaveAttribute("data-state", "needs_review");
 });

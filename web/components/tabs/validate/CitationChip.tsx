@@ -12,6 +12,7 @@ export function CitationChip({ citation }: { citation: Citation }) {
     <button
       type="button"
       data-testid="citation-chip"
+      data-activity={citation.activity_id}
       onClick={() => jumpToStep(citation.activity_id)}
       title={`${citation.text}${bad && citation.reason ? `\nNot verified: ${citation.reason}` : ""}\nOpen on the canvas`}
       className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium ${

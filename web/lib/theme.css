@@ -126,4 +126,9 @@ body {
   table {
     min-width: 0 !important;
   }
+  /* The sequence diagram scales to the page width instead of being clipped. */
+  .sequence-svg {
+    width: 100% !important;
+    height: auto !important;
+  }
 }

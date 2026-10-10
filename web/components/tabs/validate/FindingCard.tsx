@@ -7,9 +7,9 @@ import type { FindingView } from "@/lib/types";
 import { CitationChip } from "./CitationChip";
 
 const DECISIONS = [
-  { value: "keep", label: "Keep behaviour", help: "Generate the same behaviour as TIBCO" },
+  { value: "keep", label: "Keep behavior", help: "Generate the same behavior as TIBCO" },
   { value: "fix", label: "Fix", help: "Correct it in .NET; recorded as an expected difference" },
-  { value: "ask", label: "Ask business", help: "Keep the behaviour and record the question for the business owner" },
+  { value: "ask", label: "Ask business", help: "Keep the behavior and record the question for the business owner" },
 ] as const;
 
 const SEVERITY: Record<string, "error" | "decision" | "det"> = { high: "error", medium: "decision", low: "det" };

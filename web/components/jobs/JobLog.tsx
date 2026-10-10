@@ -78,6 +78,12 @@ export function JobLog({
             <span className={`break-words ${e.event === "error" ? "text-error" : "text-ink"}`}>{e.text}</span>
           </li>
         ))}
+        {stream?.status === "failed" && stream.error && !lines.some((e) => e.event === "error") ? (
+          <li className="flex gap-2 py-0.5">
+            <span className="h-fit shrink-0 rounded bg-error-bg px-1.5 text-[10.5px] font-semibold uppercase text-error">error</span>
+            <span className="text-error">{stream.error}</span>
+          </li>
+        ) : null}
         {!stream ? <li className="font-sans text-[13px] text-slate">{idle}</li> : null}
         {stream && lines.length === 0 ? <li className="text-slate">Waiting for the job to start.</li> : null}
       </ol>

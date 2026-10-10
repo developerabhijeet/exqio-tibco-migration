@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProcesses } from "@/lib/queries";
@@ -27,7 +27,7 @@ interface Turn {
  */
 function stepOf(c: AskCitation, analysis?: AnalysisView | null): string | null {
   const m = /Steps?:\s*([A-Za-z_][\w.-]*)/.exec(c.text);
-  if (m) return m[1];
+  if (m) return m[1].replace(/\.+$/, "");
   const named = /^(Rule|Finding) (\S+?)(?: of| \(|\s)/.exec(c.text);
   if (!named || !analysis) return null;
   const items = named[1] === "Rule" ? analysis.rules : analysis.findings;
@@ -41,6 +41,8 @@ export function AskPanel() {
   const onClose = () => setAskOpen(false);
   const processes = useProcesses(projectId);
   const qc = useQueryClient();
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 60_000 });
+  const provider = health.data?.provider;
   const analysisOf = (pid: string | null) => (pid ? qc.getQueryData<AnalysisView | null>(["analysis", pid]) : null);
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -116,8 +118,16 @@ export function AskPanel() {
               <div data-testid="ask-answer" className="rounded-card border border-line px-3 py-2">
                 <div className="mb-1 flex items-center gap-2">
                   <MessageSquare size={14} className="text-ai" aria-hidden />
-                  <Pill tone={t.answer.used_model ? "ai" : "det"}>
-                    {t.answer.used_model ? "AI answer" : "closest knowledge items"}
+                  <Pill
+                    tone={t.answer.used_model ? "ai" : "det"}
+                    testId="ask-answer-source"
+                    title={
+                      t.answer.used_model
+                        ? "A model wrote this answer from the cited knowledge items"
+                        : "No model answered: these are the closest items from the knowledge base"
+                    }
+                  >
+                    {t.answer.used_model ? `AI answer${provider ? ` (${provider} provider)` : ""}` : "knowledge base search, no model"}
                   </Pill>
                 </div>
                 <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">{t.answer.text}</p>
@@ -128,6 +138,7 @@ export function AskPanel() {
                         <button
                           type="button"
                           data-testid="ask-citation"
+                          data-step={stepOf(c, analysisOf(c.process_id)) ?? ""}
                           disabled={!c.process_id}
                           onClick={() => follow(c)}
                           title={c.process_id ? "Open on the canvas" : "Not tied to a process"}
