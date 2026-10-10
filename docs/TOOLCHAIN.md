@@ -45,3 +45,19 @@ for developer machines; there is no Docker daemon here.
 
 `api.nuget.org` is refused here and on the device shell, so generated .NET code can only be
 restore-verified on a developer machine or with an offline package cache.
+
+## Acceptance run and e2e in this container
+
+- `make demo-check` probes NuGet (or `.tools/nuget-cache`) and the provider registry first. Both
+  are refused here, so it runs in offline mode: it asserts the failed restore with the NuGet reason
+  and the `make nuget-cache` remedy, build and test skipped, G4 closed, the service not running,
+  verify refused, no parity claimed and the registry reported unreachable. Full mode (every test
+  green, infrastructure validated, parity 100% except intended fields) needs a machine that
+  reaches both; see `docs/DEMO.md`, "What this container could not verify".
+- Other sessions may leave servers on 8000 and 3000. `make demo-check API_PORT=<port>` starts its
+  own API on that port when nothing answers there, and `make e2e` picks two free ports and never
+  reuses a server it did not start.
+- A production `next start` from `web/.next` and a `next dev` in the same checkout share the
+  build folder. To run `make e2e` beside such a server, set `NEXT_DIST_DIR=.next-e2e`; Next then
+  rewrites `web/next-env.d.ts` and adds the folder to `web/tsconfig.json`, so restore those two
+  files afterwards (`git restore web/next-env.d.ts web/tsconfig.json`).

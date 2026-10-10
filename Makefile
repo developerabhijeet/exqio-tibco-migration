@@ -1,6 +1,17 @@
 PY ?= .venv/bin/python
 PYTEST ?= .venv/bin/pytest
 
+# Ports for `make api`, `make web` and `make demo-check`. The web calls the API from the browser.
+# Both CORS defaults (the API's CORS_ORIGINS and the generated service's Cors:Origins, which the
+# service reads from the API's environment as Cors__Origins__0) are http://localhost:3000; with
+# another WEB_PORT the API is started with both set to that origin, unless already set.
+API_PORT ?= 8000
+WEB_PORT ?= 3000
+API_URL ?= http://localhost:$(API_PORT)
+WEB_ORIGIN := http://localhost:$(WEB_PORT)
+WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)} \
+	Cors__Origins__0=$${Cors__Origins__0:-$(WEB_ORIGIN)})
+
 .PHONY: setup db api web test e2e demo-check toolchain samples samples-zip nuget-cache
 
 setup:
@@ -15,19 +26,54 @@ db:
 	.venv/bin/alembic -c api/alembic.ini upgrade head
 
 api:
-	.venv/bin/uvicorn api.app.main:app --reload --port 8000
+	env $(WEB_CORS_ENV) .venv/bin/uvicorn api.app.main:app --reload --port $(API_PORT)
 
 web:
-	cd web && ([ -d node_modules ] || npm install) && npm run dev
+	cd web && ([ -d node_modules ] || npm install) && \
+		NEXT_PUBLIC_API_URL=$${NEXT_PUBLIC_API_URL:-$(API_URL)} npm run dev -- -p $(WEB_PORT)
 
 test:
 	$(PYTEST)
 
-e2e:
-	cd web && ([ -d node_modules ] || npm install) && npx playwright test
+# Playwright starts its own API (PROVIDER=fake, EMBEDDINGS_BACKEND=hash) and web on two free ports,
+# so a server someone left on 8000 or 3000 is never reused. Override with E2E_API_PORT/E2E_WEB_PORT;
+# E2E_REUSE_SERVERS=1 reuses servers you started yourself on those ports.
+TWO_FREE_PORTS := python3 -c 'import socket; a, b = socket.socket(), socket.socket(); \
+	a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0)); print(a.getsockname()[1], b.getsockname()[1])'
 
-demo-check:
-	$(PY) scripts/demo_check.py
+e2e:
+	@ports=$$($(TWO_FREE_PORTS)); api=$(or $(E2E_API_PORT),$${ports% *}); web=$(or $(E2E_WEB_PORT),$${ports#* }); \
+	echo "e2e: API on port $$api, web on port $$web"; \
+	cd web && ([ -d node_modules ] || npm install) && \
+		E2E_API_PORT=$$api E2E_WEB_PORT=$$web NEXT_PUBLIC_API_URL=http://localhost:$$api npx playwright test
+
+# Acceptance run (design spec section 12; scripts/demo_check.py). Uses the API answering at API_URL,
+# or starts one on API_PORT for the run and stops it afterwards. Started here, the API uses
+# PROVIDER=fake unless PROVIDER is set or a Claude token or Azure OpenAI key is set in the
+# environment or .env (then the API's own choice applies), and EMBEDDINGS_BACKEND=hash unless set.
+# DEMO_ARGS passes options through, for example DEMO_ARGS="--mode offline".
+DEMO_LOG ?= data/demo-check-api.log
+
+demo-check: samples samples-zip
+	@if curl -sf -m 5 $(API_URL)/health >/dev/null 2>&1; then \
+		echo "demo-check: using the API already answering at $(API_URL)"; \
+		$(PY) scripts/demo_check.py --api $(API_URL) $(DEMO_ARGS); \
+	else \
+		mkdir -p $$(dirname $(DEMO_LOG)); \
+		keys=$$( { env; cat .env 2>/dev/null; } | grep -cE '^(CLAUDE_CODE_OAUTH_TOKEN|AZURE_OPENAI_API_KEY)=.+' ); \
+		provider=$${PROVIDER:-}; \
+		if [ -z "$$provider" ] && [ "$$keys" -eq 0 ]; then provider=fake; fi; \
+		echo "demo-check: starting the API on port $(API_PORT) (provider $${provider:-from .env}, log $(DEMO_LOG))"; \
+		env $${provider:+PROVIDER=$$provider} EMBEDDINGS_BACKEND=$${EMBEDDINGS_BACKEND:-hash} $(WEB_CORS_ENV) \
+			.venv/bin/uvicorn api.app.main:app --port $(API_PORT) >$(DEMO_LOG) 2>&1 & pid=$$!; \
+		trap 'kill $$pid 2>/dev/null; wait $$pid 2>/dev/null' EXIT; \
+		up=0; for i in $$(seq 60); do \
+			if curl -sf -m 2 $(API_URL)/health >/dev/null 2>&1; then up=1; break; fi; \
+			kill -0 $$pid 2>/dev/null || break; sleep 1; \
+		done; \
+		if [ $$up -ne 1 ]; then echo "demo-check: the API did not start; see $(DEMO_LOG)"; exit 1; fi; \
+		$(PY) scripts/demo_check.py --api $(API_URL) $(DEMO_ARGS); \
+	fi
 
 toolchain:
 	python3 scripts/toolchain.py
