@@ -17,8 +17,9 @@ Order, each stage logged ``code`` or ``ai``:
    model);
 5. review (ai): equivalence, security and standards reviewers over the agent-written code, and
    the test reviewer over the rule and branch tests; it runs when the Code Builder filled a file
-   or the Test Engineer wrote a test (then the production reviewers are shown no placeholder
-   code). Test findings are stored with the others (reviewer ``test``);
+   or the Test Engineer wrote a test (then only the test reviewer runs: no production reviewer
+   is asked about placeholder code). Test findings are stored with the others (reviewer
+   ``test``);
 6. restore, build, format, test: ``dotnet``; restore always runs, bounded to
    ``RESTORE_TIMEOUT_S``; a failure is annotated with the NuGet probe; a step that cannot run is
    recorded as failed with the reason (``dotnet`` absent, restore failed), never hidden;
@@ -52,7 +53,7 @@ from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.design import ai_logger
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import build_provider, model_call_recorder
-from engine.agents.builder import BuildRejection, fill_method_bodies, is_test_path
+from engine.agents.builder import BuildRejection, fill_method_bodies
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
 from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
@@ -398,16 +399,16 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     elif not filled_paths and not te_filled:
         await ctx.log("skipped: no agent-written code or tests to review", tag="ai")
     else:
-        # without code the builder filled, the production reviewers are shown no placeholder files
-        target = solution if filled_paths else solution.model_copy(update={"files": [
-            f for f in solution.files if f.origin != "agent" or is_test_path(f.path)]})
+        # without code the builder filled there is nothing for the production reviewers
+        panel = [*REVIEWERS, TEST_REVIEWER] if filled_paths else [TEST_REVIEWER]
         if not filled_paths:
-            await ctx.log("no agent-written production code: the production reviewers are shown no file; "
-                          "the test reviewer reviews the rule and branch tests", tag="ai")
+            await ctx.log("no agent-written production code: only the test reviewer runs, over the rule and "
+                          "branch tests", tag="ai")
         try:
-            found = await review_panel(target, design, approved_rules, findings, provider, process=proc)
+            found = await review_panel(solution, design, approved_rules, findings, provider, process=proc,
+                                       reviewers=panel)
             reviewers_run = ([*REVIEWERS] if filled_paths else []) + (
-                [TEST_REVIEWER] if reviewed_test_files(target, proc) else [])
+                [TEST_REVIEWER] if reviewed_test_files(solution, proc) else [])
             reviews = [r.model_dump() for r in found]
             triage = {t: sum(1 for r in found if r.triage == t) for t in ("patch", "defer", "decision")}
             tested = sum(1 for r in found if r.reviewer == TEST_REVIEWER)

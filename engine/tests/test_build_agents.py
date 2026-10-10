@@ -20,7 +20,7 @@ from engine.agents.builder import (
 from engine.agents.designer import design_narrative
 from engine.agents.prompting import render_prompt
 from engine.agents.provider import FakeProvider, MemoryItem
-from engine.agents.reviewers import ReviewFinding, review_panel, reviewed_test_files
+from engine.agents.reviewers import TEST_REVIEWER, ReviewFinding, review_panel, reviewed_test_files
 from engine.agents.routing import ModelCallRecord, RoutedProvider, RoutingTable
 from engine.agents.test_engineer import check_test_body, expected_value_warning, fill_test_bodies
 from engine.analysis.models import Citation, Finding, Rule
@@ -573,6 +573,30 @@ async def test_review_panel_skips_the_test_reviewer_without_written_tests(tmp_pa
     assert await review_panel(sol, make_design(), make_rules(), make_findings(), rp,
                               process=make_process()) == []
     assert len(fake.requests) == 3
+
+
+async def test_review_panel_with_only_the_test_reviewer_makes_one_call(tmp_path):
+    sol = make_solution(tmp_path)  # placeholder production code and a written rule test
+    tests = json.dumps({"findings": [
+        {"file": TEST_FILE, "line": 6, "text": "Assert the APR for tier A.", "triage": "patch"},
+        {"file": MAPPINGS, "line": 11, "text": "Not a test file: dropped.", "triage": "patch"},
+    ]})
+    fake = FakeProvider([tests])
+    rp, records = routed(fake)
+    out = await review_panel(sol, make_design(), make_rules(), make_findings(), rp,
+                             process=make_process(), reviewers=[TEST_REVIEWER])
+
+    assert len(fake.requests) == 1 and [r.task_kind for r in records] == ["review"]
+    assert fake.requests[0].tags.get("reviewer") == "test"
+    assert [(f.reviewer, f.file) for f in out] == [("test", TEST_FILE)]
+    # a test-only panel without written tests makes no call; an unknown reviewer is refused
+    sol.files = [f for f in sol.files if f.path != TEST_FILE]
+    assert await review_panel(sol, make_design(), make_rules(), make_findings(), rp,
+                              process=make_process(), reviewers=[TEST_REVIEWER]) == []
+    assert len(fake.requests) == 1
+    with pytest.raises(ValueError, match="unknown reviewer"):
+        await review_panel(sol, make_design(), make_rules(), make_findings(), rp,
+                           process=make_process(), reviewers=["style"])
 
 
 def test_test_reviewer_prompt_follows_house_rules():

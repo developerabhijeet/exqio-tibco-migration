@@ -292,6 +292,10 @@ async def test_build_fails_without_dotnet_and_g4_disabled(client, app, monkeypat
     # the builder filled no production file, but the Test Engineer wrote tests: the test reviewer ran
     assert build["builder"]["reviewers"] == ["test"]
     assert build["review_findings"] == {"test": []}  # the fake reviewer finds nothing
+    async with app.state.sessionmaker() as s:
+        review_calls = (await s.execute(select(ModelCall).where(ModelCall.job_id == build["job_id"],
+                                                                ModelCall.stage == "reviewer"))).scalars().all()
+    assert len(review_calls) == 1  # the test reviewer only: no production reviewer call
     assert (await client.get(f"/builds/{build_id}/reviews")).json() == []
 
     infra = (await client.get(f"/builds/{build_id}/infra")).json()

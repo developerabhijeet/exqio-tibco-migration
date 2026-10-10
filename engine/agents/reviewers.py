@@ -11,6 +11,7 @@ triage.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
@@ -147,14 +148,23 @@ async def review_panel(
     *,
     process: Process | None = None,
     diff: str | None = None,
+    reviewers: Iterable[Reviewer] | None = None,
 ) -> list[ReviewFinding]:
     """Run the three production reviewers in turn, equivalence first, then the test reviewer
     when rule or branch tests were written, and return their findings in that order.
+
+    ``reviewers`` limits the panel to those reviewers (``None``: all of them); the order stays
+    the panel's. ``[TEST_REVIEWER]`` reviews only the tests (one model call when rule or branch
+    tests were written, none otherwise). An unknown name raises ``ValueError``.
 
     ``diff`` overrides the default view of the change (the numbered agent-written files); findings
     are still kept only for those files. ``process`` adds the TIBCO source for the equivalence
     comparison; without it the rule citations are the source. Test findings (reviewer ``test``)
     have the same shape and are kept only for the reviewed test files."""
+    chosen = set(REVIEWERS) | {TEST_REVIEWER} if reviewers is None else set(reviewers)
+    unknown = sorted(chosen - set(REVIEWERS) - {TEST_REVIEWER})
+    if unknown:
+        raise ValueError(f"unknown reviewer(s): {', '.join(unknown)}")
     files = reviewed_files(solution)
     code = diff if diff is not None else numbered(files)
     if process is not None:
@@ -163,7 +173,7 @@ async def review_panel(
         source = "TIBCO source not supplied; compare against the citations of the rules."
     spec = skeleton_text(design)
     out: list[ReviewFinding] = []
-    for reviewer in REVIEWERS:
+    for reviewer in (r for r in REVIEWERS if r in chosen):
         system, user = render_prompt(
             f"reviewer_{reviewer}",
             process_name=process.name if process is not None else design.process_id,
@@ -180,7 +190,7 @@ async def review_panel(
         )
         out += _coerce(reviewer, data, files)
 
-    tests = reviewed_test_files(solution, process)
+    tests = reviewed_test_files(solution, process) if TEST_REVIEWER in chosen else {}
     if tests:
         system, user = render_prompt(
             "reviewer_test",
