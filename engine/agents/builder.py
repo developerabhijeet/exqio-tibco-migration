@@ -21,8 +21,8 @@ from engine.ir.models import Process
 
 from .designer import rules_block
 from .jsonout import JsonOutputError
-from .prompting import ask_json, memory_block, render_process, render_prompt
-from .provider import MemoryItem
+from .prompting import ask_json, memory_block, render_process, render_prompt, wrap_source
+from .provider import MemoryItem, mask_sensitive
 
 log = logging.getLogger(__name__)
 
@@ -52,11 +52,12 @@ _ASSERT = re.compile(r"\bAssert\b")
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")
 _PRAGMA = re.compile(r"#\s*pragma\s+warning\s+disable")
 # Directives that load a file, string literals holding an absolute filesystem path, a home path,
-# a file URI or a parent-directory step.
+# a file URI or a parent-directory step. The roots are ones no HTTP route of a migrated service
+# uses ("/health", "/api/...", "/dev/token" are routes, not files), so route literals pass.
 _OUTSIDE = re.compile(
     r"""^\s*\#\s*(?:r|load|include)\b
       | "(?:[A-Za-z]:[\\/]|\\\\|~/|file:/
-           |/(?:etc|home|usr|var|tmp|root|opt|mnt|proc|dev|sys|srv|Users|private|Volumes)/)
+           |/(?:etc|home|usr|var|tmp|root|opt|mnt|proc|Users|Volumes)/)
       | (?:^|["\s/\\])\.\.[\\/]""",
     re.VERBOSE | re.MULTILINE,
 )
@@ -66,11 +67,98 @@ def _norm(line: str) -> str:
     return " ".join(line.split())
 
 
+def _string_end(text: str, i: int) -> int:
+    """Index just past the C# string or char literal starting at ``i`` (regular, interpolated,
+    verbatim, raw)."""
+    n = len(text)
+    j = i
+    while j < n and text[j] in "$@":
+        j += 1
+    verbatim = "@" in text[i:j]
+    quote = text[j]
+    if quote == '"' and text.startswith('"""', j):
+        k = j
+        while k < n and text[k] == '"':
+            k += 1
+        fence = text[j:k]
+        end = text.find(fence, k)
+        return n if end < 0 else end + len(fence)
+    k = j + 1
+    while k < n:
+        c = text[k]
+        if c == "\\" and not verbatim:
+            k += 2
+            continue
+        if c == quote:
+            if verbatim and k + 1 < n and text[k + 1] == quote:
+                k += 2
+                continue
+            return k + 1
+        if c == "\n" and not verbatim:
+            return k
+        k += 1
+    return n
+
+
+def strip_comments(text: str) -> str:
+    """``text`` with ``//`` and ``/* */`` comments blanked out (newlines kept, so line numbers
+    hold) and string and char literals left alone."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if c == "/" and text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i:j]))
+            i = j
+            continue
+        if c in "\"'" or (c in "$@" and re.match(r'[$@]{1,3}"', text[i:i + 4])):
+            j = _string_end(text, i)
+            out.append(text[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _strip_block_comments(text: str) -> str:
+    """Block comments blanked out; line comments kept (a ``// TIBCO`` line inside ``/* */`` does
+    not count as kept)."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(text[i:j])
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join(ch if ch == "\n" else " " for ch in text[i:j]))
+            i = j
+        elif text[i] in "\"'" or (text[i] in "$@" and re.match(r'[$@]{1,3}"', text[i:i + 4])):
+            j = _string_end(text, i)
+            out.append(text[i:j])
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 def declarations(text: str) -> list[str]:
     """Member and type declarations that end in a parameter list (methods, constructors, primary
-    constructors), normalised. Expression-bodied members and statements are not declarations."""
+    constructors), normalised, from the code with comments removed. Expression-bodied members and
+    statements are not declarations."""
     out: list[str] = []
-    for line in text.splitlines():
+    for line in strip_comments(text).splitlines():
         s = _norm(line)
         if _ACCESS.match(s) and "(" in s and s.endswith(")") and "=>" not in s and ";" not in s:
             out.append(s)
@@ -78,7 +166,11 @@ def declarations(text: str) -> list[str]:
 
 
 def tibco_comments(text: str) -> list[str]:
-    return [_norm(ln) for ln in text.splitlines() if _TIBCO_COMMENT.match(ln.strip())]
+    """The ``// TIBCO`` line comments, normalised (not those inside a block comment)."""
+    return [
+        _norm(ln) for ln in _strip_block_comments(text).splitlines()
+        if _TIBCO_COMMENT.match(ln.strip())
+    ]
 
 
 def is_test_path(path: str) -> bool:
@@ -102,11 +194,15 @@ def check_filled_file(
     ``require_filled`` no ``agent fills`` placeholder may remain."""
     if is_test_path(path):
         return f"{path} is a test file; the builder never edits tests"
-    present = {_norm(ln) for ln in new.splitlines()}
-    missing = [d for d in declarations(original) if d not in present]
+    wanted = declarations(original)
+    if PLACEHOLDER.search(strip_comments(original)) and not wanted:
+        return "no method signature found around the placeholder; the file cannot be checked"
+    present = set(declarations(new))
+    missing = [d for d in wanted if d not in present]
     if missing:
         return f"the method signature changed or is missing: {missing[0]}"
-    lost = [c for c in tibco_comments(original) if c not in present]
+    kept = set(tibco_comments(new))
+    lost = [c for c in tibco_comments(original) if c not in kept]
     if lost:
         return f"the TIBCO expression comment is missing: {lost[0]}"
     if _introduced(_ASSERT, original, new):
@@ -161,19 +257,56 @@ def _process_paths(design: DesignRecord) -> set[str]:
     return {f"src/{r.project}/{r.file}" for r in design.mapping if r.pattern != "call.process"}
 
 
-def _targets(solution: GeneratedSolution, design: DesignRecord, process: Process) -> list[_Target]:
-    """Agent-written, non-test files of this process that still hold a placeholder."""
-    owned = _process_paths(design)
-    stem = ident(process.name, "Process")
+PER_PROCESS_SUFFIXES = ("State", "Service", "Mappings", "Conditions", "Data", "Repository")
+
+
+def _claims(f: GenFile, design: DesignRecord, process: Process) -> bool:
+    """Whether ``process`` owns ``f``. ``GenFile.process_id`` decides when set; a shared file
+    (``process_id`` None) is owned through an exact path on one of the process's mapping rows or
+    an exact ``<Process><Suffix>.cs`` name."""
+    if f.process_id is not None:
+        return f.process_id == process.id
+    if f.path in _process_paths(design):
+        return True
+    stem = re.escape(ident(process.name, "Process"))
+    suffixes = "|".join(PER_PROCESS_SUFFIXES)
+    return re.fullmatch(rf"{stem}(?:{suffixes})\.cs", PurePosixPath(f.path).name) is not None
+
+
+def _fillable(f: GenFile) -> bool:
+    return f.origin == "agent" and not is_test_path(f.path) and bool(PLACEHOLDER.search(f.content))
+
+
+def claimed_files(
+    solution: GeneratedSolution,
+    design: DesignRecord,
+    process: Process,
+    others: list[tuple[DesignRecord, Process]] | None = None,
+) -> tuple[list[GenFile], list[BuildRejection]]:
+    """The agent-written, non-test files with a placeholder that ``process`` owns, and a
+    rejection for each such file another process in ``others`` also claims (neither fills it)."""
+    owned: list[GenFile] = []
+    rejected: list[BuildRejection] = []
+    for f in solution.files:
+        if not _fillable(f) or not _claims(f, design, process):
+            continue
+        rivals = sorted(p.id for d, p in others or [] if p.id != process.id and _claims(f, d, p))
+        if rivals:
+            rejected.append(BuildRejection(
+                path=f.path, attempt=0,
+                reason=f"claimed by more than one process: {', '.join([process.id, *rivals])}",
+            ))
+            continue
+        owned.append(f)
+    return owned, rejected
+
+
+def _targets(files: list[GenFile], design: DesignRecord, process: Process) -> list[_Target]:
+    """Prompt context for each owned file: the activities its rows and placeholders name."""
     by_name = {a.name: a.id for a in process.activities}
     ids = {a.id for a in process.activities}
     out: list[_Target] = []
-    for f in solution.files:
-        if f.origin != "agent" or is_test_path(f.path) or not PLACEHOLDER.search(f.content):
-            continue
-        name = PurePosixPath(f.path).name
-        if not (f.path in owned or name.startswith(stem) or f.activity_id in ids):
-            continue
+    for f in files:
         acts: list[str] = []
         if f.activity_id in ids:
             acts.append(f.activity_id)
@@ -289,9 +422,10 @@ async def _fill_one(
     )
     reason = ""
     for attempt in (1, 2):
+        # The reason can quote TIBCO text (a lost // TIBCO comment), so it goes in as data.
         prompt = user if not reason else (
-            f"{user}\n\nYour previous reply was rejected by the checks: {reason}. "
-            f"Return {t.file.path} again with that fixed."
+            f"{user}\n\nYour previous reply was rejected by the checks. The reason, as data:\n"
+            f"{wrap_source(reason)}\nReturn the target file again with that fixed."
         )
         try:
             data, _ = await ask_json(
@@ -311,7 +445,8 @@ async def _fill_one(
                     if not new.endswith("\n"):
                         new += "\n"
                     return t.file.model_copy(update={"content": new})
-        log.warning("builder rejected %s (attempt %d): %s", t.file.path, attempt, reason)
+        log.warning("builder rejected %s (attempt %d): %s", t.file.path, attempt,
+                    mask_sensitive(reason))
         if rejections is not None:
             rejections.append(BuildRejection(path=t.file.path, attempt=attempt, reason=reason))
     return None
@@ -325,15 +460,23 @@ async def fill_method_bodies(
     memory_items: list[MemoryItem],
     provider: Any,
     rejections: list[BuildRejection] | None = None,
+    others: list[tuple[DesignRecord, Process]] | None = None,
 ) -> list[GenFile]:
     """Fill the placeholder bodies of this process's agent-written files, one model call per file.
 
     Returns only ``origin="agent"`` files whose new content passed :func:`check_filled_file`;
-    code-generated files, test files and other processes' files are never sent or returned. A
-    rejected reply is retried once with the reason; a file rejected twice is left out and its
-    reasons are appended to ``rejections``. ``solution`` is not modified."""
+    code-generated files, test files and other processes' files are never sent or returned
+    (ownership: :func:`claimed_files`; pass the solution's other processes as ``others`` so a file
+    two processes claim is rejected instead of filled). A rejected reply is retried once with the
+    reason; a file rejected twice is left out. Every rejection is appended to ``rejections``
+    (``attempt`` 0 for an ownership conflict). ``solution`` is not modified."""
+    files, conflicts = claimed_files(solution, design, process, others)
+    for c in conflicts:
+        log.warning("builder skipped %s: %s", c.path, c.reason)
+    if rejections is not None:
+        rejections.extend(conflicts)
     out: list[GenFile] = []
-    for t in _targets(solution, design, process):
+    for t in _targets(files, design, process):
         filled = await _fill_one(t, solution, design, process, rules, memory_items, provider,
                                  rejections)
         if filled is not None:

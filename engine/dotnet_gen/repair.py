@@ -4,8 +4,9 @@ On a failing run the builder model gets the failing test names and messages, the
 TIBCO step behind them, and answers with a unified diff. Code applies the diff only when every file
 it touches is an existing agent-written production file inside the solution root (never under a
 tests folder, never a code-generated scaffold file, never outside the root) and the patched file
-still passes the builder's checks; then it rebuilds and retests. At most ``max_attempts`` diffs are
-asked for and every attempt is recorded.
+still passes the builder's checks; then it rebuilds and retests. A diff that breaks the build is
+rolled back, so every attempt starts from the last compiling state. At most ``max_attempts`` diffs
+are asked for and every attempt is recorded.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from engine.agents.builder import check_filled_file, focused_process, is_test_pa
 from engine.agents.designer import rules_block
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.prompting import ask_json, render_process, render_prompt
+from engine.agents.provider import mask_sensitive
 from engine.analysis.models import Rule
 from engine.dotnet_gen.generator import GeneratedSolution
 from engine.dotnet_gen.runner import BuildResult, TestRun
@@ -48,11 +50,19 @@ class RepairAttempt(BaseModel):
     n: int
     failing: list[str] = Field(default_factory=list)
     diff: str = ""
+    # True when the diff is in the solution after this attempt: it passed the gate and the
+    # solution still builds. A diff that broke the build was rolled back and is False.
     applied: bool = False
-    reason: str = ""  # why the diff was not applied, or what went wrong after; empty on success
+    reason: str = ""  # why the diff was rejected or rolled back; empty when it was applied
 
 
 class RepairResult(BaseModel):
+    """``attempts`` in order; ``final`` is the test run of the solution as left on disk.
+
+    The solution on disk (and ``solution.files``) always ends in a compiling state: diffs that
+    broke the build were rolled back, so ``final`` is the last test run of a build that compiled
+    (or the first run when nothing was applied)."""
+
     attempts: list[RepairAttempt] = Field(default_factory=list)
     final: TestRun
 
@@ -74,6 +84,8 @@ class PatchError(ValueError):
 
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
+_BINARY = re.compile(r"^(?:GIT binary patch|Binary files .* differ|literal \d+|delta \d+)",
+                     re.MULTILINE)
 
 
 @dataclass
@@ -99,6 +111,8 @@ def _diff_path(header: str) -> str | None:
 def parse_unified_diff(diff: str) -> list[FilePatch]:
     """Parse ``--- / +++ / @@`` sections. Hunk line counts are not trusted (models miscount);
     a hunk runs to the next hunk or file header."""
+    if _BINARY.search(diff) or "\0" in diff:
+        raise PatchError("the diff has a binary section; only text diffs are applied")
     lines = diff.replace("\r\n", "\n").split("\n")
     while lines and not lines[-1].strip():
         lines.pop()
@@ -242,7 +256,7 @@ def _failures_block(run: TestRun, previous: RepairAttempt | None) -> str:
         lines.append("The build or the test run failed before any test result:")
         lines.append((run.log or "(no log)")[-FAILURE_LOG_LIMIT:])
     if previous is not None and not previous.applied and previous.reason:
-        lines.append(f"Your previous diff was rejected: {previous.reason}")
+        lines.append(f"Your previous diff was not kept: {previous.reason}")
     return "\n".join(lines)
 
 
@@ -338,16 +352,22 @@ async def repair_loop(
         except JsonOutputError as exc:
             patched, reason = {}, f"the reply was not valid JSON ({exc})"
         if reason:
-            log.warning("repair attempt %d for %s rejected: %s", n, process.id, reason)
+            log.warning("repair attempt %d for %s rejected: %s", n, process.id,
+                        mask_sensitive(reason))
         else:
+            before = {f.path: f.content for f in solution.files if f.path in patched}
             _write(solution, patched)
-            applied = True
             build: BuildResult = await _call(runner.build)
             if build.ok:
+                applied = True
                 run = await _call(runner.test)
             else:
-                run = TestRun(ok=False, log="\n".join(build.errors) or build.log)
-                reason = f"the build failed after the diff: {len(build.errors)} error(s)"
+                _write(solution, before)  # back to the last compiling state
+                errors = "; ".join(build.errors[:5]) or (build.log or "")[-500:]
+                reason = (f"the build failed after the diff ({len(build.errors)} error(s)), "
+                          f"so it was rolled back: {errors}")
+                log.warning("repair attempt %d for %s rolled back: %s", n, process.id,
+                            mask_sensitive(reason))
         attempt = RepairAttempt(n=n, failing=failing, diff=diff, applied=applied, reason=reason)
         attempts.append(attempt)
         await _record(recorder, attempt)
