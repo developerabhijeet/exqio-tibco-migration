@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --purple: #9b5de5;
+  --purple-lt: #f1e9fc;
+  --plum: #20063b;
+  --coral: #ff495c;
+  --warm: #f4f3ee;
+  --page: #faf9f7;
+  --line: #e2dfd6;
+  --ink: #212529;
+  --slate: #425466;
+  --footer: #140811;
+  --lilac: #d9c6f5;
+  --det: #425466;
+  --det-bg: #f4f3ee;
+  --ai: #0e7a6e;
+  --ai-bg: #e1f3f0;
+  --gate: #1e7b3c;
+  --gate-bg: #e2f3e6;
+  --decision: #9a5e0a;
+  --decision-bg: #fbf0df;
+  --error: #a33a32;
+  --error-bg: #f9e5e3;
+  --highlight: #fff2b8;
+  --highlight-strong: #ffe27a;
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--page);
+  color: var(--ink);
+}
+
+body {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-line bg-white;
+  }
+  .eyebrow {
+    @apply text-eyebrow uppercase text-coral;
+  }
+  .label {
+    @apply text-eyebrow uppercase text-slate;
+  }
+  .screen-title {
+    @apply text-screen-title text-purple;
+  }
+  .panel-title {
+    @apply text-panel-title text-plum;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-4 py-2 text-[15px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-purple text-white hover:bg-purple-dk;
+  }
+  .btn-secondary {
+    @apply btn border border-line bg-white text-plum hover:bg-warm;
+  }
+  .btn-ghost {
+    @apply btn px-2 py-1 text-slate hover:bg-warm;
+  }
+  .input {
+    @apply w-full rounded-btn border border-line bg-white px-3 py-2 text-[15px] text-ink outline-none focus:border-purple focus:ring-2 focus:ring-purple-lt;
+  }
+  .table-head {
+    @apply bg-plum text-left text-eyebrow uppercase text-white;
+  }
+}
+
+/* Monaco: the selected step's source element (warm yellow band) and its anchor line. */
+.xml-hl-line {
+  background: var(--highlight);
+}
+.xml-hl-anchor {
+  background: var(--highlight-strong);
+}
+
+/* React Flow: quiet chrome on the warm background. */
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__node.selected > .activity-card,
+.react-flow__node.selected > .terminal-pill {
+  box-shadow: 0 0 0 3px var(--purple-lt), 0 0 0 4px var(--purple);
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}

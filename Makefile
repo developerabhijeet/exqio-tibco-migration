@@ -18,13 +18,13 @@ api:
 	.venv/bin/uvicorn api.app.main:app --reload --port 8000
 
 web:
-	cd web && npm run dev
+	cd web && ([ -d node_modules ] || npm install) && npm run dev
 
 test:
 	$(PYTEST)
 
 e2e:
-	@if [ -d web ]; then cd web && npx playwright test; else echo "web/ not scaffolded yet"; fi
+	cd web && ([ -d node_modules ] || npm install) && npx playwright test
 
 demo-check:
 	$(PY) scripts/demo_check.py
