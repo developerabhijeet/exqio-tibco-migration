@@ -18,8 +18,10 @@ Fix touches the field's lineage), noise (reviewed rules: timestamps, generated i
 The engine cannot apply a Fix finding to the TIBCO model, so no counterfactual run exists: an
 intended field is stored with ``confirmed: false`` ("not confirmed: no TIBCO sandbox run; derived
 from the TIBCO model"), does not count as unexplained and does not block G5; only defects do.
-``service_called`` side effects are not compared: the running service calls the real endpoints,
-not the evaluator's stubs.
+Outbound HTTP: every typed client of the running service points at the build's stub server
+(:mod:`api.app.services.stub_server`), loaded with the scenario's ``stub_responses`` before each
+scenario; the calls it records are the actual ``service_called`` side effects and are compared
+with the evaluator's. A JMS publish that no consumer handled is an ``error``, not a match.
 """
 from __future__ import annotations
 
@@ -70,7 +72,7 @@ from engine.parity.models import (
 from engine.parity.models import Scenario as EngineScenario
 from engine.parity.scenarios import generate_scenarios, took_link
 from engine.parity.seed import SeedData, estate_root
-from engine.parity.stubs import StubRegistry, WireMockStubs
+from engine.parity.stubs import DEFAULT_TIMEOUT_MS, StubRegistry, WireMockStubs
 
 MODEL_LABEL = "expected output derived from the TIBCO model"
 TEST_DATA_NOTE = ("Rows generated from the schemas, enumerations and branch predicates, with masking applied "
@@ -397,12 +399,6 @@ def release_port(port: int) -> None:
         _RESERVED_PORTS.discard(port)
 
 
-def free_port() -> int:
-    s, port = reserve_port()
-    s.close()
-    return port
-
-
 def connection_names(build_root: Path, app_name: str) -> list[str]:
     layout = solution_layout(app_name)
     folder = layout["projects"]["api"]["folder"]
@@ -473,20 +469,45 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
     async with lock:
         await asyncio.to_thread(seed)
     clients = client_names(root)
-    stubs = StubServer()
-    env = service_env(dsn, connection_names(root, app_name), clients, stubs.url)
-    held, port = reserve_port()
-    runner = DotnetRunner(root, dotnet=dotnet)
+    stubs: StubServer | None = None
+    held: socket.socket | None = None
+    port: int | None = None
+    launching: asyncio.Future[ServiceHandle] | None = None
 
-    def launch() -> ServiceHandle:
-        held.close()  # hand the port to the service at the last moment
-        return runner.run_service(solution_layout(app_name)["api_project"], port, env, timeout_s)
+    def cleanup() -> None:
+        if held is not None:
+            held.close()
+        if stubs is not None:
+            stubs.stop()
+        if port is not None:
+            release_port(port)
 
     try:
-        handle: ServiceHandle = await asyncio.to_thread(launch)
+        stubs = StubServer()
+        env = service_env(dsn, connection_names(root, app_name), clients, stubs.url)
+        held, port = reserve_port()
+        runner = DotnetRunner(root, dotnet=dotnet)
+        sock, service_port = held, port
+
+        def launch() -> ServiceHandle:
+            sock.close()  # hand the port to the service at the last moment
+            return runner.run_service(solution_layout(app_name)["api_project"], service_port, env, timeout_s)
+
+        launching = asyncio.ensure_future(asyncio.to_thread(launch))
+        handle: ServiceHandle = await asyncio.shield(launching)
+    except asyncio.CancelledError:
+        # the launch thread cannot be interrupted: wait for it and stop the service it started
+        if launching is not None:
+            try:
+                started = await launching
+            except Exception:  # noqa: BLE001  the launch failed on its own: nothing to stop
+                started = None
+            if started is not None:
+                await asyncio.to_thread(started.stop)
+        cleanup()
+        raise
     except BaseException:
-        stubs.stop()
-        release_port(port)
+        cleanup()
         raise
     return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients)
 
@@ -633,13 +654,18 @@ NOT_A_FAULT = ("SelectorMismatch", "InvalidBody")
 def publish_outcome(outcome: Any) -> Fault | None:
     """``POST /_bus/publish`` answer ``{disposition: completed|dead_lettered|abandoned, reason,
     description, messages_published}`` as the run's fault: a dead letter for a business fault is
-    that fault; a selector mismatch, an unreadable body or an abandoned (transient) delivery means
-    the scenario did not run, which raises."""
+    that fault; a selector mismatch, an unreadable body, an abandoned (transient) delivery or a
+    completed delivery with a reason (no consumer handled it) means the scenario did not run,
+    which raises."""
     if not isinstance(outcome, dict):
         raise TypeError(f"unexpected /_bus/publish answer: {outcome!r}")
     disposition = str(outcome.get("disposition") or "")
     reason = outcome.get("reason")
     if disposition == "completed":
+        if reason:  # e.g. "no consumer subscribed to <entity>": nothing handled the message
+            raise RuntimeError(f"the service did not handle the message: {reason}")
+        if "messages_published" not in outcome:
+            raise RuntimeError(f"unexpected /_bus/publish answer without messages_published: {outcome!r}")
         return None
     if disposition == "dead_lettered":
         if not reason or reason in NOT_A_FAULT:
@@ -692,6 +718,15 @@ def report_json(report: ParityReport, extra: dict[str, Any]) -> dict[str, Any]:
     return {**out, **extra}
 
 
+def resource_timeouts(app: IRApplication) -> dict[str, int]:
+    """Timeout (ms) per resource, with the evaluator's default when ``timeout_ms`` is not set."""
+    out: dict[str, int] = {}
+    for r in app.resources:
+        value = str(r.settings.get("timeout_ms") or "")
+        out[r.id] = int(value) if value.isdigit() else DEFAULT_TIMEOUT_MS
+    return out
+
+
 def applied_noise(report: ParityReport, rules: list[NoiseRule]) -> list[dict[str, str]]:
     noisy = [d.path for d in report.fields + report.side_effects if d.status == "noise"]
     return [r.model_dump() for r in rules if any(r.matches(p) for p in noisy)]
@@ -720,8 +755,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
         raise ServiceNotRunning("the generated service is not running: start it first (POST /builds/{id}/run)")
     kind = proc.starter.kind if proc.starter else "subprocess"
     resource_names = {r.id: r.name for r in app.resources}
-    resource_timeouts = {r.id: int(r.settings["timeout_ms"]) for r in app.resources
-                         if str(r.settings.get("timeout_ms") or "").isdigit()}
+    timeouts = resource_timeouts(app)
     if fixes:
         await ctx.log(f"{len(fixes)} finding(s) decided Fix; without a counterfactual run a difference they touch "
                       f"is reported as intended and unconfirmed with the finding id ({evidence.UNCONFIRMED_NOTE})")
@@ -747,7 +781,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                         raise RuntimeError("the scenario expects outbound HTTP calls but the service has no stub "
                                            "server (it was not started by the API)")
                     if info.stubs is not None:
-                        info.stubs.load(sc.stub_responses, resource_names, resource_timeouts)
+                        info.stubs.load(sc.stub_responses, resource_names, timeouts)
                     await asyncio.to_thread(reset_db, db, app, sc.seed_state)
                     if kind in ("rest", "http"):
                         before = await bus_messages(client)

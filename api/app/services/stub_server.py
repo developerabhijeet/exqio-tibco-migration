@@ -4,8 +4,14 @@ The generated service's typed HTTP clients read ``Clients:<Client>:BaseAddress``
 starts the service it points every client at this server (``Clients__<Client>__BaseAddress``).
 Before each scenario the verify job loads the scenario's ``stub_responses`` (the responses the
 parity evaluator used, keyed ``<resource id><path>``); the server answers them by path (exact,
-then glob), sleeps ``delay_ms`` so timeouts happen for real, and records every call. Those calls
-become the actual ``service_called`` side effects, compared with the evaluator's.
+then glob; the query string is not part of the match), sleeps ``delay_ms`` so timeouts happen for
+real, and records every call with its raw query string (``query``, as the evaluator records a
+mapped QueryString). Those calls become the actual ``service_called`` side effects, compared with
+the evaluator's.
+
+The longest delay it honors is the longest resource timeout of the scenario plus 1 s, bounded to
+``MAX_DELAY_S``; loading a stub with a longer delay raises, so the scenario is an ``error``
+instead of a timeout that silently never happens.
 """
 from __future__ import annotations
 
@@ -21,7 +27,8 @@ from urllib.parse import urlsplit
 
 from engine.parity.models import SideEffect, StubResponse
 
-MAX_DELAY_S = 30.0
+MAX_DELAY_S = 60.0
+TIMEOUT_MARGIN_S = 1.0
 _CLIENT_KEY = re.compile(r'Clients:(\w+):BaseAddress')
 
 
@@ -42,6 +49,7 @@ class StubServer:
         self.routes: list[tuple[str, str, StubResponse]] = []  # (path pattern, resource id, response)
         self.names: dict[str, str] = {}
         self.timeouts: dict[str, int] = {}
+        self.max_delay_s = MAX_DELAY_S
         self.calls: list[dict[str, Any]] = []
         outer = self
 
@@ -56,23 +64,25 @@ class StubServer:
                     body: Any = json.loads(raw) if raw else None
                 except ValueError:
                     body = raw.decode("utf-8", errors="replace")
-                path = urlsplit(self.path).path
+                parts = urlsplit(self.path)
+                path = parts.path
+                query = {"query": parts.query} if parts.query else {}
                 route = outer.match(path)
                 if route is None:
-                    outer.record({"method": self.command, "path": path, "body": body, "resource_id": None,
-                                  "status": 404})
+                    outer.record({"method": self.command, "path": path, "body": body, **query,
+                                  "resource_id": None, "status": 404})
                     self._send(404, {"title": f"no stub for {self.command} {path}"})
                     return
                 resource_id, response = route
                 timeout = outer.timeouts.get(resource_id)
-                call = {"method": self.command, "path": path, "body": body, "resource_id": resource_id}
+                call = {"method": self.command, "path": path, "body": body, **query, "resource_id": resource_id}
                 if timeout is not None and response.delay_ms > timeout:
                     call["outcome"] = "timeout"
                 else:
                     call["status"] = response.status
                 outer.record(call)
                 if response.delay_ms:
-                    time.sleep(min(response.delay_ms / 1000.0, MAX_DELAY_S))
+                    time.sleep(min(response.delay_ms / 1000.0, outer.max_delay_s))
                 try:
                     self._send(response.status, response.body)
                 except (BrokenPipeError, ConnectionResetError):  # the client gave up (a timeout)
@@ -97,12 +107,20 @@ class StubServer:
     # ------------------------------------------------------------ scenario state
     def load(self, stub_responses: dict[str, StubResponse], names: dict[str, str],
              timeouts: dict[str, int]) -> None:
+        """Replace the routes for the next scenario. ``ValueError`` when a stub's delay exceeds
+        what the server honors (the longest timeout plus 1 s, at most ``MAX_DELAY_S``)."""
+        longest = max(timeouts.values(), default=0) / 1000.0
+        max_delay_s = min(longest + TIMEOUT_MARGIN_S, MAX_DELAY_S)
         routes = []
         for key, response in stub_responses.items():
+            if response.delay_ms / 1000.0 > max_delay_s:
+                raise ValueError(f"stub {key}: a delay of {response.delay_ms} ms cannot be honored (the stub "
+                                 f"server waits at most {max_delay_s:g} s)")
             resource, sep, rest = key.partition("/")
             routes.append(("/" + rest if sep else "*", resource, response))
         with self._lock:
             self.routes, self.names, self.timeouts, self.calls = routes, names, timeouts, []
+            self.max_delay_s = max_delay_s
 
     def match(self, path: str) -> tuple[str, StubResponse] | None:
         with self._lock:
@@ -131,6 +149,8 @@ class StubServer:
             name = self.names.get(c["resource_id"] or "", c["resource_id"] or "(unstubbed)")
             target = f"{name} {c['method']} {c['path']}"
             payload: dict[str, Any] = {"request": c["body"]}
+            if "query" in c:
+                payload["query"] = c["query"]
             if "outcome" in c:
                 payload["outcome"] = c["outcome"]
             else:

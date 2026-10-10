@@ -23,6 +23,7 @@ import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from sqlalchemy import select
@@ -769,6 +770,12 @@ def test_bus_publish_outcome_and_window():
                     {"disposition": "weird"}):
         with pytest.raises(RuntimeError):
             verify_svc.publish_outcome(outcome)
+    # completed but nothing handled it (the consumer subscribes to another entity): the scenario did not run
+    with pytest.raises(RuntimeError, match="no consumer subscribed to gmf.dealer.funding.request"):
+        verify_svc.publish_outcome({"disposition": "completed", "messages_published": 0,
+                                    "reason": "no consumer subscribed to gmf.dealer.funding.request"})
+    with pytest.raises(RuntimeError, match="messages_published"):
+        verify_svc.publish_outcome({"disposition": "completed", "reason": None})
     before = [{"entity": "old", "body": "{}"}]
     after = before + [{"entity": "gmf.dealer.funding.request", "body": "{}"},
                       {"entity": "gmf.funding.events", "body": "{\"status\": \"FUNDED\"}"}]
@@ -802,6 +809,167 @@ async def test_outbound_stub_server_records_service_calls():
         ]
     finally:
         stubs.stop()
+
+
+def test_stub_timeouts_default_like_the_evaluator():
+    from api.app.services.stub_server import StubServer
+    from engine.ir.models import Application as IRApp
+    from engine.parity.models import StubResponse
+    from engine.parity.stubs import DEFAULT_TIMEOUT_MS
+
+    app = IRApp.model_validate({"id": "a", "name": "a", "dialect": "bw5", "resources": [
+        {"id": "Res.A", "kind": "http", "name": "A", "settings": {"timeout_ms": "5000"}},
+        {"id": "Res.B", "kind": "http", "name": "B", "settings": {}}]})
+    assert DEFAULT_TIMEOUT_MS == 30_000
+    assert verify_svc.resource_timeouts(app) == {"Res.A": 5000, "Res.B": DEFAULT_TIMEOUT_MS}
+
+    stubs = StubServer()
+    try:
+        # the longest resource timeout plus 1 s, bounded to 60 s
+        stubs.load({}, {}, {"Res.A": 5000, "Res.B": 30_000})
+        assert stubs.max_delay_s == 31.0
+        stubs.load({}, {}, {"Res.C": 90_000})
+        assert stubs.max_delay_s == 60.0
+        # a delay the server cannot honor makes the scenario an error instead of a silent cut
+        with pytest.raises(ValueError, match="cannot be honored"):
+            stubs.load({"Res.C/slow": StubResponse(status=200, delay_ms=90_001)}, {}, {"Res.C": 90_000})
+        stubs.load({"Res.B/slow": StubResponse(status=200, delay_ms=30_001)}, {"Res.B": "BClient"},
+                   {"Res.B": 30_000})  # the generated timeout scenario against the default
+        assert stubs.match("/slow") is not None
+    finally:
+        stubs.stop()
+
+
+async def test_stub_server_records_the_query_like_the_evaluator():
+    import httpx
+
+    from api.app.services.stub_server import StubServer
+    from engine.parity.models import StubResponse
+
+    stubs = StubServer()
+    try:
+        stubs.load({"Res.Dealer/dealers": StubResponse(status=200, body={"ok": True})}, {"Res.Dealer": "DealerClient"},
+                   {"Res.Dealer": 1000})
+        async with httpx.AsyncClient(base_url=stubs.url, timeout=5) as c:
+            r = await c.get("dealers?id=5")  # matched by path, the query ignored
+            assert r.status_code == 200 and r.json() == {"ok": True}
+            await c.get("dealers")
+        effects = stubs.side_effects()
+        # the evaluator stores the raw QueryString text under "query" when one is mapped
+        assert [(e.target, e.payload) for e in effects] == [
+            ("DealerClient GET /dealers", {"request": None, "query": "id=5", "status": 200}),
+            ("DealerClient GET /dealers", {"request": None, "status": 200}),
+        ]
+    finally:
+        stubs.stop()
+
+
+class _TrackedStubs:
+    instances: ClassVar[list[_TrackedStubs]] = []
+
+    def __init__(self) -> None:
+        self.url = "http://127.0.0.1:1/"
+        self.stopped = False
+        _TrackedStubs.instances.append(self)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _startable(monkeypatch, tmp_path):
+    """A build folder with a solution and the seeding and dotnet lookup stubbed out."""
+    (tmp_path / "GmfCredit.sln").write_text("", encoding="utf-8")
+    _TrackedStubs.instances = []
+    monkeypatch.setattr(verify_svc, "StubServer", _TrackedStubs)
+    monkeypatch.setattr(verify_svc, "find_dotnet", lambda: "dotnet")
+    monkeypatch.setattr(verify_svc, "open_db", lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(verify_svc, "reset_db", lambda *a, **k: None)
+    return Build(id="b1", process_id="p1", output_dir=str(tmp_path))
+
+
+@pytest.mark.parametrize("fail", ["reserve_port", "runner"])
+async def test_start_service_cleans_up_when_it_cannot_start(monkeypatch, tmp_path, settings, fail):
+    build = _startable(monkeypatch, tmp_path)
+    reserved = set(verify_svc._RESERVED_PORTS)
+    if fail == "reserve_port":
+        def no_port():
+            raise RuntimeError("no free port")
+        monkeypatch.setattr(verify_svc, "reserve_port", no_port)
+    else:
+        def broken(*args, **kwargs):
+            raise RuntimeError("runner cannot be created")
+        monkeypatch.setattr(verify_svc, "DotnetRunner", broken)
+    with pytest.raises(RuntimeError):
+        await verify_svc.start_service(settings, build, "proj", None, asyncio.Lock())
+    assert [s.stopped for s in _TrackedStubs.instances] == [True]
+    assert verify_svc._RESERVED_PORTS == reserved  # no port stays reserved
+
+
+async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch, tmp_path, settings):
+    build = _startable(monkeypatch, tmp_path)
+    reserved = set(verify_svc._RESERVED_PORTS)
+    handles = []
+
+    class Handle:
+        url, pid, log_path = "http://127.0.0.1:2", 1, str(tmp_path / "log")
+
+        def __init__(self) -> None:
+            self.stopped = False
+            handles.append(self)
+
+        def poll(self):
+            return 0 if self.stopped else None
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class SlowRunner:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def run_service(self, *args, **kwargs):
+            import time
+            time.sleep(0.6)  # dotnet run still starting when the request is canceled
+            return Handle()
+
+    monkeypatch.setattr(verify_svc, "DotnetRunner", SlowRunner)
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(handles) == 1 and handles[0].stopped  # waited for the launch and stopped its service
+    assert [s.stopped for s in _TrackedStubs.instances] == [True]
+    assert verify_svc._RESERVED_PORTS == reserved
+
+
+async def test_stop_waits_for_a_start_in_progress(client, app, monkeypatch, tmp_path):
+    _, procs = await _scanned(client)
+    async with app.state.sessionmaker() as s:
+        b = Build(process_id=procs[FSL]["id"], status="passed", output_dir=str(tmp_path))
+        s.add(b)
+        await s.commit()
+        build_id = b.id
+    handle = None
+
+    async def slow_start(settings, build, project_id, app_ir, lock, timeout_s=240.0):
+        nonlocal handle
+        await asyncio.sleep(0.5)
+        handle = StandIn({}, tmp_path / "service.log")
+        return verify_svc.RunInfo(build_id=build.id, handle=handle, port=int(handle.url.rsplit(":", 1)[1]))
+
+    monkeypatch.setattr(verify_svc, "start_service", slow_start)
+
+    async def stop_soon():
+        await asyncio.sleep(0.1)
+        return await client.delete(f"/builds/{build_id}/run")
+
+    started, stopped = await asyncio.gather(client.post(f"/builds/{build_id}/run"), stop_soon())
+    assert started.status_code == 200, started.text
+    # the stop waited for the start and stopped the service it registered
+    assert stopped.json()["stopped"] is True
+    assert build_id not in app.state.services and handle.poll() is not None
+    assert (await client.get(f"/builds/{build_id}/run")).json()["running"] is False
 
 
 def test_unreadable_secret_is_reported():

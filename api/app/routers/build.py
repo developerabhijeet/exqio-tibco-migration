@@ -212,10 +212,14 @@ async def run_logs(build_id: str, request: Request, session: SessionDep) -> dict
 
 @router.delete("/builds/{build_id}/run")
 async def stop_service(build_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+    """Stop the build's service. Under the same per-build lock as the start, so a stop during a
+    start waits for it and stops the service it registered."""
     build = await _build(session, build_id)
-    info = request.app.state.services.pop(build_id, None)
-    if info is not None:
-        await asyncio.to_thread(info.stop)
+    lock = request.app.state.start_locks.setdefault(build_id, asyncio.Lock())
+    async with lock:
+        info = request.app.state.services.pop(build_id, None)
+        if info is not None:
+            await asyncio.to_thread(info.stop)
     build.run_port = build.run_pid = None
     await session.commit()
     return {"stopped": info is not None, "running": False}
