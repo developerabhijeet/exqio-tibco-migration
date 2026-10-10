@@ -7,7 +7,7 @@ citation are marked ``unverified`` in place. A rule an analyst already
 """
 from __future__ import annotations
 
-from engine.analysis.evidence import EvidenceIndex
+from engine.analysis.evidence import MIN_CITATION_LEN, EvidenceIndex, normalize
 from engine.analysis.models import Citation, CitationFailure, Rule, VerificationResult
 from engine.ir.models import Process
 
@@ -27,8 +27,8 @@ def verify_citations(process: Process, rules: list[Rule]) -> VerificationResult:
             ))
         for cit in rule.citations:
             total += 1
-            if not cit.text.strip():
-                reason = "empty citation text"
+            if len(normalize(cit.text)) < MIN_CITATION_LEN:
+                reason = f"citation text too short (minimum {MIN_CITATION_LEN} characters)"
             elif not index.known(cit.activity_id):
                 reason = f"unknown activity: {cit.activity_id!r}"
             elif not index.has(cit.activity_id, cit.kind, cit.text):

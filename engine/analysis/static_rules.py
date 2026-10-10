@@ -101,26 +101,43 @@ def _is_masked(text: str) -> bool:
 
 
 class _Flow:
-    """Reachability and enclosing-group lookups over one process."""
+    """Reachability and enclosing-group lookups over one process.
+
+    A transition endpoint that is a group id is resolved through the group's
+    ``config["entry_ids"]`` (arriving) and ``config["exit_ids"]`` (leaving), so
+    order inside a loop, scope, parallel or critical group is the order of its own
+    transitions. A group missing those keys falls back to all its members.
+    """
 
     def __init__(self, process: Process):
         self.process = process
+        self.groups = {g.id: g for g in process.groups}
         self.edges: dict[str, set[str]] = defaultdict(set)
         for tr in process.transitions:
-            self.edges[tr.from_id].add(tr.to_id)
-        self.members: dict[str, set[str]] = {g.id: set(g.member_ids) for g in process.groups}
-        for act in process.activities:
-            if act.group_id and act.group_id in self.members:
-                self.members[act.group_id].add(act.id)
-        for gid, members in self.members.items():
-            self.edges[gid] |= members  # entering a group reaches its members
-            for m in members:
-                self.edges[m].add(gid)  # leaving a member leaves the group
+            for src in self._resolve(tr.from_id, "exit_ids"):
+                self.edges[src].update(self._resolve(tr.to_id, "entry_ids"))
         self.kind_of = {g.id: g.kind for g in process.groups}
         self.parent: dict[str, str] = {}
-        for gid, members in self.members.items():
-            for m in members:
+        for act in process.activities:
+            if act.group_id and act.group_id in self.groups:
+                self.parent.setdefault(act.id, act.group_id)
+        for gid, grp in self.groups.items():
+            for m in grp.member_ids:
                 self.parent.setdefault(m, gid)
+
+    def _resolve(self, node: str, key: str, _seen: frozenset[str] = frozenset()) -> list[str]:
+        grp = self.groups.get(node)
+        if grp is None:
+            return [node]
+        if node in _seen:
+            return []
+        ids = grp.config.get(key)
+        if not isinstance(ids, list):
+            ids = grp.member_ids
+        out: list[str] = []
+        for i in ids:
+            out.extend(self._resolve(i, key, _seen | {node}))
+        return out
 
     def reaches(self, src: str, dst: str) -> bool:
         seen, stack = set(), [src]

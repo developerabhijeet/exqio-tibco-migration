@@ -1,6 +1,7 @@
 """Tests for the plain-code checks behind the AI output (Task 8): static risk rules,
 the evidence index, the citation verifier and the coverage matrix."""
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from engine.analysis.evidence import EvidenceIndex
 from engine.analysis.models import Citation, CoverageResult, Finding, Rule, VerificationResult
 from engine.analysis.static_rules import run_static_rules
 from engine.analysis.verifier import verify_citations
-from engine.ir.models import FaultHandler
+from engine.ir.models import FaultHandler, Transition
 from engine.tibco_parser.scanner import scan_folder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -150,19 +151,49 @@ def test_static_s6_catch_without_activities(procs, apps):
 
 
 def test_static_rules_match_estate_oracle(scan):
-    """Every seeded finding that names a static rule is found; nothing else fires."""
-    expected = {}
+    """Every seeded finding that names a static rule is found, with exact counts, and nothing else fires."""
+    expected: dict[str, Counter] = {}
     for p in ESTATE["processes"]:
         for f in p["findings"]:
             if f["static_rule"]:
-                expected.setdefault(p["id"].split(".")[-1], set()).add(f["static_rule"])
-    got = {}
+                expected.setdefault(p["id"].split(".")[-1], Counter())[f["static_rule"]] += 1
+    got: dict[str, Counter] = {}
     for app in scan.applications:
         for proc in app.processes:
-            rules = {f.id.split("-")[0] for f in run_static_rules(proc, app.contracts, app.substvars)}
-            if rules:
-                got[proc.name] = rules
+            findings = run_static_rules(proc, app.contracts, app.substvars)
+            if findings:
+                got[proc.name] = Counter(f.id.split("-")[0] for f in findings)
+            result = verify_citations(proc, _as_rules(findings))
+            assert result.failures == [], (proc.name, result.failures)
+            assert result.verified == result.total
     assert got == expected
+
+
+def _scope_payment(procs, drop_member_transitions=False):
+    proc = procs["PaymentPosting"].model_copy(deep=True)
+    grp = proc.groups[0]
+    grp.kind = "scope"
+    if drop_member_transitions:
+        members = set(grp.member_ids)
+        proc.transitions = [t for t in proc.transitions if not (t.from_id in members and t.to_id in members)]
+    return proc
+
+
+def test_static_s1_positive_control_non_transaction_group(procs, apps):
+    proc = _scope_payment(procs)
+    s1 = _by_rule(run_static_rules(proc, apps["PaymentPosting"].contracts, []), "S1")
+    assert len(s1) == 1
+    assert _acts(s1[0]) == {"LoadAccount", "UpdateLoanAccount"}
+
+
+def test_static_s1_order_inside_group_matters(procs, apps):
+    contracts = apps["PaymentPosting"].contracts
+    # no transitions between the members: nothing reaches anything
+    proc = _scope_payment(procs, drop_member_transitions=True)
+    assert _by_rule(run_static_rules(proc, contracts, []), "S1") == []
+    # write strictly before the read inside the group: not a read-then-write
+    proc.transitions.append(Transition(id="w2r", from_id="UpdateLoanAccount", to_id="LoadAccount", kind="success"))
+    assert _by_rule(run_static_rules(proc, contracts, []), "S1") == []
 
 
 # ------------------------------------------------------------ evidence + verifier
@@ -232,6 +263,33 @@ def test_verifier_kind_and_activity_restrictions(procs):
     assert "no citations" in reasons["K4"]
 
 
+def test_verifier_whitespace_rules(procs):
+    proc = procs["DealerFundingRequest"]
+
+    def check(text, activity="LookupDealer", kind="sql"):
+        rule = Rule(id="W", text="t", confidence=1, citations=[Citation(activity_id=activity, kind=kind, text=text)])
+        return verify_citations(proc, [rule]).failures == []
+
+    assert check("dealer_id like ?")
+    assert check("dealer_id   like\n?")
+    assert check("dealer_id like?")  # whitespace before a non-word character is dropped
+    assert not check("dealer_idlike ?")  # whitespace between two word characters is significant
+    # multi-line insert citation as the static rules emit it
+    ins = next(a for a in proc.activities if a.id == "InsertFunding").config["sql"]
+    assert check(ins, "InsertFunding")
+    assert check("count($CheckExistingFunding/Record) = 0", "CheckExistingFunding", "condition")
+    assert check("count($CheckExistingFunding/Record)=0", "CheckExistingFunding", "condition")
+
+
+def test_verifier_minimum_citation_length(procs):
+    rule = Rule(id="M", text="t", confidence=1, citations=[
+        Citation(activity_id="LookupDealer", kind="sql", text="de"),
+        Citation(activity_id="LookupDealer", kind="sql", text="  d  ")])
+    result = verify_citations(procs["DealerFundingRequest"], [rule])
+    assert rule.status == "unverified"
+    assert len(result.failures) == 2 and all("too short" in f.reason for f in result.failures)
+
+
 # ------------------------------------------------------------------- coverage
 def test_coverage_counts(procs):
     proc = procs["DealerFundingRequest"]
@@ -291,6 +349,24 @@ def test_coverage_unverified_rules_do_not_count(procs):
         Citation(activity_id="LookupDeal", kind="sql", text="from gmf.deal")])
     result = coverage_matrix(proc, [rule], {})
     assert result.covered == 0
+
+
+def test_coverage_config_only_citation_covers_activity(procs):
+    rule = Rule(id="R-CFG", text="Listens on the funding queue", confidence=1, citations=[
+        Citation(activity_id="ReceiveFundingRequest", kind="config", text="gmf.dealer.funding.request")])
+    items = {(i.kind, i.ref): i for i in coverage_matrix(procs["DealerFundingRequest"], [rule], {}).items}
+    assert items[("activity", "ReceiveFundingRequest")].covered_by == ["R-CFG"]
+    assert items[("activity", "LookupDealer")].covered_by == []
+
+
+def test_coverage_otherwise_edge_covered_via_source_condition(procs):
+    proc = procs["DealerFundingRequest"]
+    rule = Rule(id="R-OTH", text="Dealer must be active", confidence=1, citations=[
+        Citation(activity_id="LookupDealer", kind="condition", text="$LookupDealer/Record[1]/status = 'ACTIVE'")])
+    items = {(i.kind, i.ref): i for i in coverage_matrix(proc, [rule], {}).items}
+    assert items[("transition", "LookupDealerToLookupDeal")].covered_by == ["R-OTH"]
+    assert items[("transition", "LookupDealerToThrowDealerInactive")].covered_by == ["R-OTH"]
+    assert items[("transition", "LookupDealToPublishFundingRejected")].covered_by == []
 
 
 def test_finding_model_roundtrip():

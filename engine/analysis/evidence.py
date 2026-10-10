@@ -12,8 +12,10 @@ may quote, split by citation kind:
 Groups and fault handlers are addressable too (a transition can leave a group;
 a ``catch`` is cited by its fault name), so findings about them can be verified.
 
-Matching is a substring test after removing all whitespace: a model that
-re-flows ``numofpulls + 1`` as ``numofpulls+1`` still matches, a paraphrase does not.
+Matching is a substring test after whitespace normalisation: whitespace touching a
+non-word character is dropped and whitespace between two word characters collapses
+to one space, so ``numofpulls + 1`` equals ``numofpulls+1`` but ``dealer_idlike``
+does not equal ``dealer_id like``. A paraphrase never matches.
 """
 from __future__ import annotations
 
@@ -26,9 +28,14 @@ _WS = re.compile(r"\s+")
 _SQL_KEYS = {"sql", "sqlstatement", "statement"}
 
 
+MIN_CITATION_LEN = 3  # shorter (normalised) citations prove nothing and match almost anywhere
+
+_EDGE_WS = re.compile(r"(?<=\W) | (?=\W)")
+
+
 def normalize(text: str) -> str:
     """Whitespace-insensitive form used for every citation comparison."""
-    return _WS.sub("", text)
+    return _EDGE_WS.sub("", _WS.sub(" ", text.strip()))
 
 
 def iter_config_strings(value: Any, key: str = ""):
@@ -88,6 +95,6 @@ class EvidenceIndex:
 
     def has(self, activity_id: str, kind: str, text: str) -> bool:
         needle = normalize(text)
-        if not needle:
+        if len(needle) < MIN_CITATION_LEN:
             return False
         return any(needle in cand for cand in self._norm.get(activity_id, {}).get(kind, []))

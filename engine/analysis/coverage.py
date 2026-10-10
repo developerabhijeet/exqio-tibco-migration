@@ -12,7 +12,7 @@ either. Rules that are ``rejected`` or ``unverified`` never count as cover.
 """
 from __future__ import annotations
 
-from engine.analysis.evidence import normalize
+from engine.analysis.evidence import MIN_CITATION_LEN, normalize
 from engine.analysis.models import CoverageItem, CoverageResult, Rule
 from engine.ir.models import Process
 
@@ -51,7 +51,7 @@ def coverage_matrix(process: Process, rules: list[Rule], technical: dict[str, st
             continue
         expr = normalize(tr.expression) if tr.expression else ""
         if expr:
-            by = rules_where(lambda aid, k, t, f=tr.from_id, e=expr: aid == f and k == "condition" and t and t in e)
+            by = rules_where(lambda aid, k, t, f=tr.from_id, e=expr: aid == f and k == "condition" and len(t) >= MIN_CITATION_LEN and t in e)
         else:
             # an otherwise (or bare error) edge is the complement of its source's conditions:
             # a rule that cites any condition on the source activity explains it
@@ -61,7 +61,7 @@ def coverage_matrix(process: Process, rules: list[Rule], technical: dict[str, st
     for act in process.activities:
         for b in act.input_bindings:
             expr = normalize(b.expression)
-            by = rules_where(lambda aid, k, t, a=act.id, e=expr: aid == a and k == "expression" and t and t in e)
+            by = rules_where(lambda aid, k, t, a=act.id, e=expr: aid == a and k == "expression" and len(t) >= MIN_CITATION_LEN and t in e)
             add("mapping", f"{act.id}:{b.target}", by)
 
     covered = sum(1 for i in items if i.covered_by or i.technical_reason)
