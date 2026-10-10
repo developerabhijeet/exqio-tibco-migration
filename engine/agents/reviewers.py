@@ -23,9 +23,7 @@ Reviewer = Literal["equivalence", "security", "standards"]
 Triage = Literal["patch", "defer", "decision"]
 REVIEWERS: tuple[Reviewer, ...] = ("equivalence", "security", "standards")
 TRIAGES: tuple[Triage, ...] = ("patch", "defer", "decision")
-# Reviews have no task kind of their own in the routing table; they are independent second
-# opinions on generated work, routed like the challenger.
-REVIEW_TASK_KIND = "challenge"
+REVIEW_TASK_KIND = "review"
 
 REVIEW_SCHEMA: dict = {
     "type": "object",

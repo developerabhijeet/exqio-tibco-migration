@@ -22,7 +22,7 @@ from .provider import (
     mask_sensitive,
 )
 
-TaskKind = Literal["analyse", "challenge", "design", "build", "test", "repair", "name"]
+TaskKind = Literal["analyse", "challenge", "design", "build", "test", "repair", "review", "name"]
 
 TASK_WEIGHTS: dict[str, float] = {
     "analyse": 1.0,
@@ -31,6 +31,7 @@ TASK_WEIGHTS: dict[str, float] = {
     "build": 1.3,
     "test": 0.9,
     "repair": 1.3,  # a repair is a build step on a failing test
+    "review": 1.0,  # equivalence, security and standards review of generated code
     "name": 0.3,  # naming a domain is a short summarisation
 }
 HARD_CONSTRUCT_BONUS = 2.0  # build only: Java code or XPath/XSLT 2.0 functions in the process

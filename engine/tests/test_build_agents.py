@@ -21,7 +21,9 @@ from engine.agents.designer import design_narrative
 from engine.agents.provider import FakeProvider, MemoryItem
 from engine.agents.reviewers import ReviewFinding, review_panel
 from engine.agents.routing import ModelCallRecord, RoutedProvider, RoutingTable
+from engine.agents.test_engineer import check_test_body, fill_test_bodies
 from engine.analysis.models import Citation, Finding, Rule
+from engine.dotnet_gen import tests_gen
 from engine.dotnet_gen.generator import GeneratedSolution, GenFile
 from engine.dotnet_gen.models import (
     ContractMap,
@@ -35,6 +37,7 @@ from engine.dotnet_gen.repair import RepairAttempt, apply_unified_diff, check_di
 from engine.dotnet_gen.runner import BuildResult, TestRun
 from engine.dotnet_gen.trx import TestCase
 from engine.ir.models import Activity, Complexity, InputBinding, Process, Transition
+from engine.parity.models import Scenario
 
 APP = "Gmf"
 MAPPINGS = f"src/{APP}.Core/Mappings/LoanRatesMappings.cs"
@@ -490,7 +493,7 @@ async def test_review_panel_triage_shapes(tmp_path):
         "not an object",
     ]})
     fake = FakeProvider([equivalence, security, standards])
-    rp, _ = routed(fake)
+    rp, review_records = routed(fake)
     out = await review_panel(sol, make_design(), make_rules(), make_findings(), rp,
                              process=make_process())
 
@@ -503,6 +506,7 @@ async def test_review_panel_triage_shapes(tmp_path):
     assert out[2].line == 0 and out[2].triage == "patch"  # a line outside the file is unknown
 
     assert len(fake.requests) == 3
+    assert [r.task_kind for r in review_records] == ["review"] * 3
     for i in range(3):
         user = user_text(fake, i)
         assert "pulls + 1" in user  # the diff (agent-written code)
@@ -703,3 +707,195 @@ async def test_repair_leaves_the_last_compiling_state_when_every_diff_breaks(tmp
     assert (tmp_path / MAPPINGS).read_text(encoding="utf-8") == before
     assert next(f for f in sol.files if f.path == MAPPINGS).content == before
     assert result.final.ok is False and result.final.cases  # the last real test run
+
+
+
+# ---------------------------------------------------------------- test engineer
+
+RULES_TESTS = f"tests/{APP}.Tests/LoanRatesRulesTests.cs"
+BRANCH_TESTS = f"tests/{APP}.Tests/LoanRatesBranchTests.cs"
+OTHER_TESTS = f"tests/{APP}.Tests/OtherRulesTests.cs"
+R1 = "LoanRates_R1_each_request_adds_one_to_the_pull_counter"
+R2 = "LoanRates_R2_the_apr_is_read_from_the_rates_table_by_tier"
+BRANCH = "Branch_LookupApr_to_Count_when_query_apr_10"
+
+SERVICE_TE_CS = """using System.Text.Json.Nodes;
+
+namespace Gmf.Core.Services;
+
+public sealed class LoanRatesService(ILoanRatesRepository repository)
+{
+    public async Task<ProcessResult> ExecuteAsync(JsonObject? start, CancellationToken cancellationToken)
+    {
+        return await Task.FromResult(new ProcessResult());
+    }
+}
+"""
+
+TEST_DB_CS = """namespace Gmf.Tests;
+
+public sealed class TestDatabase : IAsyncLifetime
+{
+    public string ConnectionString { get; private set; } = string.Empty;
+    public async Task InitializeAsync()
+    {
+    }
+}
+"""
+
+R1_BODY = """var service = new LoanRatesService(new InMemoryLoanRatesRepository());
+var result = await service.ExecuteAsync(new JsonObject { ["pulls"] = 2 }, CancellationToken.None);
+var pulls = result.Output!["numofpulls"]!.GetValue<int>();
+Assert.Equal(3, pulls);"""
+
+R2_BODY = """var service = new LoanRatesService(new InMemoryLoanRatesRepository(apr: 7.5m));
+var result = await service.ExecuteAsync(new JsonObject { ["tier"] = "A" }, CancellationToken.None);
+Assert.Equal(7.5m, result.Output!["apr"]!.GetValue<decimal>());"""
+
+BRANCH_BODY = """var service = new LoanRatesService(new InMemoryLoanRatesRepository(apr: 11m));
+var result = await service.ExecuteAsync(new JsonObject { ["tier"] = "B" }, CancellationToken.None);
+Assert.True(result.Output!.ContainsKey("numofpulls"));"""
+
+
+def te_solution(root: Path) -> GeneratedSolution:
+    generated = {f.path: f for f in tests_gen.generate_tests(make_process(), make_rules(), [],
+                                                             make_design())}
+    other = generated[RULES_TESTS].content.replace("LoanRates", "Other")
+    files = [
+        GenFile(path=MAPPINGS, content=MAPPINGS_CS, origin="agent", process_id="LoanRates"),
+        GenFile(path=SERVICE, content=SERVICE_TE_CS, origin="agent", process_id="LoanRates"),
+        GenFile(path=f"tests/{APP}.Tests/TestDatabase.cs", content=TEST_DB_CS),
+        generated[RULES_TESTS],
+        generated[BRANCH_TESTS],
+        generated[f"tests/{APP}.Tests/LoanRatesScenarioTests.cs"],
+        GenFile(path=OTHER_TESTS, content=other, origin="agent", process_id="Other"),
+    ]
+    return GeneratedSolution(root=root, name=APP, files=files, build_hash="h")
+
+
+def _tests_reply(**bodies: str) -> str:
+    return json.dumps({"tests": [{"method": k, "body": v} for k, v in bodies.items()]})
+
+
+def _method_text(content: str, name: str) -> str:
+    start = content.index(f"Task {name}()")
+    return content[start:content.index("\n    }", start)]
+
+
+SCENARIO = Scenario(id="LoanRates:happy", process_id="LoanRates", name="tier A", kind="happy",
+                    input={"tier": "A", "pulls": 2})
+
+
+async def test_test_engineer_fills_bodies_and_validates(tmp_path):
+    sol = te_solution(tmp_path)
+    fake = FakeProvider([
+        _tests_reply(**{R1: R1_BODY, R2: "var x = 7.5m;\nAssert.Equal(7.5m, x);"}),
+        _tests_reply(**{R2: R2_BODY}),
+        _tests_reply(**{BRANCH: BRANCH_BODY}),
+    ])
+    rp, records = routed(fake)
+    rejected: list[BuildRejection] = []
+    out = await fill_test_bodies(sol, make_process(), make_rules(), [SCENARIO], make_design(),
+                                 MEMORY, rp, rejections=rejected)
+
+    assert [f.path for f in out] == [RULES_TESTS, BRANCH_TESTS]
+    rules_file, branch_file = out
+    assert 'Assert.Fail("no test body' not in rules_file.content
+    assert 'Assert.Fail("no test body' not in branch_file.content
+    assert "Assert.Fail" not in rules_file.content
+    assert f"public async Task {R1}()" in rules_file.content  # the body awaits
+    assert "return Task.CompletedTask;" not in _method_text(rules_file.content, R1)
+    assert "Assert.Equal(3, pulls);" in _method_text(rules_file.content, R1)
+    assert "using Gmf.Core.Services;" in rules_file.content  # the generated type is in scope
+    for f, orig in ((rules_file, RULES_TESTS), (branch_file, BRANCH_TESTS)):
+        before = next(g for g in sol.files if g.path == orig).content
+        assert f.content.count("[Fact(") == before.count("[Fact(")
+        assert [ln for ln in f.content.split("\n") if "[Trait(" in ln or "[Fact(" in ln] == \
+            [ln for ln in before.split("\n") if "[Trait(" in ln or "[Fact(" in ln]
+        assert f.process_id == "LoanRates"
+    assert [(r.path.split("::")[1], r.attempt) for r in rejected] == [(R2, 1)]
+    assert "does not call the generated LoanRatesService" in rejected[0].reason
+
+    assert len(fake.requests) == 3
+    assert all(r.task_kind == "test" for r in records)
+    first, retry, branch = (user_text(fake, i) for i in range(3))
+    assert "Each request adds one to the pull counter." in first  # rule text
+    assert "$start/pulls + 1" in first  # the TIBCO citation
+    assert "ExecuteAsync(JsonObject? start, CancellationToken cancellationToken)" in first
+    assert "public sealed class TestDatabase" in first  # the helper
+    assert '"tier": "A"' in first and "LoanRates:happy" in first  # scenario inputs
+    assert "pat-7" in first
+    assert "$query/apr > 10" in branch  # the branch expression
+    assert "does not call the generated" in retry
+    assert "does not call the generated" not in _outside_blocks(retry)
+    assert R2 in retry
+    assert sol.files[3].content.count('Assert.Fail("no test body') == 2  # input unchanged
+
+
+async def test_test_engineer_rejects_trivial_assert(tmp_path):
+    sol = te_solution(tmp_path)
+    trivial = "var service = new LoanRatesService(null!);\nawait service.ExecuteAsync(null, default);\nAssert.True(true);"
+    fake = FakeProvider([
+        _tests_reply(**{R1: trivial, R2: R2_BODY}),
+        _tests_reply(**{R1: trivial}),
+        *["not json"] * 4,  # ask_json retries once per call, and the agent calls twice
+    ])
+    rp, _ = routed(fake)
+    rejected: list[BuildRejection] = []
+    out = await fill_test_bodies(sol, make_process(), make_rules(), [], make_design(), [], rp,
+                                 rejections=rejected)
+    rules_file = next(f for f in out if f.path == RULES_TESTS)
+    r1 = _method_text(rules_file.content, R1)
+    assert 'Assert.Fail("no test body for LoanRates:R1: the body asserts a constant' in r1
+    assert "Assert.True(true)" not in rules_file.content
+    assert f"public Task {R1}()" in rules_file.content  # back to a plain placeholder
+    assert "return Task.CompletedTask;" in r1
+    assert "Assert.Equal(7.5m" in _method_text(rules_file.content, R2)
+    assert [(r.path.split("::")[1], r.attempt) for r in rejected if RULES_TESTS in r.path] == \
+        [(R1, 1), (R1, 2)]
+    # the branch file got no valid reply twice: its placeholder keeps an honest reason
+    branch_file = next(f for f in out if f.path == BRANCH_TESTS)
+    assert "no test body for branch t2: the reply was not valid JSON" in branch_file.content
+
+
+@pytest.mark.parametrize(("body", "reason"), [
+    ("var s = new LoanRatesService();\nvar r = await s.ExecuteAsync(null, default);\nAssert.Fail(\"x\");",
+     "Assert.Fail"),
+    ("var s = new LoanRatesService();\nvar r = await s.ExecuteAsync(null, default);\nAssert . True( true );",
+     "constant"),
+    ("[Fact]\nvar s = new LoanRatesService();\nvar r = s.Run();\nAssert.NotNull(r);", "Fact"),
+    ("var s = new LoanRatesService();\nvar r = s.Run();\nAssert.NotNull(r);\n}\npublic void X() {",
+     "unbalanced"),
+    ("var other = new OtherService();\nvar r = other.Run();\nAssert.NotNull(r);", "does not call"),
+    ("var s = new LoanRatesService();\nvar r = s.Run();\nvar k = 1;\nAssert.Equal(1, k);",
+     "no Assert"),
+    ("#pragma warning disable CS1998\nvar s = new LoanRatesService();\nvar r = s.Run();\nAssert.NotNull(r);",
+     "pragma"),
+])
+def test_test_body_checks(body, reason):
+    assert reason in (check_test_body(body, "LoanRates") or "")
+    for ok in (R1_BODY, R2_BODY,
+               "var c = new LoanRatesController(null!);\nawait Assert.ThrowsAsync<ArgumentException>(() => c.PostAsync(null!));",
+               "var r = await LoanRatesConsumer.HandleStaticAsync(\"m\");\nvar text = r.ToString();\nAssert.Contains(\"x\", text);"):
+        assert check_test_body(ok, "LoanRates") is None, ok
+
+
+async def test_test_engineer_never_touches_non_test_files(tmp_path):
+    sol = te_solution(tmp_path)
+    before = {f.path: f.content for f in sol.files}
+    fake = FakeProvider([
+        _tests_reply(**{R1: R1_BODY, R2: R2_BODY, "CountMapping": "return null;",
+                        "LoanRates_R9_not_a_test": R1_BODY}),
+        _tests_reply(**{BRANCH: BRANCH_BODY}),
+    ])
+    rp, _ = routed(fake)
+    out = await fill_test_bodies(sol, make_process(), make_rules(), [], make_design(), [], rp)
+    assert [f.path for f in out] == [RULES_TESTS, BRANCH_TESTS]
+    assert all(is_test_path(f.path) for f in out)
+    assert len(fake.requests) == 2  # the other process's tests and the scenario tests are not sent
+    assert {f.path: f.content for f in sol.files} == before
+    for i in range(2):
+        user = user_text(fake, i)
+        assert "OtherRulesTests" not in user
+        assert 'agent fills: Count' not in user  # production placeholders are not test targets
+    assert "return null;" not in out[0].content and "R9" not in out[0].content

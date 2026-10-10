@@ -127,6 +127,25 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def code_only(text: str) -> str:
+    """``text`` with comments removed and the contents of string and char literals blanked (the
+    quotes stay), so braces, semicolons and words inside literals do not count as code."""
+    stripped = strip_comments(text)
+    out: list[str] = []
+    i, n = 0, len(stripped)
+    while i < n:
+        c = stripped[i]
+        if c in "\"'" or (c in "$@" and re.match(r'[$@]{1,3}"', stripped[i:i + 4])):
+            j = _string_end(stripped, i)
+            out.append(c + "".join("\n" if ch == "\n" else " " for ch in stripped[i + 1:j - 1])
+                       + (stripped[j - 1] if j - 1 > i else ""))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _strip_block_comments(text: str) -> str:
     """Block comments blanked out; line comments kept (a ``// TIBCO`` line inside ``/* */`` does
     not count as kept)."""
