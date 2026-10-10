@@ -183,7 +183,8 @@ async def scan(project_id: str, request: Request, session: SessionDep, runner: R
         if active is not None:
             raise HTTPException(status_code=409, detail=f"a scan of this project is already in progress: {active}")
         job_id = await runner.submit("scan", {"project_id": project_id, "upload_id": upload_row.id},
-                                     scan_job(project_id, upload_row.id), project_id=project_id)
+                                     scan_job(project_id, upload_row.id, request.app.state.knowledge),
+                                     project_id=project_id)
     return JobCreated(job_id=job_id)
 
 

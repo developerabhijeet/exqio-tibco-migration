@@ -13,9 +13,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.app.config import Settings
-from api.app.db import make_engine, make_sessionmaker
+from api.app.db import make_engine, make_sessionmaker, psycopg_url
 from api.app.jobs.runner import JobRunner
-from api.app.routers import jobs, processes, projects
+from api.app.routers import analysis, ask, domains, gates, jobs, processes, projects
+from api.app.services.knowledge import Knowledge
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sessionmaker = sessionmaker
         app.state.runner = runner
         app.state.scan_lock = asyncio.Lock()
+        app.state.analyse_lock = asyncio.Lock()
+        app.state.knowledge = Knowledge(psycopg_url(settings.database_url))
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
         try:
             await runner.start()
@@ -52,6 +55,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(processes.router)
     app.include_router(jobs.router)
+    app.include_router(domains.router)
+    app.include_router(analysis.router)
+    app.include_router(gates.router)
+    app.include_router(ask.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, str]:

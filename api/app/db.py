@@ -64,6 +64,15 @@ def asyncpg_url(url: str) -> str:
     return url
 
 
+def psycopg_url(url: str) -> str:
+    """The same database as a plain ``postgresql://`` URL (psycopg, the knowledge store)."""
+    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql+psycopg2://",
+                   "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql://" + url[len(prefix):]
+    return url
+
+
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(asyncpg_url(url), pool_pre_ping=True)
 

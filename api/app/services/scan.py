@@ -11,6 +11,12 @@ the new hash and an audit line ``rescanned: spec hash changed <old> -> <new>``; 
 through that hash (Task 18 resets them). Processes, applications and domains that disappeared
 are deleted, each removed process with an audit line. The graph is replaced. The upload's
 ``files`` rows take the scanner's kind, dialect and ``duplicate_of``.
+
+The spec hash of a process that already has decisions covers its approved rules and finding
+decisions too (``services.gates.current_spec_hash``), so an unchanged IR keeps its hash. A
+domain the SME merged into another keeps sending its processes to that domain. After the
+transaction the estate graph is also loaded into the knowledge store (schema ``knowledge``)
+for dependency questions; a failure there is logged, not fatal.
 """
 from __future__ import annotations
 
@@ -33,8 +39,11 @@ from api.app.models import (
     ScanReport,
     Upload,
 )
+from api.app.services.gates import hash_decisions, hash_rules, load_findings, load_rules
+from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from engine.domains.discover import discover_domains
 from engine.domains.graph import build_graph
+from engine.domains.models import Graph
 from engine.ir.spec_hash import spec_hash
 from engine.tibco_parser.scanner import ScanResult, scan_folder
 
@@ -80,7 +89,8 @@ def _audit(project_id: str, process_id: str | None, action: str, detail: dict[st
                     action=action, detail=detail)
 
 
-async def run_scan(ctx: JobContext, project_id: str, upload_id: str) -> dict[str, Any]:
+async def run_scan(ctx: JobContext, project_id: str, upload_id: str,
+                   knowledge: Knowledge | None = None) -> dict[str, Any]:
     async with ctx.sessionmaker() as s:
         upload = await s.get(Upload, upload_id)
         if upload is None or upload.project_id != project_id:
@@ -111,6 +121,13 @@ async def run_scan(ctx: JobContext, project_id: str, upload_id: str) -> dict[str
     await ctx.log(f"stored {len(result.applications)} applications, {counts['processes']} processes "
                   f"({counts['added']} new, {counts['changed']} with a new spec hash, "
                   f"{counts['removed']} removed), {len(domains)} domains")
+    if knowledge is not None:
+        try:
+            await knowledge.load_graph(project_id, Graph.model_validate(relativise(
+                graph.model_dump(mode="json"), root)))
+            await ctx.log("estate graph loaded into the knowledge store")
+        except KnowledgeUnavailable as exc:
+            await ctx.log(f"knowledge store not updated: {exc}")
     return {"upload_id": upload_id, "applications": len(result.applications), "domains": len(domains),
             "synthetic": result.synthetic, "ok": report.ok, "files_found": report.files_found,
             "files_parsed": report.files_parsed, **counts}
@@ -142,6 +159,7 @@ async def _persist(ctx: JobContext, project_id: str, upload_id: str, root: Path,
         for gone in old_domains.values():
             await s.delete(gone)  # processes.domain_id is ON DELETE SET NULL
         await s.flush()
+        live_domain_ids = {r.id for r in domain_rows.values()}
 
         old_apps = {a.app_key: a for a in (await s.execute(
             select(Application).where(Application.project_id == project_id))).scalars()}
@@ -164,9 +182,17 @@ async def _persist(ctx: JobContext, project_id: str, upload_id: str, root: Path,
 
             for p in app.processes:
                 ir = relativise(p.model_dump(mode="json"), root)
-                new_hash = spec_hash(ir, [], [])
                 dom = domain_rows.get(domain_of.get(p.id, ""))
+                if dom is not None and dom.merged_into in live_domain_ids:
+                    dom_id = dom.merged_into
+                else:
+                    dom_id = dom.id if dom else None
                 row = old_procs.pop(p.id, None)
+                if row is None:
+                    new_hash = spec_hash(ir, [], [])
+                else:
+                    new_hash = spec_hash(ir, hash_rules(await load_rules(s, row.id)),
+                                         hash_decisions(await load_findings(s, row.id)))
                 if row is None:
                     row = Process(project_id=project_id, ir_id=p.id)
                     s.add(row)
@@ -177,7 +203,7 @@ async def _persist(ctx: JobContext, project_id: str, upload_id: str, root: Path,
                                  {"ir_id": p.id, "old": row.spec_hash, "new": new_hash, "job_id": ctx.job_id}))
                 row.application_id = app_row.id
                 row.upload_id = upload_id
-                row.domain_id = dom.id if dom else None
+                row.domain_id = dom_id
                 row.name = p.name
                 row.module = p.module
                 row.package = p.package
@@ -227,8 +253,8 @@ async def _persist(ctx: JobContext, project_id: str, upload_id: str, root: Path,
     return {"processes": total, "added": added, "changed": changed, "removed": removed}
 
 
-def scan_job(project_id: str, upload_id: str):
+def scan_job(project_id: str, upload_id: str, knowledge: Knowledge | None = None):
     async def run(ctx: JobContext) -> dict[str, Any]:
-        return await run_scan(ctx, project_id, upload_id)
+        return await run_scan(ctx, project_id, upload_id, knowledge)
 
     return run
