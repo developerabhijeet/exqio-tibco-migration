@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from engine.ir import catalogue, complexity, spec_hash
 from engine.ir.models import (
@@ -23,7 +24,6 @@ from engine.ir.models import (
     UnknownElement,
     Variable,
 )
-
 
 # ---------------------------------------------------------------- catalogue
 
@@ -122,6 +122,7 @@ def test_group_kind():
 @pytest.mark.parametrize(
     "native,expected",
     [
+        ("bw.generalactivities.callprocess", "call.process"),
         ("bw.internal.end", "end"),
         ("bw.internal.accumulateend", "end"),
         ("bw.http.sendHTTPResponse", "reply"),
@@ -169,7 +170,13 @@ def test_deliberately_unmapped_types():
 # ------------------------------------------- harvested sample types (source of truth)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_BW6_TYPE = re.compile(r'activityTypeID="([^"]+)"')
+# BW6 carries a type three ways: activityTypeID on the activity config, type= on
+# tibex:extActivity, and type="<code> <id>" on notation diagram children.
+_BW6_TYPES = (
+    re.compile(r'activityTypeID="(bw\.[^"]+)"'),
+    re.compile(r'\btype="(bw\.[^"]+)"'),
+    re.compile(r'\btype="\d+ (bw\.[^"]+)"'),
+)
 _BW5_TYPE = re.compile(r"<pd:type>\s*(com\.tibco\.[^<\s]+)\s*</pd:type>")  # pd:type also holds line styles such as "solid"
 
 # Types under samples/public that are deliberately NOT mapped, each with a reason.
@@ -187,7 +194,8 @@ def _harvest(root: Path) -> set:
     found = set()
     for path in list(root.glob("**/*.bwp")) + list(root.glob("**/*.process")):
         text = path.read_text(encoding="utf-8", errors="replace")
-        found.update(_BW6_TYPE.findall(text))
+        for rx in _BW6_TYPES:
+            found.update(rx.findall(text))
         found.update(_BW5_TYPE.findall(text))
     return found
 
@@ -258,9 +266,9 @@ def test_models_roundtrip():
 
 
 def test_models_reject_bad_literals():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Transition(id="t", from_id="a", to_id="b", kind="bogus", expression=None, source_line=None)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Variable(name="v", schema=None, scope="global")
 
 

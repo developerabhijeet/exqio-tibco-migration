@@ -12,12 +12,11 @@ Weights are calibrated so that a process with 25 activities, 8 branches and an
 XSLT transform scores exactly 7.0 on those three factors alone.
 """
 import re
-from typing import Dict, List, Optional, Set
 
 from .models import Complexity, Group, Process
 
 # factor -> (weight in points, saturation value at which the factor is maxed)
-_WEIGHTS: Dict[str, float] = {
+_WEIGHTS: dict[str, float] = {
     "activities": 2.5,
     "branches": 2.5,
     "mapping_size": 1.0,
@@ -28,7 +27,7 @@ _WEIGHTS: Dict[str, float] = {
     "group_nesting": 0.5,
     "external_systems": 0.5,
 }
-_SATURATION: Dict[str, float] = {
+_SATURATION: dict[str, float] = {
     "activities": 25,
     "branches": 8,
     "mapping_size": 1500,  # characters of binding expression text
@@ -46,21 +45,21 @@ def _frac(value: float, factor: str) -> float:
     return min(max(value, 0.0) / _SATURATION[factor], 1.0)
 
 
-def _expressions(process: Process) -> List[str]:
+def _expressions(process: Process) -> list[str]:
     out = [b.expression for a in process.activities for b in a.input_bindings]
     out.extend(t.expression for t in process.transitions if t.expression)
     return out
 
 
-def _group_depth(groups: List[Group]) -> int:
+def _group_depth(groups: list[Group]) -> int:
     """Deepest chain of groups containing groups (1 for a single flat group, 0 for none)."""
     if not groups:
         return 0
     ids = {g.id for g in groups}
     children = {g.id: [m for m in g.member_ids if m in ids and m != g.id] for g in groups}
-    memo: Dict[str, int] = {}
+    memo: dict[str, int] = {}
 
-    def depth(gid: str, seen: Set[str]) -> int:
+    def depth(gid: str, seen: set[str]) -> int:
         if gid in memo:
             return memo[gid]
         if gid in seen:  # cycle in malformed input; stop
@@ -80,7 +79,7 @@ def _band(score: float) -> str:
     return "high"
 
 
-def score(process: Process, subprocess_depth: Optional[int] = None) -> Complexity:
+def score(process: Process, subprocess_depth: int | None = None) -> Complexity:
     """Score a process.
 
     ``subprocess_depth`` is the depth of the call chain below this process. It

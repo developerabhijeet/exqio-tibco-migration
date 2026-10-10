@@ -15,11 +15,29 @@ Spec 4.2 canonical types (33):
   group.iterate, group.transaction, group.critical, flow.parallel, wait,
   checkpoint, confirm.
 
-Controller ruling, extension of spec 4.2 (16 more, evidenced by the sample
-estates; total 49):
+Controller ruling, extension of spec 4.2 (16 more; total 49), needed for the
+public samples and anticipated BW plugins:
   json.parse, json.render, xml.parse, xml.render, shared.get, shared.set,
   noop, jms.reply, jms.request_reply, ftp.get, ftp.put, mail.send,
   mail.receive, cmd.exec, file.list, engine.command.
+
+Sample evidence: tests/test_ir.py harvests every type from samples/synthetic-gmf
+and samples/public and is the source of truth. The following native names have
+NO sample evidence (they come from the original brief, TIBCO naming
+conventions or anticipation of other estates) and should be confirmed against
+real exports when they appear:
+  BW6: bw.file.read, bw.generalactivities.throw, bw.http.receive,
+    bw.http.sendhttprequest and SendHTTPRequest (case variants), bw.internal.callprocess,
+    bw.internal.checkpoint, bw.internal.confirm, bw.java.JavaInvoke,
+    bw.jdbc.{JDBCCallProcedure,JDBCUpdate,callprocedure,query},
+    bw.jms.{getmessage,sendmessage}, bw.mail.sendmail,
+    bw.rest.* and bw.restjson.{JsonReceive,RestInvoke,RestReceive,RestReference,
+    RestService,invoke,receive}, bw.soap.* (all), bw.xml.{parsexml,transformxml}.
+  BW5: pe.core.{CheckpointActivity,WaitActivity}, cmdexec.ExecuteCommandActivity,
+    http.HTTPSendRequestActivity, jdbc.{JDBCCallActivity,JDBCQueryActivity,
+    JDBCUpdateActivity}, jms.{JMSTopicEventSource,JMSTopicPublishActivity},
+    json.activities.JSONRenderActivity, mail.SendMailActivity,
+    soap.SOAPSendRequestActivity.
 
 Ambiguity that only a parser can resolve (from bindings, not names):
   * BPEL ``receive`` defaults to ``rest.receive`` and BPEL ``invoke`` to
@@ -29,9 +47,8 @@ Ambiguity that only a parser can resolve (from bindings, not names):
     says otherwise.
 """
 import re
-from typing import Dict, FrozenSet, List, Optional, Tuple
 
-CANONICAL_TYPES: FrozenSet[str] = frozenset(
+CANONICAL_TYPES: frozenset[str] = frozenset(
     {
         "rest.receive", "http.receive", "soap.receive", "jms.receive", "timer.start",
         "jdbc.query", "jdbc.update", "jdbc.call",
@@ -49,7 +66,7 @@ CANONICAL_TYPES: FrozenSet[str] = frozenset(
 )
 
 # BW6 native types (as in tibex:activityType-style attributes and binding namespaces).
-_BW6: Dict[str, List[str]] = {
+_BW6: dict[str, list[str]] = {
     "rest.receive": [
         "bw.restjson.JsonReceive", "bw.restjson.RestService", "bw.restjson.RestReceive",
         "bw.restjson.receive", "bw.rest.RestService", "bw.rest.RestReceive",
@@ -69,7 +86,10 @@ _BW6: Dict[str, List[str]] = {
     "jdbc.query": ["bw.jdbc.JDBCQuery", "bw.jdbc.query"],
     "jdbc.update": ["bw.jdbc.update", "bw.jdbc.JDBCUpdate"],
     "jdbc.call": ["bw.jdbc.callprocedure", "bw.jdbc.JDBCCallProcedure"],
-    "call.process": ["bw.internal.callprocess"],
+    "call.process": [
+        "bw.generalactivities.callprocess",  # the real BW6 Call Process type (sample evidence)
+        "bw.internal.callprocess",  # no sample evidence; kept from the original brief
+    ],
     "mapper": ["bw.generalactivities.mapper"],
     "assign": ["bw.internal.setEPR"],
     "throw": ["bw.generalactivities.throw"],
@@ -90,7 +110,7 @@ _BW6: Dict[str, List[str]] = {
 }
 
 # BW6 / BPEL structural element names. Bare names and the bpel:/bpws:/tibex: prefixed forms.
-_BPEL: Dict[str, str] = {
+_BPEL: dict[str, str] = {
     "receive": "rest.receive",  # default; parser refines from the binding
     "invoke": "call.process",  # default; parser refines from the binding
     "reply": "reply",
@@ -107,8 +127,8 @@ _BPEL: Dict[str, str] = {
     "while": "group.loop",
     "flow": "flow.parallel",
 }
-_BPEL_PREFIXES: Tuple[str, ...] = ("bpel", "bpws")
-_TIBEX: Dict[str, str] = {
+_BPEL_PREFIXES: tuple[str, ...] = ("bpel", "bpws")
+_TIBEX: dict[str, str] = {
     "transaction": "group.transaction",
     "criticalSection": "group.critical",
     "critical": "group.critical",
@@ -117,7 +137,7 @@ _TIBEX: Dict[str, str] = {
 }
 
 # BW5 plugin and process-engine types.
-_BW5: Dict[str, List[str]] = {
+_BW5: dict[str, list[str]] = {
     "http.receive": ["com.tibco.plugin.http.HTTPEventSource"],
     "soap.receive": ["com.tibco.plugin.soap.SOAPEventSource"],
     "jms.receive": [
@@ -171,8 +191,8 @@ _BW5: Dict[str, List[str]] = {
 }
 
 
-def _build() -> Dict[str, str]:
-    table: Dict[str, str] = {}
+def _build() -> dict[str, str]:
+    table: dict[str, str] = {}
     for src in (_BW6, _BW5):
         for canon, natives in src.items():
             for n in natives:
@@ -189,28 +209,28 @@ def _build() -> Dict[str, str]:
     return table
 
 
-NATIVE_TO_CANONICAL: Dict[str, str] = _build()
+NATIVE_TO_CANONICAL: dict[str, str] = _build()
 
 # ---- lookup indexes -------------------------------------------------------
 
-_LOWER: Dict[str, str] = {k.lower(): v for k, v in NATIVE_TO_CANONICAL.items()}
+_LOWER: dict[str, str] = {k.lower(): v for k, v in NATIVE_TO_CANONICAL.items()}
 # Qualified keys (with a dot) take part in prefix and suffix matching, longest first.
 # Bare BPEL names never do: "something.invoke" must not become call.process.
-_QUALIFIED: List[Tuple[str, str]] = sorted(
+_QUALIFIED: list[tuple[str, str]] = sorted(
     ((k.lower(), v) for k, v in NATIVE_TO_CANONICAL.items() if "." in k and ":" not in k),
     key=lambda kv: len(kv[0]),
     reverse=True,
 )
 # BW5 class simple names are distinctive, so "<anything>.JDBCUpdateActivity" resolves.
-_BW5_SIMPLE: Dict[str, str] = {
+_BW5_SIMPLE: dict[str, str] = {
     k.rsplit(".", 1)[1].lower(): v for k, v in NATIVE_TO_CANONICAL.items() if k.startswith("com.tibco.")
 }
-_BPEL_LOCAL: Dict[str, str] = {k.lower(): v for k, v in _BPEL.items()}
+_BPEL_LOCAL: dict[str, str] = {k.lower(): v for k, v in _BPEL.items()}
 _PREFIX_BOUNDARY = ".:/#( "
 _SPLIT = re.compile(r"[.:/#]")
 
 
-def canonical(native: str) -> Optional[str]:
+def canonical(native: str) -> str | None:
     """Map a native BW5/BW6 type string to a canonical type, or None if unknown.
 
     Order: exact, case-insensitive exact, namespace-prefixed BPEL name, prefix
@@ -251,7 +271,7 @@ def canonical(native: str) -> Optional[str]:
 # ---- BW5 groups -----------------------------------------------------------
 
 # BW5 groups appear as <pd:group> with a <pd:groupType>. Values are IR Group.kind.
-_GROUP_KINDS: Dict[str, str] = {
+_GROUP_KINDS: dict[str, str] = {
     # real BW5 pd:groupType values (matched case-insensitively)
     "inputloop": "iterate",
     "repeat": "loop",
@@ -267,7 +287,7 @@ _GROUP_KINDS: Dict[str, str] = {
     "transaction": "transaction",
     "critical": "critical",
 }
-GROUP_KIND_TO_CANONICAL: Dict[str, str] = {
+GROUP_KIND_TO_CANONICAL: dict[str, str] = {
     "loop": "group.loop",
     "iterate": "group.iterate",
     "transaction": "group.transaction",
@@ -276,7 +296,7 @@ GROUP_KIND_TO_CANONICAL: Dict[str, str] = {
 }
 
 
-def group_kind(native: str) -> Optional[str]:
+def group_kind(native: str) -> str | None:
     """Map a BW5 ``pd:groupType`` value (inputLoop, repeat, while, repeatOnError,
     criticalSection, transactionGroup, pick, none, or a plain word) or a group class
     name (LoopGroup) to an IR Group.kind."""

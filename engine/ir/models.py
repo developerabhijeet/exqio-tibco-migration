@@ -4,7 +4,7 @@ Parsers for BW5 and BW6 both produce these models; every later component
 (analyst, designer, generator, parity evaluator) consumes only these.
 """
 import warnings
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -15,7 +15,7 @@ class InputBinding(BaseModel):
     target: str
     expression: str
     language: Literal["xpath", "xslt"]
-    source_line: Optional[int] = None
+    source_line: int | None = None
 
 
 class Activity(BaseModel):
@@ -23,11 +23,11 @@ class Activity(BaseModel):
     name: str
     type: str  # canonical type from catalogue.CANONICAL_TYPES (or a reported unknown)
     native_type: str
-    config: Dict[str, Any] = Field(default_factory=dict)
-    input_bindings: List[InputBinding] = Field(default_factory=list)
-    output_schema: Optional[str] = None
-    source_line: Optional[int] = None
-    group_id: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    input_bindings: list[InputBinding] = Field(default_factory=list)
+    output_schema: str | None = None
+    source_line: int | None = None
+    group_id: str | None = None
 
 
 class Transition(BaseModel):
@@ -35,27 +35,27 @@ class Transition(BaseModel):
     from_id: str
     to_id: str
     kind: Literal["success", "conditional", "otherwise", "error"]
-    expression: Optional[str] = None
-    source_line: Optional[int] = None
+    expression: str | None = None
+    source_line: int | None = None
 
 
 class Group(BaseModel):
     id: str
     kind: Literal["loop", "iterate", "transaction", "critical", "parallel", "scope"]
-    member_ids: List[str] = Field(default_factory=list)
-    config: Dict[str, Any] = Field(default_factory=dict)
+    member_ids: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class Starter(BaseModel):
     activity_id: str
     kind: Literal["rest", "http", "soap", "jms", "timer", "subprocess"]
-    config: Dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class FaultHandler(BaseModel):
     id: str
-    fault_name: Optional[str] = None
-    activity_ids: List[str] = Field(default_factory=list)
+    fault_name: str | None = None
+    activity_ids: list[str] = Field(default_factory=list)
 
 
 class ProcessCall(BaseModel):
@@ -72,7 +72,7 @@ class UnknownElement(BaseModel):
 class Complexity(BaseModel):
     score: float
     band: Literal["low", "medium", "high"]
-    factors: Dict[str, float] = Field(default_factory=dict)
+    factors: dict[str, float] = Field(default_factory=dict)
 
 
 with warnings.catch_warnings():
@@ -83,7 +83,7 @@ with warnings.catch_warnings():
 
     class Variable(BaseModel):
         name: str
-        schema: Optional[str] = None
+        schema: str | None = None
         scope: Literal["process", "scope"] = "process"
 
 
@@ -95,16 +95,16 @@ class Process(BaseModel):
     name: str
     dialect: Dialect
     source_path: str
-    starter: Optional[Starter] = None
-    activities: List[Activity] = Field(default_factory=list)
-    transitions: List[Transition] = Field(default_factory=list)
-    groups: List[Group] = Field(default_factory=list)
-    variables: List[Variable] = Field(default_factory=list)
-    fault_handlers: List[FaultHandler] = Field(default_factory=list)
-    calls: List[ProcessCall] = Field(default_factory=list)
-    complexity: Optional[Complexity] = None
-    unknown_elements: List[UnknownElement] = Field(default_factory=list)
-    contracts_used: List[str] = Field(default_factory=list)
+    starter: Starter | None = None
+    activities: list[Activity] = Field(default_factory=list)
+    transitions: list[Transition] = Field(default_factory=list)
+    groups: list[Group] = Field(default_factory=list)
+    variables: list[Variable] = Field(default_factory=list)
+    fault_handlers: list[FaultHandler] = Field(default_factory=list)
+    calls: list[ProcessCall] = Field(default_factory=list)
+    complexity: Complexity | None = None
+    unknown_elements: list[UnknownElement] = Field(default_factory=list)
+    contracts_used: list[str] = Field(default_factory=list)
     raw_xml_sha256: str = ""
 
 
@@ -113,8 +113,8 @@ class Resource(BaseModel):
     kind: Literal["jdbc", "http", "jms", "file"]
     name: str
     source_path: str = ""
-    settings: Dict[str, Any] = Field(default_factory=dict)
-    masked_fields: List[str] = Field(default_factory=list)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    masked_fields: list[str] = Field(default_factory=list)
 
 
 class SubstVar(BaseModel):
@@ -128,7 +128,7 @@ class Contract(BaseModel):
     id: str
     kind: Literal["xsd", "wsdl", "json"]
     path: str
-    root_elements: List[str] = Field(default_factory=list)
+    root_elements: list[str] = Field(default_factory=list)
     text: str = ""
 
 
@@ -136,9 +136,9 @@ class Application(BaseModel):
     id: str
     name: str
     dialect: Dialect
-    modules: List[str] = Field(default_factory=list)
-    processes: List[Process] = Field(default_factory=list)
-    resources: List[Resource] = Field(default_factory=list)
-    substvars: List[SubstVar] = Field(default_factory=list)
-    contracts: List[Contract] = Field(default_factory=list)
-    sql_files: List[str] = Field(default_factory=list)
+    modules: list[str] = Field(default_factory=list)
+    processes: list[Process] = Field(default_factory=list)
+    resources: list[Resource] = Field(default_factory=list)
+    substvars: list[SubstVar] = Field(default_factory=list)
+    contracts: list[Contract] = Field(default_factory=list)
+    sql_files: list[str] = Field(default_factory=list)

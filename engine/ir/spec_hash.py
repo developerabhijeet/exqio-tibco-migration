@@ -4,19 +4,19 @@ Gates G1 and G2 bind to this value (design spec section 3.1).
 """
 import hashlib
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 
 def canonical_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
-def _stable(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _stable(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Order-independent when entries carry an ``id``; otherwise sorted by canonical JSON."""
     return sorted(items, key=lambda x: (str(x.get("id", "")), canonical_json(x)))
 
 
-def spec_hash(process_ir: Dict[str, Any], rules: List[Dict[str, Any]], decisions: List[Dict[str, Any]]) -> str:
+def spec_hash(process_ir: dict[str, Any], rules: list[dict[str, Any]], decisions: list[dict[str, Any]]) -> str:
     """Return the SHA-256 hex digest binding an IR, its approved rules and finding decisions.
 
     Dict key order is irrelevant. Rules and decisions are sorted (by ``id``,
