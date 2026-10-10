@@ -66,7 +66,12 @@ class StubRegistry:
     def call(
         self, resource_id: str, path: str, body: Any, timeout_ms: int | None = None
     ) -> StubResponse:
-        """Return the registered response, or raise ``TimeoutError`` / ``LookupError``."""
+        """Return the registered response.
+
+        Raises ``TimeoutError`` when the response's ``delay_ms`` exceeds the timeout (the
+        evaluator catches it to drive resilience branches) and ``LookupError`` when no stub
+        matches. It never returns the exception.
+        """
         limit = self.timeout_ms if timeout_ms is None else timeout_ms
         response = self._lookup(resource_id, path)
         if response.delay_ms > limit:

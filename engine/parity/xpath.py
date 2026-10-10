@@ -17,9 +17,8 @@ helpers an SME is likely to add):
 * ``tib:current-dateTime()``       injectable clock (``now=``) for reproducible results
 * ``tib:timestamp()``              the same clock, as an ISO-8601 string
 
-The namespace URIs for ``bw:`` and ``tib:`` are BW's published function namespaces as best
-known; they are overridable through ``namespaces`` because the estate's own XPath only uses
-the prefixes.
+The ``tib:`` namespace URI is the one the estate declares; the ``bw:`` URI is unverified (see
+``BW_NS``). Both are overridable through ``namespaces``.
 """
 from __future__ import annotations
 
@@ -33,8 +32,11 @@ from elementpath import XPathContext as _EPContext
 from elementpath.datatypes import DateTime10
 from lxml import etree
 
+# TIB_NS is the URI the estate declares (LegacyAddressStandardize.process and 24 other files).
+TIB_NS = "http://www.tibco.com/bw/xslt/custom-functions"
+# UNVERIFIED: no file in the estate or the public samples declares an xmlns:bw= prefix, so
+# this URI is from memory of BW6 documentation; nothing depends on it except the prefix.
 BW_NS = "http://www.tibco.com/bw/xpath/bw-custom-functions"
-TIB_NS = "http://www.tibco.com/bw/xpath/tibco-custom-functions"
 
 DEFAULT_NAMESPACES = {
     "bw": BW_NS,

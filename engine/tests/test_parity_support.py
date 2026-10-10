@@ -22,7 +22,7 @@ from engine.parity.models import (
 )
 from engine.parity.stubs import StubRegistry
 from engine.parity.xpath import XPathContext
-from engine.parity.xslt import transform
+from engine.parity.xslt import bw5_binding_stylesheet, rewrite_tib_calls, transform
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SYNTH = REPO_ROOT / "samples" / "synthetic-gmf"
@@ -46,6 +46,28 @@ def _transition_conditions() -> list[str]:
     tree = etree.parse(str(DECISION_BWP))
     bpws = "{http://docs.oasis-open.org/wsbpel/2.0/process/executable}"
     return [c.text for c in tree.iter(f"{bpws}transitionCondition")]
+
+
+def _tier_links() -> list[tuple[str, str]]:
+    """(link name, condition) of the ComputeDTI outgoing transitions, document order."""
+    tree = etree.parse(str(DECISION_BWP))
+    bpws = "{http://docs.oasis-open.org/wsbpel/2.0/process/executable}"
+    return [
+        (src.get("linkName"), src.find(f"{bpws}transitionCondition").text)
+        for src in tree.iter(f"{bpws}source")
+        if src.get("linkName", "").startswith("ComputeDTIToAssign")
+    ]
+
+
+LEGACY = SYNTH / "LegacyAddress" / "LegacyAddressStandardize.process"
+PD = "{http://xmlns.tibco.com/bw/process/2003}"
+
+
+def _legacy_bindings(activity: str) -> etree._Element:
+    for act in etree.parse(str(LEGACY)).iter(f"{PD}activity"):
+        if act.get("name") == activity:
+            return act.find(f"{PD}inputBindings")
+    raise AssertionError(activity)
 
 
 def _start(score: int = 750, debt: str = "1500", income: str = "5000") -> etree._Element:
@@ -133,14 +155,21 @@ def test_xpath_dti_arithmetic():
     assert ctx.evaluate(select) == pytest.approx(0.3)
 
 
-def test_xpath_transition_conditions_of_decision_engine():
-    conds = [c for c in _transition_conditions() if c != "##otherwise##"]
-    assert conds
-    dti = dict_to_xml({"dti": "0.30"}, "DtiResult")
-    results = [XPathContext({"Start": _start(750), "ComputeDTI": dti}, {}).evaluate(c)
-               for c in conds]
-    assert all(isinstance(r, bool) for r in results)
-    assert results.count(True) >= 1
+@pytest.mark.parametrize(
+    ("score", "dti", "tier"),
+    [(750, "0.30", "A"), (700, "0.30", "B"), (650, "0.40", "C"), (600, "0.30", "decline")],
+)
+def test_xpath_transition_conditions_of_decision_engine(score, dti, tier):
+    # BW rule: the first true conditional transition wins, else the ##otherwise## one
+    ctx = XPathContext(
+        {"Start": _start(score), "ComputeDTI": dict_to_xml({"dti": dti}, "DtiResult")}, {}
+    )
+    chosen = "decline"
+    for link, cond in _tier_links():
+        if cond != "##otherwise##" and ctx.evaluate(cond) is True:
+            chosen = link.removeprefix("ComputeDTIToAssignTier")
+            break
+    assert chosen == tier
 
 
 def test_xpath_namespaced_paths_and_xsd_constructors():
@@ -202,6 +231,91 @@ def test_xslt_binding_transform():
     assert out.find("decision").text == "APPROVED"
     assert out.find("apr").text == "5.49"
     assert out.find("approvedAmount").text == "20000.00"
+
+
+def test_xslt_tier_c_caps_term_at_72_months():
+    start = _start(650)
+    start.find("parameters/requestedTermMonths").text = "84"
+    ctx = XPathContext({"Start": start, "ComputeDTI": dict_to_xml({"dti": "0.4"}, "DtiResult")}, {})
+    out = transform(_binding("AssignTierC"), ctx)
+    assert out.find("tier").text == "C"
+    assert out.find("approvedTermMonths").text == "72"
+    start.find("parameters/requestedTermMonths").text = "48"
+    assert transform(_binding("AssignTierC"), ctx).find("approvedTermMonths").text == "48"
+
+
+def test_xslt_decline_has_no_tier():
+    ctx = XPathContext(
+        {"Start": _start(600), "ComputeDTI": dict_to_xml({"dti": "0.5"}, "DtiResult")}, {}
+    )
+    out = transform(_binding("AssignDecline"), ctx)
+    assert out.find("tier") is None
+    assert out.find("decision").text == "DECLINED"
+
+
+def _http_receiver(**params: str) -> etree._Element:
+    return dict_to_xml({"ProcessStarterOutput": {"parameters": params}}, "HTTP-Receiver")
+
+
+def test_xslt_legacy_bw5_binding_with_tib_trim():
+    sheet = bw5_binding_stylesheet(_legacy_bindings("Standardize Address"))
+    ctx = XPathContext(
+        {
+            "HTTP-Receiver": _http_receiver(
+                line1="  12 main st ", line2="   ", city=" columbus ", state=" oh ",
+                zip=" 43215-1234 ",
+            )
+        },
+        {},
+    )
+    out = transform(sheet, ctx)
+    assert etree.QName(out).localname == "StandardizedAddress"
+    got = {etree.QName(c).localname: c.text for c in out}
+    assert got == {"line1": "12 MAIN ST", "city": "COLUMBUS", "state": "OH", "postalCode": "43215"}
+    ctx.variables["HTTP-Receiver"] = _http_receiver(
+        line1="1 a st", line2=" apt 4 ", city="x", state="y", zip="12345")
+    out = transform(sheet, ctx)
+    assert out.find("{*}line2").text == "APT 4"
+
+
+def test_xslt_legacy_bw5_binding_with_tib_render_xml():
+    std = transform(
+        bw5_binding_stylesheet(_legacy_bindings("Standardize Address")),
+        XPathContext({"HTTP-Receiver": _http_receiver(
+            line1="1 a st", line2="", city="c", state="s", zip="99999")}, {}),
+    )
+    wrapper = etree.Element("Standardize-Address")
+    wrapper.append(std)
+    out = transform(
+        bw5_binding_stylesheet(_legacy_bindings("Send HTTP Response")),
+        XPathContext({"Standardize-Address": wrapper}, {}),
+    )
+    body = out.find("asciiContent").text
+    assert "StandardizedAddress" in body and ">1 A ST<" in body
+    assert out.find("Headers/StatusLine").text == "HTTP/1.1 200 OK"
+
+
+def test_xslt_legacy_binding_lxml_fallback_extensions(monkeypatch):
+    monkeypatch.setattr(xslt_mod, "_saxon_available", lambda: False)
+    sheet = bw5_binding_stylesheet(_legacy_bindings("Send HTTP Response"))
+    pfx = _legacy_bindings("Send HTTP Response").nsmap["pfx"]
+    wrapper = etree.fromstring(
+        f'<Standardize-Address><p:StandardizedAddress xmlns:p="{pfx}"><v> x </v>'
+        "</p:StandardizedAddress></Standardize-Address>"
+    )
+    with pytest.warns(UserWarning, match="xslt downgraded"):
+        out = transform(sheet, XPathContext({"Standardize-Address": wrapper}, {}))
+    assert "<v> x </v>" in out.find("asciiContent").text
+
+
+def test_rewrite_tib_calls():
+    assert rewrite_tib_calls("upper-case(tib:trim($a/b))") == (
+        "upper-case(replace(replace(string($a/b), '^\\s+', ''), '\\s+$', ''))"
+    )
+    assert rewrite_tib_calls("tib:render-xml($x, true())") == "serialize($x)"
+    # nested, quoted parentheses, untouched foreign prefixes
+    assert rewrite_tib_calls("tib:trim(tib:trim('a)'))").count("replace(") == 4
+    assert rewrite_tib_calls("other:trim($a)") == "other:trim($a)"
 
 
 def test_xslt_dti_binding():
@@ -303,6 +417,36 @@ def test_qmark_to_format():
         "select * from t where a = %s and b = %s"
     )
     assert qmark_to_format("select '?' , 5 % 2, ?") == "select '?' , 5 %% 2, %s"
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        ("select 1 /* why? 5%2 */ + ?", "select 1 /* why? 5%%2 */ + %s"),
+        ("select /* a /* nested ? */ still ? */ ?", "select /* a /* nested ? */ still ? */ %s"),
+        ("select 1 -- ? 100%\n, ?", "select 1 -- ? 100%%\n, %s"),
+        ("select $$a ? 'b$$, ?", "select $$a ? 'b$$, %s"),
+        ("select $q$it's ? $$ here$q$, ?", "select $q$it's ? $$ here$q$, %s"),
+        ("select E'it\\'s ?', ?", "select E'it\\'s ?', %s"),
+        ("select 'it''s ?', ?", "select 'it''s ?', %s"),
+        ("select \"a?b\", ?", "select \"a?b\", %s"),
+        ("select doc ?| array['a'] from t where x = ?", "select doc ?| array['a'] from t where x = %s"),
+        ("select doc ?& array['a'] and y = ?", "select doc ?& array['a'] and y = %s"),
+        ("select ?||'%'", "select %s||'%%'"),
+        ("select $1, ?", "select $1, %s"),
+        ("select coalesce(a,0)::text || 'e' , ?", "select coalesce(a,0)::text || 'e' , %s"),
+    ],
+)
+def test_qmark_to_format_skips_literals_comments_and_operators(statement, expected):
+    assert qmark_to_format(statement) == expected
+
+
+def test_reset_refuses_non_test_database_without_override():
+    db = ScenarioDB("postgresql://exiqo:exiqo@localhost:5432/exiqo")
+    with pytest.raises(ValueError, match="refusing to reset"):
+        db.reset("select 1", "select 1")
+    # the guard fires before any connection is made
+    assert db._conn is None
 
 
 def test_scenario_db_reset_and_transaction_rollback():
