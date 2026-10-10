@@ -3,8 +3,8 @@
 Every citation a rule carries must be found, whitespace-normalised, in the IR
 evidence the cited activity actually has for that kind. Rules with any failing
 citation are marked ``unverified`` in place, including ``approved`` and ``edited``
-ones: an analyst edit that breaks a quote is downgraded, so the API re-runs
-verification after every rule edit. A rule an analyst already ``rejected`` keeps
+ones: an analyst edit that breaks a quote is downgraded, so callers (the
+API's rule-edit endpoint) must re-run verification after an edit. A rule an analyst already ``rejected`` keeps
 that decision (its failures are still reported). Citations under three
 characters fail.
 """

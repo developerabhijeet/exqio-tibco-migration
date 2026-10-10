@@ -106,7 +106,7 @@ class _Flow:
     A transition endpoint that is a group id is resolved through the group's
     ``config["entry_ids"]`` (arriving) and ``config["exit_ids"]`` (leaving), so
     order inside a loop, scope, parallel or critical group is the order of its own
-    transitions. A group missing those keys falls back to all its members.
+    transitions. A group whose keys are missing or empty falls back to all its members.
     """
 
     def __init__(self, process: Process):
