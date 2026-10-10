@@ -6,12 +6,12 @@ import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
 import { FileTree } from "@/components/tabs/upload/FileTree";
 import { ErrorNote } from "@/components/ui/Empty";
 import { useBuildFiles } from "@/lib/buildQueries";
-import { useCanvas, useDesign, useFiles, useProcesses } from "@/lib/queries";
+import { useCanvas, useDesign, useFiles, useProcesses, useXml } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
 import type { BuildFileEntry, TibcoRef } from "@/lib/buildTypes";
 import type { FileEntry, ProcessSummary } from "@/lib/types";
 import { CodeViewer } from "./CodeViewer";
-import { TibcoSourcePane } from "./TibcoSourcePane";
+import { highlightLabel, stepHighlight, TibcoSourcePane } from "./TibcoSourcePane";
 
 interface Dir {
   name: string;
@@ -145,10 +145,13 @@ function StepChips({
   entry,
   activeId,
   onPick,
+  labels,
 }: {
   entry: BuildFileEntry | null;
   activeId: string | null;
   onPick: (activityId: string) => void;
+  /** Per step, the same "line F of A to B" the source pane shows (absent until the XML loads). */
+  labels: Record<string, string>;
 }) {
   const ref: TibcoRef | null = entry?.tibco_ref ?? null;
   return (
@@ -184,7 +187,11 @@ function StepChips({
                     <span className="text-slate">
                       {r.class_name}.{r.method}
                     </span>
-                    {line ? <span className="text-slate">line {line}</span> : null}
+                    {line ? (
+                      <span className="text-slate" data-testid="step-chip-lines">
+                        {labels[r.activity_id] ?? `line ${line}`}
+                      </span>
+                    ) : null}
                     {r.rule_ids.length ? <span className="text-gate">{r.rule_ids.join(", ")}</span> : null}
                   </button>
                 </li>
@@ -241,11 +248,12 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
   };
 
   // Open on the production file that implements a step of this process once the files arrive.
+  // Not while a TIBCO file is open on its own: its empty right pane is the answer.
   useEffect(() => {
-    if (selected || list.length === 0) return;
+    if (selected || manualSource || list.length === 0) return;
     const first = fileForProcess(list, process.ir_id) ?? list.find((f) => mine.has(f.path)) ?? null;
     if (first) setSelected(first.path);
-  }, [list, mine, selected, process.ir_id]);
+  }, [list, mine, selected, manualSource, process.ir_id]);
 
   // A step chosen on the canvas (here or in Discover) opens the file that implements it, at that step.
   useEffect(() => {
@@ -268,8 +276,10 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     const gen = fileForProcess(list, p.ir_id);
     if (gen) openGenerated(gen.path);
     else {
+      setSelected(null);
+      setActivity(null);
       setManualSource(p.id);
-      setNote(`No generated file names ${p.name} in this build; its TIBCO source is shown alone.`);
+      setNote(null);
     }
   };
 
@@ -288,6 +298,18 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
   // The canvas of this process carries each step's SQL; with it the highlight lands on the statement.
   const activeConfig = sourceProc?.id === process.id ? canvas.data?.nodes.find((n) => n.id === activeId)?.data.config : undefined;
   const activeSql = typeof activeConfig?.sql === "string" ? activeConfig.sql : null;
+  // The chips use the same band and landing line as the source pane, so both read alike.
+  const refXml = useXml(refProc?.id ?? null);
+  const chipLabels = useMemo(() => {
+    const out: Record<string, string> = {};
+    if (!ref || !refXml.data) return out;
+    for (const r of ref.rows) {
+      const config = refProc?.id === process.id ? canvas.data?.nodes.find((n) => n.id === r.activity_id)?.data.config : undefined;
+      const h = stepHighlight(refXml.data, ref.source_lines[r.activity_id], typeof config?.sql === "string" ? config.sql : null);
+      if (h) out[r.activity_id] = highlightLabel(h);
+    }
+    return out;
+  }, [ref, refXml.data, refProc?.id, process.id, canvas.data]);
   const counts = files.data?.counts ?? {};
 
   return (
@@ -388,6 +410,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
         <StepChips
           entry={entry}
           activeId={activeId}
+          labels={chipLabels}
           onPick={(id) => {
             setActivity(id);
             setManualSource(null);
@@ -397,7 +420,18 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
 
       <div className="mt-3 grid items-start gap-4 xl:grid-cols-2" data-testid="side-by-side">
         <TibcoSourcePane proc={sourceProc} line={line} activityName={activeName} sql={activeSql} height={PANE_HEIGHT} />
-        <CodeViewer buildId={buildId} entry={entry} showRef={false} height={PANE_HEIGHT} />
+        <CodeViewer
+          buildId={buildId}
+          entry={entry}
+          showRef={false}
+          height={PANE_HEIGHT}
+          testId="code-viewer"
+          empty={
+            manualSource
+              ? "No generated file implements this source in this build."
+              : "Select a generated file, or a step on the TIBCO canvas, to see its code here."
+          }
+        />
       </div>
     </section>
   );

@@ -16,12 +16,15 @@ export default function CodeView({
   height,
   highlight,
   testId,
+  wrap = false,
 }: {
   value: string;
   language: string;
   height: number | string;
   highlight?: XmlHighlight | null;
   testId?: string;
+  /** Wrap long lines (the Build tab's TIBCO pane, where attribute values hold whole SQL statements). */
+  wrap?: boolean;
 }) {
   const editorRef = useRef<MonacoEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
@@ -97,7 +100,7 @@ export default function CodeView({
           fontSize: 12.5,
           lineHeight: 19,
           scrollBeyondLastLine: false,
-          wordWrap: "off",
+          wordWrap: wrap ? "on" : "off",
           renderLineHighlight: "none",
           folding: true,
           stickyScroll: { enabled: false },

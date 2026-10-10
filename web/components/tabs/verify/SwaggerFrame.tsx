@@ -81,8 +81,11 @@ export function useService(buildId: string | null): ServiceHandle {
   return { state, run: r, reason, busy, start, stop };
 }
 
-/** Start and stop the generated service, with its status, url, the reason it is down and the log tail. */
-export function ServiceControl({ svc }: { svc: ServiceHandle }) {
+/**
+ * Start and stop the generated service, with its status, url, the reason it is down and the log
+ * tail. `blocked` (the latest build failed) turns Start into a disabled secondary button with the reason.
+ */
+export function ServiceControl({ svc, blocked = null }: { svc: ServiceHandle; blocked?: string | null }) {
   const { state, run: r, reason, busy, start, stop } = svc;
   return (
     <Panel
@@ -91,10 +94,18 @@ export function ServiceControl({ svc }: { svc: ServiceHandle }) {
       testId="service-control"
       actions={
         <>
-          <button type="button" className="btn-primary" onClick={start} disabled={!!busy || state === "running"}>
-            {busy === "start" ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} aria-hidden />}
-            Start service
-          </button>
+          <span title={blocked ?? undefined}>
+            <button
+              type="button"
+              className={blocked ? "btn-secondary" : "btn-primary"}
+              onClick={start}
+              disabled={!!blocked || !!busy || state === "running"}
+              title={blocked ?? undefined}
+            >
+              {busy === "start" ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} aria-hidden />}
+              Start service
+            </button>
+          </span>
           <button type="button" className="btn-secondary" onClick={stop} disabled={!!busy || state !== "running"}>
             <Square size={15} aria-hidden /> Stop
           </button>

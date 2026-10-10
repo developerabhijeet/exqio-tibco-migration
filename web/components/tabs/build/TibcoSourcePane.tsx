@@ -14,6 +14,18 @@ const CodeView = dynamic(() => import("@/components/canvas/CodeView"), {
   loading: () => <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-[13px] text-slate">Loading editor</div>,
 });
 
+/** A step's element band and the line the reader lands on (its SQL when known), as Discover computes them. */
+export function stepHighlight(xml: string | undefined, line: number | null | undefined, sql?: string | null): XmlHighlight | null {
+  if (!xml || !line) return null;
+  const s = elementSpan(xml, line);
+  return s ? { start: s.start, end: s.end, focus: focusLine(xml, s, sql) } : null;
+}
+
+/** One wording for the step chips and the source pane: "line 666 of 629 to 701". */
+export function highlightLabel(h: XmlHighlight): string {
+  return `line ${h.focus} of ${h.start} to ${h.end}`;
+}
+
 /**
  * The TIBCO process source, read only, from the same route the Discover inspector reads
  * (GET /processes/{id}/xml). With a source line, the step's element is highlighted and scrolled
@@ -34,11 +46,7 @@ export function TibcoSourcePane({
   height?: number;
 }) {
   const xml = useXml(proc?.id ?? null);
-  const span = useMemo<XmlHighlight | null>(() => {
-    if (!xml.data || !line) return null;
-    const s = elementSpan(xml.data, line);
-    return s ? { start: s.start, end: s.end, focus: focusLine(xml.data, s, sql) } : null;
-  }, [xml.data, line, sql]);
+  const span = useMemo(() => stepHighlight(xml.data, line, sql), [xml.data, line, sql]);
 
   if (!proc) {
     return (
@@ -62,12 +70,12 @@ export function TibcoSourcePane({
           TIBCO {proc.dialect}
         </Pill>
         <span className="ml-auto text-[12px] text-slate" data-testid="tibco-source-span">
-          {span ? `lines ${span.start} to ${span.end}${activityName ? `: ${activityName}` : ""}` : "read only"}
+          {span ? `${activityName ? `${activityName}: ` : ""}${highlightLabel(span)}` : "read only"}
         </span>
       </div>
       {xml.error ? <ErrorNote error={xml.error} /> : null}
       {xml.data ? (
-        <CodeView value={xml.data} language="xml" height={height} highlight={span} testId="tibco-xml" />
+        <CodeView value={xml.data} language="xml" height={height} highlight={span} testId="tibco-xml" wrap />
       ) : xml.isLoading ? (
         <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-[13px] text-slate">
           Loading the TIBCO source

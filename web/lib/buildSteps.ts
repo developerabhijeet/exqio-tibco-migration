@@ -5,6 +5,7 @@ import type { JobEvent } from "./types";
 export const BUILD_STEPS = [
   "generate",
   "tests",
+  "test engineer",
   "builder",
   "review",
   "restore",
@@ -40,6 +41,7 @@ export const JOB_STAGES = [
 const LABELS: Record<BuildStepName, string> = {
   generate: "Generate solution",
   tests: "Write tests",
+  "test engineer": "Test Engineer",
   builder: "Code Builder",
   review: "Review panel",
   restore: "dotnet restore",
@@ -52,7 +54,7 @@ const LABELS: Record<BuildStepName, string> = {
   metrics: "Metrics",
 };
 
-const AI_STEPS = new Set<BuildStepName>(["builder", "review", "repair"]);
+const AI_STEPS = new Set<BuildStepName>(["test engineer", "builder", "review", "repair"]);
 
 export type StepRunStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "warning";
 
@@ -133,6 +135,24 @@ export function buildStepRows(
             log = [log, ...b.rejections.map((r) => `rejected ${r.path} (attempt ${r.attempt}): ${r.reason}`)]
               .filter(Boolean)
               .join("\n");
+        }
+      } else if (name === "test engineer") {
+        // Fills the test bodies; an API older than this stage reports nothing for it.
+        const te = build.builder?.test_engineer;
+        if (te) {
+          const filled = te.filled?.length ?? 0;
+          const rejected = te.rejections?.length ?? 0;
+          const soft = te.warnings?.length ?? 0;
+          status = rejected > 0 && filled === 0 ? "warning" : "passed";
+          summary = `${filled} test file(s) filled, ${rejected} reply(ies) rejected${soft ? `, ${soft} soft assertion(s)` : ""}`;
+          const extra = [
+            ...(te.rejections ?? []).map((r) => `rejected ${r.path}: ${r.reason}`),
+            ...(te.warnings ?? []).map((w) => `soft assertion ${w.path} ${w.method}: ${w.reason}`),
+          ];
+          if (extra.length) log = [log, ...extra].filter(Boolean).join("\n");
+        } else if (!reached.has(name)) {
+          status = "skipped";
+          summary = "not reported by this build";
         }
       } else if (name === "repair") {
         const r = build.repair;

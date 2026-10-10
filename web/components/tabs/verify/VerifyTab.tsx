@@ -93,7 +93,7 @@ export function VerifyTab() {
           </div>
           {buildId ? (
             <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-              <ServiceControl svc={svc} />
+              <ServiceControl svc={svc} blocked={build.data?.status === "failed" ? "build failed; restore the build first" : null} />
               <DevTokenHelper run={svc.run} running={svc.state === "running"} />
             </div>
           ) : null}

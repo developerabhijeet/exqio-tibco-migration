@@ -34,7 +34,7 @@
         { "path": "output.body.status", "expected": "FUNDED", "actual": "PENDING", "status": "defect", "finding_id": null },
         {
           "path": "output.body.dealerId",
-          "expected": "D10021 ",
+          "expected": "d10021",
           "actual": "D10021",
           "status": "intended",
           "finding_id": "S2-trim-dealer",

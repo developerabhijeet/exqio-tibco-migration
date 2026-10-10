@@ -59,6 +59,7 @@ export function CodeViewer({
   if (!entry) {
     return (
       <div
+        data-testid={`${testId}-empty`}
         style={{ minHeight: height }}
         className="flex h-full items-center justify-center rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[14px] text-slate"
       >
