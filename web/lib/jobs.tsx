@@ -7,7 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { subscribeJob } from "./sse";
 import type { JobEvent } from "./types";
 
-export type JobKind = "analyse" | "design";
+export type JobKind = "analyse" | "design" | "build" | "verify" | "plan" | "eval";
 
 export interface JobStream {
   kind: JobKind;

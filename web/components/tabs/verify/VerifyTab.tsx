@@ -1,0 +1,90 @@
+"use client";
+
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { useLatestBuildId } from "@/lib/buildQueries";
+import { useJob } from "@/lib/jobs";
+import { useGates, useProcesses } from "@/lib/queries";
+import { useAppState } from "@/lib/state";
+import { Empty } from "@/components/ui/Empty";
+import { GateButton } from "@/components/gates/GateButton";
+import { ProcessPicker } from "@/components/tabs/ProcessPicker";
+import { shortHash, useScrollToHash } from "@/components/tabs/build/Panel";
+import { ParityTable } from "./ParityTable";
+import { ScenarioRunner } from "./ScenarioRunner";
+import { DevTokenHelper, ServiceControl, SwaggerFrame, useService } from "./SwaggerFrame";
+import { TestDataPanel } from "./TestDataPanel";
+
+export function VerifyTab() {
+  const qc = useQueryClient();
+  const { projectId, processId } = useAppState();
+  useScrollToHash();
+  const processes = useProcesses(projectId);
+  const gates = useGates(processId);
+  const { buildId, loading } = useLatestBuildId(processId);
+  const svc = useService(buildId);
+  const { stream, watch } = useJob("verify", processId);
+  const proc = processes.data?.find((p) => p.id === processId) ?? null;
+  const g5 = (gates.data ?? []).find((g) => g.gate === "G5");
+
+  const status = stream?.status;
+  useEffect(() => {
+    if (status !== "done" && status !== "failed") return;
+    for (const q of ["parity", "gates", "readiness", "scenario-list"]) qc.invalidateQueries({ queryKey: [q] });
+  }, [status, qc]);
+
+  const runVerify = async () => {
+    if (!buildId) return;
+    const { job_id } = await api.verify(buildId);
+    watch(job_id);
+  };
+
+  return (
+    <div className="space-y-5" data-testid="verify-tab">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="eyebrow">Step 6</p>
+          <h2 className="panel-title">Verify</h2>
+          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+            The scenarios run through the TIBCO model to give the expected output, then against the running .NET service with
+            the same inputs. Every field is compared; a difference is a defect unless a finding decided Fix explains it. QA
+            approves parity (G5).
+          </p>
+        </div>
+        <ProcessPicker />
+      </div>
+      {!processId ? (
+        <Empty title="No process open">Pick a process above, or open one from Discover.</Empty>
+      ) : (
+        <>
+          {!buildId && !loading ? (
+            <Empty title="No build yet">Build {proc?.name ?? "this process"} first; Verify runs the service of the latest build.</Empty>
+          ) : null}
+          {buildId ? (
+            <p className="text-[13px] text-slate">
+              Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}.
+            </p>
+          ) : null}
+          <GateButton
+            processId={processId}
+            gate={g5}
+            name="G5"
+            started={!!buildId}
+            hint="QA approves parity when no difference is unexplained and no scenario errored."
+          />
+          {buildId ? (
+            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+              <ServiceControl svc={svc} />
+              <DevTokenHelper run={svc.run} running={svc.state === "running"} />
+            </div>
+          ) : null}
+          {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} /> : null}
+          <ScenarioRunner processId={processId} buildId={buildId} running={svc.state === "running"} stream={stream} onRun={runVerify} />
+          <ParityTable buildId={buildId} />
+          <TestDataPanel processId={processId} />
+        </>
+      )}
+    </div>
+  );
+}

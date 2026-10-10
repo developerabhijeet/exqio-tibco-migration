@@ -17,6 +17,29 @@ import type {
   ScenarioSet,
   UploadResult,
 } from "./types";
+import type {
+  AzureConnectBody,
+  AzureConnection,
+  BuildFileContent,
+  BuildFiles,
+  BuildSummary,
+  BuildView,
+  EvalView,
+  HistoryView,
+  InfraView,
+  ParityView,
+  PlanOut,
+  PlanStart,
+  ReadinessView,
+  ReviewFinding,
+  RunState,
+  Scenario,
+  ScenarioList,
+  SettingsPatch,
+  SettingsView,
+  TestData,
+  TestReport,
+} from "./buildTypes";
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -127,6 +150,57 @@ export const api = {
   },
   scenarios: (processId: string) => optional<ScenarioSet>(`/processes/${processId}/scenarios`),
   settings: () => optional<Record<string, unknown>>("/settings"),
+
+  // Task 22: Build, Verify, Deploy, Settings, History, Readiness
+  startBuild: (processId: string, runtime: "container_app" | "aks") =>
+    json<{ job_id: string; build_id: string }>(`/processes/${processId}/build`, post({ runtime })),
+  builds: (processId: string) => optional<BuildSummary[]>(`/processes/${processId}/builds`),
+  build: (buildId: string) => json<BuildView>(`/builds/${buildId}`),
+  buildFiles: (buildId: string) => json<BuildFiles>(`/builds/${buildId}/files`),
+  buildFile: (buildId: string, path: string) =>
+    json<BuildFileContent>(`/builds/${buildId}/files/${path.split("/").map(encodeURIComponent).join("/")}`),
+  buildTests: (buildId: string) => json<TestReport>(`/builds/${buildId}/tests`),
+  buildReviews: (buildId: string) => json<ReviewFinding[]>(`/builds/${buildId}/reviews`),
+  infra: (buildId: string) => json<InfraView>(`/builds/${buildId}/infra`),
+
+  runState: (buildId: string) => json<RunState>(`/builds/${buildId}/run`),
+  startService: (buildId: string) => json<RunState>(`/builds/${buildId}/run`, post()),
+  stopService: (buildId: string) =>
+    json<{ stopped: boolean; running: false }>(`/builds/${buildId}/run`, { method: "DELETE" }),
+
+  scenarioList: (processId: string) => optional<ScenarioList>(`/processes/${processId}/scenarios`),
+  /** POST .../scenarios/generate; an API without that route regenerates with GET ?refresh=true. */
+  generateScenarios: async (processId: string): Promise<ScenarioList | null> => {
+    try {
+      return await json<ScenarioList>(`/processes/${processId}/scenarios/generate`, post());
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405))
+        return json<ScenarioList>(`/processes/${processId}/scenarios?refresh=true`);
+      throw e;
+    }
+  },
+  addScenario: (processId: string, name: string, input: Record<string, unknown>) =>
+    json<Scenario & { notes: string[] }>(`/processes/${processId}/scenarios`, post({ name, input })),
+  verify: (buildId: string) => json<{ job_id: string }>(`/builds/${buildId}/verify`, post()),
+  parity: (buildId: string) => optional<ParityView>(`/builds/${buildId}/parity`),
+  testData: (processId: string) => optional<TestData>(`/processes/${processId}/test-data`),
+
+  azure: (projectId: string) => json<AzureConnection>(`/projects/${projectId}/azure`),
+  connectAzure: (projectId: string, body: AzureConnectBody) =>
+    json<AzureConnection>(`/projects/${projectId}/azure`, post(body)),
+  disconnectAzure: (projectId: string) =>
+    json<AzureConnection>(`/projects/${projectId}/azure`, { method: "DELETE" }),
+  startPlan: (buildId: string) => json<PlanStart>(`/builds/${buildId}/plan`, post()),
+  plan: (buildId: string) => optional<PlanOut>(`/builds/${buildId}/plan`),
+  acknowledgePlan: (buildId: string, note: string) => json<PlanOut>(`/builds/${buildId}/plan/acknowledge`, post({ note })),
+
+  settingsView: () => json<SettingsView>("/settings"),
+  putSettings: (body: SettingsPatch) => json<SettingsView>("/settings", { method: "PUT", body: JSON.stringify(body) }),
+  startEval: (processIds: string[]) =>
+    json<{ job_id: string; eval_id: string }>("/providers/eval", post({ process_ids: processIds })),
+  evalView: (evalId: string) => json<EvalView>(`/providers/eval/${evalId}`),
+  history: (projectId: string) => json<HistoryView>(`/history?project_id=${encodeURIComponent(projectId)}`),
+  readiness: (projectId: string) => json<ReadinessView>(`/projects/${projectId}/readiness`),
 };
 
 export interface DesignView {

@@ -7,18 +7,34 @@ import { DiscoverTab } from "@/components/tabs/discover/DiscoverTab";
 import { LaterStep } from "@/components/tabs/LaterStep";
 import { ValidateTab } from "@/components/tabs/validate/ValidateTab";
 import { DesignTab } from "@/components/tabs/design/DesignTab";
+import { BuildTab } from "@/components/tabs/build/BuildTab";
+import { VerifyTab } from "@/components/tabs/verify/VerifyTab";
+import { DeployTab } from "@/components/tabs/deploy/DeployTab";
 import { AskPanel } from "@/components/tabs/validate/AskPanel";
 import { Empty } from "@/components/ui/Empty";
 import { useProjects, useReport } from "@/lib/queries";
-import { STEP_KEYS, useAppState } from "@/lib/state";
+import { STEP_KEYS, useAppState, type StepKey } from "@/lib/state";
 import { useStepStates } from "@/lib/steps";
 
 export default function Home() {
-  const { projectId, step, setStep } = useAppState();
+  const { projectId, step, setStep, openProcess } = useAppState();
   const projects = useProjects();
   const report = useReport(projectId);
   const steps = useStepStates();
   const opened = useRef<string | null>(null);
+
+  // A link from Readiness (/?step=build&process=<id>#metrics) opens that step and process.
+  useEffect(() => {
+    if (!projectId) return;
+    const q = new URLSearchParams(window.location.search);
+    const s = q.get("step");
+    if (!s || !(STEP_KEYS as readonly string[]).includes(s)) return;
+    opened.current = projectId;
+    const pid = q.get("process");
+    if (pid) openProcess(pid);
+    setStep(s as StepKey);
+    window.history.replaceState(null, "", `/${window.location.hash}`);
+  }, [projectId, openProcess, setStep]);
 
   // A project that has been scanned opens on Discover; a new one on Upload.
   useEffect(() => {
@@ -57,6 +73,12 @@ export default function Home() {
         <ValidateTab />
       ) : step === "design" ? (
         <DesignTab />
+      ) : step === "build" ? (
+        <BuildTab />
+      ) : step === "verify" ? (
+        <VerifyTab />
+      ) : step === "deploy" ? (
+        <DeployTab />
       ) : (
         <LaterStep step={steps[active]} />
       )}
