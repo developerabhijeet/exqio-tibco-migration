@@ -1,0 +1,107 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Azure.Messaging.ServiceBus;
+using {{ app }}.Core.Messaging;
+
+namespace {{ app }}.Infrastructure.Messaging;
+
+/// <summary>
+/// Azure Service Bus implementation of <see cref="IMessageBus"/> (<c>Messaging:Mode=ServiceBus</c>).
+/// Queues and topics keep their TIBCO names; a topic consumer subscribes as <c>topic/subscription</c>.
+/// A handler that throws abandons the message, so Service Bus redelivers it (JMS redelivery).
+/// </summary>
+public sealed class ServiceBusMessageBus(ServiceBusClient client) : IMessageBus, IAsyncDisposable
+{
+    private readonly ConcurrentDictionary<string, ServiceBusSender> _senders = new(StringComparer.Ordinal);
+    private readonly ConcurrentBag<ServiceBusProcessor> _processors = [];
+
+    public async Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default)
+    {
+        var sender = _senders.GetOrAdd(entity, name => client.CreateSender(name));
+        var outgoing = new ServiceBusMessage(BinaryData.FromString(JsonSerializer.Serialize(message, BusJson.Options)))
+        {
+            ContentType = "application/json",
+        };
+        if (properties is not null)
+        {
+            foreach (var (key, value) in properties)
+            {
+                outgoing.ApplicationProperties[key] = value;
+            }
+
+            if (properties.TryGetValue(BusMessage.CorrelationIdProperty, out var correlationId))
+            {
+                outgoing.CorrelationId = correlationId;
+            }
+
+            if (properties.TryGetValue(BusMessage.ReplyToProperty, out var replyTo))
+            {
+                outgoing.ReplyTo = replyTo;
+            }
+        }
+
+        await sender.SendMessageAsync(outgoing, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var parts = entity.Split('/', 2);
+        var processor = parts.Length == 2 ? client.CreateProcessor(parts[0], parts[1]) : client.CreateProcessor(entity);
+        processor.ProcessMessageAsync += async args =>
+        {
+            var properties = args.Message.ApplicationProperties.ToDictionary(p => p.Key, p => Convert.ToString(p.Value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
+            if (!string.IsNullOrEmpty(args.Message.CorrelationId))
+            {
+                properties[BusMessage.CorrelationIdProperty] = args.Message.CorrelationId;
+            }
+
+            if (!string.IsNullOrEmpty(args.Message.ReplyTo))
+            {
+                properties[BusMessage.ReplyToProperty] = args.Message.ReplyTo;
+            }
+
+            await handler(new BusMessage(parts[0], args.Message.Body.ToString(), properties), args.CancellationToken).ConfigureAwait(false);
+            await args.CompleteMessageAsync(args.Message, args.CancellationToken).ConfigureAwait(false);
+        };
+        processor.ProcessErrorAsync += _ => Task.CompletedTask;
+        _processors.Add(processor);
+        await processor.StartProcessingAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        // Request-reply over Service Bus needs a session-enabled reply queue (design decision).
+        throw new NotImplementedException($"agent fills: request-reply on {entity} over Service Bus sessions");
+    }
+
+    public Task ReplyAsync<T>(BusMessage request, T message, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.Properties.TryGetValue(BusMessage.ReplyToProperty, out var replyTo))
+        {
+            throw new InvalidOperationException($"Message on {request.Entity} has no {BusMessage.ReplyToProperty} property.");
+        }
+
+        var properties = new Dictionary<string, string>();
+        if (request.Properties.TryGetValue(BusMessage.CorrelationIdProperty, out var correlationId))
+        {
+            properties[BusMessage.CorrelationIdProperty] = correlationId;
+        }
+
+        return PublishAsync(replyTo, message, properties, cancellationToken);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var processor in _processors)
+        {
+            await processor.DisposeAsync().ConfigureAwait(false);
+        }
+
+        foreach (var sender in _senders.Values)
+        {
+            await sender.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+}

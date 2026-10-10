@@ -1,0 +1,48 @@
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json.Serialization;
+using {{ app }}.Infrastructure.Messaging;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace {{ app }}.Tests.Support;
+
+/// <summary>
+/// Hosts the generated API in memory (Development auth, in-memory bus, timers off) against the
+/// test database, and sends scenario requests with a development token.
+/// </summary>
+public sealed class ApiFactory(TestDatabase database) : WebApplicationFactory<Program>
+{
+    /// <summary>The in-memory bus, to read what the process published.</summary>
+    public InMemoryMessageBus Bus => Services.GetRequiredService<InMemoryMessageBus>();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.UseEnvironment("Development");
+        builder.UseSetting("Auth:Mode", "Development");
+        builder.UseSetting("Messaging:Mode", "InMemory");
+        builder.UseSetting("Jobs:Enabled", "false");
+        foreach (var name in TestDatabase.ConnectionNames)
+        {
+            builder.UseSetting($"ConnectionStrings:{name}", database.ConnectionString);
+        }
+    }
+
+    /// <summary>Sends the fixture's request with a token from POST /auth/dev-token.</summary>
+    public async Task<HttpResponseMessage> SendAsync(ScenarioFixture fixture)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        var client = CreateClient();
+        using var tokenResponse = await client.PostAsJsonAsync("/auth/dev-token", new { subject = "scenario-tests" });
+        tokenResponse.EnsureSuccessStatusCode();
+        var token = await tokenResponse.Content.ReadFromJsonAsync<TokenAnswer>()
+            ?? throw new InvalidOperationException("empty answer from /auth/dev-token");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        using var request = fixture.ToHttpRequest();
+        return await client.SendAsync(request);
+    }
+
+    private sealed record TokenAnswer([property: JsonPropertyName("access_token")] string AccessToken);
+}

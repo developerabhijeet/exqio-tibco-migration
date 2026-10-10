@@ -1,0 +1,169 @@
+using System.Text.Json.Nodes;
+using {{ app }}.Tests.Support;
+using Npgsql;
+using NpgsqlTypes;
+using Testcontainers.PostgreSql;
+using Xunit;
+
+namespace {{ app }}.Tests;
+
+/// <summary>
+/// The test database: the estate's own SQL (<c>Database/*.sql</c>, copied from the TIBCO estate) on
+/// PostgreSQL. When <c>TEST_DATABASE_URL</c> is set (for example
+/// <c>postgresql://exiqo:exiqo@localhost:5432/exiqo_test</c>) that database is used, so the tests run
+/// without Docker; otherwise a Testcontainers PostgreSQL container is started. Every scenario resets
+/// the schemas, so scenarios do not see each other's writes.
+/// </summary>
+public sealed class TestDatabase : IAsyncLifetime
+{
+    /// <summary>Schemas the estate's SQL creates; dropped and recreated on every reset.</summary>
+    public static IReadOnlyList<string> Schemas { get; } = [{% for s in schemas %}"{{ s }}"{% if not loop.last %}, {% endif %}{% endfor %}];
+
+    /// <summary>The estate's SQL files, run in this order on every reset.</summary>
+    public static IReadOnlyList<string> SqlFiles { get; } = [{% for f in sql_files %}"{{ f }}"{% if not loop.last %}, {% endif %}{% endfor %}];
+
+    /// <summary>Connection strings the generated service reads; all point at this database.</summary>
+    public static IReadOnlyList<string> ConnectionNames { get; } = [{% for c in connections %}"{{ c }}"{% if not loop.last %}, {% endif %}{% endfor %}];
+
+    private PostgreSqlContainer? _container;
+
+    public string ConnectionString { get; private set; } = string.Empty;
+
+    public async Task InitializeAsync()
+    {
+        var url = Environment.GetEnvironmentVariable("TEST_DATABASE_URL");
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            ConnectionString = ToConnectionString(url);
+        }
+        else
+        {
+            _container = new PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
+            await _container.StartAsync();
+            ConnectionString = _container.GetConnectionString();
+        }
+
+        await ResetAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (_container is not null)
+        {
+            await _container.DisposeAsync();
+        }
+    }
+
+    /// <summary>Recreates the schemas, runs the estate SQL, then inserts the scenario's seed rows.</summary>
+    public async Task ResetAsync(ScenarioFixture? fixture = null)
+    {
+        var database = new NpgsqlConnectionStringBuilder(ConnectionString).Database ?? string.Empty;
+        if (_container is null && !database.EndsWith("_test", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Refusing to reset database '{database}': the name must end with _test.");
+        }
+
+        await using var dataSource = NpgsqlDataSource.Create(ConnectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        foreach (var schema in Schemas)
+        {
+            await ExecuteAsync(connection, $"DROP SCHEMA IF EXISTS {Quote(schema)} CASCADE; CREATE SCHEMA {Quote(schema)};");
+        }
+
+        foreach (var file in SqlFiles)
+        {
+            var sql = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Database", file));
+            await ExecuteAsync(connection, sql);
+        }
+
+        foreach (var (table, row) in fixture?.SeedRows() ?? [])
+        {
+            await InsertAsync(connection, table, row);
+        }
+    }
+
+    /// <summary>Every row of a schema-qualified table, column name to value.</summary>
+    public async Task<IReadOnlyList<Dictionary<string, object?>>> QueryAsync(string table)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(ConnectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT * FROM {QuoteTable(table)}";
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<Dictionary<string, object?>>();
+        while (await reader.ReadAsync())
+        {
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                row[reader.GetName(i)] = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private static async Task ExecuteAsync(NpgsqlConnection connection, string sql)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertAsync(NpgsqlConnection connection, string table, JsonObject row)
+    {
+        var columns = row.Select(p => p.Key).ToList();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"INSERT INTO {QuoteTable(table)} ({string.Join(", ", columns.Select(Quote))}) VALUES ({string.Join(", ", columns.Select((_, i) => $"@p{i}"))})";
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var value = row[columns[i]];
+            object text = value is null ? DBNull.Value : value is JsonValue v && v.TryGetValue<string>(out var s) ? s : value.ToJsonString();
+            command.Parameters.Add(new NpgsqlParameter { ParameterName = $"p{i}", Value = text, NpgsqlDbType = NpgsqlDbType.Unknown });
+        }
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static string QuoteTable(string table)
+    {
+        var parts = table.Split('.');
+        if (parts.Length == 1 && Schemas.Count > 0)
+        {
+            return $"{Quote(Schemas[0])}.{Quote(parts[0])}";
+        }
+
+        return string.Join(".", parts.Select(Quote));
+    }
+
+    private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    private static string ToConnectionString(string url)
+    {
+        if (!url.Contains("://", StringComparison.Ordinal))
+        {
+            return url;
+        }
+
+        var uri = new Uri(url);
+        var user = uri.UserInfo.Split(':', 2);
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.Port > 0 ? uri.Port : 5432,
+            Database = uri.AbsolutePath.TrimStart('/'),
+            Username = Uri.UnescapeDataString(user[0]),
+            Password = user.Length > 1 ? Uri.UnescapeDataString(user[1]) : null,
+        };
+        return builder.ConnectionString;
+    }
+}
+
+/// <summary>One database for the whole test run (tests in the collection run one at a time).</summary>
+[CollectionDefinition(Name)]
+public sealed class TestDatabaseCollection : ICollectionFixture<TestDatabase>
+{
+    public const string Name = "database";
+}

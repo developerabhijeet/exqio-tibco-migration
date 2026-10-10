@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.625" branch-rate="0.5" version="1.9" timestamp="1791633600" lines-covered="50" lines-valid="80" branches-covered="10" branches-valid="20">
+  <sources>
+    <source>/s/src/</source>
+  </sources>
+  <packages>
+    <package name="GmfCredit.Core" line-rate="0.6" branch-rate="0.5" complexity="10">
+      <classes />
+    </package>
+    <package name="GmfCredit.Infrastructure" line-rate="0.65" branch-rate="0.5" complexity="10">
+      <classes />
+    </package>
+  </packages>
+</coverage>

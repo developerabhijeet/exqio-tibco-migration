@@ -1,0 +1,14 @@
+using System.Diagnostics.CodeAnalysis;
+
+namespace {{ app }}.Core.Tibco;
+
+/// <summary>
+/// Marks a step the deterministic generator left to the Code Builder agent: the TIBCO expression
+/// or behaviour is kept in a comment next to the call, and the generated tests fail until it is filled.
+/// </summary>
+public static class AgentFill
+{
+    /// <summary>Throws <see cref="NotImplementedException"/> naming the TIBCO step to fill.</summary>
+    [DoesNotReturn]
+    public static void Required(string step) => throw new NotImplementedException($"agent fills: {step}");
+}

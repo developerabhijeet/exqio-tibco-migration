@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 PYTEST ?= .venv/bin/pytest
 
-.PHONY: setup db api web test e2e demo-check toolchain samples samples-zip
+.PHONY: setup db api web test e2e demo-check toolchain samples samples-zip nuget-cache
 
 setup:
 	python3 -m venv .venv
@@ -38,3 +38,21 @@ samples:
 samples-zip:
 	rm -f samples/synthetic-gmf.zip
 	$(PY) -m zipfile -c samples/synthetic-gmf.zip samples/synthetic-gmf
+
+# Offline NuGet feed for machines where api.nuget.org is refused (run this where NuGet is reachable,
+# then copy .tools/nuget-cache to the same path on the offline machine). Generates the synthetic
+# estate's solution, restores it into a dedicated packages folder (exactly the packages it needs,
+# transitive ones included, in the layout NuGet reads as a local feed) and copies that folder to
+# .tools/nuget-cache. DotnetRunner passes it to generated solutions as EXIQO_NUGET_CACHE.
+DOTNET ?= $(shell command -v dotnet 2>/dev/null || echo .tools/dotnet/dotnet)
+NUGET_CACHE ?= .tools/nuget-cache
+NUGET_WORK := .tools/nuget-cache-work
+
+nuget-cache:
+	rm -rf $(NUGET_WORK)
+	$(PY) -m engine.dotnet_gen.generator samples/synthetic-gmf --app gmf.credit --out $(NUGET_WORK)/GmfCredit
+	EXIQO_NUGET_CACHE= NUGET_PACKAGES=$(CURDIR)/$(NUGET_WORK)/packages $(DOTNET) restore $(NUGET_WORK)/GmfCredit/GmfCredit.sln
+	mkdir -p $(NUGET_CACHE)
+	cp -R $(NUGET_WORK)/packages/. $(NUGET_CACHE)/
+	rm -rf $(NUGET_WORK)
+	@echo "Offline NuGet feed ready in $(NUGET_CACHE) ($$(ls $(NUGET_CACHE) | wc -l) packages)."

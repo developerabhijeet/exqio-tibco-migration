@@ -1,0 +1,25 @@
+using System.Text.Json.Serialization;
+
+namespace {{ app }}.Core.Diagnostics;
+
+/// <summary>TIBCO Log activity: writes one structured log entry (implemented with ILogger in Infrastructure).</summary>
+public interface IStepLogger
+{
+    void Write(string process, string step, StepLogEntry entry);
+}
+
+/// <summary>Input of a TIBCO Log activity (<c>ActivityInput</c>).</summary>
+public sealed record StepLogEntry
+{
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    [JsonPropertyName("msgCode")]
+    public string? MsgCode { get; init; }
+
+    [JsonPropertyName("loggerName")]
+    public string? LoggerName { get; init; }
+
+    [JsonPropertyName("logLevel")]
+    public string? LogLevel { get; init; }
+}

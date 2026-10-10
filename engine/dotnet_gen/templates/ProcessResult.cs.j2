@@ -1,0 +1,27 @@
+using System.Text.Json.Serialization;
+
+namespace {{ app }}.Core.Services;
+
+/// <summary>What a process run returns to its starter: the HTTP status and the reply body, if any.</summary>
+public sealed record ProcessResult(int StatusCode, object? Body)
+{
+    /// <summary>A run that ended without a reply activity.</summary>
+    public static ProcessResult Completed { get; } = new(204, null);
+
+    /// <summary>A REST client or server error reply (TIBCO <c>client4XXError</c> or <c>server5XXError</c>).</summary>
+    public static ProcessResult FromError(ErrorReply error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return new ProcessResult(error.StatusCode, error);
+    }
+}
+
+/// <summary>Body of a TIBCO REST error reply (<c>client4XXError</c>, <c>server5XXError</c>).</summary>
+public sealed record ErrorReply
+{
+    [JsonPropertyName("statusCode")]
+    public int StatusCode { get; init; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+}

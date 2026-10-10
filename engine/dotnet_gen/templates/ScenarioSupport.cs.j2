@@ -1,0 +1,281 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using {{ app }}.Core.Exceptions;
+using {{ app }}.Core.Messaging;
+using {{ app }}.Infrastructure.Messaging;
+using Xunit;
+
+namespace {{ app }}.Tests.Support;
+
+/// <summary>
+/// A parity scenario fixture (<c>Fixtures/&lt;process&gt;/&lt;scenario&gt;.json</c>): the scenario input,
+/// the request it becomes, and the expected output, fault and side effects derived from the TIBCO
+/// model. Paths listed as noise (wall-clock values) are not compared; the fixture says why.
+/// </summary>
+public sealed class ScenarioFixture
+{
+    private ScenarioFixture(string scenarioId, JsonObject root)
+    {
+        ScenarioId = scenarioId;
+        Root = root;
+    }
+
+    public string ScenarioId { get; }
+
+    public JsonObject Root { get; }
+
+    public static ScenarioFixture Load(string process, string scenario)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", process, scenario + ".json");
+        var root = JsonNode.Parse(File.ReadAllText(path))?.AsObject()
+            ?? throw new InvalidOperationException($"empty fixture {path}");
+        return new ScenarioFixture((string?)root["scenario_id"] ?? scenario, root);
+    }
+
+    public JsonNode? Expected(string name) => Root["expected"]?[name];
+
+    public IReadOnlyCollection<string> OutputNoise =>
+        Root["expected"]?["output_noise"]?.AsArray().Select(n => (string?)n ?? string.Empty).ToHashSet(StringComparer.Ordinal) ?? [];
+
+    /// <summary>The scenario input deserialized as the starter's message or body type.</summary>
+    public T InputAs<T>()
+    {
+        var input = Root["input"] ?? throw new InvalidOperationException($"{ScenarioId} has no input");
+        return JsonSerializer.Deserialize<T>(input, BusJson.Options)
+            ?? throw new InvalidOperationException($"{ScenarioId} input does not deserialize as {typeof(T).Name}");
+    }
+
+    /// <summary>Rows inserted after the reset: (schema-qualified table, column values).</summary>
+    public IEnumerable<(string Table, JsonObject Row)> SeedRows()
+    {
+        foreach (var item in Root["seed_state"]?.AsArray() ?? new JsonArray())
+        {
+            if (item?["table"] is JsonValue table && item["row"] is JsonObject row)
+            {
+                yield return (table.GetValue<string>(), row);
+            }
+        }
+    }
+
+    /// <summary>The HTTP request the generator resolved from the REST starter and the scenario input.</summary>
+    public HttpRequestMessage ToHttpRequest()
+    {
+        var request = Root["request"] ?? throw new InvalidOperationException($"{ScenarioId} has no request");
+        var method = new HttpMethod((string?)request["method"] ?? "GET");
+        var url = (string?)request["path"] ?? "/";
+        var query = request["query"]?.AsObject();
+        if (query is { Count: > 0 })
+        {
+            url += "?" + string.Join("&", query.Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(ScenarioAssert.Text(p.Value))));
+        }
+
+        var message = new HttpRequestMessage(method, new Uri(url, UriKind.Relative));
+        if (request["body"] is JsonNode body)
+        {
+            message.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        }
+
+        return message;
+    }
+}
+
+/// <summary>Field-by-field comparison of a run with its fixture.</summary>
+public static class ScenarioAssert
+{
+    public static async Task<Exception?> CaptureAsync(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        try
+        {
+            await action();
+            return null;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>No fault expected: no exception. Fault expected: the typed exception with the same fields.</summary>
+    public static void FaultMatches(ScenarioFixture fixture, Exception? error)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        var expected = fixture.Expected("fault");
+        if (expected is null)
+        {
+            Assert.True(error is null, $"{fixture.ScenarioId}: unexpected exception {error}");
+            return;
+        }
+
+        var fault = Assert.IsAssignableFrom<ProcessFaultException>(error);
+        Assert.Equal((string?)expected["name"], fault.FaultName);
+        var actual = JsonSerializer.SerializeToNode(fault.FaultData, BusJson.Options);
+        AssertFields(fixture.ScenarioId, expected["data"], actual, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    /// <summary>The response status and body against <c>expected.output</c> (<c>status</c>, <c>body</c>).</summary>
+    public static async Task ResponseMatchesAsync(ScenarioFixture fixture, HttpResponseMessage response)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        ArgumentNullException.ThrowIfNull(response);
+        var text = await response.Content.ReadAsStringAsync();
+        var actual = new JsonObject
+        {
+            ["status"] = (int)response.StatusCode,
+            ["body"] = string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text),
+        };
+        if (fixture.Expected("fault") is JsonNode fault)
+        {
+            Assert.Equal(500, (int)response.StatusCode);
+            Assert.Equal((string?)fault["name"], (string?)actual["body"]?["title"]);
+            return;
+        }
+
+        AssertFields(fixture.ScenarioId, fixture.Expected("output"), actual, fixture.OutputNoise);
+    }
+
+    /// <summary>Rows written (in the test database) and messages published (on the in-memory bus).</summary>
+    public static async Task SideEffectsMatchAsync(ScenarioFixture fixture, TestDatabase database, InMemoryMessageBus bus)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(bus);
+        foreach (var effect in fixture.Expected("side_effects")?.AsArray() ?? new JsonArray())
+        {
+            if (effect is null)
+            {
+                continue;
+            }
+
+            var payload = effect["payload"]?.AsObject() ?? new JsonObject();
+            var noise = effect["noise"]?.AsArray().Select(n => (string?)n ?? string.Empty).ToHashSet(StringComparer.Ordinal) ?? [];
+            switch ((string?)effect["kind"])
+            {
+                case "row_written":
+                    var table = (string?)effect["table"] ?? throw new InvalidOperationException("row_written without table");
+                    var rows = await database.QueryAsync(table);
+                    Assert.True(
+                        rows.Any(row => Matches(payload, name => row.TryGetValue(name, out var v) ? Text(v) : null, noise)),
+                        $"{fixture.ScenarioId}: no row in {table} matches {payload.ToJsonString()}");
+                    break;
+                case "message_published":
+                    var entity = (string?)effect["target"] ?? string.Empty;
+                    var messages = bus.PublishedTo(entity).Select(m => JsonNode.Parse(m.Body)).ToList();
+                    Assert.True(
+                        messages.Any(m => Matches(payload, name => m?[name] is JsonNode n ? Text(n) : null, noise)),
+                        $"{fixture.ScenarioId}: no message on {entity} matches {payload.ToJsonString()}");
+                    break;
+                default:
+                    // service_called and subprocess_called are compared by the verifier (tab 6), not here.
+                    break;
+            }
+        }
+    }
+
+    public static void AssertFields(string scenarioId, JsonNode? expected, JsonNode? actual, IReadOnlyCollection<string> noise)
+    {
+        ArgumentNullException.ThrowIfNull(noise);
+        var want = Flatten(expected);
+        var got = Flatten(actual);
+        var mismatches = new List<string>();
+        foreach (var (path, value) in want)
+        {
+            if (noise.Contains(path))
+            {
+                continue;
+            }
+
+            var actualValue = got.TryGetValue(path, out var a) ? a : null;
+            if (!FieldEquals(value, actualValue))
+            {
+                mismatches.Add($"{path}: expected '{value}', actual '{actualValue ?? "(missing)"}'");
+            }
+        }
+
+        Assert.True(mismatches.Count == 0, $"{scenarioId}: {mismatches.Count} field(s) differ:\n" + string.Join("\n", mismatches));
+    }
+
+    public static string Text(object? value) => value switch
+    {
+        null => string.Empty,
+        JsonValue v when v.TryGetValue<string>(out var s) => s,
+        JsonNode n => n.ToJsonString(),
+        string s => s,
+        bool b => b ? "true" : "false",
+        DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture),
+        DateTimeOffset dto => dto.ToString("o", CultureInfo.InvariantCulture),
+        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? string.Empty,
+    };
+
+    /// <summary>Equal as text, as numbers, or as dates; an empty expected value matches a missing one.</summary>
+    public static bool FieldEquals(string? expected, string? actual)
+    {
+        expected ??= string.Empty;
+        actual ??= string.Empty;
+        if (string.Equals(expected, actual, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (decimal.TryParse(expected, NumberStyles.Float, CultureInfo.InvariantCulture, out var e)
+            && decimal.TryParse(actual, NumberStyles.Float, CultureInfo.InvariantCulture, out var a))
+        {
+            return e == a;
+        }
+
+        if (DateTime.TryParse(expected, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ed)
+            && DateTime.TryParse(actual, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ad))
+        {
+            return ed == ad;
+        }
+
+        return false;
+    }
+
+    private static bool Matches(JsonObject expected, Func<string, string?> actual, IReadOnlyCollection<string> noise)
+    {
+        foreach (var (name, value) in expected)
+        {
+            if (!noise.Contains(name) && !FieldEquals(Text(value), actual(name)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static Dictionary<string, string> Flatten(JsonNode? node)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        Walk(node, string.Empty, result);
+        return result;
+    }
+
+    private static void Walk(JsonNode? node, string path, Dictionary<string, string> result)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (name, child) in obj)
+                {
+                    Walk(child, path.Length == 0 ? name : $"{path}.{name}", result);
+                }
+
+                break;
+            case JsonArray array:
+                for (var i = 0; i < array.Count; i++)
+                {
+                    Walk(array[i], $"{path}[{i}]", result);
+                }
+
+                break;
+            default:
+                result[path] = Text(node);
+                break;
+        }
+    }
+}

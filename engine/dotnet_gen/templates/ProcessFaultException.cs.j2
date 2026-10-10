@@ -1,0 +1,21 @@
+namespace {{ app }}.Core.Exceptions;
+
+/// <summary>
+/// Base class of the typed exceptions generated for TIBCO Throw activities. The Api project maps it
+/// to ProblemDetails in one exception handler; consumers let it fail the message.
+/// </summary>
+public abstract class ProcessFaultException : Exception
+{
+    protected ProcessFaultException(string faultName, object? faultData, string message)
+        : base(message)
+    {
+        FaultName = faultName;
+        FaultData = faultData;
+    }
+
+    /// <summary>The TIBCO fault name, for example <c>DealerInactiveFault</c>.</summary>
+    public string FaultName { get; }
+
+    /// <summary>The fault record built by the throw mapping.</summary>
+    public object? FaultData { get; }
+}

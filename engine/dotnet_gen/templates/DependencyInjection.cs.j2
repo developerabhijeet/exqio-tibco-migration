@@ -1,0 +1,64 @@
+{% for u in usings %}
+using {{ u }};
+{% endfor %}
+
+namespace {{ app }}.Infrastructure;
+
+/// <summary>Registers the generated services, repositories, messaging, consumers and jobs.</summary>
+public static class InfrastructureServiceCollectionExtensions
+{
+    public static IServiceCollection Add{{ app }}Infrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        // Dapper maps snake_case columns (deal_id) to PascalCase properties (DealId).
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+{% for c in connections %}
+        services.AddKeyedSingleton("{{ c }}", (_, _) => NpgsqlDataSource.Create(
+            configuration.GetConnectionString("{{ c }}") ?? throw new InvalidOperationException("ConnectionStrings:{{ c }} is not configured.")));
+{% endfor %}
+
+        // Messaging: Azure Service Bus in production, in-memory for tests and local runs.
+        if (string.Equals(configuration["Messaging:Mode"], "InMemory", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<InMemoryMessageBus>();
+            services.AddSingleton<IMessageBus>(sp => sp.GetRequiredService<InMemoryMessageBus>());
+        }
+        else
+        {
+            services.AddSingleton(_ => new ServiceBusClient(
+                configuration.GetConnectionString("ServiceBus") ?? throw new InvalidOperationException("ConnectionStrings:ServiceBus is not configured.")));
+            services.AddSingleton<IMessageBus, ServiceBusMessageBus>();
+        }
+
+        services.AddSingleton<IStepLogger, LoggerStepLogger>();
+{% for iface, impl in repositories %}
+        services.AddSingleton<{{ iface }}, {{ impl }}>();
+{% endfor %}
+{% for s in services %}
+        services.AddSingleton<{{ s }}>();
+{% endfor %}
+{% for c in consumers %}
+        services.AddSingleton<{{ c }}>();
+        services.AddHostedService(sp => sp.GetRequiredService<{{ c }}>());
+{% endfor %}
+{% for j in jobs %}
+        services.AddSingleton<{{ j }}>();
+        services.AddHostedService(sp => sp.GetRequiredService<{{ j }}>());
+{% endfor %}
+{% for c in clients %}
+        services.AddHttpClient<{{ c.name }}>(client => client.BaseAddress = new Uri(configuration["{{ c.base_key }}"] ?? "http://localhost/"))
+{% if c.resilience %}
+            .AddStandardResilienceHandler(options =>
+            {
+{% for line in c.resilience %}
+                {{ line }}
+{% endfor %}
+            });
+{% else %}
+            ;
+{% endif %}
+{% endfor %}
+        return services;
+    }
+}

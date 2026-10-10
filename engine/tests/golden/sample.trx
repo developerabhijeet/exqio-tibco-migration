@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="5b3f0c4e-1111-4c1e-9d5e-000000000001" name="exiqo@build 2026-10-10 12:00:00" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-10T12:00:00.0000000+00:00" queuing="2026-10-10T12:00:00.0000000+00:00" start="2026-10-10T12:00:00.0000000+00:00" finish="2026-10-10T12:00:02.0000000+00:00" />
+  <Results>
+    <UnitTestResult executionId="e1" testId="t1" testName="R1 A dealer must be ACTIVE to receive funding." computerName="build" duration="00:00:00.0123456" startTime="2026-10-10T12:00:00.0000000+00:00" endTime="2026-10-10T12:00:00.0123456+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e1" />
+    <UnitTestResult executionId="e2" testId="t2" testName="R2 The funding amount must be within 2% of the approved deal amount." computerName="build" duration="00:00:00.0010000" startTime="2026-10-10T12:00:00.0000000+00:00" endTime="2026-10-10T12:00:00.0010000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e2">
+      <Output>
+        <ErrorInfo>
+          <Message>no test body for R2</Message>
+          <StackTrace>   at GmfCredit.Tests.DealerFundingRequestRulesTests.R2_the_funding_amount_must_be_within_2_of() in /s/tests/GmfCredit.Tests/DealerFundingRequestRulesTests.cs:line 30</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="e3" testId="t3" testName="Branch [LookupDealerToLookupDeal] LookupDealer to LookupDeal when $LookupDealer/Record[1]/status = 'ACTIVE'" computerName="build" duration="00:00:01.5000000" startTime="2026-10-10T12:00:00.0000000+00:00" endTime="2026-10-10T12:00:01.5000000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e3" />
+    <UnitTestResult executionId="e4" testId="t4" testName="Scenario [DealerFundingRequest:happy] happy path" computerName="build" duration="00:00:00.2500000" startTime="2026-10-10T12:00:01.5000000+00:00" endTime="2026-10-10T12:00:01.7500000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e4" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="R1 A dealer must be ACTIVE to receive funding." storage="/s/tests/gmfcredit.tests/bin/debug/net10.0/gmfcredit.tests.dll" id="t1">
+      <Execution id="e1" />
+      <TestMethod codeBase="/s/tests/GmfCredit.Tests/bin/Debug/net10.0/GmfCredit.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="GmfCredit.Tests.DealerFundingRequestRulesTests" name="R1_a_dealer_must_be_active" />
+    </UnitTest>
+    <UnitTest name="R2 The funding amount must be within 2% of the approved deal amount." storage="/s/tests/gmfcredit.tests/bin/debug/net10.0/gmfcredit.tests.dll" id="t2">
+      <Execution id="e2" />
+      <TestMethod codeBase="/s/tests/GmfCredit.Tests/bin/Debug/net10.0/GmfCredit.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="GmfCredit.Tests.DealerFundingRequestRulesTests" name="R2_the_funding_amount_must_be_within_2_of" />
+    </UnitTest>
+    <UnitTest name="Branch [LookupDealerToLookupDeal] LookupDealer to LookupDeal when $LookupDealer/Record[1]/status = 'ACTIVE'" storage="/s/tests/gmfcredit.tests/bin/debug/net10.0/gmfcredit.tests.dll" id="t3">
+      <Execution id="e3" />
+      <TestMethod codeBase="/s/tests/GmfCredit.Tests/bin/Debug/net10.0/GmfCredit.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="GmfCredit.Tests.DealerFundingRequestBranchTests" name="Branch_LookupDealer_to_LookupDeal_when_lookupdealer_record_1_status_active" />
+    </UnitTest>
+    <UnitTest name="Scenario [DealerFundingRequest:happy] happy path" storage="/s/tests/gmfcredit.tests/bin/debug/net10.0/gmfcredit.tests.dll" id="t4">
+      <Execution id="e4" />
+      <TestMethod codeBase="/s/tests/GmfCredit.Tests/bin/Debug/net10.0/GmfCredit.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="GmfCredit.Tests.DealerFundingRequestScenarioTests" name="Scenario_happy" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="t1" executionId="e1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="t2" executionId="e2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="t3" executionId="e3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="t4" executionId="e4" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="4" executed="4" passed="3" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+  </ResultSummary>
+</TestRun>

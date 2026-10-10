@@ -1,0 +1,12 @@
+namespace {{ app }}.Core.Contracts;
+
+/// <summary>
+/// Lineage: the TIBCO element path a contract property was generated from, so the parity report
+/// can name the XSD or JSON schema field behind every C# property.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+public sealed class TibcoPathAttribute(string path) : Attribute
+{
+    /// <summary>Element path from the root element, for example <c>/FundingRequest/dealId</c>.</summary>
+    public string Path { get; } = path;
+}

@@ -1,0 +1,75 @@
+#if EXIQO_DEV_ENDPOINTS
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using {{ app }}.Core.Messaging;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
+
+namespace {{ app }}.Api.Auth;
+
+/// <summary>
+/// Development JWTs (Auth:Mode=Development): HMAC-SHA256 signed with Auth:DevToken:SigningKey from
+/// appsettings.Development.json. Compiled out of Release builds; production uses Microsoft Entra ID.
+/// </summary>
+public static class DevToken
+{
+    public static TokenValidationParameters ValidationParameters(IConfiguration configuration)
+    {
+        var settings = Settings(configuration);
+        return new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = settings.Issuer,
+            ValidateAudience = true,
+            ValidAudience = settings.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = settings.Key,
+            ValidateLifetime = true,
+        };
+    }
+
+    public static DevTokenResponse Issue(IConfiguration configuration, string subject)
+    {
+        var settings = Settings(configuration);
+        var expires = DateTime.UtcNow.AddHours(8);
+        var token = new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = settings.Issuer,
+            Audience = settings.Audience,
+            Expires = expires,
+            Subject = new ClaimsIdentity([new Claim("sub", subject), new Claim("name", subject)]),
+            SigningCredentials = new SigningCredentials(settings.Key, SecurityAlgorithms.HmacSha256),
+        });
+        return new DevTokenResponse(token, "Bearer", expires);
+    }
+
+    private static (string Issuer, string Audience, SymmetricSecurityKey Key) Settings(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Auth:DevToken");
+        var key = section["SigningKey"];
+        if (string.IsNullOrEmpty(key) || Encoding.UTF8.GetByteCount(key) < 32)
+        {
+            throw new InvalidOperationException("Auth:DevToken:SigningKey must be at least 32 bytes.");
+        }
+
+        return (section["Issuer"] ?? "exiqo-dev", section["Audience"] ?? "exiqo-api", new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)));
+    }
+}
+
+/// <summary>Body of POST /auth/dev-token.</summary>
+public sealed record DevTokenRequest(string? Subject);
+
+/// <summary>Answer of POST /auth/dev-token.</summary>
+public sealed record DevTokenResponse(
+    [property: JsonPropertyName("access_token")] string AccessToken,
+    [property: JsonPropertyName("token_type")] string TokenType,
+    [property: JsonPropertyName("expires_at")] DateTime ExpiresAt);
+
+/// <summary>Body of POST /_bus/publish: an entity, a JSON payload and optional JMS properties.</summary>
+public sealed record BusPublishRequest(string Entity, JsonElement Payload, Dictionary<string, string>? Properties)
+{
+    public BusMessage ToMessage() => new(Entity, Payload.GetRawText(), Properties ?? new Dictionary<string, string>());
+}
+#endif

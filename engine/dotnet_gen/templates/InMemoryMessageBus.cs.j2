@@ -1,0 +1,103 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using {{ app }}.Core.Messaging;
+
+namespace {{ app }}.Infrastructure.Messaging;
+
+/// <summary>
+/// In-memory bus for tests and local runs (<c>Messaging:Mode=InMemory</c>): delivery is synchronous,
+/// every message is recorded so tests and the verifier can read what a process published.
+/// </summary>
+public sealed class InMemoryMessageBus : IMessageBus
+{
+    private static readonly IReadOnlyDictionary<string, string> NoProperties = new Dictionary<string, string>();
+    private readonly ConcurrentDictionary<string, List<Func<BusMessage, CancellationToken, Task>>> _handlers = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<BusMessage> _published = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<BusMessage>> _replies = new(StringComparer.Ordinal);
+
+    /// <summary>Every message published or delivered, in order.</summary>
+    public IReadOnlyList<BusMessage> Published => [.. _published];
+
+    /// <summary>Messages published to one entity (a queue or a topic name).</summary>
+    public IReadOnlyList<BusMessage> PublishedTo(string entity) => [.. _published.Where(m => m.Entity == entity)];
+
+    public Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default)
+    {
+        var body = JsonSerializer.Serialize(message, BusJson.Options);
+        return DeliverAsync(new BusMessage(entity, body, properties ?? NoProperties), cancellationToken);
+    }
+
+    /// <summary>Records <paramref name="message"/> and hands it to the subscribers of its entity.</summary>
+    public async Task DeliverAsync(BusMessage message, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        _published.Enqueue(message);
+        if (message.Properties.TryGetValue(BusMessage.CorrelationIdProperty, out var correlationId)
+            && _replies.TryRemove($"{message.Entity}|{correlationId}", out var waiter))
+        {
+            waiter.TrySetResult(message);
+            return;
+        }
+
+        if (!_handlers.TryGetValue(message.Entity, out var handlers))
+        {
+            return;
+        }
+
+        Func<BusMessage, CancellationToken, Task>[] snapshot;
+        lock (handlers)
+        {
+            snapshot = [.. handlers];
+        }
+
+        foreach (var handler in snapshot)
+        {
+            await handler(message, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var key = entity.Split('/')[0]; // topic/subscription: every subscription sees every topic message
+        var handlers = _handlers.GetOrAdd(key, _ => []);
+        lock (handlers)
+        {
+            handlers.Add(handler);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var correlationId = Guid.NewGuid().ToString("N");
+        var replyTo = $"{entity}.reply";
+        var waiter = new TaskCompletionSource<BusMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _replies[$"{replyTo}|{correlationId}"] = waiter;
+        var properties = new Dictionary<string, string>
+        {
+            [BusMessage.ReplyToProperty] = replyTo,
+            [BusMessage.CorrelationIdProperty] = correlationId,
+        };
+        await PublishAsync(entity, message, properties, cancellationToken).ConfigureAwait(false);
+        return await waiter.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task ReplyAsync<T>(BusMessage request, T message, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!request.Properties.TryGetValue(BusMessage.ReplyToProperty, out var replyTo))
+        {
+            throw new InvalidOperationException($"Message on {request.Entity} has no {BusMessage.ReplyToProperty} property.");
+        }
+
+        var properties = new Dictionary<string, string>();
+        if (request.Properties.TryGetValue(BusMessage.CorrelationIdProperty, out var correlationId))
+        {
+            properties[BusMessage.CorrelationIdProperty] = correlationId;
+        }
+
+        return PublishAsync(replyTo, message, properties, cancellationToken);
+    }
+}

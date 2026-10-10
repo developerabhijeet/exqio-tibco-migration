@@ -1,0 +1,36 @@
+using {{ app }}.Core.Exceptions;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+
+namespace {{ app }}.Api.Errors;
+
+/// <summary>
+/// Maps the typed TIBCO fault exceptions to ProblemDetails (status 500, as an uncaught BW fault
+/// fails the job); the fault record is returned in the <c>fault</c> extension.
+/// </summary>
+public sealed class FaultExceptionHandler(IProblemDetailsService problemDetails) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(httpContext);
+        if (exception is not ProcessFaultException fault)
+        {
+            return false;
+        }
+
+        httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        var details = new ProblemDetails
+        {
+            Status = StatusCodes.Status500InternalServerError,
+            Title = fault.FaultName,
+            Detail = fault.Message,
+        };
+        details.Extensions["fault"] = fault.FaultData;
+        return await problemDetails.TryWriteAsync(new ProblemDetailsContext
+        {
+            HttpContext = httpContext,
+            ProblemDetails = details,
+            Exception = exception,
+        }).ConfigureAwait(false);
+    }
+}

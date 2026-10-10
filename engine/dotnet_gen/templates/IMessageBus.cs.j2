@@ -1,0 +1,42 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace {{ app }}.Core.Messaging;
+
+/// <summary>
+/// Messaging port for the JMS steps: Azure Service Bus in production, an in-memory bus for tests and
+/// local runs. Entities are the TIBCO queue and topic names, verbatim; message bodies are JSON.
+/// </summary>
+public interface IMessageBus
+{
+    /// <summary>JMS Send or Publish: sends <paramref name="message"/> to a queue or topic.</summary>
+    Task PublishAsync<T>(string entity, T message, IReadOnlyDictionary<string, string>? properties = null, CancellationToken cancellationToken = default);
+
+    /// <summary>JMS receive: calls <paramref name="handler"/> for every message on a queue, or on a topic (<c>topic/subscription</c>).</summary>
+    Task SubscribeAsync(string entity, Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default);
+
+    /// <summary>JMS Request Reply: sends with a reply-to entity and waits for the correlated reply.</summary>
+    Task<BusMessage> RequestAsync<T>(string entity, T message, TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>JMS Reply: answers <paramref name="request"/> on its reply-to entity with the same correlation id.</summary>
+    Task ReplyAsync<T>(BusMessage request, T message, CancellationToken cancellationToken = default);
+}
+
+/// <summary>A message as received from the bus: entity, JSON body and application properties.</summary>
+public sealed record BusMessage(string Entity, string Body, IReadOnlyDictionary<string, string> Properties)
+{
+    /// <summary>Property names the bus uses for request and reply.</summary>
+    public const string ReplyToProperty = "ReplyTo";
+
+    public const string CorrelationIdProperty = "CorrelationId";
+}
+
+/// <summary>JSON settings shared by publishers and consumers (web defaults, numbers accepted as strings).</summary>
+public static class BusJson
+{
+    public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)
+    {
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+}
