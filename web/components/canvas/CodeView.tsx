@@ -50,7 +50,7 @@ export default function CodeView({
       decorations.current = editor.deltaDecorations(decorations.current, []);
       return;
     }
-    // The band skips the focus line so the stronger focus colour is not painted over.
+    // The band skips the focus line so the stronger focus color is not painted over.
     const band = [
       [highlight.start, highlight.focus - 1],
       [highlight.focus + 1, highlight.end],

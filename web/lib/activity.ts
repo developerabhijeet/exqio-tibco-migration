@@ -1,4 +1,4 @@
-// Activity presentation by canonical type: colour strip and icon name.
+// Activity presentation by canonical type: color strip and icon name.
 import type { CanvasNodeData } from "./types";
 
 export const STRIP = {

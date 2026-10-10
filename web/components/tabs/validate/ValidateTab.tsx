@@ -148,7 +148,7 @@ export function ValidateTab() {
             </div>
 
             {!a?.analysed ? (
-              <Empty title="Not analysed yet">
+              <Empty title="Not analyzed yet">
                 Run analysis to draft rules and findings for {proc?.name ?? "this process"}.
               </Empty>
             ) : (

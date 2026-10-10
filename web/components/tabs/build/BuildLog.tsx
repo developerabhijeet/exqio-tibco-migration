@@ -9,7 +9,7 @@ import { OutcomePill, TagPill } from "./Panel";
 
 /**
  * When the job ended but the build failed, the card says so and the stage chips take the color
- * of their step rows (restore failed red, build and test skipped grey); otherwise null.
+ * of their step rows (restore failed red, build and test skipped gray); otherwise null.
  */
 export function failedBuildOutcome(buildStatus: string | null | undefined, rows: BuildStepRow[]): JobOutcomeOverride | null {
   if (buildStatus !== "failed") return null;

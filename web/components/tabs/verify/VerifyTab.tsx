@@ -49,9 +49,9 @@ export function VerifyTab() {
           <p className="eyebrow">Step 6</p>
           <h2 className="panel-title">Verify</h2>
           <p className="mt-1 max-w-[760px] text-[14px] text-slate">
-            The scenarios run through the TIBCO model to give the expected output, then against the running .NET service with
-            the same inputs. Every field is compared; a difference is a defect unless a finding decided Fix explains it. QA
-            approves parity (G5).
+            The scenarios run through the platform&apos;s model of the TIBCO process; expected values are derived from the TIBCO
+            model, not from a TIBCO runtime. The same inputs then go to the running .NET service. Every field is compared; a
+            difference is a defect unless a finding decided Fix explains it. QA approves parity (G5).
           </p>
         </div>
         <ProcessPicker />

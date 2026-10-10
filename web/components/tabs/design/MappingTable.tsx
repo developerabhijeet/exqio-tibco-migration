@@ -96,7 +96,7 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
               </td>
               <td className="px-3 py-2">
                 {m.origin === "code" ? (
-                  <Pill tone="det" title="Code-generated mapping from the pattern catalogue; no model involved">
+                  <Pill tone="det" title="Code-generated mapping from the pattern catalog; no model involved">
                     code
                   </Pill>
                 ) : (

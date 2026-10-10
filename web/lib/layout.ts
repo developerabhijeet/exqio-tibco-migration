@@ -1,5 +1,5 @@
 // ELK layered layout (left to right) of a process canvas into React Flow nodes and edges.
-// Groups (scope, loops, synthesised parallel blocks) and fault handlers become dashed parent
+// Groups (scope, loops, synthesized parallel blocks) and fault handlers become dashed parent
 // nodes; ELK positions children relative to their parent, which is what React Flow expects.
 import type { ElkExtendedEdge, ElkNode } from "elkjs/lib/elk-api";
 import { MarkerType, type Edge, type Node } from "@xyflow/react";

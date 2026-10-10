@@ -86,7 +86,7 @@ export function AskPanel() {
         <div>
           <p className="eyebrow">Ask AI</p>
           <h2 className="mt-0.5 text-[18px] font-semibold text-plum">Questions about this estate</h2>
-          <p className="mt-0.5 text-[12.5px] text-slate">Answered from the analysed rules, findings and decisions, with citations.</p>
+          <p className="mt-0.5 text-[12.5px] text-slate">Answered from the analyzed rules, findings and decisions, with citations.</p>
         </div>
         <button type="button" className="btn-ghost" onClick={onClose} aria-label="Close Ask AI">
           <X size={18} />

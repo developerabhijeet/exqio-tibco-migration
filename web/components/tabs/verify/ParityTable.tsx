@@ -16,6 +16,9 @@ const STATUS: Record<string, { tone: "gate" | "error" | "decision" | "det"; text
   noise: { tone: "det", text: "noise" },
 };
 
+const CONTROL_ONLY_TITLE =
+  "touched only through a branch decision by this finding; not accepted as intended without a TIBCO sandbox run";
+
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : `${Math.round(v * 1000) / 10}%`);
 
 function show(v: unknown): string {
@@ -43,11 +46,16 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
                     not confirmed
                   </Pill>
                 ) : null}
-                {f.status === "intended" && f.finding_id ? (
+                {(f.status === "intended" || f.status === "defect") && f.finding_id ? (
                   <button
                     type="button"
+                    data-testid="finding-pill"
                     className="text-[12px] font-medium text-decision underline-offset-2 hover:underline"
-                    title={`Finding ${f.finding_id}, decided Fix at G2`}
+                    title={
+                      f.via === "control"
+                        ? CONTROL_ONLY_TITLE
+                        : `Finding ${f.finding_id}, decided Fix at G2`
+                    }
                     onClick={() => setStep("validate")}
                   >
                     {shortKey(f.finding_id)}
@@ -160,6 +168,12 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
             <p data-testid="unconfirmed-intended" className="rounded-card border border-decision/30 bg-decision-bg px-4 py-2 text-[13.5px] text-decision">
               <span className="font-semibold">{p.unconfirmed_intended} intended difference(s)</span>{" "}
               {p.unconfirmed_note ?? "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"}
+            </p>
+          ) : null}
+          {p.control_only_defects ? (
+            <p data-testid="control-only-defects" className="rounded-card border border-error/30 bg-error-bg px-4 py-2 text-[13.5px] text-error">
+              <span className="font-semibold">{p.control_only_defects}</span> of the unexplained differences are touched only
+              through a branch decision by a Fix finding
             </p>
           ) : null}
           <p className="text-[13px] text-slate">

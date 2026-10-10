@@ -216,6 +216,8 @@ export interface FieldDiff {
   finding_id: string | null;
   /** false on an intended difference no TIBCO sandbox run has confirmed (newer API). */
   confirmed?: boolean;
+  /** "control" on a defect a Fix finding touches only through a branch decision; it stays a defect (newer API). */
+  via?: "control" | string;
 }
 
 export interface ScenarioReport {
@@ -245,6 +247,8 @@ export interface ParityView {
   /** Intended differences derived from the TIBCO model and not confirmed by a sandbox run. */
   unconfirmed_intended?: number;
   unconfirmed_note?: string;
+  /** Defects a Fix finding touches only through a branch decision (newer API). */
+  control_only_defects?: number;
   noise_rules: { path_glob: string; reason: string }[];
   reports: ScenarioReport[];
 }

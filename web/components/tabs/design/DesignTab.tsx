@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { FileDown, History, Loader2, Wand2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useJob } from "@/lib/jobs";
@@ -69,6 +70,12 @@ export function DesignTab() {
   const running = stream?.status === "running";
   const rec = design.data?.record ?? null;
   const g3 = (gates.data ?? []).find((g) => g.gate === "G3");
+  // The active provider, as AskPanel reads it: the fake provider's narrative is canned prose.
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 60_000 });
+  const provider = health.data?.provider;
+  const narrativeEyebrow = provider
+    ? `Designer narrative, ${provider} provider${provider === "fake" ? " (scripted demo text, no model)" : ""}`
+    : "Designer narrative";
 
   const generate = async () => {
     if (!processId) return;
@@ -88,7 +95,7 @@ export function DesignTab() {
           <p className="eyebrow">Step 4</p>
           <h2 className="panel-title">Design</h2>
           <p className="mt-1 max-w-[720px] text-[14px] text-slate">
-            Code maps every TIBCO step to a C# file, class and method from the pattern catalogue. The designer model writes
+            Code maps every TIBCO step to a C# file, class and method from the pattern catalog. The designer model writes
             the narrative. An architect approves the record (G3).
           </p>
         </div>
@@ -162,7 +169,7 @@ export function DesignTab() {
                 ) : null}
               </div>
 
-              <Panel title="Narrative" eyebrow="Designer" testId="design-narrative">
+              <Panel title="Narrative" eyebrow={narrativeEyebrow} testId="design-narrative">
                 {rec.narrative ? (
                   <div className="space-y-2 text-[15px] leading-relaxed text-ink">
                     {rec.narrative.split(/\n{2,}/).map((p, i) => (

@@ -307,7 +307,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await expect(page.getByTestId("history-timeline")).toContainText("build");
 });
 
-test("the parity table shows a committed fixture: 88.9 %, one defect, one unconfirmed intended, one noise", async ({ page }) => {
+test("the parity table shows a committed fixture: 70 %, one defect, one control-only defect, one unconfirmed intended, one noise", async ({ page }) => {
   test.setTimeout(180_000);
   // Its own project and process; the latest build and its parity are routed, so the flow test can
   // fail without taking this coverage with it.
@@ -359,22 +359,38 @@ test("the parity table shows a committed fixture: 88.9 %, one defect, one unconf
   await actAs(page, "qa.priya");
   await page.getByTestId("step-verify").click();
   const table = page.getByTestId("parity-table");
-  await expect(table.getByTestId("parity-overall")).toHaveText("88.9%");
-  await expect(table).toContainText("8 of 9 fields");
+  // The API's math: parity counts only `match` fields (intended and defects are not matched; noise is
+  // not compared), 7 of 10 overall and 6 of 9 in the happy-path scenario.
+  await expect(table.getByTestId("parity-overall")).toHaveText("70%");
+  await expect(table).toContainText("7 of 10 fields");
   await expect(table.getByTestId("parity-label")).toHaveText("Expected output derived from the TIBCO model");
   const banner = table.getByTestId("unexplained-banner");
-  await expect(banner).toHaveText("Unexplained differences: 1");
+  await expect(banner).toHaveText("Unexplained differences: 2");
   await expect(banner).toHaveClass(/text-error/);
   await expect(table.getByTestId("unconfirmed-intended")).toHaveText(
     "1 intended difference(s) not confirmed: no TIBCO sandbox run; derived from the TIBCO model",
   );
-  await expect(table.getByTestId("parity-scenario")).toHaveCount(2);
+  await expect(table.getByTestId("control-only-defects")).toHaveText(
+    "1 of the unexplained differences are touched only through a branch decision by a Fix finding",
+  );
+  const scenarios = table.getByTestId("parity-scenario");
+  await expect(scenarios).toHaveCount(2);
+  await expect(scenarios.first()).toContainText("66.7%");
+  await expect(scenarios.first()).toContainText("2 unexplained");
   const rows = table.getByTestId("parity-row");
-  await expect(rows).toHaveCount(10);
+  await expect(rows).toHaveCount(11);
   await expect(rows.and(page.locator('[data-status="match"]'))).toHaveCount(7);
-  const defect = rows.and(page.locator('[data-status="defect"]'));
+  const defects = rows.and(page.locator('[data-status="defect"]'));
+  await expect(defects).toHaveCount(2);
+  const defect = defects.filter({ hasText: "output.body.status" });
   await expect(defect).toHaveCount(1);
-  await expect(defect).toContainText("output.body.status");
+  await expect(defect.getByTestId("finding-pill")).toHaveCount(0);
+  const controlOnly = defects.filter({ hasText: "output.body.dealerRegion" });
+  await expect(controlOnly.getByTestId("finding-pill")).toHaveText("S2");
+  await expect(controlOnly.getByTestId("finding-pill")).toHaveAttribute(
+    "title",
+    "touched only through a branch decision by this finding; not accepted as intended without a TIBCO sandbox run",
+  );
   const intended = rows.and(page.locator('[data-status="intended"]'));
   await expect(intended).toHaveCount(1);
   await expect(intended.getByTestId("unconfirmed-pill")).toHaveText("not confirmed");

@@ -152,7 +152,7 @@ export function ScenarioRunner({
         >
           <label className="text-[13px] text-slate">
             Name
-            <input className="input mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="dealer with a cancelled deal" required />
+            <input className="input mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="dealer with a canceled deal" required />
           </label>
           <label className="text-[13px] text-slate">
             Input (JSON, the same shape as the generated scenarios)

@@ -17,6 +17,11 @@ import { IOCard } from "./IOCard";
 
 const DomainGraph = dynamic(() => import("./DomainGraph"), { ssr: false });
 
+/** Display label for a stored migration_status (the stored value `analysed` stays as the API sends it). */
+function statusLabel(s: string): string {
+  return s === "analysed" ? "analyzed" : s.replace(/_/g, " ");
+}
+
 function ViewToggle() {
   return (
     <div className="inline-flex rounded-btn border border-line bg-white p-0.5 text-[13.5px]" role="group" aria-label="View">
@@ -145,7 +150,7 @@ export function DiscoverTab() {
               >
                 {["all", ...statuses].map((s) => (
                   <option key={s} value={s}>
-                    {s.replace("_", " ")}
+                    {statusLabel(s)}
                   </option>
                 ))}
               </select>
@@ -167,7 +172,7 @@ export function DiscoverTab() {
               <span className="flex items-center gap-1">
                 <span className="h-3 w-2.5 rounded-sm border border-slate/40 bg-warm" /> table
               </span>
-              <span>queue, topic, endpoint: small grey</span>
+              <span>queue, topic, endpoint: small gray</span>
             </div>
           </div>
         </section>
