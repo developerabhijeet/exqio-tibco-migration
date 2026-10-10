@@ -47,7 +47,10 @@ def test_scan_synthetic():
     assert any(c.kind == "json" for c in credit.contracts)
     assert any(c.kind == "xsd" for c in credit.contracts)
     assert any(v.source_path.endswith("gmf.credit.application/META-INF/default.substvar") for v in credit.substvars)
-    assert "Database/schema.sql" in credit.sql_files
+    # estate-level SQL goes only to applications that use JDBC
+    assert credit.sql_files == ["Database/schema.sql", "Database/seed.sql"]
+    assert legacy.sql_files == []
+    assert result.sql_files == ["Database/schema.sql", "Database/seed.sql"]
 
     kinds = [f.kind for f in result.files]
     assert kinds.count("bwp") == 10
@@ -122,3 +125,15 @@ def test_scan_records_broken_file_and_goes_on(tmp_path):
     assert [len(a.processes) for a in result.applications] == [1]
     assert [f.path.endswith("Broken.process") for f in result.report.failures] == [True]
     assert not result.report.ok
+
+
+def test_packaged_module_without_processes_is_not_a_duplicate(tmp_path):
+    import shutil
+
+    src = GMF / "DealerFunding"
+    shutil.copytree(src, tmp_path / "DealerFunding")
+    packaged = tmp_path / "gmf.application" / "DealerFunding"
+    shutil.copytree(src / "META-INF", packaged / "META-INF")  # a module shell with no .bwp
+    result = scanner.scan_folder(tmp_path)
+    assert all(f.duplicate_of is None for f in result.files)
+    assert not any("packaged copy" in e.reason for e in result.report.explained)

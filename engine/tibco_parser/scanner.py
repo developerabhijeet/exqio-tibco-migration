@@ -11,8 +11,8 @@ the applications in it and runs both parsers:
   folder first. Modules no application claims are grouped by their parent folder.
   The application id is the application's bundle symbolic name (or folder name)
   without the ``.application`` suffix; module names are module folder names.
-* A module folder inside a ``*.application/`` folder whose process files are
-  sha256-identical to those of a module with the same symbolic name outside any
+* A module folder inside a ``*.application/`` folder whose process files (at
+  least one) are all sha256-identical to those of a module with the same symbolic name outside any
   ``*.application/`` folder is a packaged copy (Studio export): its process files
   are flagged ``duplicate_of`` the source file and the copy is not parsed or
   collected twice.
@@ -23,7 +23,8 @@ the applications in it and runs both parsers:
 * Shared resources, substitution variables, contracts (XSD, WSDL and the JSON
   files under ``Service Descriptors``) and SQL files are collected into the
   owning Application. A SQL file outside every application goes to the
-  application(s) closest to it (deepest common folder; ties go to all).
+  closest application(s) with at least one ``jdbc.*`` activity (deepest common
+  folder; ties go to all). ``ScanResult.sql_files`` lists every SQL file.
 * ``synthetic`` is true when ``SYNTHETIC.txt`` sits at the scan root.
 
 ``ScanResult.report`` is one ``CompletenessReport`` across every parsed file.
@@ -65,6 +66,7 @@ class ScanResult(BaseModel):
     report: CompletenessReport
     files: list[FileEntry] = Field(default_factory=list)
     synthetic: bool = False
+    sql_files: list[str] = Field(default_factory=list)  # every SQL file in the upload (relative paths)
 
 
 # --------------------------------------------------------------------- helpers
@@ -178,7 +180,7 @@ class _Scanner:
                         pairs[p] = twin
                     elif self.files[p].sha256 in theirs:
                         pairs[p] = theirs[self.files[p].sha256]
-                if len(pairs) == len(mine):
+                if mine and len(pairs) == len(mine):
                     m.packaged_copy_of = src
                     for p, twin in pairs.items():
                         self.files[p].duplicate_of = self.files[twin].path
@@ -350,13 +352,6 @@ class _Scanner:
                 continue
             entry.dialect = app.dialect  # type: ignore[assignment]
             owned[id(app)].append(p)
-        for p in stray_sql:
-            depth = {id(a): max(_common_depth(p, d) for d in a.dirs) for a in apps}
-            if depth:
-                best = max(depth.values())
-                for a in apps:
-                    if depth[id(a)] == best:
-                        owned[id(a)].append(p)
         for p, entry in self.files.items():
             if entry.kind in ("bwp", "bwm"):
                 entry.dialect = "bw6"
@@ -364,11 +359,29 @@ class _Scanner:
                 entry.dialect = "bw5"
 
         applications = [self.build(a, owned[id(a)]) for a in apps]
+        self.attach_stray_sql(stray_sql, apps, applications)
         return ScanResult(
             applications=applications, report=self.collector.report(),
             files=sorted(self.files.values(), key=lambda f: f.path),
             synthetic=(self.root / "SYNTHETIC.txt").is_file(),
+            sql_files=sorted(f.path for f in self.files.values() if f.kind == "sql"),
         )
+
+    def attach_stray_sql(self, stray: list[Path], apps: list[_App], applications: list[Application]) -> None:
+        """A SQL file outside every application goes to the closest application(s) that use JDBC
+        (deepest common folder; ties go to all). With no JDBC application it stays estate-level only."""
+        jdbc = [(a, built) for a, built in zip(apps, applications, strict=True)
+                if any(act.type.startswith("jdbc.") for proc in built.processes for act in proc.activities)]
+        for p in stray:
+            if not jdbc:
+                self.collector.explain(self.files[p].path, "SQL file outside every application and no "
+                                                           "application uses JDBC; kept at estate level")
+                continue
+            depth = {id(a): max(_common_depth(p, d) for d in a.dirs) for a, _ in jdbc}
+            best = max(depth.values())
+            for a, built in jdbc:
+                if depth[id(a)] == best:
+                    built.sql_files = sorted({*built.sql_files, self.files[p].path})
 
 
 def scan_folder(root: Path) -> ScanResult:

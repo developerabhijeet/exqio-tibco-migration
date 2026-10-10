@@ -254,3 +254,63 @@ def test_public_transaction_and_jdbc_resource_ref():
     shared = root / act.config["resource_path"].lstrip("/")
     if shared.is_file():
         assert act.config["resource_ref"] == resources.parse_resource(shared, project_root=root).id
+
+
+def test_jdbc_general_sql_from_statement_binding(tmp_path):
+    path = next(p for p in PUBLIC_BW5 if p.name == "JDBC SQL Direct.process")
+    proc, _ = _parse(path)
+    act = _by_id(proc.activities)["SQL Direct"]
+    assert act.type == "jdbc.call"
+    assert act.config["sql"] == "SELECT 1+1 FROM DUAL"
+    assert "sql_expression" not in act.config
+
+    # a non-literal statement expression is kept as an expression, not as SQL
+    root = _project_root(path)
+    copy_root = tmp_path / root.name
+    shutil.copytree(root, copy_root)
+    copied = copy_root / path.relative_to(root)
+    copied.write_text(copied.read_text(encoding="utf-8").replace(
+        "\"'SELECT 1+1 FROM DUAL'\"", "\"concat('SELECT ', $Start/n)\""), encoding="utf-8")
+    proc, _ = _parse(copied)
+    act = _by_id(proc.activities)["SQL Direct"]
+    assert act.config["sql"] is None
+    assert act.config["sql_expression"] == "concat('SELECT ', $Start/n)"
+
+
+_JDBC_QUERY_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
+<pd:ProcessDefinition xmlns:pd="http://xmlns.tibco.com/bw/process/2003"
+                      xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+    <pd:name>Q.process</pd:name>
+    <pd:startName>Start</pd:startName>
+    <pd:endName>End</pd:endName>
+    <pd:activity name="Query">
+        <pd:type>com.tibco.plugin.jdbc.JDBCQueryActivity</pd:type>
+        <pd:resourceType>ae.activities.JDBCQueryActivity</pd:resourceType>
+        <config>
+            <timeout>10</timeout>
+            <jdbcSharedConfig>/Resources/DB.sharedjdbc</jdbcSharedConfig>
+            <statement>SELECT id, name
+  FROM t
+ WHERE tag = 'a&amp;b'</statement>
+        </config>
+        <pd:inputBindings/>
+    </pd:activity>
+    <pd:transition><pd:from>Start</pd:from><pd:to>Query</pd:to><pd:conditionType>always</pd:conditionType></pd:transition>
+    <pd:transition><pd:from>Query</pd:from><pd:to>End</pd:to><pd:conditionType>always</pd:conditionType></pd:transition>
+</pd:ProcessDefinition>
+"""
+
+
+def test_jdbc_query_statement_verbatim(tmp_path):
+    root = tmp_path / "Proj"
+    (root / "defaultVars").mkdir(parents=True)
+    path = root / "Q.process"
+    path.write_text(_JDBC_QUERY_FIXTURE, encoding="utf-8")
+    proc, collector = _parse(path)
+    act = _by_id(proc.activities)["Query"]
+    expected = "SELECT id, name\n  FROM t\n WHERE tag = 'a&b'"
+    assert act.type == "jdbc.query"
+    assert act.config["settings"]["statement"] == expected
+    assert act.config["sql"] == expected
+    assert act.config["resource_ref"] == "Proj/Resources/DB"
+    assert collector.report().ok

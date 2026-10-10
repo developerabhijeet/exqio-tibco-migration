@@ -97,6 +97,8 @@ _CONDITION_KIND = {"always": "success", "xpath": "conditional", "otherwise": "ot
 _SECRET = re.compile(r"password|credential|secret", re.IGNORECASE)
 _SCHEMA_REF = re.compile(r"^/.+\.(xsd|wsdl)$", re.IGNORECASE)
 _FAULT_LOCALNAME = re.compile(r"localname=(\S+)")
+# An XPath 1.0 string literal: no escapes exist, so the delimiter cannot occur inside.
+_XPATH_LITERAL = re.compile(r"'([^']*)'" + r'|"([^"]*)"')
 
 
 # --------------------------------------------------------------------- helpers
@@ -129,7 +131,11 @@ def _clark(el, qname: str | None) -> str | None:
 
 def _raw(el) -> Any:
     """Lossless dict form of a BW5 config element: one key per child (a list when
-    repeated), ``@attr`` for attributes, ``#text`` for mixed text."""
+    repeated), ``@attr`` for attributes, ``#text`` for mixed text.
+
+    Text values are stripped of outer whitespace only; inner whitespace and
+    newlines (e.g. a multi-line SQL ``statement``) are kept verbatim.
+    """
     attrs = {f"@{local(k)}": v for k, v in el.attrib.items()}
     kids: dict[str, Any] = {}
     for c in _children(el):
@@ -498,6 +504,8 @@ class _Bw5Parser:
             self.groups[group].member_ids.append(aid)
         for b in bindings:
             self._bindings(b, act)
+        if type_.startswith("jdbc.") and not config.get("sql"):
+            self._lift_bound_sql(act)
         if type_ == "call.process" and config.get("sub_process") and not config.get("dynamic"):
             self.calls.append(ProcessCall(activity_id=aid, target_process=config["sub_process"]))
         for s in _strings(settings):
@@ -603,6 +611,23 @@ class _Bw5Parser:
         if rp and rp.startswith("/"):
             config["resource_ref"] = _bw5_id(self.project_root / rp.lstrip("/"), self.project_root)
         return output_schema
+
+    @staticmethod
+    def _lift_bound_sql(act: Activity) -> None:
+        """JDBC General (and any JDBC activity without a configured statement) takes its SQL
+        from the ``.../statement`` input binding: a plain XPath string literal becomes
+        ``config["sql"]``; any other expression goes to ``config["sql_expression"]`` with
+        ``config["sql"]`` left None."""
+        binding = next((b for b in act.input_bindings
+                        if b.target == "statement" or b.target.endswith("/statement")), None)
+        if binding is None:
+            return
+        m = _XPATH_LITERAL.fullmatch(binding.expression.strip())
+        if m:
+            act.config["sql"] = m.group(1) if m.group(1) is not None else m.group(2)
+        else:
+            act.config["sql"] = None
+            act.config["sql_expression"] = binding.expression
 
     # ---- bindings
     def _bindings(self, el, act: Activity) -> None:
