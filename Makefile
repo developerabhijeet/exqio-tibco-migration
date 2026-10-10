@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 PYTEST ?= .venv/bin/pytest
 
-.PHONY: setup db api web test e2e demo-check toolchain samples-zip
+.PHONY: setup db api web test e2e demo-check toolchain samples samples-zip
 
 setup:
 	python3 -m venv .venv
@@ -28,6 +28,9 @@ demo-check:
 
 toolchain:
 	python3 scripts/toolchain.py
+
+samples:
+	$(PY) scripts/gen_synthetic_gmf.py
 
 samples-zip:
 	rm -f samples/synthetic-gmf.zip

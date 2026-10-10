@@ -61,7 +61,63 @@ WSDL_NS = "http://schemas.xmlsoap.org/wsdl/"
 XSLT_LANG = "urn:oasis:names:tc:wsbpel:2.0:sublang:xslt1.0"
 XPATH_LANG = "urn:oasis:names:tc:wsbpel:2.0:sublang:xpath2.0"
 OTHERWISE = "##otherwise##"
-LINK_TYPES = {"SUCCESS", "SUCCESSWITHCONDITION", "SUCCESSWITHNOCONDITION", "ERROR"}
+NOTATION = "http://www.eclipse.org/gmf/runtime/1.0.2/notation"
+
+# --- dialect vocabulary --------------------------------------------------------------
+# VERIFIED: harvested from the public BW6 samples under samples/public (TN2018 credit
+# application and tibcobwblog bw6.x projects). Seen in real Studio output.
+VERIFIED_ACTIVITY_TYPES = frozenset({
+    "bw.file.create", "bw.file.write",
+    "bw.generalactivities.callprocess", "bw.generalactivities.log",
+    "bw.generalactivities.mapper", "bw.generalactivities.timer",
+    "bw.http.HTTPReceiver", "bw.http.sendHTTPRequest", "bw.http.sendHTTPResponse",
+    "bw.internal.accumulateend", "bw.internal.end", "bw.internal.setEPR",
+    "bw.java.javamethod", "bw.jdbc.JDBCQuery", "bw.jdbc.update", "bw.mail.receive",
+    "bw.restjson.JsonParser", "bw.restjson.JsonRender", "bw.xml.renderxml",
+})
+VERIFIED_GROUP_VALUES = frozenset({"iterate", "groupStart", "groupEnd"})
+VERIFIED_LINK_TYPES = frozenset({"SUCCESS", "SUCCESSWITHCONDITION", "SUCCESSWITHNOCONDITION"})
+
+# UNVERIFIED: used by the synthetic estate but absent from every public sample. Spellings
+# follow TIBCO documentation labels or BPEL 2.0; a TIBCO SME must confirm each one against
+# real Studio output (samples/synthetic-gmf/estate.json carries the same checklist).
+UNVERIFIED = (
+    {"token": "bw.jms.receive", "kind": "activityTypeID",
+     "what_to_confirm": "activityTypeID of the JMS Receive Message event source"},
+    {"token": "bw.jms.send", "kind": "activityTypeID",
+     "what_to_confirm": "activityTypeID of Send JMS Message"},
+    {"token": "localTransaction", "kind": "tibex:group",
+     "what_to_confirm": "tibex:group value Studio writes for a Local Transaction group"},
+    {"token": "ERROR", "kind": "tibex:linkType",
+     "what_to_confirm": "tibex:linkType of an error transition"},
+    *({"token": attr, "kind": "bw.jms.* config attribute",
+       "what_to_confirm": f"EMF attribute name '{attr}' on JMS activity config values "
+                          f"(documented label: {label})"}
+      for attr, label in (
+          ("connectionReference", "JMS Connection"),
+          ("destination", "Destination"),
+          ("messagingStyle", "Messaging Style: Generic, Queue or Topic"),
+          ("messageType", "Message Type, value XMLText for XML Text"),
+          ("messageSelector", "Message Selector"),
+          ("acknowledgeMode", "Acknowledge Mode, value 1 for Auto"),
+          ("pollingInterval", "Polling Interval (sec)"),
+          ("deliveryMode", "Delivery Mode, value 2 for Persistent"),
+          ("expiration", "Expiration"),
+          ("priority", "Priority"),
+          ("bodyEditorElement", "XSD element of an XML Text body (child element)"),
+      )),
+)
+UNVERIFIED_ACTIVITY_TYPES = frozenset(
+    u["token"] for u in UNVERIFIED if u["kind"] == "activityTypeID")
+UNVERIFIED_GROUP_VALUES = frozenset(u["token"] for u in UNVERIFIED if u["kind"] == "tibex:group")
+UNVERIFIED_LINK_TYPES = frozenset(u["token"] for u in UNVERIFIED if u["kind"] == "tibex:linkType")
+UNVERIFIED_JMS_CONFIG = frozenset(
+    u["token"] for u in UNVERIFIED if u["kind"] == "bw.jms.* config attribute")
+LINK_TYPES = VERIFIED_LINK_TYPES | UNVERIFIED_LINK_TYPES
+BPEL_ACTIVITIES = frozenset({
+    "assign", "compensate", "compensateScope", "empty", "exit", "extensionActivity", "flow",
+    "forEach", "if", "invoke", "pick", "receive", "repeatUntil", "reply", "rethrow", "scope",
+    "sequence", "throw", "validate", "wait", "while"})
 
 ACTIVITY_TAGS = {
     f"{{{TIBEX}}}receiveEvent",
@@ -351,9 +407,8 @@ def _check_links(root: etree._Element, out: list[str]) -> None:
                 out.append(f"links: link '{name}' declared twice")
             declared_in[name] = flow
             link_types[name] = link.get(_q(TIBEX, "linkType"))
-            if link_types[name] not in LINK_TYPES:
-                out.append(f"links: link '{name}' has tibex:linkType "
-                           f"'{link_types[name]}' (expected one of {sorted(LINK_TYPES)})")
+            if link_types[name] is None:
+                out.append(f"links: link '{name}' has no tibex:linkType")
     sources: dict[str, int] = {n: 0 for n in declared_in}
     targets: dict[str, int] = {n: 0 for n in declared_in}
     for tag, counter in ((_q(BPWS, "source"), sources), (_q(BPWS, "target"), targets)):
@@ -387,6 +442,180 @@ def _check_condition(src: etree._Element, name: str, kind: str | None, out: list
             out.append(f"links: otherwise link '{name}' must carry '{OTHERWISE}'")
     elif cond is not None and text:
         out.append(f"links: unconditional link '{name}' carries a transitionCondition")
+
+
+def _vocab(kind: str, token: str, verified: frozenset, unverified: frozenset, where: str,
+           out: list[str]) -> None:
+    if token not in verified and token not in unverified:
+        out.append(f"vocabulary: {kind} '{token}' ({where}) is neither verified from the public "
+                   "samples nor listed as unverified")
+
+
+def _check_vocabulary(root: etree._Element, out: list[str]) -> None:
+    for el in root.iter(_q(BWEXT, "BWActivity")):
+        type_id = el.get("activityTypeID")
+        if not type_id:
+            continue
+        where = f"line {el.sourceline}"
+        _vocab("activityTypeID", type_id, VERIFIED_ACTIVITY_TYPES, UNVERIFIED_ACTIVITY_TYPES,
+               where, out)
+        if type_id in UNVERIFIED_ACTIVITY_TYPES and type_id.startswith("bw.jms."):
+            for value in el.iter("value"):
+                for attr in value.attrib:
+                    if attr.startswith("{"):
+                        continue
+                    _vocab("bw.jms.* config attribute", attr, frozenset(),
+                           UNVERIFIED_JMS_CONFIG, where, out)
+                for child in value:
+                    if isinstance(child.tag, str):
+                        _vocab("bw.jms.* config attribute", etree.QName(child).localname,
+                               frozenset(), UNVERIFIED_JMS_CONFIG, where, out)
+    for el in root.iter(_q(TIBEX, "extActivity")):
+        if el.get("type"):
+            _vocab("activityTypeID", el.get("type"), VERIFIED_ACTIVITY_TYPES,
+                   UNVERIFIED_ACTIVITY_TYPES, _where(el), out)
+    for el in root.iter():
+        if isinstance(el.tag, str) and el.get(_q(TIBEX, "group")) is not None:
+            _vocab("tibex:group", el.get(_q(TIBEX, "group")), VERIFIED_GROUP_VALUES,
+                   UNVERIFIED_GROUP_VALUES, _where(el), out)
+    for link in root.iter(_q(BPWS, "link")):
+        kind = link.get(_q(TIBEX, "linkType"))
+        if kind is not None:
+            _vocab("tibex:linkType", kind, VERIFIED_LINK_TYPES, UNVERIFIED_LINK_TYPES,
+                   f"link '{link.get('name')}'", out)
+
+
+def unverified_tokens(path: Path) -> list[str]:
+    """Unverified dialect tokens a file uses (informational, not failures)."""
+    root = etree.parse(str(path)).getroot()
+    used: set[str] = set()
+    for el in root.iter(_q(BWEXT, "BWActivity")):
+        type_id = el.get("activityTypeID", "")
+        if type_id in UNVERIFIED_ACTIVITY_TYPES:
+            used.add(type_id)
+            for value in el.iter("value"):
+                used |= {a for a in value.attrib if a in UNVERIFIED_JMS_CONFIG}
+                used |= {etree.QName(c).localname for c in value if isinstance(c.tag, str)
+                         and etree.QName(c).localname in UNVERIFIED_JMS_CONFIG}
+    for el in root.iter():
+        if isinstance(el.tag, str) and el.get(_q(TIBEX, "group")) in UNVERIFIED_GROUP_VALUES:
+            used.add(el.get(_q(TIBEX, "group")))
+    for link in root.iter(_q(BPWS, "link")):
+        if link.get(_q(TIBEX, "linkType")) in UNVERIFIED_LINK_TYPES:
+            used.add(link.get(_q(TIBEX, "linkType")))
+    return [u["token"] for u in UNVERIFIED if u["token"] in used]
+
+
+# --- notation diagram ------------------------------------------------------------------
+
+
+def _bpel_activities(el: etree._Element) -> list[etree._Element]:
+    return [c for c in el if isinstance(c.tag, str) and c.tag.startswith(f"{{{BPWS}}}")
+            and etree.QName(c).localname in BPEL_ACTIVITIES]
+
+
+def _unwrap(el: etree._Element) -> etree._Element:
+    if el.tag == _q(BPWS, "extensionActivity") and len(el):
+        return el[0]
+    return el
+
+
+def _resolve_href(root: etree._Element, href: str) -> etree._Element | None:
+    """Resolve a GMF element href such as //0/@process/@activity/@activities.2."""
+    parts = href.split("/")
+    if parts[:4] != ["", "", "0", "@process"]:
+        return root if href == "//0" else None
+    cur = root
+    try:
+        for seg in parts[4:]:
+            name, _, idx = seg[1:].partition(".")
+            i = int(idx) if idx else 0
+            if name == "activity":
+                cur = _unwrap(_bpel_activities(cur)[0])
+            elif name == "activities":
+                cur = _unwrap(_bpel_activities(cur)[i])
+            elif name == "messages":
+                cur = cur.findall(_q(BPWS, "onMessage"))[i]
+            elif name == "faultHandlers":
+                cur = cur.find(_q(BPWS, "faultHandlers"))
+            elif name == "catchAll":
+                cur = cur.find(_q(BPWS, "catchAll"))
+            elif name == "catch":
+                cur = cur.findall(_q(BPWS, "catch"))[i]
+            elif name == "links":
+                cur = cur.find(_q(BPWS, "links"))
+            elif name == "partnerLinks":
+                cur = cur.find(_q(BPWS, "partnerLinks"))
+            elif name == "children":
+                cur = [c for c in cur if isinstance(c.tag, str)][i]
+            else:
+                return None
+            if cur is None:
+                return None
+    except (IndexError, ValueError):
+        return None
+    return cur
+
+
+def _resolve_path(diagram: etree._Element, path: str) -> etree._Element | None:
+    cur = diagram
+    try:
+        for seg in path.strip("/").split("/"):
+            name, _, idx = seg[1:].partition(".")
+            cur = cur.findall(name)[int(idx)]
+    except (IndexError, ValueError):
+        return None
+    return cur
+
+
+def _check_diagram(root: etree._Element, out: list[str]) -> None:
+    diagram = root.find(_q(NOTATION, "Diagram"))
+    if diagram is None:
+        out.append("diagram: notation:Diagram missing")
+        return
+    shown: set = set()
+    for node in diagram.iter("children"):
+        ref = node.find("element")
+        if ref is None or node.get("type") == "4017":
+            continue
+        target = _resolve_href(root, ref.get("href", ""))
+        if target is None:
+            out.append(f"diagram: node href '{ref.get('href')}' does not resolve")
+            continue
+        if node.get("type", "").startswith(("4002", "4018")):
+            shown.add(target)
+    for el in root.iter():
+        if not isinstance(el.tag, str):
+            continue
+        group = el.tag == _q(BPWS, "scope") and el.get(_q(TIBEX, "group")) is not None
+        boxed = el.tag in ACTIVITY_TAGS and el.tag not in {
+            _q(BPWS, "pick"), _q(BPWS, "onMessage"), _q(BPWS, "catch"), _q(BPWS, "catchAll")}
+        if (group or boxed) and el not in shown:
+            out.append(f"diagram: {_where(el)} has no 4002/4018 diagram node")
+    edges: dict = {}
+    for edge in diagram.findall("edges"):
+        if edge.get("type") != "4006":
+            continue
+        ref = edge.find("element")
+        link = _resolve_href(root, ref.get("href", "")) if ref is not None else None
+        if link is None or link.tag != _q(BPWS, "link"):
+            out.append("diagram: edge element does not resolve to a bpws:link")
+            continue
+        name = link.get("name")
+        edges[name] = edges.get(name, 0) + 1
+        ends = []
+        for attr in ("source", "target"):
+            node = _resolve_path(diagram, edge.get(attr, ""))
+            el_ref = node.find("element") if node is not None else None
+            ends.append(_resolve_href(root, el_ref.get("href", "")) if el_ref is not None else None)
+        src = root.find(f".//{_q(BPWS, 'source')}[@linkName='{name}']")
+        tgt = root.find(f".//{_q(BPWS, 'target')}[@linkName='{name}']")
+        want = [x.getparent().getparent() if x is not None else None for x in (src, tgt)]
+        if ends != want:
+            out.append(f"diagram: edge for link '{name}' does not join its source and target")
+    for link in root.iter(_q(BPWS, "link")):
+        if edges.get(link.get("name"), 0) != 1:
+            out.append(f"diagram: link '{link.get('name')}' needs exactly one 4006 edge")
 
 
 def _binding_text(el: etree._Element) -> str:
@@ -439,6 +668,8 @@ def check(path: Path) -> list[str]:
     _check_shared_resources(root, out)
     _check_links(root, out)
     _check_bindings(root, out)
+    _check_vocabulary(root, out)
+    _check_diagram(root, out)
     return out
 
 
@@ -463,6 +694,9 @@ def main(argv: list[str]) -> int:
                     print(f"  - {p}")
             else:
                 print(f"OK   {path}")
+            notes = unverified_tokens(path)
+            if notes:
+                print(f"  unverified dialect: {', '.join(notes)}")
     return 1 if failed else 0
 
 

@@ -129,11 +129,39 @@ def _mutate(tmp_path: Path, old: str, new: str) -> Path:
         ('name="creditcheckservice.LookupDatabase"', 'name="other.Name"', "root:"),
         ("&lt;xsl:template name=&quot;End-input&quot;", "&lt;xsl:template name=&quot;End-input",
          "bindings:"),
+        ('activityTypeID="bw.jdbc.JDBCQuery"', 'activityTypeID="bw.jdbc.TotallyMadeUp"',
+         "vocabulary:"),
+        ('tibex:linkType="SUCCESSWITHCONDITION"', 'tibex:linkType="SUCCESSORFAIL"',
+         "vocabulary:"),
+        ("@links/@children.0", "@links/@children.9", "diagram:"),
+        ('<element href="//0/@process/@activity/@activity/@activities.4"/>',
+         '<element href="//0/@process/@activity/@activity/@activities.2"/>', "diagram:"),
     ],
 )
 def test_check_reports_broken_structure(tmp_path, old, new, rule):
     problems = bw6_structure_check.check(_mutate(tmp_path, old, new))
     assert any(p.startswith(rule) for p in problems), problems
+
+
+def test_check_vocabulary_group_values(tmp_path):
+    src = SYNTH / "LoanServicing" / "Processes" / "loanservicing" / "PaymentPosting.bwp"
+    target = tmp_path / "LoanServicing" / "Processes" / "loanservicing" / src.name
+    target.parent.mkdir(parents=True)
+    text = src.read_text(encoding="utf-8")
+    target.write_text(text.replace('tibex:group="localTransaction"', 'tibex:group="madeUpGroup"'),
+                      encoding="utf-8")
+    assert any(p.startswith("vocabulary: tibex:group 'madeUpGroup'")
+               for p in bw6_structure_check.check(target))
+
+
+def test_check_vocabulary_lists_are_disjoint_and_cover_estate():
+    verified = (bw6_structure_check.VERIFIED_ACTIVITY_TYPES
+                | bw6_structure_check.VERIFIED_GROUP_VALUES
+                | bw6_structure_check.VERIFIED_LINK_TYPES)
+    unverified = {u["token"] for u in bw6_structure_check.UNVERIFIED}
+    assert not verified & unverified
+    used = set().union(*(bw6_structure_check.unverified_tokens(p) for p in _bwp_files()))
+    assert used == unverified
 
 
 def test_check_cli_exit_codes(tmp_path):
@@ -266,14 +294,46 @@ def test_estate_json_oracle():
     assert set(ids) == EXPECTED_IDS and len(ids) == len(EXPECTED_IDS)
     for proc in estate["processes"]:
         assert set(proc) >= {"id", "module", "trigger", "rules", "findings", "tables_read",
-                             "tables_written", "queues_in", "queues_out"}
+                             "tables_written", "queues_in", "queues_out", "topics_out"}
         text = paths[proc["id"]].read_text(encoding="utf-8").lower()
         for table in proc["tables_read"] + proc["tables_written"]:
             assert f"gmf.{table}" in text, (proc["id"], table)
-        for queue in proc["queues_in"] + proc["queues_out"]:
+        for queue in proc["queues_in"] + proc["queues_out"] + proc["topics_out"]:
             assert queue in text, (proc["id"], queue)
+        assert not set(proc["queues_out"]) & set(estate["topics"]), proc["id"]
         for item in proc["rules"] + proc["findings"]:
             assert item["id"] and item["text"]
+
+
+def test_estate_json_topics_and_dialect_checklist():
+    estate = _estate()
+    by_id = {p["id"]: p for p in estate["processes"]}
+    assert by_id["dealerfunding.DealerFundingRequest"]["topics_out"] == ["gmf.funding.events"]
+    assert by_id["dealerfunding.DealerFundingRequest"]["queues_out"] == []
+    checklist = estate["dialect_unverified"]
+    tokens = {item["token"] for item in checklist}
+    assert {u["token"] for u in bw6_structure_check.UNVERIFIED} <= tokens
+    for item in checklist:
+        assert item["where"] and item["what_to_confirm"], item["token"]
+
+
+def test_us_spelling():
+    for name in ("SYNTHETIC.txt", "estate.json"):
+        text = (SYNTH / name).read_text(encoding="utf-8").lower()
+        for british in ("artefact", "behaviour", "organisation", "licence", "colour"):
+            assert british not in text, (name, british)
+
+
+def test_generator_reproduces_committed_estate(tmp_path):
+    from synthetic_gmf.build import build
+
+    build(tmp_path / "out")
+    generated = {p.relative_to(tmp_path / "out"): p.read_bytes()
+                 for p in (tmp_path / "out").rglob("*") if p.is_file()}
+    committed = {p.relative_to(SYNTH): p.read_bytes() for p in SYNTH.rglob("*") if p.is_file()}
+    assert sorted(generated) == sorted(committed)
+    changed = [str(rel) for rel in generated if generated[rel] != committed[rel]]
+    assert not changed, changed
 
 
 def test_queue_and_topic_names():
@@ -320,7 +380,11 @@ def test_seed_payment_posting_transaction_group_and_grace():
     assert len(groups) == 1
     inside = {el.get("name") for el in groups[0].iter() if isinstance(el.tag, str)}
     assert {"LoadAccount", "InsertPayment", "UpdateLoanAccount"} <= inside
-    assert any(">= 10" in c for c in _conditions(path))
+    source = root.find(f".//{{{BPWS}}}source[@linkName='LoadAccountToAssessLateFee']")
+    assert source.getparent().getparent().get("name") == "LoadAccount"
+    grace = source.findtext(f"{{{BPWS}}}transitionCondition").strip()
+    assert grace.endswith(") >= 10"), grace
+    assert "receivedDate" in grace and "next_due_date" in grace
     assert "25.00" in _bindings(_activity(path, "AssessLateFee"))
 
 
@@ -349,19 +413,86 @@ def test_seed_faults():
         assert fault in names, pid
 
 
+def _links(root) -> dict[str, tuple[str, str, str]]:
+    """link name -> (source activity, target activity, linkType)."""
+    out = {}
+    for link in root.iter(f"{{{BPWS}}}link"):
+        name = link.get("name")
+        src = root.find(f".//{{{BPWS}}}source[@linkName='{name}']").getparent().getparent()
+        tgt = root.find(f".//{{{BPWS}}}target[@linkName='{name}']").getparent().getparent()
+        out[name] = (src.get("name"), tgt.get("name"), link.get(f"{{{TIBEX}}}linkType"))
+    return out
+
+
 def test_seed_bureau_parallel_flow_and_resilience():
     path = _process_paths()["creditorigination.BureauOrchestrator"]
     root = etree.parse(str(path)).getroot()
-    group = next(s for s in root.iter(f"{{{BPWS}}}scope") if s.get(f"{{{TIBEX}}}group"))
-    calls = [a for a in group.iter(f"{{{BWEXT}}}BWActivity")
+    assert not [s for s in root.iter(f"{{{BPWS}}}scope") if s.get(f"{{{TIBEX}}}group")]
+    calls = [a.getparent().getparent().get("name")
+             for a in root.iter(f"{{{BWEXT}}}BWActivity")
              if a.get("activityTypeID") == "bw.http.sendHTTPRequest"]
-    assert len(calls) == 2
+    assert sorted(calls) == ["PullEquifax", "PullTransUnion"]
+    edges = {(s, t, k) for s, t, k in _links(root).values()}
+    # both calls fork from the same activity, are never linked to each other ...
+    assert ("RenderBureauRequest", "PullEquifax", "SUCCESS") in edges
+    assert ("RenderBureauRequest", "PullTransUnion", "SUCCESS") in edges
+    assert not {(s, t) for s, t, _k in edges} & {("PullEquifax", "PullTransUnion"),
+                                                  ("PullTransUnion", "PullEquifax")}
+    # ... each has a success and an error branch, and every branch joins at MergeScores
+    for bureau in ("Equifax", "TransUnion"):
+        assert (f"Pull{bureau}", f"Parse{bureau}", "SUCCESS") in edges
+        assert (f"Pull{bureau}", f"{bureau}Unavailable", "ERROR") in edges
+        assert (f"Parse{bureau}", "MergeScores", "SUCCESS") in edges
+        assert (f"{bureau}Unavailable", "MergeScores", "SUCCESS") in edges
     for name in ("EquifaxClient", "TransUnionClient"):
         res = (SYNTH / "CreditOrigination" / "Resources" / "creditorigination" /
                f"{name}.httpClientResource").read_text(encoding="utf-8")
         assert 'cmdExecutionIsolationTimeout="1000"' in res
         assert 'cmdCircuitBreakerErrorThresholdPercentage="50"' in res
         assert 'cmdCircuitBreakerRequestVolumeThreshold="20"' in res
+
+
+def test_groups_have_start_and_end_markers():
+    for pid in ("loanservicing.PaymentPosting", "loanservicing.NightlyDelinquencyScan"):
+        root = etree.parse(str(_process_paths()[pid])).getroot()
+        group = next(s for s in root.iter(f"{{{BPWS}}}scope") if s.get(f"{{{TIBEX}}}group"))
+        markers = {el.get(f"{{{TIBEX}}}group"): el.get("name") for el in group.iter()
+                   if isinstance(el.tag, str) and el.get(f"{{{TIBEX}}}group") in
+                   ("groupStart", "groupEnd")}
+        assert markers == {"groupStart": "GroupStart", "groupEnd": "GroupEnd"}, pid
+        links = _links(root).values()
+        assert any(s == "GroupStart" for s, _t, _k in links), pid
+        assert any(t == "GroupEnd" for _s, t, _k in links), pid
+
+
+def test_jms_send_and_call_process_studio_attributes():
+    for path in _bwp_files():
+        root = etree.parse(str(path)).getroot()
+        for act in root.iter(f"{{{BWEXT}}}BWActivity"):
+            if act.get("activityTypeID") == "bw.jms.send":
+                owner = act.getparent().getparent()
+                assert owner.get("outputVariable") == owner.get("name"), path.name
+        for ext in root.iter(f"{{{TIBEX}}}extActivity"):
+            assert ext.get("expression", "").startswith("<?xml"), (path.name, ext.get("name"))
+            assert ext.get("expressionLanguage")
+
+
+def test_diagram_has_node_per_activity_and_edge_per_link():
+    notation = "http://www.eclipse.org/gmf/runtime/1.0.2/notation"
+    for path in _bwp_files():
+        root = etree.parse(str(path)).getroot()
+        diagram = root.find(f"{{{notation}}}Diagram")
+        nodes = [c for c in diagram.iter("children") if c.get("type", "").startswith("4002")]
+        boxed = [el for el in root.iter() if isinstance(el.tag, str)
+                 and el.get(f"{{{TIBEX}}}xpdlId") and el.tag in {
+                     f"{{{TIBEX}}}receiveEvent", f"{{{TIBEX}}}activityExtension",
+                     f"{{{TIBEX}}}extActivity", f"{{{BPWS}}}invoke", f"{{{BPWS}}}reply",
+                     f"{{{BPWS}}}throw", f"{{{BPWS}}}assign", f"{{{BPWS}}}empty"}]
+        assert len(nodes) == len(boxed), path.name
+        edges = diagram.findall("edges[@type='4006']")
+        assert len(edges) == len(list(root.iter(f"{{{BPWS}}}link"))), path.name
+        xs = {int(c.find("layoutConstraint").get("x", 0)) for c in nodes}
+        assert xs <= set(range(-1, 4000)) and len(xs) > 1, path.name
 
 
 def test_seed_audit_log_writes_ssn():
@@ -402,12 +533,13 @@ def test_seed_vin_rule():
 
 
 def test_sql_loads():
-    psycopg = pytest.importorskip("psycopg")
-    url = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localhost:5432/exiqo_test")
-    try:
-        conn = psycopg.connect(url, connect_timeout=3)
-    except psycopg.OperationalError as exc:
-        pytest.skip(f"test database unavailable: {exc}")
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL is not set")
+    import psycopg
+
+    # TEST_DATABASE_URL is set, so an unreachable database is a failure, not a skip.
+    conn = psycopg.connect(url, connect_timeout=3)
     with conn:
         conn.execute("DROP SCHEMA IF EXISTS gmf CASCADE")
         conn.execute("CREATE SCHEMA gmf")

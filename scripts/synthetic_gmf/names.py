@@ -1,0 +1,23 @@
+"""Namespaces, resource names and shared constants for the synthetic GMF estate."""
+
+BASE = "http://xmlns.gmfin.example"
+CO_APP = f"{BASE}/credit/origination/application"
+CO_BUR = f"{BASE}/credit/origination/bureau"
+CO_DEC = f"{BASE}/credit/origination/decision"
+CO_VEH = f"{BASE}/credit/origination/vehicle"
+CO_AUD = f"{BASE}/credit/origination/audit"
+CO_FLT = f"{BASE}/credit/origination/faults"
+DF_REQ = f"{BASE}/dealer/funding/request"
+DF_EVT = f"{BASE}/dealer/funding/event"
+DF_STS = f"{BASE}/dealer/funding/status"
+DF_FLT = f"{BASE}/dealer/funding/faults"
+DF_PRM = "http://xmlns.example.com/funding/parameters"
+LS_PAY = f"{BASE}/loan/servicing/payment"
+LS_ACC = f"{BASE}/loan/servicing/account"
+LS_COL = f"{BASE}/loan/servicing/collections"
+LS_PRM = "http://xmlns.example.com/accounts/parameters"
+LA_ADDR = f"{BASE}/legacy/address"
+REST_NS = "http://tns.tibco.com/bw/REST"
+
+STATES = ("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+          "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY")

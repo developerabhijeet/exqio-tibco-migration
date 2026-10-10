@@ -1,6 +1,6 @@
 {
   "synthetic": true,
-  "note": "Synthetic GMF-style estate for the ExiQO Migrate demo. Original content; not a GM Financial artefact.",
+  "note": "Synthetic GMF-style estate for the ExiQO Migrate demo. Original content; not a GM Financial artifact.",
   "applications": [
     {
       "id": "gmf.credit",
@@ -110,7 +110,8 @@
       ],
       "tables_written": [],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "creditorigination.BureauOrchestrator",
@@ -158,6 +159,7 @@
       ],
       "queues_in": [],
       "queues_out": [],
+      "topics_out": [],
       "endpoints": [
         "EquifaxClient POST /consumer-credit/v2/scores",
         "TransUnionClient POST /credit-report/v1/score"
@@ -223,7 +225,8 @@
         "credit_application"
       ],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "creditorigination.ValidateVIN",
@@ -253,7 +256,8 @@
       "tables_read": [],
       "tables_written": [],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "creditorigination.AuditLog",
@@ -289,7 +293,8 @@
         "audit_log"
       ],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "dealerfunding.DealerFundingRequest",
@@ -365,7 +370,8 @@
       "queues_in": [
         "gmf.dealer.funding.request"
       ],
-      "queues_out": [
+      "queues_out": [],
+      "topics_out": [
         "gmf.funding.events"
       ]
     },
@@ -394,7 +400,8 @@
       ],
       "tables_written": [],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "loanservicing.PaymentPosting",
@@ -451,7 +458,8 @@
       "queues_in": [
         "gmf.payments.inbound"
       ],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "loanservicing.AccountLookup",
@@ -486,7 +494,8 @@
       ],
       "tables_written": [],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
     },
     {
       "id": "loanservicing.NightlyDelinquencyScan",
@@ -536,7 +545,8 @@
       "queues_in": [],
       "queues_out": [
         "gmf.collections.queue"
-      ]
+      ],
+      "topics_out": []
     },
     {
       "id": "LegacyAddressStandardize",
@@ -577,7 +587,242 @@
       "tables_read": [],
       "tables_written": [],
       "queues_in": [],
-      "queues_out": []
+      "queues_out": [],
+      "topics_out": []
+    }
+  ],
+  "dialect_unverified": [
+    {
+      "token": "bw.jms.receive",
+      "kind": "activityTypeID",
+      "where": [
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "activityTypeID of the JMS Receive Message event source"
+    },
+    {
+      "token": "bw.jms.send",
+      "kind": "activityTypeID",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections"
+      ],
+      "what_to_confirm": "activityTypeID of Send JMS Message"
+    },
+    {
+      "token": "localTransaction",
+      "kind": "tibex:group",
+      "where": [
+        "loanservicing.PaymentPosting: PostPaymentTransaction"
+      ],
+      "what_to_confirm": "tibex:group value Studio writes for a Local Transaction group"
+    },
+    {
+      "token": "ERROR",
+      "kind": "tibex:linkType",
+      "where": [
+        "creditorigination.BureauOrchestrator: PullEquifaxToEquifaxUnavailable",
+        "creditorigination.BureauOrchestrator: PullTransUnionToTransUnionUnavailable"
+      ],
+      "what_to_confirm": "tibex:linkType of an error transition"
+    },
+    {
+      "token": "connectionReference",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'connectionReference' on JMS activity config values (documented label: JMS Connection)"
+    },
+    {
+      "token": "destination",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'destination' on JMS activity config values (documented label: Destination)"
+    },
+    {
+      "token": "messagingStyle",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'messagingStyle' on JMS activity config values (documented label: Messaging Style: Generic, Queue or Topic)"
+    },
+    {
+      "token": "messageType",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'messageType' on JMS activity config values (documented label: Message Type, value XMLText for XML Text)"
+    },
+    {
+      "token": "messageSelector",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'messageSelector' on JMS activity config values (documented label: Message Selector)"
+    },
+    {
+      "token": "acknowledgeMode",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'acknowledgeMode' on JMS activity config values (documented label: Acknowledge Mode, value 1 for Auto)"
+    },
+    {
+      "token": "pollingInterval",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'pollingInterval' on JMS activity config values (documented label: Polling Interval (sec))"
+    },
+    {
+      "token": "deliveryMode",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections"
+      ],
+      "what_to_confirm": "EMF attribute name 'deliveryMode' on JMS activity config values (documented label: Delivery Mode, value 2 for Persistent)"
+    },
+    {
+      "token": "expiration",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections"
+      ],
+      "what_to_confirm": "EMF attribute name 'expiration' on JMS activity config values (documented label: Expiration)"
+    },
+    {
+      "token": "priority",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections"
+      ],
+      "what_to_confirm": "EMF attribute name 'priority' on JMS activity config values (documented label: Priority)"
+    },
+    {
+      "token": "bodyEditorElement",
+      "kind": "bw.jms.* config attribute",
+      "where": [
+        "dealerfunding.DealerFundingRequest: PublishFundingEvent",
+        "dealerfunding.DealerFundingRequest: PublishFundingRejected",
+        "dealerfunding.DealerFundingRequest: ReceiveFundingRequest",
+        "loanservicing.NightlyDelinquencyScan: SendToCollections",
+        "loanservicing.PaymentPosting: ReceivePayment"
+      ],
+      "what_to_confirm": "EMF attribute name 'bodyEditorElement' on JMS activity config values (documented label: XSD element of an XML Text body (child element))"
+    },
+    {
+      "token": "jms:JMSConnectionFactory",
+      "kind": ".jmsConnResource",
+      "where": [
+        "DealerFunding/Resources/dealerfunding/GMFEMSConnection.jmsConnResource",
+        "LoanServicing/Resources/loanservicing/GMFEMSConnection.jmsConnResource"
+      ],
+      "what_to_confirm": "namedResource type and configuration attribute names (connectionFactoryType, messagingStyle, providerURL, username, password, clientID); labels match TIBCO's JMS Connection docs"
+    },
+    {
+      "token": "{http://xsd.tns.tibco.com/bw/models/sharedresource/jms}JMSConnectionFactory",
+      "kind": "sca-bpel:sharedResourceType",
+      "where": [
+        "dealerfunding.DealerFundingRequest",
+        "loanservicing.PaymentPosting",
+        "loanservicing.NightlyDelinquencyScan"
+      ],
+      "what_to_confirm": "sharedResourceType QName of the JMS connection process property"
+    },
+    {
+      "token": "jms+<xpdlId>+input/output",
+      "kind": "inline JMS schemas",
+      "where": [
+        "dealerfunding.DealerFundingRequest",
+        "loanservicing.PaymentPosting",
+        "loanservicing.NightlyDelinquencyScan"
+      ],
+      "what_to_confirm": "generated namespace and field names of JMS activity input and output (JMSHeaders, JMSProperties and Body are documented; namespace pattern copied from the JDBC activities)"
+    },
+    {
+      "token": "bpws:catch faultElement",
+      "kind": "fault handler",
+      "where": [
+        "creditorigination.CreditApplicationIntake: catchDuplicate, catchMissingIncome"
+      ],
+      "what_to_confirm": "attributes Studio writes on a typed catch (public samples only show catchAll) and its diagram nodes (4029/4033 and the @catch.N href are assumed from catchAll)"
+    },
+    {
+      "token": "bpws:empty tibex:group",
+      "kind": "group markers",
+      "where": [
+        "loanservicing.PaymentPosting: GroupStart, GroupEnd",
+        "loanservicing.NightlyDelinquencyScan: GroupEnd"
+      ],
+      "what_to_confirm": "element Studio writes for GroupStart/GroupEnd when the group has no iteration variable and no accumulate option (public sample: assign for GroupStart, accumulate end for GroupEnd)"
+    },
+    {
+      "token": "parameterDefinitions",
+      "kind": "module.bwm REST binding",
+      "where": [
+        "DealerFunding/META-INF/module.bwm",
+        "LoanServicing/META-INF/module.bwm"
+      ],
+      "what_to_confirm": "element and attributes for a REST path parameter (name, type, parameterType=Path, required)"
+    },
+    {
+      "token": "maxConnections, loginTimeout",
+      "kind": ".jdbcResource",
+      "where": [
+        "Resources/*/*.jdbcResource"
+      ],
+      "what_to_confirm": "JDBC connection pool attribute names"
+    },
+    {
+      "token": "port",
+      "kind": ".httpConnResource",
+      "where": [
+        "Resources/*/*Connector.httpConnResource"
+      ],
+      "what_to_confirm": "attribute carrying the HTTP connector port"
+    },
+    {
+      "token": "<parameters><parameter>",
+      "kind": "BW5 HTTP Receiver config",
+      "where": [
+        "LegacyAddress/LegacyAddressStandardize.process: HTTP Receiver"
+      ],
+      "what_to_confirm": "config shape for declared HTTP parameters (name, dataType, repeating) and the output path ProcessStarterOutput/parameters/<name>"
     }
   ]
 }

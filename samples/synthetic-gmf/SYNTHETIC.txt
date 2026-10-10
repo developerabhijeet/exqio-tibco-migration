@@ -2,7 +2,7 @@ SYNTHETIC ESTATE
 
 Everything under this folder is synthetic. It was written for the ExiQO Migrate demo
 (R Systems) to look like a GM Financial style TIBCO BusinessWorks estate. It is not a
-GM Financial artefact and contains no customer code, data or configuration.
+GM Financial artifact and contains no customer code, data or configuration.
 
 Layout follows the BusinessWorks 6.5 project format (BPEL with tibex extensions,
 module.bwm, META-INF/MANIFEST.MF, default.substvar, shared resources, XSD, Swagger

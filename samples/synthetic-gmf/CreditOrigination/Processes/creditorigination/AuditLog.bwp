@@ -102,7 +102,8 @@
     <tibex:ProcessTemplateConfigurations/>
     <notation:Diagram measurementUnit="Pixel" type="BWProcess"
         xmlns:bwnotation="http://tns.tibco.com/bw/runtime/BWNotation"
-        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        xmlns:notation="http://www.eclipse.org/gmf/runtime/1.0.2/notation"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <children type="2001">
             <children type="5001"/>
             <children type="3002">
@@ -113,12 +114,204 @@
                 <styles xsi:type="notation:SortingStyle"/>
                 <styles xsi:type="notation:FilteringStyle"/>
             </children>
-            <styles fontName="Segoe UI" lineColor="0" xsi:type="notation:ShapeStyle"/>
+            <children type="3004">
+                <children type="4018">
+                    <children type="3018">
+                        <children type="4020">
+                            <children type="3020">
+                                <children type="4005">
+                                    <children type="3007">
+                                        <children type="4002">
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <styles fontName="Segoe UI"
+                                                lineColor="0"
+                                                xsi:type="notation:ShapeStyle"/>
+                                            <styles backgroundColor="16777215"
+                                                gradientEndColor="50431"
+                                                gradientStartColor="16777215"
+                                                xsi:type="bwnotation:BackgroundStyle"/>
+                                            <element href="//0/@process/@activity/@activity/@activities.0"/>
+                                            <layoutConstraint height="40"
+                                                width="40" x="20"
+                                                xsi:type="notation:Bounds"
+                                                y="20"/>
+                                        </children>
+                                        <children type="4002 bw.jdbc.update">
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <styles fontName="Segoe UI"
+                                                lineColor="0"
+                                                xsi:type="notation:ShapeStyle"/>
+                                            <styles backgroundColor="16777215"
+                                                gradientEndColor="50431"
+                                                gradientStartColor="16777215"
+                                                xsi:type="bwnotation:BackgroundStyle"/>
+                                            <element href="//0/@process/@activity/@activity/@activities.1"/>
+                                            <layoutConstraint height="40"
+                                                width="40" x="200"
+                                                xsi:type="notation:Bounds"
+                                                y="20"/>
+                                        </children>
+                                        <children type="4002">
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <children type="4017">
+                                                <styles fontName="Segoe UI"
+                                                    lineColor="0"
+                                                    xsi:type="notation:ShapeStyle"/>
+                                                <layoutConstraint xsi:type="notation:Bounds"/>
+                                            </children>
+                                            <styles fontName="Segoe UI"
+                                                lineColor="0"
+                                                xsi:type="notation:ShapeStyle"/>
+                                            <styles backgroundColor="16777215"
+                                                gradientEndColor="50431"
+                                                gradientStartColor="16777215"
+                                                xsi:type="bwnotation:BackgroundStyle"/>
+                                            <element href="//0/@process/@activity/@activity/@activities.2"/>
+                                            <layoutConstraint height="40"
+                                                width="40" x="380"
+                                                xsi:type="notation:Bounds"
+                                                y="20"/>
+                                        </children>
+                                        <styles xsi:type="notation:DrawerStyle"/>
+                                        <styles xsi:type="notation:SortingStyle"/>
+                                        <styles xsi:type="notation:FilteringStyle"/>
+                                        <element href="//0/@process/@activity/@activity"/>
+                                    </children>
+                                    <styles fontName="Segoe UI" lineColor="0"
+                                        xsi:type="notation:ShapeStyle"/>
+                                    <styles backgroundColor="16777215"
+                                        gradientEndColor="50431"
+                                        gradientStartColor="16777215"
+                                        xsi:type="bwnotation:BackgroundStyle"/>
+                                    <styles xsi:type="bwnotation:ResizingStyle"/>
+                                    <element href="//0/@process/@activity/@activity"/>
+                                    <layoutConstraint height="160" width="580"
+                                        xsi:type="notation:Bounds"/>
+                                </children>
+                                <styles xsi:type="notation:SortingStyle"/>
+                                <styles xsi:type="notation:FilteringStyle"/>
+                            </children>
+                            <styles fontName="Segoe UI" lineColor="0"
+                                xsi:type="notation:ShapeStyle"/>
+                            <styles xsi:type="bwnotation:BackgroundStyle"/>
+                            <styles xsi:type="bwnotation:ResizingStyle"/>
+                            <element href="//0/@process/@activity"/>
+                            <layoutConstraint height="160" width="580" x="30"
+                                xsi:type="notation:Bounds" y="20"/>
+                        </children>
+                        <styles xsi:type="notation:SortingStyle"/>
+                        <styles xsi:type="notation:FilteringStyle"/>
+                        <element href="//0/@process/@activity"/>
+                    </children>
+                    <styles fontName="Segoe UI" lineColor="0"
+                        xsi:type="notation:ShapeStyle"/>
+                    <styles backgroundColor="16777215" gradientEndColor="50431"
+                        gradientStartColor="16777215"
+                        xsi:type="bwnotation:BackgroundStyle"/>
+                    <styles xsi:type="bwnotation:ResizingStyle"/>
+                    <element href="//0/@process/@activity"/>
+                    <layoutConstraint height="220" width="640"
+                        xsi:type="notation:Bounds"/>
+                </children>
+                <styles xsi:type="notation:SortingStyle"/>
+                <styles xsi:type="notation:FilteringStyle"/>
+                <element href="//0/@process"/>
+            </children>
+            <styles fontName="Segoe UI" lineColor="0"
+                xsi:type="notation:ShapeStyle"/>
             <element href="//0/@process"/>
-            <layoutConstraint height="520" width="1180" xsi:type="notation:Bounds"/>
+            <layoutConstraint height="340" width="880"
+                xsi:type="notation:Bounds"/>
         </children>
         <styles xsi:type="notation:DiagramStyle"/>
         <element href="//0"/>
+        <edges source="//@children.0/@children.3/@children.0/@children.0/@children.0/@children.0/@children.0/@children.0/@children.0"
+            target="//@children.0/@children.3/@children.0/@children.0/@children.0/@children.0/@children.0/@children.0/@children.1"
+            type="4006">
+            <children type="6002">
+                <layoutConstraint xsi:type="notation:Location" y="40"/>
+            </children>
+            <styles lineColor="0" xsi:type="notation:ConnectorStyle"/>
+            <styles fontName="Segoe UI" xsi:type="notation:FontStyle"/>
+            <element href="//0/@process/@activity/@activity/@links/@children.0"/>
+            <bendpoints points="[0, 0, 0, 0]$[0, 0, 0, 0]"
+                xsi:type="notation:RelativeBendpoints"/>
+        </edges>
+        <edges source="//@children.0/@children.3/@children.0/@children.0/@children.0/@children.0/@children.0/@children.0/@children.1"
+            target="//@children.0/@children.3/@children.0/@children.0/@children.0/@children.0/@children.0/@children.0/@children.2"
+            type="4006">
+            <children type="6002">
+                <layoutConstraint xsi:type="notation:Location" y="40"/>
+            </children>
+            <styles lineColor="0" xsi:type="notation:ConnectorStyle"/>
+            <styles fontName="Segoe UI" xsi:type="notation:FontStyle"/>
+            <element href="//0/@process/@activity/@activity/@links/@children.1"/>
+            <bendpoints points="[0, 0, 0, 0]$[0, 0, 0, 0]"
+                xsi:type="notation:RelativeBendpoints"/>
+        </edges>
     </notation:Diagram>
     <tibex:NamespaceRegistry enabled="true">
         <tibex:namespaceItem namespace="http://xmlns.gmfin.example/credit/origination/audit"
