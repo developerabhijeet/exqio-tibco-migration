@@ -12,9 +12,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from api.app.config import Settings
 from api.app.db import new_id
 from api.app.deps import RunnerDep, SessionDep, SettingsDep
-from api.app.models import Application, Domain, File, Process, Project, ScanReport, Upload
+from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
 from api.app.schemas.project import (
@@ -78,6 +79,19 @@ def _spool_to(src, part_path: Path) -> None:
         shutil.copyfileobj(src, out, 1024 * 1024)
 
 
+def _allowed_source(settings: Settings, project_id: str, raw: str) -> Path:
+    """The resolved server path, if it lies under UPLOAD_ALLOWED_ROOTS and not in another
+    project's upload folder."""
+    src = Path(raw).expanduser().resolve()
+    allowed = any(src.is_relative_to(root) for root in settings.allowed_upload_roots)
+    store = settings.uploads_dir
+    if src.is_relative_to(store) and not src.is_relative_to(store / project_id):
+        allowed = False
+    if not allowed:
+        raise uploads.UploadError(f"path not allowed: {raw}")
+    return src
+
+
 @router.post("/projects/{project_id}/upload", status_code=201, response_model=UploadOut,
              openapi_extra={"requestBody": {"content": {
                  "multipart/form-data": {"schema": {"type": "object", "properties": {
@@ -100,7 +114,7 @@ async def upload(project_id: str, request: Request, session: SessionDep,
                 body = UploadPathIn.model_validate(await request.json())
             except (ValueError, ValidationError) as exc:
                 raise HTTPException(status_code=422, detail="expected multipart 'file' or JSON {\"path\"}") from exc
-            src = Path(body.path).expanduser()
+            src = _allowed_source(settings, project_id, body.path)
             source_kind, source_name = "path", body.path
             if src.is_dir():
                 await asyncio.to_thread(uploads.copy_folder, src, dest, settings.upload_max_bytes)
@@ -151,8 +165,9 @@ async def list_files(project_id: str, session: SessionDep,
 
 
 @router.post("/projects/{project_id}/scan", status_code=202, response_model=JobCreated)
-async def scan(project_id: str, session: SessionDep, runner: RunnerDep,
+async def scan(project_id: str, request: Request, session: SessionDep, runner: RunnerDep,
                body: ScanIn | None = None) -> JobCreated:
+    """Queue a scan of an upload; 409 while a scan of this project is queued or running."""
     await _project(session, project_id)
     if body and body.upload_id:
         upload_row = await session.get(Upload, body.upload_id)
@@ -162,8 +177,13 @@ async def scan(project_id: str, session: SessionDep, runner: RunnerDep,
         upload_row = await _latest_upload(session, project_id)
         if upload_row is None:
             raise HTTPException(status_code=409, detail="nothing uploaded yet")
-    job_id = await runner.submit("scan", {"project_id": project_id, "upload_id": upload_row.id},
-                                 scan_job(project_id, upload_row.id), project_id=project_id)
+    async with request.app.state.scan_lock:  # the check and the submit are one step
+        active = await session.scalar(select(Job.id).where(
+            Job.project_id == project_id, Job.kind == "scan", Job.status.in_(("queued", "running"))).limit(1))
+        if active is not None:
+            raise HTTPException(status_code=409, detail=f"a scan of this project is already in progress: {active}")
+        job_id = await runner.submit("scan", {"project_id": project_id, "upload_id": upload_row.id},
+                                     scan_job(project_id, upload_row.id), project_id=project_id)
     return JobCreated(job_id=job_id)
 
 

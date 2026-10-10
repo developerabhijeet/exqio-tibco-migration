@@ -8,6 +8,12 @@ written by another worker). The runner emits the terminal ``done`` or ``error`` 
 
 On startup :meth:`JobRunner.recover` marks jobs left ``queued`` or ``running`` by a previous
 process as failed with the reason "api restarted" (their coroutines died with that process).
+Recovery assumes a single API process per database: a second process (for example
+``uvicorn --workers 2``) would mark the first one's live jobs failed when it starts. Jobs carry
+no owner, so run one API process; recording an owner pid is the change if that ever moves.
+
+Event tags: ``log`` events carry ``tag`` ``code`` or ``ai``; ``stage``, ``done`` and ``error``
+events carry ``tag`` ``None`` (``null`` in the stream).
 """
 from __future__ import annotations
 

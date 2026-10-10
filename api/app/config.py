@@ -1,10 +1,14 @@
 """API settings, read from the environment (and ``.env`` when present)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 ProviderChoice = Literal["auto", "fake", "claude", "azure"]
 ResolvedProvider = Literal["fake", "claude", "azure", "none"]
@@ -44,6 +48,21 @@ class Settings(BaseSettings):
     job_workers: int = 2
     cors_origins: str = "http://localhost:3000"  # comma separated
     upload_max_bytes: int = 2 * 1024 * 1024 * 1024  # total uncompressed size of one upload
+    # Server folders a JSON {"path"} upload may read (comma separated or a JSON list);
+    # unset means DATA_DIR and <repo>/samples.
+    upload_allowed_roots: Annotated[list[Path] | None, NoDecode] = None
+
+    @field_validator("upload_allowed_roots", mode="before")
+    @classmethod
+    def _split_roots(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if text.startswith("["):
+                return json.loads(text)
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -52,6 +71,13 @@ class Settings(BaseSettings):
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir.resolve() / "uploads"
+
+    @property
+    def allowed_upload_roots(self) -> list[Path]:
+        roots = self.upload_allowed_roots
+        if roots is None:
+            roots = [self.data_dir, REPO_ROOT / "samples"]
+        return [Path(r).expanduser().resolve() for r in roots]
 
     def resolved_provider(self) -> ResolvedProvider:
         """The provider the API will use: an explicit choice, or the ``auto`` fallback chain."""

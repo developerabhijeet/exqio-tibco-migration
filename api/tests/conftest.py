@@ -27,7 +27,8 @@ TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localho
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(database_url=asyncpg_url(TEST_DSN), data_dir=tmp_path / "data", job_workers=2,
-                    provider="fake", _env_file=None)
+                    provider="fake", upload_allowed_roots=[tmp_path, REPO_ROOT / "samples"],
+                    _env_file=None)
 
 
 @pytest.fixture

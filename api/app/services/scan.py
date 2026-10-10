@@ -1,12 +1,21 @@
 """The scan job: parse an upload with the engine and persist everything tab 1 and tab 2 read.
 
-``scan_folder`` runs in a thread. One transaction then replaces the project's previous scan
-(applications, processes, domains, graph) with the new one, stores the completeness report and
-updates the upload's ``files`` rows with the scanner's kind, dialect and ``duplicate_of``.
+``scan_folder`` runs in a thread. Every stored payload (IR, report, domain evidence, graph) is
+first made relative to the scan root, so nothing stored carries the server's upload path and
+the spec hash of an unchanged process is the same whichever upload it came from.
+
+A rescan upserts by key in one transaction, so ids survive and downstream rows (rules,
+findings, gates, designs, builds) stay attached: applications by ``app_key``, domains by
+``key`` (an SME rename is kept), processes by ``ir_id``. A process whose spec hash moved gets
+the new hash and an audit line ``rescanned: spec hash changed <old> -> <new>``; gates go stale
+through that hash (Task 18 resets them). Processes, applications and domains that disappeared
+are deleted, each removed process with an audit line. The graph is replaced. The upload's
+``files`` rows take the scanner's kind, dialect and ``duplicate_of``.
 """
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +24,7 @@ from sqlalchemy import delete, select
 from api.app.jobs.runner import JobContext
 from api.app.models import (
     Application,
+    AuditLog,
     Domain,
     File,
     GraphEdge,
@@ -28,21 +38,46 @@ from engine.domains.graph import build_graph
 from engine.ir.spec_hash import spec_hash
 from engine.tibco_parser.scanner import ScanResult, scan_folder
 
+SYSTEM = "system"
+
 
 def upload_scan_root(upload: Upload) -> Path:
     root = Path(upload.root_dir)
     return root / upload.scan_root if upload.scan_root else root
 
 
-def relative_source(source_path: str, scan_root: Path) -> str:
-    """The IR's source path relative to the scan root (posix); unchanged if it is not under it."""
-    p = Path(source_path)
-    if not p.is_absolute():
-        return p.as_posix()
-    try:
-        return p.resolve().relative_to(scan_root.resolve()).as_posix()
-    except ValueError:
-        return p.as_posix()
+def relativise(obj: Any, root: Path) -> Any:
+    """``obj`` (JSON-like) with every occurrence of the scan root made relative to it.
+
+    ``<root>/a/b`` becomes ``a/b`` wherever it appears in a string (paths, ``path#xpath``
+    references, error texts); the bare root becomes ``.``.
+    """
+    prefixes = sorted({str(root), str(root.resolve())}, key=len, reverse=True)
+    patterns = [(re.compile(re.escape(p) + "/"), "") for p in prefixes]  # <root>/x -> x
+    patterns += [(re.compile(re.escape(p) + r"(?![\w.-])"), ".") for p in prefixes]  # <root> -> .
+
+    def fix(text: str) -> str:
+        if not any(p in text for p in prefixes):
+            return text
+        for pattern, repl in patterns:
+            text = pattern.sub(repl, text)
+        return text
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, str):
+            return fix(value)
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    return walk(obj)
+
+
+def _audit(project_id: str, process_id: str | None, action: str, detail: dict[str, Any]) -> AuditLog:
+    return AuditLog(project_id=project_id, process_id=process_id, actor=SYSTEM, actor_kind=SYSTEM,
+                    action=action, detail=detail)
 
 
 async def run_scan(ctx: JobContext, project_id: str, upload_id: str) -> dict[str, Any]:
@@ -72,54 +107,113 @@ async def run_scan(ctx: JobContext, project_id: str, upload_id: str) -> dict[str
                   f"{len(graph.edges)} edges")
 
     await ctx.stage("persist")
-    process_count = 0
-    async with ctx.sessionmaker() as s:
-        for model in (Process, Application, Domain, GraphNode, GraphEdge):
-            await s.execute(delete(model).where(model.project_id == project_id))
+    counts = await _persist(ctx, project_id, upload_id, root, result, domains, graph)
+    await ctx.log(f"stored {len(result.applications)} applications, {counts['processes']} processes "
+                  f"({counts['added']} new, {counts['changed']} with a new spec hash, "
+                  f"{counts['removed']} removed), {len(domains)} domains")
+    return {"upload_id": upload_id, "applications": len(result.applications), "domains": len(domains),
+            "synthetic": result.synthetic, "ok": report.ok, "files_found": report.files_found,
+            "files_parsed": report.files_parsed, **counts}
 
+
+async def _persist(ctx: JobContext, project_id: str, upload_id: str, root: Path, result: ScanResult,
+                   domains: list, graph: Any) -> dict[str, int]:
+    added = changed = removed = total = 0
+    async with ctx.sessionmaker() as s:
+        # domains: upsert by key, keep an SME rename
+        old_domains = {d.key: d for d in (await s.execute(
+            select(Domain).where(Domain.project_id == project_id))).scalars()}
         domain_rows: dict[str, Domain] = {}
         domain_of: dict[str, str] = {}
         for d in domains:
-            row = Domain(project_id=project_id, key=d.id, suggested_name=d.suggested_name,
-                         name=d.suggested_name, evidence=[e.model_dump(mode="json") for e in d.evidence],
-                         process_ids=list(d.process_ids))
-            s.add(row)
+            evidence = relativise([e.model_dump(mode="json") for e in d.evidence], root)
+            row = old_domains.pop(d.id, None)
+            if row is None:
+                row = Domain(project_id=project_id, key=d.id, name=d.suggested_name)
+                s.add(row)
+            elif row.renamed_by is None:
+                row.name = d.suggested_name
+            row.suggested_name = d.suggested_name
+            row.evidence = evidence
+            row.process_ids = list(d.process_ids)
             domain_rows[d.id] = row
             for pid in d.process_ids:
                 domain_of[pid] = d.id
+        for gone in old_domains.values():
+            await s.delete(gone)  # processes.domain_id is ON DELETE SET NULL
         await s.flush()
 
+        old_apps = {a.app_key: a for a in (await s.execute(
+            select(Application).where(Application.project_id == project_id))).scalars()}
+        old_procs = {p.ir_id: p for p in (await s.execute(
+            select(Process).where(Process.project_id == project_id))).scalars()}
+        seen_apps: set[str] = set()
         for app in result.applications:
-            app_row = Application(project_id=project_id, upload_id=upload_id, app_key=app.id,
-                                  name=app.name, dialect=app.dialect, modules=list(app.modules),
-                                  ir=app.model_dump(mode="json", exclude={"processes"}))
-            s.add(app_row)
+            app_ir = relativise(app.model_dump(mode="json", exclude={"processes"}), root)
+            app_row = old_apps.get(app.id)
+            if app_row is None:
+                app_row = Application(project_id=project_id, app_key=app.id)
+                s.add(app_row)
+            app_row.upload_id = upload_id
+            app_row.name = app.name
+            app_row.dialect = app.dialect
+            app_row.modules = list(app.modules)
+            app_row.ir = app_ir
+            seen_apps.add(app.id)
             await s.flush()
+
             for p in app.processes:
-                ir = p.model_dump(mode="json")
+                ir = relativise(p.model_dump(mode="json"), root)
+                new_hash = spec_hash(ir, [], [])
                 dom = domain_rows.get(domain_of.get(p.id, ""))
-                s.add(Process(
-                    project_id=project_id, application_id=app_row.id, upload_id=upload_id,
-                    domain_id=dom.id if dom else None, ir_id=p.id, name=p.name, module=p.module,
-                    package=p.package, dialect=p.dialect, source_path=relative_source(p.source_path, root),
-                    starter_kind=p.starter.kind if p.starter else None, ir=ir,
-                    spec_hash=spec_hash(ir, [], []),
-                    complexity=p.complexity.model_dump(mode="json") if p.complexity else None,
-                    complexity_score=p.complexity.score if p.complexity else None,
-                    complexity_band=p.complexity.band if p.complexity else None))
-                process_count += 1
+                row = old_procs.pop(p.id, None)
+                if row is None:
+                    row = Process(project_id=project_id, ir_id=p.id)
+                    s.add(row)
+                    added += 1
+                elif row.spec_hash != new_hash:
+                    changed += 1
+                    s.add(_audit(project_id, row.id, f"rescanned: spec hash changed {row.spec_hash} -> {new_hash}",
+                                 {"ir_id": p.id, "old": row.spec_hash, "new": new_hash, "job_id": ctx.job_id}))
+                row.application_id = app_row.id
+                row.upload_id = upload_id
+                row.domain_id = dom.id if dom else None
+                row.name = p.name
+                row.module = p.module
+                row.package = p.package
+                row.dialect = p.dialect
+                row.source_path = ir["source_path"]
+                row.starter_kind = p.starter.kind if p.starter else None
+                row.ir = ir
+                row.spec_hash = new_hash
+                row.complexity = ir.get("complexity")
+                row.complexity_score = p.complexity.score if p.complexity else None
+                row.complexity_band = p.complexity.band if p.complexity else None
+                total += 1
 
-        for n in graph.nodes:
-            s.add(GraphNode(project_id=project_id, node_id=n.id, kind=n.kind, name=n.name,
-                            attrs=n.model_dump(mode="json")["attrs"]))
-        for e in graph.edges:
-            s.add(GraphEdge(project_id=project_id, src=e.src, dst=e.dst, kind=e.kind,
-                            attrs=e.model_dump(mode="json")["attrs"]))
+        for ir_id, row in old_procs.items():
+            removed += 1
+            s.add(_audit(project_id, row.id, f"rescanned: process removed {ir_id}",
+                         {"ir_id": ir_id, "spec_hash": row.spec_hash, "job_id": ctx.job_id}))
+            await s.delete(row)
+        await s.flush()
+        for key, app_row in old_apps.items():
+            if key not in seen_apps:
+                await s.delete(app_row)
 
+        await s.execute(delete(GraphNode).where(GraphNode.project_id == project_id))
+        await s.execute(delete(GraphEdge).where(GraphEdge.project_id == project_id))
+        g = relativise(graph.model_dump(mode="json"), root)
+        s.add_all(GraphNode(project_id=project_id, node_id=n["id"], kind=n["kind"], name=n["name"],
+                            attrs=n["attrs"]) for n in g["nodes"])
+        s.add_all(GraphEdge(project_id=project_id, src=e["src"], dst=e["dst"], kind=e["kind"],
+                            attrs=e["attrs"]) for e in g["edges"])
+
+        report = result.report
         s.add(ScanReport(project_id=project_id, upload_id=upload_id, job_id=ctx.job_id,
-                         report=report.model_dump(mode="json"), ok=report.ok, synthetic=result.synthetic,
-                         sql_files=list(result.sql_files), files_found=report.files_found,
-                         files_parsed=report.files_parsed))
+                         report=relativise(report.model_dump(mode="json"), root), ok=report.ok,
+                         synthetic=result.synthetic, sql_files=list(result.sql_files),
+                         files_found=report.files_found, files_parsed=report.files_parsed))
 
         files = {f.path: f for f in (await s.execute(select(File).where(File.upload_id == upload_id))).scalars()}
         for entry in result.files:
@@ -130,12 +224,7 @@ async def run_scan(ctx: JobContext, project_id: str, upload_id: str) -> dict[str
             row.dialect = entry.dialect
             row.duplicate_of = entry.duplicate_of
         await s.commit()
-
-    await ctx.log(f"stored {len(result.applications)} applications, {process_count} processes, "
-                  f"{len(domains)} domains")
-    return {"upload_id": upload_id, "applications": len(result.applications), "processes": process_count,
-            "domains": len(domains), "synthetic": result.synthetic, "ok": report.ok,
-            "files_found": report.files_found, "files_parsed": report.files_parsed}
+    return {"processes": total, "added": added, "changed": changed, "removed": removed}
 
 
 def scan_job(project_id: str, upload_id: str):

@@ -2,7 +2,12 @@
 
 ``GET /jobs/{id}/events`` replays stored events after ``Last-Event-ID`` (default 0), then
 streams live ones from the in-process runner, polling the table every 500 ms for events
-written by another worker, and ends after the terminal ``done`` or ``error`` event.
+written by another worker, and ends after the terminal ``done`` or ``error`` event. When the
+job has finished and ``Last-Event-ID`` is at or past its terminal event the reply is 204, so a
+browser ``EventSource`` stops reconnecting.
+
+Each event's ``data`` is JSON ``{seq, tag, text, data, ts}``. ``tag`` is ``code`` or ``ai`` on
+``log`` events and ``null`` on ``stage``, ``done`` and ``error`` events.
 """
 from __future__ import annotations
 
@@ -10,8 +15,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Request, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -73,13 +78,19 @@ async def stream_events(request: Request, runner: JobRunner, job_id: str,
         runner.unsubscribe(job_id, queue)
 
 
-@router.get("/jobs/{job_id}/events")
+@router.get("/jobs/{job_id}/events", response_model=None)
 async def job_events(job_id: str, request: Request, session: SessionDep,
-                     runner: RunnerDep) -> EventSourceResponse:
-    if await session.get(Job, job_id) is None:
+                     runner: RunnerDep) -> EventSourceResponse | Response:
+    job = await session.get(Job, job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     try:
         after = int(request.headers.get("last-event-id") or 0)
     except ValueError:
         after = 0
+    if job.status in ("done", "failed"):
+        terminal = await session.scalar(select(func.max(JobEvent.seq)).where(
+            JobEvent.job_id == job_id, JobEvent.event.in_(("done", "error"))))
+        if terminal is not None and after >= terminal:
+            return Response(status_code=204)  # nothing left: EventSource stops reconnecting
     return EventSourceResponse(stream_events(request, runner, job_id, after), ping=15)

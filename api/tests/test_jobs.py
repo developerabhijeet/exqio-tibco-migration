@@ -63,6 +63,11 @@ async def test_sse_streams_log_events(client, app):
         replay = _parse_sse("".join([c async for c in r.aiter_text()]))
     assert [int(e["id"]) for e in replay] == [4, 5]
 
+    # at or past the terminal event of a finished job: 204, so EventSource stops reconnecting
+    for last in ("5", "9"):
+        r = await client.get(f"/jobs/{job_id}/events", headers={"Last-Event-ID": last})
+        assert r.status_code == 204 and r.content == b""
+
 
 async def test_failed_job_streams_error(client, app):
     async def boom(ctx: JobContext) -> dict:

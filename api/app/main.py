@@ -5,6 +5,7 @@ Run with ``uvicorn api.app.main:app`` (``make api``). The schema is created by A
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -31,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.runner = runner
+        app.state.scan_lock = asyncio.Lock()
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
         try:
             await runner.start()

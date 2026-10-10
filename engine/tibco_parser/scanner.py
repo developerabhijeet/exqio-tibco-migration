@@ -49,7 +49,8 @@ from engine.tibco_parser.substvar import parse_substvar
 from engine.tibco_parser.xmlutil import local, read_xml
 
 FileKind = Literal["bwp", "process", "bwm", "xsd", "wsdl", "json", "substvar", "resource", "sql", "manifest", "other"]
-_SKIP_DIRS = {".git", "__MACOSX", ".svn"}
+SKIP_DIRS = frozenset({".git", "__MACOSX", ".svn"})  # folders never inventoried
+_SKIP_DIRS = SKIP_DIRS  # private alias kept for existing callers
 _APP_SUFFIX = ".application"
 
 
@@ -70,7 +71,8 @@ class ScanResult(BaseModel):
 
 
 # --------------------------------------------------------------------- helpers
-def _kind(path: Path) -> str:
+def file_kind(path: Path) -> str:
+    """The FileKind of one file, by extension and location (shared with the API upload inventory)."""
     ext = path.suffix.lower()
     simple = {".bwp": "bwp", ".process": "process", ".bwm": "bwm", ".xsd": "xsd", ".wsdl": "wsdl",
               ".json": "json", ".substvar": "substvar", ".sql": "sql"}
@@ -81,6 +83,9 @@ def _kind(path: Path) -> str:
     if ext.startswith(".shared") or (ext.endswith("resource") and len(ext) > len(".resource")):
         return "resource"
     return "other"
+
+
+_kind = file_kind  # private alias kept for existing callers
 
 
 def _manifest_value(manifest: Path, key: str) -> str | None:
@@ -139,13 +144,13 @@ class _Scanner:
     # ---- inventory
     def inventory(self) -> None:
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for fn in sorted(filenames):
                 p = Path(dirpath) / fn
                 if not p.is_file():
                     continue
                 digest = hashlib.sha256(p.read_bytes()).hexdigest()
-                self.files[p] = FileEntry(path=self.rel(p), kind=_kind(p), sha256=digest)  # type: ignore[arg-type]
+                self.files[p] = FileEntry(path=self.rel(p), kind=file_kind(p), sha256=digest)  # type: ignore[arg-type]
 
     def of_kind(self, *kinds: str) -> list[Path]:
         return [p for p, f in self.files.items() if f.kind in kinds]
