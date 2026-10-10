@@ -65,7 +65,7 @@ async def patch_rule(rule_id: str, body: RulePatch, request: Request, session: S
 @router.patch("/findings/{finding_id}", response_model=AnalysisOut)
 async def patch_finding(finding_id: str, body: FindingPatch, request: Request, session: SessionDep,
                         user: UserDep) -> dict:
-    """Decide a finding: keep behaviour, fix, or ask the business, with a note."""
+    """Decide a finding: keep behavior, fix, or ask the business, with a note."""
     try:
         proc = await svc.decide_finding(session, request.app.state.knowledge, finding_id, body.decision,
                                         body.note, user)

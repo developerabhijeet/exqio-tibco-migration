@@ -33,6 +33,9 @@ CONTROL_ONLY_NOTE = ("touched only through a branch decision by a Fix finding; n
                      "without a TIBCO sandbox run")
 NUGET_MARKER = "NuGet unreachable"  # the restore log's note (``build.NUGET_DOWN``) starts with it
 NUGET_REMEDY = "NuGet unreachable: run `make nuget-cache` on a connected machine"
+# logged by the build when the setting is empty, and appended to the test step's log when the tests
+# then failed because Testcontainers could not reach Docker (the G4 reason repeats it)
+TESTDB_UNSET = "TEST_DATABASE_URL not set: generated tests will start a Testcontainers Postgres (needs Docker)"
 
 
 def canonical_hash(data: Any) -> str:
@@ -85,7 +88,8 @@ def control_only_count(runs: list[ScenarioRun]) -> int:
 
 
 def control_only_text(n: int) -> str:
-    return f"{n} difference(s) {CONTROL_ONLY_NOTE}"
+    """Appended to the unexplained count: control-only defects are a part of it, not extra."""
+    return f"of which {n} are {CONTROL_ONLY_NOTE}"
 
 
 async def unconfirmed_intended(session: AsyncSession, process: Process) -> int:
@@ -138,8 +142,11 @@ async def g4_blockers(session: AsyncSession, process: Process, build: Build | No
         failed = sum(1 for t in tests if t.outcome == "failed")
         not_run = sum(1 for t in tests if t.outcome not in ("passed", "failed"))
         if failed or not_run:
+            test_step = build_step(build, "test")
+            hint = (f"; {TESTDB_UNSET}" if test_step and not test_step.get("ok")
+                    and TESTDB_UNSET in (test_step.get("log") or "") else "")
             reasons.append(f"{failed + not_run} of {len(tests)} test(s) not passed "
-                           f"({failed} failed, {not_run} not run)")
+                           f"({failed} failed, {not_run} not run){hint}")
     return reasons
 
 
@@ -167,11 +174,10 @@ async def evidence_reasons(session: AsyncSession, process: Process,
         g5: list[str] = []
         unexplained = sum(int((r.report or {}).get("unexplained") or 0) for r in runs)
         errors = sum(1 for r in runs if r.status == "error")
-        if unexplained:
-            g5.append(f"{unexplained} unexplained difference(s) in the parity report")
         control_only = control_only_count(runs)
-        if control_only:
-            g5.append(control_only_text(control_only))
+        if unexplained or control_only:
+            g5.append(f"{unexplained} unexplained difference(s) in the parity report"
+                      + (f", {control_only_text(control_only)}" if control_only else ""))
         if errors:
             g5.append(f"{errors} scenario(s) could not run")
         out["G5"] = g5

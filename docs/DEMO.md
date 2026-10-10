@@ -107,19 +107,26 @@ Run through this on the demo machine the day before and again an hour before.
 4. **NuGet.** The build restores packages. Check that `https://api.nuget.org/v3/index.json`
    answers from the demo machine, or run `make nuget-cache` on a machine with NuGet access and
    copy `.tools/nuget-cache` to the same path on the demo machine.
-5. **Provider variables.** For a real model set `CLAUDE_CODE_OAUTH_TOKEN`, or the Azure OpenAI
+5. **Test database for the generated tests.** Export `TEST_DATABASE_URL` or run Docker Desktop.
+   The build passes the API's `TEST_DATABASE_URL` (environment or `.env`, default
+   `postgresql://exiqo:exiqo@localhost:5432/exiqo_test`; the database name must end in `_test`)
+   to the generated tests, which then run against that Postgres. When it is empty the build log
+   says "TEST_DATABASE_URL not set: generated tests will start a Testcontainers Postgres (needs
+   Docker)", and the first run needs a Docker daemon plus a Docker Hub pull of
+   `postgres:16-alpine`; without them every test fails and G4 repeats that line.
+6. **Provider variables.** For a real model set `CLAUDE_CODE_OAUTH_TOKEN`, or the Azure OpenAI
    variables, in the environment or `.env`. Settings shows each provider as configured or
    missing; it never shows values. Without keys the demo runs with `PROVIDER=fake` (scripted
    replies) and says so on screen.
-6. **Ports.** The API on 8000 and the web on 3000 by default (`make api`, `make web`; change with
+7. **Ports.** The API on 8000 and the web on 3000 by default (`make api`, `make web`; change with
    `API_PORT` and `WEB_PORT`). The generated service's Development CORS allows
    `http://localhost:3000`, which the Verify tab's Get dev token call needs: keep the web on 3000,
    or start the API with `WEB_PORT` set (the Makefile then passes `Cors__Origins__0` for the web
    origin to the service). Verify starts the service on a free port the API allocates.
-7. **Rehearsal.** `make demo-check` against the demo API (or let it start one) and read the table:
+8. **Rehearsal.** `make demo-check` against the demo API (or let it start one) and read the table:
    every row must pass in full mode. The project it leaves behind is the rehearsal project for
    steps 5 to 7.
-8. **If restore fails live.** Do not retry on stage. The build card says "job finished, build
+9. **If restore fails live.** Do not retry on stage. The build card says "job finished, build
    failed", the restore step shows "NuGet unreachable" and the remedy (`make nuget-cache`), G4
    stays closed with the reason, and Verify and Deploy show why they cannot start the service or
    plan an image. Say that plainly, switch to the rehearsal project, and continue from there.

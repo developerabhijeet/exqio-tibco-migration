@@ -365,6 +365,64 @@ async def test_test_engineer_fills_rule_bodies_and_clears_g4_reason(client, app,
     assert calls
 
 
+DOCKER_DOWN = ("DotNet.Testcontainers.Builders.DockerUnavailableException: Docker is either not running or "
+               "misconfigured.\nFailed! - Failed: 17, Passed: 0")
+TESTDB_HINT = "TEST_DATABASE_URL not set: generated tests will start a Testcontainers Postgres (needs Docker)"
+
+
+class RecordingRunner:
+    """A ``DotnetRunner`` whose ``dotnet`` commands are recorded with their child environment:
+    restore, build and format succeed, the tests fail as they do when Testcontainers finds no Docker."""
+    calls: ClassVar[list[tuple[str, dict[str, str]]]] = []
+
+    @classmethod
+    def make(cls):
+        from engine.dotnet_gen.runner import DotnetRunner
+
+        class Recording(DotnetRunner):
+            def _run(self, args, timeout_s=None, env=None):
+                cls.calls.append((args[0], self.env(env)))
+                if args[0] == "build":
+                    return 0, "Build succeeded.\n    0 Warning(s)\n    0 Error(s)\n"
+                if args[0] == "test":
+                    return 1, DOCKER_DOWN
+                return 0, ""
+
+        return Recording
+
+
+async def test_generated_tests_get_the_test_database(client, app, monkeypatch, settings):
+    recording = RecordingRunner.make()
+    RecordingRunner.calls.clear()
+    monkeypatch.setattr(build_svc, "DotnetRunner", recording)
+    monkeypatch.setattr(build_svc, "find_dotnet", lambda: "dotnet")
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql://inherited/not_passed_test")  # not inherited
+    settings.test_database_url = "postgresql://exiqo:exiqo@db.example:5432/generated_test"
+    _, proc_id, build_id, _ = await _built(client, monkeypatch, dotnet=True)
+    tests = [env for name, env in RecordingRunner.calls if name == "test"]
+    assert len(tests) >= 2, RecordingRunner.calls  # the test step and the repair loop's re-run
+    assert all(env.get("TEST_DATABASE_URL") == settings.test_database_url for env in tests)
+    assert TESTDB_HINT not in (await _gates(client, proc_id))["G4"]["reason"]
+    async with app.state.sessionmaker() as s:
+        job_id = (await s.get(Build, build_id)).job_id
+        logs = [e.text for e in (await s.execute(select(JobEvent).where(JobEvent.job_id == job_id))).scalars()]
+    assert TESTDB_HINT not in logs
+
+    # unset: one log line says so, and the G4 reason names Docker when Testcontainers could not start
+    RecordingRunner.calls.clear()
+    settings.test_database_url = ""
+    r = await client.post(f"/processes/{proc_id}/build", json={})
+    job = await _wait_job(client, r.json()["job_id"], timeout=1800)
+    assert job["status"] == "done", job
+    tests = [env for name, env in RecordingRunner.calls if name == "test"]
+    assert tests and all("TEST_DATABASE_URL" not in env for env in tests)
+    async with app.state.sessionmaker() as s:
+        logs = [e.text for e in (await s.execute(select(JobEvent).where(JobEvent.job_id == job["id"]))).scalars()]
+    assert logs.count(TESTDB_HINT) == 1
+    g4 = (await _gates(client, proc_id))["G4"]
+    assert g4["enabled"] is False and TESTDB_HINT in g4["reason"], g4
+
+
 async def test_build_scaffold_passes_with_dotnet(client, app, monkeypatch):
     if build_svc.find_dotnet() is None:
         pytest.skip("dotnet is not installed here")
@@ -779,8 +837,7 @@ async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypa
         assert [(d.classification, d.finding_key) for d in diffs] == [("defect", defects[0]["finding_id"])]
         g5 = (await _gates(client, proc_id))["G5"]
         assert g5["state"] == "pending" and g5["enabled"] is False
-        assert "1 unexplained difference(s)" in g5["reason"]
-        assert f"1 difference(s) {CONTROL_ONLY}" in g5["reason"]
+        assert f"1 unexplained difference(s) in the parity report, of which 1 are {CONTROL_ONLY}" in g5["reason"]
         assert g5["notes"] == [note]
 
         # a difference no fix touches (a field the model never produces has no lineage) is a defect
@@ -795,7 +852,7 @@ async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypa
         assert defects["output.body.message"]["via"] == "control"
         assert parity["unexplained"] == 2 and parity["control_only_defects"] == 1
         g5 = (await _gates(client, proc_id))["G5"]
-        assert "2 unexplained difference(s)" in g5["reason"] and f"1 difference(s) {CONTROL_ONLY}" in g5["reason"]
+        assert f"2 unexplained difference(s) in the parity report, of which 1 are {CONTROL_ONLY}" in g5["reason"]
     finally:
         await client.delete(f"/builds/{build_id}/run")
 

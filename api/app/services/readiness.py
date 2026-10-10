@@ -82,7 +82,7 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     else:
         ev = [_ev("report", f"/projects/{project_id}/report",
                   f"parse report: {report.files_parsed} of {report.files_found} files parsed, "
-                  f"{len(procs)} processes" + (", labelled synthetic" if report.synthetic else ""))]
+                  f"{len(procs)} processes" + (", labeled synthetic" if report.synthetic else ""))]
         if report.synthetic and report.ok:
             rows.append(_row("synthetic_estate", "met", ev, None))
         else:
@@ -242,7 +242,7 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
             rows.append(_row("knowledge_layer", "met", ev, None))
         elif chunks or memory:
             rows.append(_row("knowledge_layer", "partial", ev,
-                             "no analysed process indexed yet" if not chunks else "no migration memory yet"))
+                             "no analyzed process indexed yet" if not chunks else "no migration memory yet"))
         else:
             rows.append(_row("knowledge_layer", "missing", ev, "nothing indexed for this project yet"))
 

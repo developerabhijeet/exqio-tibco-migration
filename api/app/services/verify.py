@@ -60,7 +60,7 @@ from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle, find_dotnet
 from engine.dotnet_gen.tests_gen import TestContext, _request
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
-from engine.parity.compare import Lineage, NoiseRule, _lineage_for, _touches, build_lineage, compare
+from engine.parity.compare import Lineage, NoiseRule, build_lineage, compare, lineage_for, touches
 from engine.parity.db import ScenarioDB
 from engine.parity.evaluator import EvaluationError, Evaluator
 from engine.parity.models import (
@@ -740,10 +740,10 @@ def control_only_touches(report: ParityReport, fixes: list[Finding], data_lineag
     for d in report.fields + report.side_effects:
         if d.status != "defect":
             continue
-        data = _lineage_for(d.path, data_lineage)
-        control = _lineage_for(d.path, control_lineage)
+        data = lineage_for(d.path, data_lineage)
+        control = lineage_for(d.path, control_lineage)
         for f in fixes:
-            if _touches(f, control, process_id) and not _touches(f, data, process_id):
+            if touches(f, control, process_id) and not touches(f, data, process_id):
                 out[d.path] = f.id
                 break
     return out

@@ -229,7 +229,7 @@ def designer_reply(process: Process | None) -> dict:
             "title": "Data access",
             "choice": "Dapper repositories with the TIBCO SQL kept verbatim",
             "alternatives": ["Entity Framework Core with generated queries"],
-            "reason": "Verbatim SQL keeps behaviour identical and reviewable against the TIBCO source.",
+            "reason": "Verbatim SQL keeps behavior identical and reviewable against the TIBCO source.",
         }],
         "open_questions": [{
             "question": "Should the migrated service keep the TIBCO fault names in its error responses?",

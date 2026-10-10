@@ -87,6 +87,11 @@ NUGET_DOWN = ("NuGet unreachable: api.nuget.org did not answer and there is no o
               ".tools/nuget-cache, so `dotnet restore` of the Api, Infrastructure and Tests projects cannot "
               "succeed here. Run `make nuget-cache` on a machine with NuGet access and copy .tools/nuget-cache "
               "across.")
+# the generated TestDatabase starts a Testcontainers Postgres when TEST_DATABASE_URL is absent; these
+# are the ways that fails without Docker (no daemon, no socket, no image pull)
+_DOCKER_DOWN = re.compile(r"DockerUnavailableException|Docker is either not running|Cannot connect to the Docker "
+                          r"daemon|docker\.sock|Testcontainers\.\S*Exception|pull access denied|toomanyrequests",
+                          re.IGNORECASE)
 _FACT = re.compile(r'\[Fact\(DisplayName = (?P<lit>"(?:[^"\\]|\\.)*")\)\]')
 _METHOD = re.compile(r"public (?:async )?Task (?P<name>\w+)\(\)")
 
@@ -131,6 +136,12 @@ def toolchain() -> dict[str, Any]:
 def _tail(text: str, limit: int = LOG_LIMIT) -> str:
     text = text or ""
     return text if len(text) <= limit else "..." + text[-limit:]
+
+
+def docker_down(run: TestRun) -> bool:
+    """True when the test log or a failed case says Testcontainers could not reach Docker."""
+    texts = [run.log or ""] + [c.message or "" for c in run.cases if c.outcome != "passed"]
+    return any(_DOCKER_DOWN.search(t) for t in texts)
 
 
 def _step(name: str, ok: bool, log: str, started: float, *, skipped: bool = False) -> dict[str, Any]:
@@ -421,7 +432,13 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 6. restore, build, format, test (code)
     steps: list[dict[str, Any]] = []
     dotnet = find_dotnet()
-    runner = DotnetRunner(solution.root, dotnet=dotnet) if dotnet else None
+    # the generated tests read TEST_DATABASE_URL; the runner's child environment is an allowlist, so
+    # it is passed explicitly (the repair loop's re-runs use the same runner and get it too)
+    test_db = settings.test_database_url.strip()
+    runner = (DotnetRunner(solution.root, dotnet=dotnet, env={"TEST_DATABASE_URL": test_db} if test_db else None)
+              if dotnet else None)
+    if runner is not None and not test_db:
+        await ctx.log(evidence.TESTDB_UNSET)
     build_result: BuildResult | None = None
     test_run: TestRun | None = None
     format_ok = False
@@ -471,7 +488,10 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     if runner is not None and build_result is not None and build_result.ok:
         test_run = await asyncio.to_thread(runner.test)
         passed = sum(1 for c in test_run.cases if c.outcome == "passed")
-        steps.append(_step("test", test_run.ok, test_run.log, t0))
+        test_log = test_run.log
+        if not test_run.ok and not test_db and docker_down(test_run):
+            test_log = f"{test_log.rstrip()}\n\n{evidence.TESTDB_UNSET}"  # read back by the G4 reason
+        steps.append(_step("test", test_run.ok, test_log, t0))
         await ctx.log(f"tests: {passed} of {len(test_run.cases)} passed"
                       + (f", line coverage {test_run.coverage_line:.1%}" if test_run.coverage_line is not None else ""))
     else:

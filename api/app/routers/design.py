@@ -18,7 +18,7 @@ router = APIRouter(tags=["design"])
 async def generate_design(process_id: str, request: Request, session: SessionDep, runner: RunnerDep,
                           settings: SettingsDep) -> JobCreated:
     """Queue the design job (skeleton by code, narrative by the designer); 409 while one runs or
-    before the process has been analysed."""
+    before the process has been analyzed."""
     proc = await session.get(Process, process_id)
     if proc is None:
         raise HTTPException(status_code=404, detail="process not found")

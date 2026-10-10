@@ -55,7 +55,7 @@ shows each provider as configured or missing and never shows a value.
 | `AZURE_OPENAI_DEPLOYMENT_STRONG`, `_STANDARD`, `_EFFICIENT` | the Azure deployment for each routing tier |
 | `ROUTING_BANDS` | complexity score bands per tier (JSON); unset uses 8 to 10, 4 to 7, 0 to 3 |
 | `DATABASE_URL` | the platform database (async SQLAlchemy URL) |
-| `TEST_DATABASE_URL` | the database the test suites use |
+| `TEST_DATABASE_URL` | the database the test suites use, and the one the build passes to the generated .NET tests (empty: they start a Testcontainers Postgres, which needs Docker) |
 | `SCENARIO_DATABASE_URL` | one shared parity scenario database (name must end in `_test`); unset creates one per project on the `DATABASE_URL` server, which needs CREATEDB |
 | `DATA_DIR` | uploads and generated builds (default `./data`) |
 | `APP_SECRET` | key for the encrypted Azure service principal secret; unset generates one per API run, so a stored secret is unreadable after a restart |
@@ -97,7 +97,10 @@ analysis is labeled code-only.
 
 What always needs the network: NuGet for `dotnet restore` (or the offline cache from
 `make nuget-cache`), the Terraform or OpenTofu provider registry for `terraform validate`, and an
-Azure subscription for a real plan.
+Azure subscription for a real plan. The generated tests need a Postgres: export
+`TEST_DATABASE_URL` (the build passes it to them) or run Docker Desktop, because with it empty
+they start a Testcontainers `postgres:16-alpine`, which needs a Docker daemon and, on the first
+run, a Docker Hub pull.
 
 ## Tests
 
