@@ -12,6 +12,8 @@ activity        PascalCase activity (or group) name (``LookupDealer``)
 starter         PascalCase name of the process starter activity (``get``  -> ``Get``)
 resource        shared resource base name with a trailing ``Client`` removed (``Equifax``)
 fault           fault name of a throw (``DealerInactiveFault``)
+exception       exception class of a throw: ``fault`` + ``Exception`` unless it already ends so
+                (``DealerInactiveFaultException``), so it never clashes with the fault contract record
 target          PascalCase name of a called subprocess (``AuditLog``)
 destination     JMS queue or topic name, verbatim (``gmf.funding.events``)
 ==============  ===========================================================================
@@ -25,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 TEMPLATE_KEYS: tuple[str, ...] = (
-    "app", "process", "activity", "starter", "resource", "fault", "target", "destination",
+    "app", "process", "activity", "starter", "resource", "fault", "exception", "target", "destination",
 )
 
 
@@ -150,7 +152,7 @@ _P: list[PatternSpec] = [
                 "code, arithmetic and functions by the builder agent."),
     PatternSpec("assign", "core", *_MAPPINGS, "{activity}Mapping", [],
                 "Generated assignment to a process variable with the TIBCO expression kept as a comment."),
-    PatternSpec("throw", "core", "Exceptions/{fault}.cs", "{fault}", ".ctor", [],
+    PatternSpec("throw", "core", "Exceptions/{exception}.cs", "{exception}", ".ctor", [],
                 "Typed exception carrying the fault contract record; mapped to ProblemDetails in one "
                 "exception handler in the Api project."),
     PatternSpec("catch", "core", *_SERVICE, "ExecuteAsync", [],
@@ -228,10 +230,12 @@ _P: list[PatternSpec] = [
     PatternSpec("json.render", "core", *_SERIAL, "{activity}", [],
                 "System.Text.Json JsonSerializer.Serialize of the contract record."),
     PatternSpec("xml.parse", "core", *_SERIAL, "{activity}", [],
-                "XmlSerializer.Deserialize into the contract record (XmlReader with DTD processing "
-                "prohibited)."),
+                "Generated XDocument mapping code (XmlReader with DTD processing prohibited) that reads "
+                "each element by the record's TibcoPath and builds the contract record; the records "
+                "carry JSON attributes only, so XmlSerializer is not used."),
     PatternSpec("xml.render", "core", *_SERIAL, "{activity}", [],
-                "XmlSerializer.Serialize of the contract record with the original namespaces."),
+                "Generated XDocument mapping code that writes the contract record element by element "
+                "from its TibcoPath, with the original target namespace; XmlSerializer is not used."),
     # ---- state
     PatternSpec("shared.get", "infrastructure", "State/SharedVariables.cs", "SharedVariables",
                 'GetAsync("{activity}")', ["Microsoft.Extensions.Caching.StackExchangeRedis"],

@@ -3,15 +3,20 @@
 ``build_design_skeleton`` maps every TIBCO step to a C# project, file, class and method through
 ``patterns.PATTERNS``, and fills the solution layout, contracts, configuration, messaging,
 resilience, sequence, flagged decisions, open questions and expected differences. The designer
-agent (Task 15) only adds ``narrative`` (and may refine decisions); ``design_hash`` excludes the
-narrative.
+agent (Task 15) adds ``narrative`` and may refine ``decisions`` and ``open_questions``;
+``design_hash`` excludes those three fields (``models.HASH_EXCLUDED``), so it binds what code decided.
 
 Naming (solution per application):
   * solution ``<App>.sln``, ``<App>`` = PascalCase application id (``gmf.credit`` -> ``GmfCredit``);
     projects ``<App>.Api``, ``<App>.Core``, ``<App>.Infrastructure``, ``<App>.Tests``;
   * methods keep the activity name, PascalCase, so traceability is obvious
     (``LookupDealer`` -> ``LookupDealerAsync``); input mappings ``<Activity>Mapping``;
-  * configuration keys ``Gmf:<Module>:<Name>``; secrets go to Key Vault.
+  * throws become ``Exceptions/<Fault>Exception.cs`` so they never clash with the fault record;
+  * contracts ``Contracts/<Module>/<Stem>.cs`` in namespace ``<App>.Core.Contracts.<Module>``,
+    planned for the whole application (``csharp_contracts.plan_contracts``) so record names never
+    collide within a module; a rename is reported as an open question;
+  * configuration keys ``Gmf:<Module>:<Name>``; secrets go to Key Vault; ``BW.*`` engine
+    variables are listed in ``config_ignored``, not mapped.
 """
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ from collections import defaultdict, deque
 from pathlib import PurePath
 from typing import Any
 
-from engine.analysis.models import Finding, Rule
+from engine.analysis.models import Citation, Finding, Rule
 from engine.domains.models import IOCard
 from engine.dotnet_gen import csharp_contracts
 from engine.dotnet_gen.models import (
@@ -30,6 +35,7 @@ from engine.dotnet_gen.models import (
     Decision,
     DesignRecord,
     ExpectedDifference,
+    IgnoredConfig,
     MappingRow,
     MessagingEntity,
     OpenQuestion,
@@ -139,25 +145,38 @@ class _Ctx:
         st_act = acts.get(process.starter.activity_id) if process.starter else None
         self.starter_name = _ident(st_act.name if st_act else "Execute")
         self.calls = {c.activity_id: c.target_process for c in process.calls}
-        self.rules_by: dict[str, list[str]] = defaultdict(list)
+        # node id -> [(rule or finding id, citation)] in input order
+        self.rule_cits: dict[str, list[tuple[str, Citation]]] = defaultdict(list)
         for r in rules:
-            if r.status not in _LIVE_RULES:
-                continue
-            for c in r.citations:
-                if r.id not in self.rules_by[c.activity_id]:
-                    self.rules_by[c.activity_id].append(r.id)
-        self.findings_by: dict[str, list[str]] = defaultdict(list)
+            if r.status in _LIVE_RULES:
+                for c in r.citations:
+                    self.rule_cits[c.activity_id].append((r.id, c))
+        self.finding_cits: dict[str, list[tuple[str, Citation]]] = defaultdict(list)
         for f in findings:
             for c in f.citations:
-                if f.id not in self.findings_by[c.activity_id]:
-                    self.findings_by[c.activity_id].append(f.id)
+                self.finding_cits[c.activity_id].append((f.id, c))
+
+    @staticmethod
+    def _ids(cits: list[tuple[str, Citation]], act: Activity | None, mapping_only: bool) -> list[str]:
+        """All cited ids for a primary row; for an input-mapping row only the ids whose expression
+        citation quotes one of the step's binding expressions."""
+        out: list[str] = []
+        exprs = [" ".join(b.expression.split()) for b in act.input_bindings] if act is not None else []
+        for item_id, c in cits:
+            if mapping_only:
+                text = " ".join(c.text.split())
+                if c.kind != "expression" or not text or not any(text in e for e in exprs):
+                    continue
+            if item_id not in out:
+                out.append(item_id)
+        return out
 
     def project(self, kind: str) -> str:
         return f"{self.app_name}.{_PROJECT_SUFFIX[kind]}"
 
     def values(self, act: Activity | None, name: str) -> dict[str, str]:
         resource = name
-        fault = f"{_ident(name)}Exception"
+        fault = _ident(name)
         target = ""
         destination = ""
         if act is not None:
@@ -171,14 +190,16 @@ class _Ctx:
             tgt = self.calls.get(act.id) or act.config.get("sub_process") or act.config.get("subprocess") or ""
             target = _ident(str(tgt).rsplit(".", 1)[-1]) if tgt else ""
             destination = _destination(act)
+        exception = fault if fault.endswith("Exception") else f"{fault}Exception"
         return {"app": self.app_name, "process": self.proc_name, "activity": _ident(name),
                 "starter": self.starter_name, "resource": resource, "fault": fault,
-                "target": target, "destination": destination}
+                "exception": exception, "target": target, "destination": destination}
 
     def row(self, node_id: str, name: str, ctype: str, pattern: str, spec: PatternSpec,
             act: Activity | None, origin: str | None = None) -> MappingRow:
         v = self.values(act, name)
-        project, file_t, class_t, method_t = spec.project, spec.file_template, spec.class_template, spec.method_template
+        project, file_t = spec.project, spec.file_template
+        class_t, method_t = spec.class_template, spec.method_template
         if pattern == "reply":
             if self.starter_kind == "soap":
                 file_t, class_t = "Soap/{process}SoapService.cs", "{process}SoapService"
@@ -190,8 +211,10 @@ class _Ctx:
         return MappingRow(
             activity_id=node_id, activity_name=name, canonical_type=ctype, pattern=pattern,
             project=self.project(project), file=file_t.format(**v), class_name=class_t.format(**v),
-            method=method_t.format(**v), rule_ids=list(self.rules_by.get(node_id, [])),
-            finding_ids=list(self.findings_by.get(node_id, [])), origin=origin or spec.origin,
+            method=method_t.format(**v),
+            rule_ids=self._ids(self.rule_cits.get(node_id, []), act, pattern == "input.mapping"),
+            finding_ids=self._ids(self.finding_cits.get(node_id, []), act, pattern == "input.mapping"),
+            origin=origin or spec.origin,
         )
 
 
@@ -260,7 +283,12 @@ def _substvar_module(name: str, source_path: str) -> tuple[str | None, str]:
     return None, name
 
 
-def _config(ctx: _Ctx, resources: list[Resource]) -> list[ConfigMap]:
+_ENGINE_VAR = re.compile(r"^BW\.", re.IGNORECASE)
+_ENGINE_REASON = ("BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET "
+                  "equivalent, so it is not written to appsettings.json.")
+
+
+def _config(ctx: _Ctx, resources: list[Resource]) -> tuple[list[ConfigMap], list[IgnoredConfig]]:
     p, app = ctx.p, ctx.app
     chosen: dict[str, tuple[int, str]] = {}  # name -> (precedence, value)
     for sv in app.substvars:
@@ -270,18 +298,20 @@ def _config(ctx: _Ctx, resources: list[Resource]) -> list[ConfigMap]:
         precedence = 1 if sv.name.startswith("//") else 0  # application level overrides module level
         if name not in chosen or precedence > chosen[name][0]:
             chosen[name] = (precedence, sv.value)
+    ignored = [IgnoredConfig(substvar=name, reason=_ENGINE_REASON)
+               for name in sorted(chosen) if _ENGINE_VAR.match(name)]
     rows = [ConfigMap(substvar=name, key=f"{CONFIG_ROOT}:{ctx.module}:{_ident(name, 'Var')}",
                       secret=looks_secret(name, value))
-            for name, (_, value) in sorted(chosen.items())]
+            for name, (_, value) in sorted(chosen.items()) if not _ENGINE_VAR.match(name)]
     for res in resources:
         rname = _ident(res.name, "Resource")
         for fld in res.masked_fields:
-            rows.append(ConfigMap(substvar=f"resource:{res.name}.{fld}",
-                                  key=f"{CONFIG_ROOT}:{ctx.module}:{rname}:{_ident(fld, 'Setting')}", secret=True))
+            key = f"{CONFIG_ROOT}:{ctx.module}:{rname}:{_ident(fld, 'Setting')}"
+            rows.append(ConfigMap(substvar=f"resource:{res.name}.{fld}", key=key, secret=True))
         if res.kind == "jdbc":
             rows.append(ConfigMap(substvar=f"resource:{res.name}.jdbc_url", key=f"ConnectionStrings:{rname}",
                                   secret=True))
-    return rows
+    return rows, ignored
 
 
 def _used_resources(p: Process, app: Application) -> list[Resource]:
@@ -457,14 +487,14 @@ def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
 
 
 # ----------------------------------------------------------------- layout
-def _layout(ctx: _Ctx, rows: list[MappingRow], contracts: list[Contract]) -> SolutionLayout:
+def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap]) -> SolutionLayout:
     a, pn = ctx.app_name, ctx.proc_name
     files: dict[str, set[str]] = {k: set() for _, k in _PROJECT_KINDS}
     for _, kind in _PROJECT_KINDS:
         files[kind].add(f"{ctx.project(kind)}.csproj")
     files["api"] |= {"Program.cs", "appsettings.json"}
     files["core"] |= {"Contracts/TibcoPathAttribute.cs", f"Services/{pn}Service.cs"}
-    files["core"] |= {csharp_contracts.contract_file(c) for c in contracts}
+    files["core"] |= {cm.file for cm in contract_maps}
     files["tests"] |= {f"{pn}RulesTests.cs", f"{pn}BranchTests.cs", f"{pn}ScenarioTests.cs"}
     by_project = {ctx.project(k): k for _, k in _PROJECT_KINDS}
     for r in rows:
@@ -509,7 +539,9 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
             rows.append(grow)
 
     contracts = _process_contracts(process, app, io_card)
-    contract_maps = [ContractMap(contract_id=c.id, record_names=csharp_contracts.record_names(c))
+    plans = csharp_contracts.plan_contracts(ctx.app_name, app.contracts)
+    contract_maps = [ContractMap(contract_id=c.id, record_names=plans[c.id].record_names,
+                                 namespace=plans[c.id].namespace, file=plans[c.id].file)
                      for c in contracts]
 
     decisions: list[Decision] = []
@@ -542,27 +574,30 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
             open_questions.append(OpenQuestion(
                 question=f"{f.id} has no decision: {f.text}",
                 recommendation=f"Decide Keep, Fix or Ask at G2 before approving the design. {_NOT_A_DECISION}"))
-    owners: dict[str, list[str]] = defaultdict(list)
-    for cm in contract_maps:
-        for n in cm.record_names:
-            owners[n].append(cm.contract_id)
-    for n, ids in sorted(owners.items()):
-        if len(ids) > 1:
+    modules = {plans[c.id].module for c in contracts} | {process.module}
+    for plan in sorted(plans.values(), key=lambda pl: pl.contract_id):
+        if plan.module not in modules:
+            continue
+        for natural, emitted in plan.collisions.items():
             open_questions.append(OpenQuestion(
-                question=f"Record {n} is defined by {', '.join(ids)}.",
-                recommendation="Generate one record per contract namespace, or confirm the shapes are the "
-                               f"same and keep one. {_NOT_A_DECISION}"))
+                question=f"Record {natural} is defined by both {plan.collides_with[natural]} and "
+                         f"{plan.contract_id} in namespace {plan.namespace}; the second is generated as "
+                         f"{emitted}.",
+                recommendation="Confirm whether both shapes are needed; if they are the same message, map "
+                               f"both to one record. {_NOT_A_DECISION}"))
 
     expected = [ExpectedDifference(finding_id=f.id, description=f.text + (f" Note: {f.note}" if f.note else ""))
                 for f in findings if f.decision == "fix"]
 
+    config, config_ignored = _config(ctx, _used_resources(process, app))
     record = DesignRecord(
         process_id=process.id,
         spec_hash=spec_hash or _spec_hash(process, rules, findings),
-        solution=_layout(ctx, rows, contracts),
+        solution=_layout(ctx, rows, contract_maps),
         mapping=rows,
         contracts=contract_maps,
-        config=_config(ctx, _used_resources(process, app)),
+        config=config,
+        config_ignored=config_ignored,
         messaging=_messaging(process),
         resilience=_resilience(process, app),
         sequence=_sequence(ctx, primary),

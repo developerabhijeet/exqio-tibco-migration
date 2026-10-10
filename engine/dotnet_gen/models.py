@@ -43,12 +43,19 @@ class SolutionLayout(BaseModel):
 class ContractMap(BaseModel):
     contract_id: str
     record_names: list[str] = Field(default_factory=list)
+    namespace: str = ""  # <App>.Core.Contracts.<Module>
+    file: str = ""  # Contracts/<Module>/<Stem>.cs, relative to the Core project
 
 
 class ConfigMap(BaseModel):
     substvar: str
     key: str
     secret: bool = False
+
+
+class IgnoredConfig(BaseModel):
+    substvar: str
+    reason: str
 
 
 class MessagingEntity(BaseModel):
@@ -96,6 +103,7 @@ class DesignRecord(BaseModel):
     mapping: list[MappingRow] = Field(default_factory=list)
     contracts: list[ContractMap] = Field(default_factory=list)
     config: list[ConfigMap] = Field(default_factory=list)
+    config_ignored: list[IgnoredConfig] = Field(default_factory=list)
     messaging: list[MessagingEntity] = Field(default_factory=list)
     resilience: list[ResilienceMap] = Field(default_factory=list)
     sequence: list[SequenceStep] = Field(default_factory=list)
@@ -106,8 +114,17 @@ class DesignRecord(BaseModel):
     design_hash: str = ""
 
 
+# Fields the designer agent may write after the skeleton; they never move the hash.
+HASH_EXCLUDED: frozenset[str] = frozenset({"narrative", "decisions", "open_questions", "design_hash"})
+
+
 def compute_design_hash(record: DesignRecord) -> str:
-    """SHA-256 over the record's canonical JSON, excluding ``narrative`` and ``design_hash``."""
-    payload = record.model_dump(mode="json", exclude={"narrative", "design_hash"})
+    """SHA-256 over the record's canonical JSON, excluding ``HASH_EXCLUDED``.
+
+    The hash covers what code decides (process id, spec hash, solution, mapping, contracts, config,
+    messaging, resilience, sequence, expected differences); the designer's narrative, decisions and
+    open questions are advice on top of it and do not move it.
+    """
+    payload = record.model_dump(mode="json", exclude=set(HASH_EXCLUDED))
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

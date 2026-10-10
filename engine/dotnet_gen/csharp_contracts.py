@@ -104,19 +104,28 @@ class _Enum:
 
 
 class _Model:
-    def __init__(self) -> None:
+    def __init__(self, reserved: frozenset[str] = frozenset(), suffix: str = "") -> None:
         self.records: dict[str, _Record] = {}
         self.enums: dict[str, _Enum] = {}
         self.taken: set[str] = set()
+        self.reserved = reserved  # names another contract of the same namespace already emits
+        self.suffix = suffix  # appended to a name that is reserved
         self.root_paths: list[tuple[str, str]] = []  # (record, "/Root") in document order
 
+    def _free(self, cand: str) -> bool:
+        return bool(cand) and cand not in self.taken and cand not in self.reserved
+
     def claim(self, preferred: str, alt: str) -> str:
-        for cand in (preferred, alt):
-            if cand and cand not in self.taken:
+        cands = [preferred]
+        if preferred in self.reserved and self.suffix:
+            cands.append(preferred + self.suffix)
+        cands += [alt, alt + self.suffix] if self.suffix else [alt]
+        for cand in cands:
+            if self._free(cand):
                 self.taken.add(cand)
                 return cand
         n = 2
-        while f"{alt}{n}" in self.taken:
+        while not self._free(f"{alt}{n}"):
             n += 1
         self.taken.add(f"{alt}{n}")
         return f"{alt}{n}"
@@ -236,8 +245,8 @@ def _doc(el) -> str | None:
 
 
 class _XsdBuilder:
-    def __init__(self, schemas: list[Any]) -> None:
-        self.m = _Model()
+    def __init__(self, schemas: list[Any], model: _Model) -> None:
+        self.m = model
         self.cts: dict[str, Any] = {}
         self.sts: dict[str, Any] = {}
         self.elements: dict[str, Any] = {}
@@ -450,19 +459,34 @@ def _schemas(contract: Contract) -> list[Any]:
     return [s for s in root.iter(f"{{{XS}}}schema")]  # WSDL types
 
 
-def _xsd_model(contract: Contract) -> _Model:
-    return _XsdBuilder(_schemas(contract)).build()
+def _suffix(contract: Contract) -> str:
+    """Disambiguating suffix for a record name another contract of the namespace already emits."""
+    if contract.kind in ("json", "wsdl"):
+        return contract.kind.capitalize()
+    return _ident(_stem(contract))
 
 
-def xsd_to_records(contract: Contract, namespace: str) -> str:
-    """C# records and enums for an XSD (or the schemas inside a WSDL)."""
-    return _xsd_model(contract).render(namespace, contract.id)
+def _stem(contract: Contract) -> str:
+    return contract.id.rsplit("/", 1)[-1].rsplit(".", 1)[0].rsplit(".", 1)[-1]
+
+
+def _xsd_model(contract: Contract, reserved: frozenset[str] = frozenset()) -> _Model:
+    return _XsdBuilder(_schemas(contract), _Model(reserved, _suffix(contract))).build()
+
+
+def xsd_to_records(contract: Contract, namespace: str, reserved: frozenset[str] = frozenset()) -> str:
+    """C# records and enums for an XSD (or the schemas inside a WSDL) in ``namespace``.
+
+    ``reserved`` are record names other contracts already emit into the same namespace; a clash is
+    renamed with a suffix (see ``plan_contracts``).
+    """
+    return _xsd_model(contract, reserved).render(namespace, contract.id)
 
 
 # ----------------------------------------------------------------------- JSON
 class _JsonBuilder:
-    def __init__(self, doc: dict[str, Any], fallback_name: str) -> None:
-        self.m = _Model()
+    def __init__(self, doc: dict[str, Any], fallback_name: str, model: _Model) -> None:
+        self.m = model
         self.doc = doc
         self.defs: dict[str, Any] = {}
         for key in ("definitions", "$defs"):
@@ -577,40 +601,100 @@ class _JsonBuilder:
         return self.m
 
 
-def _json_model(contract: Contract) -> _Model:
+def _json_model(contract: Contract, reserved: frozenset[str] = frozenset()) -> _Model:
     doc = json.loads(contract.text) if contract.text.strip() else {}
     if not isinstance(doc, dict):
         doc = {}
-    stem = contract.id.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    return _JsonBuilder(doc, stem.rsplit(".", 1)[-1]).build()
+    return _JsonBuilder(doc, _stem(contract), _Model(reserved, _suffix(contract))).build()
 
 
-def json_schema_to_records(contract: Contract, namespace: str) -> str:
+def json_schema_to_records(contract: Contract, namespace: str, reserved: frozenset[str] = frozenset()) -> str:
     """C# records and enums for a JSON Schema or Swagger 2.0 document (``definitions``/``$defs``)."""
-    return _json_model(contract).render(namespace, contract.id)
+    return _json_model(contract, reserved).render(namespace, contract.id)
 
 
 # ----------------------------------------------------------------- dispatcher
-def _model(contract: Contract) -> _Model:
-    return _json_model(contract) if contract.kind == "json" else _xsd_model(contract)
+def _model(contract: Contract, reserved: frozenset[str] = frozenset()) -> _Model:
+    return _json_model(contract, reserved) if contract.kind == "json" else _xsd_model(contract, reserved)
 
 
-def to_records(contract: Contract, namespace: str) -> str:
+def to_records(contract: Contract, namespace: str, reserved: frozenset[str] = frozenset()) -> str:
     """Dispatch on ``contract.kind``: json to ``json_schema_to_records``, xsd and wsdl to XSD."""
     if contract.kind == "json":
-        return json_schema_to_records(contract, namespace)
-    return xsd_to_records(contract, namespace)
+        return json_schema_to_records(contract, namespace, reserved)
+    return xsd_to_records(contract, namespace, reserved)
 
 
-def record_names(contract: Contract) -> list[str]:
+def record_names(contract: Contract, reserved: frozenset[str] = frozenset()) -> list[str]:
     """Names of the records then enums ``to_records`` emits, in emission order."""
     try:
-        return _model(contract).names()
+        return _model(contract, reserved).names()
     except (etree.XMLSyntaxError, ValueError):
         return []
 
 
+# ------------------------------------------------------- per-application plan
+def contract_module(contract: Contract) -> str:
+    """The module (project folder) a contract belongs to: the first segment of its id."""
+    return contract.id.split("/", 1)[0] if "/" in contract.id else ""
+
+
+def contract_namespace(app_name: str, contract: Contract) -> str:
+    """``<App>.Core.Contracts.<Module>``; ``TibcoPathAttribute`` in ``<App>.Core.Contracts`` is in scope."""
+    module = _ident(contract_module(contract), "Module")
+    return f"{app_name}.Core.Contracts.{module}" if contract_module(contract) else f"{app_name}.Core.Contracts"
+
+
 def contract_file(contract: Contract) -> str:
-    """Generated file path in the Core project: ``Contracts/<Name>.cs`` from the contract file stem."""
-    stem = contract.id.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    return f"Contracts/{_ident(stem.rsplit('.', 1)[-1])}.cs"
+    """Natural file path in the Core project: ``Contracts/<Module>/<Stem>.cs``."""
+    module = contract_module(contract)
+    folder = f"Contracts/{_ident(module, 'Module')}" if module else "Contracts"
+    return f"{folder}/{_ident(_stem(contract))}.cs"
+
+
+@dataclass
+class ContractPlan:
+    contract_id: str
+    module: str
+    namespace: str
+    file: str
+    record_names: list[str]
+    reserved: frozenset[str]  # pass to ``to_records`` so the rendered names match ``record_names``
+    collisions: dict[str, str] = field(default_factory=dict)  # natural name -> emitted name
+    collides_with: dict[str, str] = field(default_factory=dict)  # natural name -> contract id owning it
+
+
+_KIND_RANK = {"xsd": 0, "wsdl": 1, "json": 2}
+
+
+def plan_contracts(app_name: str, contracts: list[Contract]) -> dict[str, ContractPlan]:
+    """Namespace, file and record names for every contract of one application.
+
+    Within a module (one namespace) contracts are taken XSD first, then WSDL, then JSON, each by id;
+    a record name an earlier contract already emits is renamed with a suffix (``Json``, ``Wsdl``, or
+    the XSD stem). Two contracts never share a file path.
+    """
+    plans: dict[str, ContractPlan] = {}
+    owners: dict[str, dict[str, str]] = {}  # namespace -> record name -> contract id
+    files: set[str] = set()
+    for c in sorted(contracts, key=lambda c: (contract_module(c), _KIND_RANK.get(c.kind, 9), c.id)):
+        ns = contract_namespace(app_name, c)
+        owned = owners.setdefault(ns, {})
+        reserved = frozenset(owned)
+        natural = record_names(c)
+        names = record_names(c, reserved)
+        collisions = {n: e for n, e in zip(natural, names, strict=False) if n in reserved and n != e}
+        file = contract_file(c)
+        if file in files:
+            base = file[: -len(".cs")]
+            file, n = f"{base}{_suffix(c)}.cs", 2
+            while file in files:
+                file, n = f"{base}{_suffix(c)}{n}.cs", n + 1
+        files.add(file)
+        plans[c.id] = ContractPlan(
+            contract_id=c.id, module=contract_module(c), namespace=ns, file=file, record_names=names,
+            reserved=reserved, collisions=collisions,
+            collides_with={n: owned[n] for n in collisions})
+        for n in names:
+            owned.setdefault(n, c.id)
+    return plans
