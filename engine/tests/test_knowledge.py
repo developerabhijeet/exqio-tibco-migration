@@ -129,9 +129,19 @@ def test_hash_floor_calibration():
         qv = embeddings._hash_embed(q)
         return max(embeddings.cosine(qv, v) for v in vecs)
 
+    # Held out: not used when the floor was chosen. Phrased differently from the seed text,
+    # so some will fall under the floor; hash recall for paraphrases relies on the keyword half.
+    held_out = ["replace a JDBC update with Dapper", "consume messages from a JMS queue",
+                "run branches in parallel with Task.WhenAll", "wrap statements in a transaction",
+                "periodic job as a hosted service", "move environment properties to appsettings"]
+    held_off = ["how to bake sourdough bread", "who painted the Mona Lisa",
+                "population of Brazil", "flight time London to Tokyo"]
+
     lowest_on = min(best(q) for q in on)
-    highest_off = max(best(q) for q in off)
+    highest_off = max(best(q) for q in off + held_off)
     assert highest_off < embeddings.HASH_VECTOR_FLOOR <= lowest_on, (highest_off, lowest_on)
+    recalled = sum(best(q) >= embeddings.HASH_VECTOR_FLOOR for q in held_out)
+    assert recalled >= len(held_out) - 2, recalled  # most held-out on-topic queries clear it
 
 
 def test_query_terms_drop_stopwords():
@@ -230,6 +240,13 @@ def test_hybrid_search_off_topic_returns_empty(store, clean):
     assert hybrid_search(store, P, "the of and") == []
 
 
+@pytest.mark.parametrize("query", ["any numofpulls", "some numofpulls", "very numofpulls"])
+def test_database_stopwords_do_not_inflate_required_terms(store, clean, query):
+    load_corpus(store)
+    hits = hybrid_search(store, P, query, vector_floor=2.0)  # keyword half only
+    assert hits and "numOfPulls" in hits[0].text
+
+
 def test_single_shared_word_is_not_a_keyword_match(store, clean):
     load_corpus(store)
     # "loan" appears in two chunks, but a two-term query needs both terms
@@ -300,6 +317,12 @@ def test_memory_record_and_retrieve(store, clean):
     assert mem.retrieve(P, "capital of France") == []
     with pytest.raises(KnowledgeError):
         mem.record(P, "gossip", "x", {}, "s", "u")
+    # a colliding id from another project never overwrites
+    with pytest.raises(KnowledgeError, match="another project"):
+        mem.record("proj-b", "note", "Hijacked text.", {}, "evil", "eve", item_id=d1)
+    assert mem.retrieve(P, "APR rounding half up")[0].text.startswith("SME decision")
+    assert mem.record(P, "decision", "Edited decision text about APR rounding.", {}, "sme", "ana",
+                      item_id=d1) == d1  # same project may update
     assert set(MEMORY_KINDS) == {"decision", "pattern", "mapping", "note", "seed"}
 
 

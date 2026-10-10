@@ -81,15 +81,18 @@ class MigrationMemory:
         self.store.check_embedding_backend()
         mid = item_id or f"mem_{uuid.uuid4().hex[:12]}"
         vec = embeddings.embed([text])[0]
-        self.store.connection().execute(
+        row = self.store.connection().execute(
             "INSERT INTO knowledge.memory_items (id, project_id, kind, text, context, source, "
             "created_by, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector) "
             "ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind, text = EXCLUDED.text, "
             "context = EXCLUDED.context, source = EXCLUDED.source, "
-            "embedding = EXCLUDED.embedding",
+            "embedding = EXCLUDED.embedding "
+            "WHERE knowledge.memory_items.project_id = EXCLUDED.project_id RETURNING id",
             [mid, project_id, kind, text, Jsonb(context or {}), source, created_by,
              vector_literal(vec)],
-        )
+        ).fetchone()
+        if row is None:  # the id exists in another project: never overwrite it
+            raise KnowledgeError(f"memory id {mid!r} already belongs to another project")
         return mid
 
     def retrieve(

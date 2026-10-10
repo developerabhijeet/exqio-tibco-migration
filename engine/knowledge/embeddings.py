@@ -31,9 +31,12 @@ FASTEMBED_MODEL = "BAAI/bge-small-en-v1.5"
 HASH_BACKEND_NAME = f"hash-{DIM}"
 FASTEMBED_BACKEND_NAME = f"fastembed:{FASTEMBED_MODEL}"
 
-# Minimum cosine similarity for the vector half of a search. 0.66 is calibrated for bge-small
-# style models; the hash backend has a different similarity scale, see
-# ``engine/tests/test_knowledge.py::test_hash_floor_calibration`` for the measurement.
+# Minimum cosine similarity for the vector half of a search. 0.66 for fastembed is the specified
+# default and is UNVALIDATED: the model could not be downloaded where this was built, so it has
+# not been measured against real bge-small similarities. Recalibrate when the model runs.
+# The hash backend has a different, lexical similarity scale; its floor was measured, see
+# ``engine/tests/test_knowledge.py::test_hash_floor_calibration``. Hash recall for paraphrases
+# relies on the keyword half of the search, not on the vectors.
 FASTEMBED_VECTOR_FLOOR = 0.66
 HASH_VECTOR_FLOOR = 0.25
 

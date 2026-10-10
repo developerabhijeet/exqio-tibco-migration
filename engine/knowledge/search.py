@@ -78,7 +78,9 @@ def hybrid_rows(
     terms = query_terms(query)
     keyword: dict[str, dict[str, Any]] = {}
     if terms:
-        required = min(max(min_terms, 1), len(terms))
+        # The database drops its own stopwords ("any", "some", "very"): the match requirement
+        # counts only the terms that survive plainto_tsquery, so "any numofpulls" needs one
+        # match, not two.
         rows = conn.execute(
             f"""
             WITH qs AS (
@@ -86,6 +88,9 @@ def hybrid_rows(
             ),
             orq AS (
                 SELECT string_agg(q::text, ' | ')::tsquery AS q FROM qs WHERE q::text <> ''
+            ),
+            need AS (
+                SELECT LEAST(%(min)s, count(*) FILTER (WHERE q::text <> '')) AS n FROM qs
             )
             SELECT {cols}, m.matched, m.rank
               FROM knowledge.{table} t
@@ -94,10 +99,10 @@ def hybrid_rows(
                           coalesce(sum(ts_rank_cd(t.tsv, qs.q)), 0) AS rank
                      FROM qs) m
              WHERE t.project_id = %(p)s{extra}
-               AND t.tsv @@ (SELECT q FROM orq) AND m.matched >= %(req)s
+               AND t.tsv @@ (SELECT q FROM orq) AND m.matched >= (SELECT n FROM need)
              ORDER BY m.rank DESC, t.id LIMIT %(n)s
             """,
-            {**base, "terms": terms, "req": required, "n": CANDIDATES_PER_HALF},
+            {**base, "terms": terms, "min": max(min_terms, 1), "n": CANDIDATES_PER_HALF},
         ).fetchall()
         keyword = {r["id"]: r for r in rows}
 

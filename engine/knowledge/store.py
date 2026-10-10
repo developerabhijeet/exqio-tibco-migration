@@ -89,7 +89,7 @@ class KnowledgeStore:
         conn = self.connection()
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext('exiqo.knowledge.schema'))")
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
             conn.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
             conn.execute(
                 "INSERT INTO knowledge.meta (key, value) VALUES ('embedding_backend', %s) "

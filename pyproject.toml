@@ -35,6 +35,10 @@ dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff"]
 [tool.setuptools.packages.find]
 include = ["engine*", "api*"]
 
+[tool.setuptools.package-data]
+"engine.knowledge" = ["schema.sql", "seed_patterns.yaml", "prompts/*.md"]
+"engine.agents" = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "api/tests"]
 asyncio_mode = "auto"
