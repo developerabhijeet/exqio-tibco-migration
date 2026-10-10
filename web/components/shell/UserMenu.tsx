@@ -67,7 +67,7 @@ export function UserMenu() {
               <span className="text-[12px] text-slate">{ROLES[u]}</span>
             </button>
           ))}
-          <p className="border-t border-line px-4 py-2 text-[12px] text-slate">Sent as X-User on every request.</p>
+          <p className="border-t border-line px-4 py-2 text-[12px] text-slate">Sent as X-User on API requests.</p>
         </div>
       ) : null}
     </div>

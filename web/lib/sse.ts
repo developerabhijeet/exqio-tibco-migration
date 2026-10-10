@@ -1,12 +1,26 @@
 // Job progress over SSE (GET /jobs/{id}/events). The stream ends with a `done` or `error` event;
 // a resumed stream for a finished job answers 204, which closes the EventSource, so the job row
-// is read to report the outcome.
+// is read to report the outcome. The browser reconnects on its own (resuming with Last-Event-ID);
+// after `maxRetries` failed attempts in a row the stream gives up and reports `onLost`.
 import { API_URL, api } from "./api";
 import type { JobEvent, JobEventKind } from "./types";
 
-export function subscribeJob(jobId: string, onEvent: (e: JobEvent) => void): () => void {
+export interface SubscribeOptions {
+  onLost?: () => void;
+  maxRetries?: number;
+}
+
+export function subscribeJob(
+  jobId: string,
+  onEvent: (e: JobEvent) => void,
+  { onLost, maxRetries = 5 }: SubscribeOptions = {},
+): () => void {
   const source = new EventSource(`${API_URL}/jobs/${jobId}/events`);
   let finished = false;
+  let failures = 0;
+  source.addEventListener("open", () => {
+    failures = 0;
+  });
 
   const finish = () => {
     finished = true;
@@ -32,7 +46,16 @@ export function subscribeJob(jobId: string, onEvent: (e: JobEvent) => void): () 
       handle("error")(raw);
       return;
     }
-    if (finished || source.readyState !== EventSource.CLOSED) return; // the browser reconnects
+    if (finished) return;
+    if (source.readyState !== EventSource.CLOSED) {
+      // The browser is reconnecting; give up after a few failures in a row.
+      failures += 1;
+      if (failures >= maxRetries) {
+        finish();
+        onLost?.();
+      }
+      return;
+    }
     // Closed by the server (204) or refused: the job row says how it ended.
     finish();
     api

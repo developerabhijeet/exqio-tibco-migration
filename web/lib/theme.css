@@ -80,8 +80,9 @@ body {
 .xml-hl-line {
   background: var(--highlight);
 }
-.xml-hl-anchor {
+.xml-hl-focus {
   background: var(--highlight-strong);
+  box-shadow: inset 3px 0 0 var(--decision);
 }
 
 /* React Flow: quiet chrome on the warm background. */

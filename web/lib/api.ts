@@ -14,7 +14,7 @@ import type {
   ProcessSummary,
   Project,
   ScanReport,
-  ScenarioView,
+  ScenarioSet,
   UploadResult,
 } from "./types";
 
@@ -125,7 +125,7 @@ export const api = {
     const body = await optional<Record<string, unknown>>(`/processes/${processId}/design`);
     return body ? toDesignView(body) : null;
   },
-  scenarios: (processId: string) => optional<ScenarioView[]>(`/processes/${processId}/scenarios`),
+  scenarios: (processId: string) => optional<ScenarioSet>(`/processes/${processId}/scenarios`),
   settings: () => optional<Record<string, unknown>>("/settings"),
 };
 

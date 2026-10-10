@@ -27,7 +27,8 @@ export function FlowEdge(props: EdgeProps<FlowEdgeType>) {
   const color = EDGE_COLORS[kind] ?? EDGE_COLORS.success;
   const dashed = kind === "otherwise" || kind === "error";
   const text = kind === "conditional" ? (data?.expression ?? data?.label ?? "") : kind === "success" ? "" : (data?.label ?? kind);
-  const short = text.length > 30 ? `${text.slice(0, 28)}…` : text;
+  // Short pills in the gap between layers; the full expression shows on hover.
+  const pill = kind === "conditional" ? (text.length > 14 ? `${text.slice(0, 13)}…` : text) : text;
   return (
     <>
       <BaseEdge
@@ -38,18 +39,31 @@ export function FlowEdge(props: EdgeProps<FlowEdgeType>) {
       {text ? (
         <EdgeLabelRenderer>
           <div
-            title={text}
             data-edge-kind={kind}
-            className={`nodrag nopan pointer-events-auto absolute max-w-[200px] truncate rounded px-1.5 py-0.5 text-[10.5px] ${
-              kind === "conditional"
-                ? "border border-decision/30 bg-decision-bg font-mono text-decision"
-                : kind === "error"
-                  ? "bg-error-bg text-error"
-                  : "bg-page italic text-slate"
-            }`}
+            aria-label={kind === "conditional" ? `condition: ${text}` : text}
+            className="nodrag nopan group pointer-events-auto absolute hover:z-50"
             style={{ transform: `translate(-50%, -50%) translate(${lx}px, ${ly}px)` }}
           >
-            {short}
+            <span
+              className={`inline-flex max-w-[110px] items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[10px] leading-4 shadow-sm ${
+                kind === "conditional"
+                  ? "border-decision/40 bg-decision-bg font-mono text-decision"
+                  : kind === "error"
+                    ? "border-error/30 bg-error-bg text-error"
+                    : "border-line bg-white italic text-slate"
+              }`}
+            >
+              {kind === "conditional" ? <span className="font-sans font-semibold not-italic">if</span> : null}
+              <span className="truncate">{pill}</span>
+            </span>
+            {kind === "conditional" ? (
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 hidden w-max max-w-[360px] -translate-x-1/2 whitespace-pre-wrap break-words rounded-btn border border-decision/40 bg-white px-2 py-1 font-mono text-[11px] text-decision shadow-lg group-hover:block"
+              >
+                {text}
+              </span>
+            ) : null}
           </div>
         </EdgeLabelRenderer>
       ) : null}

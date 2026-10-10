@@ -4,7 +4,7 @@
 // project, the active step, the open process and domain, and the scan job's streamed log.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { setApiUser } from "./api";
+import { api, setApiUser } from "./api";
 import { subscribeJob } from "./sse";
 import type { InspectorTab, JobEvent, UserName } from "./types";
 import { USERS } from "./types";
@@ -15,7 +15,7 @@ export type StepKey = (typeof STEP_KEYS)[number];
 export interface ScanState {
   jobId: string;
   projectId: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "lost";
   stage: string | null;
   events: JobEvent[];
   error: string | null;
@@ -136,30 +136,64 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     (pid: string, jobId: string) => {
       unsubscribe.current?.();
       setScan({ jobId, projectId: pid, status: "running", stage: null, events: [], error: null });
-      unsubscribe.current = subscribeJob(jobId, (ev) => {
-        setScan((s) => {
-          if (!s || s.jobId !== jobId) return s;
-          if (ev.seq > 0 && s.events.some((e) => e.seq === ev.seq)) return s;
-          const next: ScanState = { ...s, events: [...s.events, ev] };
-          if (ev.event === "stage") next.stage = ev.text;
-          if (ev.event === "done") next.status = "done";
-          if (ev.event === "error") {
-            next.status = "failed";
-            next.error = ev.text;
+      store(`exiqo.scan.${pid}`, jobId); // re-attached after a reload while it runs
+      unsubscribe.current = subscribeJob(
+        jobId,
+        (ev) => {
+          setScan((s) => {
+            if (!s || s.jobId !== jobId) return s;
+            if (ev.seq > 0 && s.events.some((e) => e.seq === ev.seq)) return s;
+            const next: ScanState = { ...s, events: [...s.events, ev] };
+            if (ev.event === "stage") next.stage = ev.text;
+            if (ev.event === "done") next.status = "done";
+            if (ev.event === "error") {
+              next.status = "failed";
+              next.error = ev.text;
+            }
+            return next;
+          });
+          if (ev.event === "done" || ev.event === "error") {
+            store(`exiqo.scan.${pid}`, null);
+            for (const key of ["report", "processes", "files", "domains", "graph"]) {
+              qc.invalidateQueries({ queryKey: [key, pid] });
+            }
+            // A rescan can change every process view.
+            for (const key of ["canvas", "io-card", "analysis", "xml", "gates", "scenarios"]) {
+              qc.invalidateQueries({ queryKey: [key] });
+            }
           }
-          return next;
-        });
-        if (ev.event === "done" || ev.event === "error") {
-          for (const key of ["report", "processes", "files", "domains", "graph"]) {
-            qc.invalidateQueries({ queryKey: [key, pid] });
-          }
-        }
-      });
+        },
+        {
+          onLost: () =>
+            setScan((s) =>
+              s && s.jobId === jobId ? { ...s, status: "lost", error: "connection to the API lost" } : s,
+            ),
+        },
+      );
     },
     [qc],
   );
 
   useEffect(() => () => unsubscribe.current?.(), []);
+
+  // After a reload, re-attach to a scan of this project that is still queued or running.
+  useEffect(() => {
+    if (!projectId) return;
+    const jobId = stored(`exiqo.scan.${projectId}`);
+    if (!jobId) return;
+    let live = true;
+    api
+      .job(jobId)
+      .then((job) => {
+        if (!live) return;
+        if (job.status === "queued" || job.status === "running") watchScan(projectId, jobId);
+        else store(`exiqo.scan.${projectId}`, null);
+      })
+      .catch(() => store(`exiqo.scan.${projectId}`, null));
+    return () => {
+      live = false;
+    };
+  }, [projectId, watchScan]);
 
   const value = useMemo<AppState>(
     () => ({

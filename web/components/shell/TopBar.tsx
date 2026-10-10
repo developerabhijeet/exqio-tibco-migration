@@ -16,7 +16,7 @@ const LINKS = [
 
 function PhasePill() {
   const steps = useStepStates();
-  const current = steps.find((s) => s.status !== "approved") ?? steps[steps.length - 1];
+  const current = steps.find((s) => s.status !== "approved" && s.status !== "complete") ?? steps[steps.length - 1];
   return (
     <span
       data-testid="phase-pill"

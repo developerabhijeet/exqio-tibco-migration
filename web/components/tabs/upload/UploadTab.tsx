@@ -91,7 +91,7 @@ export function UploadTab() {
         </>
       ) : null}
 
-      {myScan ? <ScanProgress scan={myScan} /> : null}
+      {myScan ? <ScanProgress scan={myScan} onReconnect={() => watchScan(myScan.projectId, myScan.jobId)} /> : null}
 
       {report.data && processes.data && !scanning ? (
         <div className="space-y-4">

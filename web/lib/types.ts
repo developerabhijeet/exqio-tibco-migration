@@ -3,7 +3,8 @@
 export const INSPECTOR_TABS = ["Config", "SQL", "Mappings", "Rules", "Findings", "XML"] as const;
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
-export type StepStatus = "not_started" | "running" | "needs_review" | "approved" | "failed";
+/** "complete" is derived by code (a clean scan, domains built); "approved" is reserved for gate records. */
+export type StepStatus = "not_started" | "running" | "needs_review" | "complete" | "approved" | "failed";
 
 export interface EvidenceRef {
   label: string;
@@ -379,13 +380,35 @@ export interface DesignRecord {
   design_hash: string;
 }
 
+/** One scenario of GET /processes/{id}/scenarios (api/app/services/verify.scenario_out). */
 export interface ScenarioView {
-  id?: string;
-  key?: string;
+  id: string;
+  key: string;
   name: string;
-  origin?: string;
-  data?: Record<string, unknown>;
-  [key: string]: unknown;
+  kind: "happy" | "branch" | "fault" | "external_failure" | "sme" | string | null;
+  origin: string;
+  created_by?: string | null;
+  input: Record<string, unknown> | null;
+  stub_responses?: Record<string, unknown>;
+  seed_state?: unknown[];
+  expected: {
+    output?: Record<string, unknown>;
+    side_effects?: { kind: string; target: string; payload?: Record<string, unknown>; activity_id?: string | null }[];
+    fault?: { name: string; data?: Record<string, unknown> } | null;
+    source?: string;
+  } | null;
+  source: string;
+  created_at?: string | null;
+}
+
+export interface ScenarioSet {
+  process_id: string;
+  source: string; // "model"
+  label: string; // "expected output derived from the TIBCO model"
+  generated_now: boolean;
+  notes: string[];
+  database?: string;
+  scenarios: ScenarioView[];
 }
 
 export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam"] as const;

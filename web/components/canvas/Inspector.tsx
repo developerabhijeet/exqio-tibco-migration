@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { useAnalysis, useXml } from "@/lib/queries";
-import { elementSpan } from "@/lib/xmlspan";
+import { elementSpan, focusLine, type XmlHighlight } from "@/lib/xmlspan";
 import { INSPECTOR_TABS, type CanvasNode, type InspectorTab } from "@/lib/types";
 import { Pill } from "@/components/ui/Pill";
 
@@ -77,10 +77,15 @@ export function Inspector({
   const xml = useXml(processId);
   const analysis = useAnalysis(processId);
 
-  const span = useMemo(
-    () => (xml.data && node?.data.source_line ? elementSpan(xml.data, node.data.source_line) : null),
-    [xml.data, node],
-  );
+  // One line convention everywhere: a step is located by its element's first line; the reader
+  // lands on the line holding its SQL (or the element start) inside that band.
+  const span = useMemo<XmlHighlight | null>(() => {
+    if (!xml.data || !node?.data.source_line) return null;
+    const s = elementSpan(xml.data, node.data.source_line);
+    if (!s) return null;
+    const sqlText = typeof node.data.config.sql === "string" ? (node.data.config.sql as string) : null;
+    return { start: s.start, end: s.end, focus: focusLine(xml.data, s, sqlText) };
+  }, [xml.data, node]);
 
   const sql = typeof node?.data.config.sql === "string" ? (node.data.config.sql as string) : null;
   const xslt = Array.isArray(node?.data.config.input_xslt) ? (node!.data.config.input_xslt as string[]) : [];
@@ -99,7 +104,7 @@ export function Inspector({
         {node ? (
           <p className="truncate font-mono text-[11.5px] text-slate">
             {node.data.native_type} · {node.data.canonical_type}
-            {node.data.source_line ? ` · line ${node.data.source_line}` : ""}
+            {span ? ` · lines ${span.start} to ${span.end}` : ""}
           </p>
         ) : null}
         <div role="tablist" aria-label="Inspector" className="mt-2 flex gap-1 overflow-x-auto">
@@ -184,7 +189,11 @@ export function Inspector({
         ) : xml.data ? (
           <div className="space-y-2">
             <p className="text-[13px] text-slate">
-              {span ? `Lines ${span.start} to ${span.end} hold ${node?.data.name}.` : "The process source file, read only."}
+              {span
+                ? `Lines ${span.start} to ${span.end} hold ${node?.data.name}${
+                    span.focus !== span.start ? `; line ${span.focus} holds its statement` : ""
+                  }.`
+                : "The process source file, read only."}
             </p>
             <CodeView value={xml.data} language="xml" height={470} highlight={span} testId="xml-viewer" />
           </div>

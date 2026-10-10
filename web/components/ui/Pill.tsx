@@ -41,6 +41,7 @@ const STATUS: Record<StepStatus, { tone: Tone; label: string }> = {
   not_started: { tone: "det", label: "not started" },
   running: { tone: "purple", label: "running" },
   needs_review: { tone: "decision", label: "needs review" },
+  complete: { tone: "det", label: "complete" },
   approved: { tone: "gate", label: "approved" },
   failed: { tone: "error", label: "failed" },
 };

@@ -1,14 +1,20 @@
-// Screenshots of each view for review: node scripts/screenshots.mjs <out-dir> (needs make api and make web,
-// and a scanned project as the newest project).
+// Screenshots of each view for review: BASE_URL=... PROJECT_NAME=... node scripts/screenshots.mjs <out-dir>
+// (needs the API and the web app running, and a scanned project; default: the newest project).
 import { chromium } from "@playwright/test";
 const out = process.argv[2];
+const base = process.env.BASE_URL ?? "http://localhost:3000";
+const projectName = process.env.PROJECT_NAME;
 const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
-await page.goto("http://localhost:3000/");
+await page.goto(`${base}/`);
 await page.waitForTimeout(2500);
+if (projectName) {
+  await page.getByTestId("project-select").selectOption({ label: projectName });
+  await page.waitForTimeout(2000);
+}
 await page.getByTestId("step-upload").click();
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/01-upload.png`, fullPage: true });
@@ -46,7 +52,7 @@ await page.keyboard.press("Escape");
 await page.getByTestId("domain-select").click();
 await page.screenshot({ path: `${out}/10-domain-select.png` });
 await page.keyboard.press("Escape");
-await page.goto("http://localhost:3000/settings");
+await page.goto(`${base}/settings`);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/11-settings.png` });
 console.log("errors:", JSON.stringify(errors, null, 1));

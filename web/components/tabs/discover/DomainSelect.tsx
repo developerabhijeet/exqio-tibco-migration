@@ -56,12 +56,15 @@ export function DomainSelect({
   });
   const [naming, setNaming] = useState<"idle" | "running" | "done" | "failed">("idle");
   const [namingNote, setNamingNote] = useState<string | null>(null);
+  const namingSub = useRef<(() => void) | null>(null);
+  useEffect(() => () => namingSub.current?.(), []);
   const suggest = async () => {
     setNaming("running");
     setNamingNote(null);
     try {
       const { job_id } = await api.nameDomains(projectId);
-      subscribeJob(job_id, (ev) => {
+      namingSub.current?.();
+      namingSub.current = subscribeJob(job_id, (ev) => {
         if (ev.event === "done") {
           setNaming("done");
           const r = ev.data ?? {};

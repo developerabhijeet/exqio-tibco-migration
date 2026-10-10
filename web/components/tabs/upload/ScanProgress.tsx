@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw, Unplug, XCircle } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import type { ScanState } from "@/lib/state";
 
 const STAGES = ["scan", "discover", "persist"];
 
-export function ScanProgress({ scan }: { scan: ScanState }) {
+export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconnect: () => void }) {
   const logRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -26,6 +26,15 @@ export function ScanProgress({ scan }: { scan: ScanState }) {
           <Pill tone="gate">
             <CheckCircle2 size={12} aria-hidden /> done
           </Pill>
+        ) : scan.status === "lost" ? (
+          <>
+            <Pill tone="decision">
+              <Unplug size={12} aria-hidden /> connection lost
+            </Pill>
+            <button type="button" className="btn-secondary px-3 py-1 text-[13px]" onClick={onReconnect}>
+              <RefreshCw size={14} aria-hidden /> Reconnect
+            </button>
+          </>
         ) : (
           <Pill tone="error">
             <XCircle size={12} aria-hidden /> failed

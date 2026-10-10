@@ -21,7 +21,7 @@ const ROOT_OPTIONS = {
   "elk.direction": "RIGHT",
   "elk.hierarchyHandling": "INCLUDE_CHILDREN",
   "elk.spacing.nodeNode": "28",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "100",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "124",
   "elk.layered.spacing.edgeNodeBetweenLayers": "30",
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
   "elk.separateConnectedComponents": "true",

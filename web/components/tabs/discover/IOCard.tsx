@@ -3,7 +3,7 @@
 import { ArrowDownToLine, ArrowUpFromLine, Database, Send, Workflow, Zap } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import { useIOCard, useScenarios } from "@/lib/queries";
-import type { FieldNode } from "@/lib/types";
+import type { FieldNode, ScenarioSet } from "@/lib/types";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: typeof Zap; children: React.ReactNode }) {
   return (
@@ -153,26 +153,83 @@ export function IOCard({ processId }: { processId: string }) {
       <div className="mt-6 border-t border-line pt-4" data-testid="sample-outputs">
         <p className="label">Sample outputs</p>
         <p className="mt-0.5 text-[13px] font-medium text-decision">Expected output derived from the TIBCO model</p>
-        {scenarios.data && scenarios.data.length > 0 ? (
-          <ul className="mt-2 grid gap-2 md:grid-cols-2">
-            {scenarios.data.map((s, i) => {
-              const expected = (s.data?.expected ?? s.expected ?? s.data) as unknown;
-              return (
-                <li key={s.id ?? s.key ?? i} className="rounded-btn border border-line p-3">
-                  <p className="text-[13.5px] font-medium text-plum">{s.name}</p>
-                  <pre className="mt-1 max-h-48 overflow-auto rounded bg-page p-2 font-mono text-[11.5px]">
-                    {JSON.stringify(expected, null, 2)}
-                  </pre>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="mt-2 rounded-btn bg-warm px-4 py-4 text-[14px] text-slate">
-            No scenarios yet. The parity evaluator produces one example per scenario after the build, in Verify.
-          </p>
-        )}
+        <SampleOutputs set={scenarios.data} loading={scenarios.isLoading} error={scenarios.error} />
       </div>
     </section>
+  );
+}
+
+const KIND_TONE: Record<string, "gate" | "decision" | "error" | "purple" | "det"> = {
+  happy: "gate",
+  branch: "decision",
+  fault: "error",
+  external_failure: "error",
+  sme: "purple",
+};
+
+function SampleOutputs({ set, loading, error }: { set: ScenarioSet | null | undefined; loading: boolean; error: unknown }) {
+  if (loading) {
+    return <p className="mt-2 text-[14px] text-slate">Deriving scenarios from the TIBCO model</p>;
+  }
+  if (error) {
+    return (
+      <p className="mt-2 rounded-btn bg-error-bg px-4 py-3 text-[14px] text-error">
+        Scenarios are not available: {(error as Error).message}
+      </p>
+    );
+  }
+  if (!set || set.scenarios.length === 0) {
+    return (
+      <p className="mt-2 rounded-btn bg-warm px-4 py-4 text-[14px] text-slate">
+        No scenarios yet. The parity evaluator derives one example per scenario from the parsed model.
+      </p>
+    );
+  }
+  return (
+    <>
+      <ul className="mt-2 grid gap-2 md:grid-cols-2">
+        {set.scenarios.map((s) => {
+          const exp = s.expected;
+          const effects = exp?.side_effects ?? [];
+          return (
+            <li key={s.id} className="rounded-btn border border-line p-3" data-testid="sample-output">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[13.5px] font-medium text-plum">{s.name}</p>
+                {s.kind ? <Pill tone={KIND_TONE[s.kind] ?? "det"}>{s.kind.replace("_", " ")}</Pill> : null}
+                {s.origin === "sme" ? <Pill tone="purple">SME</Pill> : null}
+              </div>
+              {exp?.fault ? (
+                <p className="mt-1 text-[13px] text-error">
+                  Fault <span className="font-mono">{exp.fault.name}</span>
+                </p>
+              ) : null}
+              {exp?.output && Object.keys(exp.output).length > 0 ? (
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-page p-2 font-mono text-[11.5px]">
+                  {JSON.stringify(exp.output, null, 2)}
+                </pre>
+              ) : (
+                <p className="mt-1 text-[12.5px] text-slate">No response body; the outcome is in the side effects.</p>
+              )}
+              {effects.length > 0 ? (
+                <ul className="mt-1 space-y-0.5 text-[12px] text-slate">
+                  {effects.map((e, i) => (
+                    <li key={i}>
+                      {e.kind.replace("_", " ")} <span className="font-mono text-ink">{e.target}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {set.notes.length > 0 ? (
+        <ul className="mt-2 list-disc pl-5 text-[12.5px] text-slate">
+          {set.notes.map((n, i) => (
+            <li key={i}>{n}</li>
+          ))}
+        </ul>
+      ) : null}
+    </>
   );
 }

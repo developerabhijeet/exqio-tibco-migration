@@ -18,6 +18,9 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   await expect(page.getByTestId("scan-progress")).toContainText("stored 2 applications");
   await expect(page.getByTestId("counter-processes")).toHaveText("11");
   await expect(page.getByTestId("counter-unknown-types")).toHaveText("0");
+  // Machine-derived steps read "complete"; green "approved" is kept for gate records.
+  await expect(page.getByTestId("step-upload")).not.toContainText("approved");
+  await expect(page.getByTestId("step-discover")).toContainText("complete");
   await expect(page.getByTestId("synthetic-banner")).toBeVisible();
   await expect(page.getByTestId("parse-report").getByRole("row")).toHaveCount(12); // header + 11
 
@@ -37,21 +40,21 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   const viewer = page.getByTestId("xml-viewer");
   await expect(viewer.locator(".xml-hl-line").first()).toBeVisible();
 
-  // Scroll through the highlighted element until a highlighted line containing "like" is rendered.
-  await viewer.locator(".monaco-editor").hover();
-  let found = false;
-  for (let i = 0; i < 30 && !found; i++) {
-    found = await viewer.evaluate((el) => {
-      const lit = new Set(
-        Array.from(el.querySelectorAll(".view-overlays .xml-hl-line")).map(
-          (d) => (d.parentElement as HTMLElement).style.top,
-        ),
-      );
-      return Array.from(el.querySelectorAll<HTMLElement>(".view-lines .view-line")).some(
-        (l) => /\blike\b/.test(l.textContent ?? "") && lit.has(l.style.top),
-      );
-    });
-    if (!found) await page.mouse.wheel(0, 120);
-  }
-  expect(found).toBe(true);
+  // The viewer lands on the line holding the step's SQL, inside the highlighted element.
+  await expect(viewer).toHaveAttribute("data-hl-focus-text", /\blike\b/);
+  const [start, end, focus] = await Promise.all(
+    ["data-hl-start", "data-hl-end", "data-hl-focus"].map(async (a) => Number(await viewer.getAttribute(a))),
+  );
+  expect(focus).toBeGreaterThan(start);
+  expect(focus).toBeLessThanOrEqual(end);
+  // That line is revealed and carries the focus decoration.
+  const focusOverlay = viewer.locator(".view-overlays .xml-hl-focus");
+  await expect(focusOverlay).toBeVisible();
+  const focusedText = await viewer.evaluate((el) => {
+    const top = (el.querySelector(".view-overlays .xml-hl-focus")?.parentElement as HTMLElement | null)?.style.top;
+    const line = Array.from(el.querySelectorAll<HTMLElement>(".view-lines .view-line")).find((l) => l.style.top === top);
+    return line?.textContent ?? "";
+  });
+  expect(focusedText).toMatch(/\blike\b/);
+  await expect(page.getByTestId("inspector")).toContainText(`lines ${start} to ${end}`);
 });

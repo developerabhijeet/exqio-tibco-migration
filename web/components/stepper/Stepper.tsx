@@ -10,6 +10,7 @@ const DOT: Record<StepState["status"], string> = {
   not_started: "border-line bg-white text-slate",
   running: "border-purple bg-purple-lt text-purple",
   needs_review: "border-decision bg-decision-bg text-decision",
+  complete: "border-det bg-det-bg text-det",
   approved: "border-gate bg-gate text-white",
   failed: "border-error bg-error text-white",
 };
@@ -20,7 +21,7 @@ function Dot({ index, status }: { index: number; status: StepState["status"] }) 
       aria-hidden
       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-[13px] font-semibold ${DOT[status]}`}
     >
-      {status === "approved" ? (
+      {status === "approved" || status === "complete" ? (
         <Check size={16} strokeWidth={3} />
       ) : status === "failed" ? (
         <X size={16} strokeWidth={3} />

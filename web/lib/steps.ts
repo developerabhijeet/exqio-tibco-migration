@@ -71,7 +71,7 @@ export function useStepStates(): StepState[] {
     let upload: StepStatus = "not_started";
     if (scanning) upload = "running";
     else if (scanFailed) upload = "failed";
-    else if (r) upload = r.ok && r.unknown_activity_types.length === 0 ? "approved" : "needs_review";
+    else if (r) upload = r.ok && r.unknown_activity_types.length === 0 ? "complete" : "needs_review";
     const uploadEvidence = r
       ? [
           {
@@ -84,7 +84,7 @@ export function useStepStates(): StepState[] {
       : [];
 
     const g = graph.data;
-    const discover: StepStatus = domains.length > 0 ? "approved" : scanning ? "running" : "not_started";
+    const discover: StepStatus = domains.length > 0 ? "complete" : scanning ? "running" : "not_started";
     const discoverEvidence =
       domains.length > 0
         ? [
