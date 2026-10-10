@@ -1,0 +1,692 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--Created by TIBCO WSDL-->
+<wsdl:definitions xmlns:ns2="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd" xmlns:ns1="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd" xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:tns="http://www.fastconnect.fr/FCTibcoFactory/ws/abstract/CodeReview.xsd" xmlns:ns0="http://www.fastconnect.fr/FCTibcoFactory/CodeReview.xsd" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" name="Untitled" targetNamespace="http://www.fastconnect.fr/FCTibcoFactory/ws/abstract/CodeReview.xsd">
+    <wsdl:types>
+        <xs:schema xmlns="http://www.fastconnect.fr/FCTibcoFactory/CodeReview.xsd" xmlns:ns1="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd" xmlns:ns0="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/TestResult.xsd" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview.xsd">
+            <xs:import namespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd"/>
+            <xs:element name="code-review">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element ref="project-path">
+                            <xs:annotation>
+                                <xs:documentation>Path to the BW project</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element ref="src-project-path">
+                            <xs:annotation>
+                                <xs:documentation>Path to the BW project source folder</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element ref="destination">
+                            <xs:annotation>
+                                <xs:documentation>Path where to write the review results</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="load-projlibs">
+                            <xs:annotation>
+                                <xs:documentation>Whether to load Projlibs when reviewing</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="project-encoding">
+                            <xs:annotation>
+                                <xs:documentation>Encoding to be used to read projects files</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" name="project-name" type="xs:string"/>
+                        <xs:element minOccurs="0" ref="formats">
+                            <xs:annotation>
+                                <xs:documentation>List of format for review results</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="fileAliasesFile">
+                            <xs:annotation>
+                                <xs:documentation>Complete filename for the file aliases links. Can be exported from TIBCO Designer.</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element ref="language">
+                            <xs:annotation>
+                                <xs:documentation>Language for the review result.</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="disabled-rules">
+                            <xs:annotation>
+                                <xs:documentation>List of disabled rules for this review.</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="output-file-name">
+                            <xs:annotation>
+                                <xs:documentation>Optional output filename (without directory, without extension)</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                        <xs:element minOccurs="0" ref="home-page">
+                            <xs:annotation>
+                                <xs:documentation>Optional home page href link to be displayed in HTML output</xs:documentation>
+                            </xs:annotation>
+                        </xs:element>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="destination" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Path where to write the review results</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="disabled-rule" type="xs:token"/>
+            <xs:element name="disabled-rules">
+                <xs:annotation>
+                    <xs:documentation>List of disabled rules for this review.</xs:documentation>
+                </xs:annotation>
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="disabled-rule"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="empty">
+                <xs:complexType/>
+            </xs:element>
+            <xs:element name="fileAliasesFile" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Complete filename for the file aliases links. Can be exported from TIBCO Designer.</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="format" type="xs:token"/>
+            <xs:element name="formats">
+                <xs:annotation>
+                    <xs:documentation>List of format for review results</xs:documentation>
+                </xs:annotation>
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="format"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="home-page" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Optional home page href link to be displayed in HTML output</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="is-started" type="xs:boolean"/>
+            <xs:element name="language">
+                <xs:annotation>
+                    <xs:documentation>Language for the review result.</xs:documentation>
+                </xs:annotation>
+                <xs:simpleType>
+                    <xs:restriction base="xs:token">
+                        <xs:enumeration value="FR"/>
+                        <xs:enumeration value="EN"/>
+                    </xs:restriction>
+                </xs:simpleType>
+            </xs:element>
+            <xs:element default="false" name="load-projlibs" type="xs:boolean">
+                <xs:annotation>
+                    <xs:documentation>Whether to load Projlibs when reviewing</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="output-file-name" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Optional output filename (without directory, without extension)</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="project-encoding" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Encoding to be used to read projects files</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="project-path" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Path to the BW project</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="src-project-path" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>Path to the BW project source folder</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+        </xs:schema>
+        <xs:schema xmlns="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd" xmlns:xs="http://www.w3.org/2001/XMLSchema" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd">
+            <xs:element name="category">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="category" type="xs:string"/>
+                        <xs:element maxOccurs="unbounded" name="infos">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element minOccurs="0" name="locale" type="xs:string"/>
+                                    <xs:element name="name" type="xs:string"/>
+                                    <xs:element name="description" type="xs:string"/>
+                                    <xs:element minOccurs="0" name="descriptionHTML" type="xs:string"/>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="rule">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="category" type="xs:string"/>
+                        <xs:element name="key" type="xs:string"/>
+                        <xs:element name="severity">
+                            <xs:simpleType>
+                                <xs:restriction base="xs:token">
+                                    <xs:enumeration value="BLOCKER"/>
+                                    <xs:enumeration value="CRITICAL"/>
+                                    <xs:enumeration value="MAJOR"/>
+                                    <xs:enumeration value="MINOR"/>
+                                    <xs:enumeration value="INFO"/>
+                                </xs:restriction>
+                            </xs:simpleType>
+                        </xs:element>
+                        <xs:element name="weight" type="xs:unsignedShort"/>
+                        <xs:element maxOccurs="unbounded" name="infos">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element minOccurs="0" name="locale" type="xs:string"/>
+                                    <xs:element name="name" type="xs:string"/>
+                                    <xs:element name="description" type="xs:string"/>
+                                    <xs:element name="descriptionHTML" type="xs:string"/>
+                                    <xs:element minOccurs="0" name="correctionHTML" type="xs:string"/>
+                                    <xs:element maxOccurs="unbounded" minOccurs="0" name="display">
+                                        <xs:complexType>
+                                            <xs:sequence>
+                                                <xs:element name="key" type="xs:string"/>
+                                                <xs:element name="value" type="xs:string"/>
+                                                <xs:element name="descriptionHTML" type="xs:string"/>
+                                            </xs:sequence>
+                                        </xs:complexType>
+                                    </xs:element>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+        <xs:schema xmlns:rr="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:rc="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd" attributeFormDefault="unqualified" elementFormDefault="qualified" targetNamespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd">
+            <xs:import namespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd"/>
+            <xs:complexType name="RuleType">
+                <xs:sequence>
+                    <xs:element ref="rc:rule"/>
+                    <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:data"/>
+                    <xs:element maxOccurs="unbounded" minOccurs="0" name="param" type="rr:entry"/>
+                    <xs:element maxOccurs="unbounded" minOccurs="0" name="result" type="rr:result"/>
+                </xs:sequence>
+                <xs:attribute name="disabled" type="xs:boolean" use="required"/>
+                <xs:attribute name="grade">
+                    <xs:simpleType>
+                        <xs:restriction base="xs:int">
+                            <xs:maxInclusive value="100"/>
+                            <xs:minInclusive value="0"/>
+                        </xs:restriction>
+                    </xs:simpleType>
+                </xs:attribute>
+            </xs:complexType>
+            <xs:complexType name="activityRuleType">
+                <xs:complexContent>
+                    <xs:extension base="rr:RuleType">
+                        <xs:sequence>
+                            <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:call"/>
+                        </xs:sequence>
+                    </xs:extension>
+                </xs:complexContent>
+            </xs:complexType>
+            <xs:complexType name="child">
+                <xs:sequence>
+                    <xs:element ref="rr:key"/>
+                    <xs:element ref="rr:value"/>
+                    <xs:element maxOccurs="unbounded" minOccurs="0" name="child" type="rr:child"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:complexType name="entry">
+                <xs:all>
+                    <xs:element ref="rr:key"/>
+                    <xs:element ref="rr:value"/>
+                </xs:all>
+            </xs:complexType>
+            <xs:complexType name="processRuleType">
+                <xs:complexContent>
+                    <xs:extension base="rr:RuleType">
+                        <xs:sequence>
+                            <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:process"/>
+                        </xs:sequence>
+                    </xs:extension>
+                </xs:complexContent>
+            </xs:complexType>
+            <xs:complexType name="result">
+                <xs:sequence>
+                    <xs:element ref="rr:resource"/>
+                    <xs:element ref="rr:key"/>
+                    <xs:element ref="rr:value"/>
+                    <xs:element maxOccurs="unbounded" minOccurs="0" name="child" type="rr:child"/>
+                </xs:sequence>
+            </xs:complexType>
+            <xs:element name="activity" type="xs:string"/>
+            <xs:element name="activityRule" type="rr:activityRuleType"/>
+            <xs:element name="additional-data">
+                <xs:complexType>
+                    <xs:all>
+                        <xs:element minOccurs="0" ref="rr:config"/>
+                        <xs:element minOccurs="0" ref="rr:files"/>
+                    </xs:all>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="call">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element ref="rr:process"/>
+                        <xs:element ref="rr:activity"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="color" type="xs:string"/>
+            <xs:element name="condition" type="xs:string"/>
+            <xs:element name="config">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" name="entry" type="rr:entry"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="data" type="xs:string"/>
+            <xs:element name="error">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="error-name" type="xs:string"/>
+                        <xs:element name="rule" type="xs:string"/>
+                        <xs:element name="context" type="xs:string"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="errors">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:error"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="file" type="xs:string"/>
+            <xs:element name="files">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:file"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="general">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element minOccurs="0" name="number-of-processes" type="xs:unsignedInt"/>
+                                <xs:element minOccurs="0" name="number-of-activities" type="xs:unsignedInt"/>
+                                <xs:element minOccurs="0" name="number-of-files" type="xs:unsignedInt"/>
+                                <xs:element minOccurs="0" name="number-of-libs" type="xs:unsignedShort"/>
+                                <xs:element minOccurs="0" name="number-of-ears" type="xs:unsignedShort"/>
+                                <xs:element minOccurs="0" name="number-of-pars" type="xs:unsignedShort"/>
+                                <xs:element minOccurs="0" name="number-of-aars" type="xs:unsignedShort"/>
+                                <xs:element minOccurs="0" name="number-of-libbuilder" type="xs:unsignedShort"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="global-variable-in-connection-definition-error">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="connection">
+                                    <xs:complexType>
+                                        <xs:sequence>
+                                            <xs:element name="dir" type="xs:string"/>
+                                            <xs:element maxOccurs="unbounded" minOccurs="0" name="xpath" type="xs:string"/>
+                                        </xs:sequence>
+                                    </xs:complexType>
+                                </xs:element>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="invalid-imports">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="invalid-import" type="xs:string"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="key" type="xs:string"/>
+            <xs:element name="namespace" type="xs:string"/>
+            <xs:element name="namespace-collision">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element ref="rr:namespace"/>
+                        <xs:element maxOccurs="unbounded" ref="rr:file"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="namespace-collisions">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:namespace-collision"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="nested-loops">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="nested-loop">
+                                    <xs:complexType>
+                                        <xs:sequence maxOccurs="unbounded" minOccurs="0">
+                                            <xs:element ref="rr:process"/>
+                                            <xs:element name="group" type="xs:string"/>
+                                        </xs:sequence>
+                                    </xs:complexType>
+                                </xs:element>
+                            </xs:sequence>
+                            <xs:attribute name="max-depth" type="xs:short"/>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="nested-transactions">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="nested-transaction">
+                                    <xs:complexType>
+                                        <xs:sequence>
+                                            <xs:element ref="rr:process1"/>
+                                            <xs:element ref="rr:transaction1"/>
+                                            <xs:element ref="rr:process2"/>
+                                            <xs:element ref="rr:transaction2"/>
+                                        </xs:sequence>
+                                    </xs:complexType>
+                                </xs:element>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="number-of-activity-by-process-error">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element name="max-accepted" type="xs:int"/>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="process-details">
+                                    <xs:complexType>
+                                        <xs:sequence>
+                                            <xs:element name="dir" type="xs:string"/>
+                                            <xs:element name="activity-number" type="xs:int"/>
+                                        </xs:sequence>
+                                    </xs:complexType>
+                                </xs:element>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="occurences" type="xs:unsignedLong"/>
+            <xs:element name="process" type="xs:string"/>
+            <xs:element name="process-call">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:process"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="process-call-depth">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:process-call"/>
+                            </xs:sequence>
+                            <xs:attribute name="max-depth" type="xs:short" use="required"/>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="process1" type="xs:string"/>
+            <xs:element name="process2" type="xs:string"/>
+            <xs:element name="processRule" type="rr:processRuleType"/>
+            <xs:element name="property" type="xs:string"/>
+            <xs:element name="recursive-call">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:process"/>
+                        <xs:element name="checked-recursive" type="xs:boolean"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="recursive-calls">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:recursive-call"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="resource" type="xs:string"/>
+            <xs:element name="resourceRule">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:resource"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="review-result">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element minOccurs="0" ref="rr:general"/>
+                        <xs:element minOccurs="0" ref="rr:errors"/>
+                        <xs:element minOccurs="0" ref="rr:additional-data"/>
+                        <xs:element minOccurs="0" name="aggregated-grades">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element maxOccurs="unbounded" minOccurs="0" name="aggregated-grade">
+                                        <xs:complexType>
+                                            <xs:simpleContent>
+                                                <xs:extension base="xs:string">
+                                                    <xs:attribute name="category" type="xs:string"/>
+                                                </xs:extension>
+                                            </xs:simpleContent>
+                                        </xs:complexType>
+                                    </xs:element>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                        <xs:element minOccurs="0" name="categories">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element maxOccurs="unbounded" minOccurs="0" ref="rc:category"/>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                        <xs:element maxOccurs="unbounded" minOccurs="0" name="rule" type="rr:RuleType"/>
+                    </xs:sequence>
+                    <xs:attribute name="duration" type="xs:decimal"/>
+                    <xs:attribute name="home-page" type="xs:string"/>
+                    <xs:attribute name="language" type="xs:string"/>
+                    <xs:attribute name="project-basedir" type="xs:string"/>
+                    <xs:attribute name="project-name" type="xs:string"/>
+                    <xs:attribute name="timestamp" type="xs:dateTime"/>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="rule" type="rr:RuleType"/>
+            <xs:element name="stack">
+                <xs:complexType>
+                    <xs:choice maxOccurs="unbounded" minOccurs="0">
+                        <xs:element name="call" type="xs:string"/>
+                        <xs:element name="group">
+                            <xs:complexType>
+                                <xs:sequence>
+                                    <xs:element name="name" type="xs:string"/>
+                                    <xs:element name="type" type="xs:string"/>
+                                </xs:sequence>
+                            </xs:complexType>
+                        </xs:element>
+                        <xs:element name="project" type="xs:string"/>
+                    </xs:choice>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="transaction1" type="xs:string"/>
+            <xs:element name="transaction2" type="xs:string"/>
+            <xs:element name="transition">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element ref="rr:process"/>
+                        <xs:element name="from" type="xs:string"/>
+                        <xs:element name="to" type="xs:string"/>
+                        <xs:element ref="rr:condition"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="transition-colors">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" name="transition-color">
+                                    <xs:complexType>
+                                        <xs:sequence>
+                                            <xs:element name="transition-type" type="xs:string"/>
+                                            <xs:element ref="rr:color"/>
+                                        </xs:sequence>
+                                    </xs:complexType>
+                                </xs:element>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="unknown-jms-properties">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:unknown-jms-property"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="unknown-jms-property">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element ref="rr:resource"/>
+                        <xs:element ref="rr:property"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="unlabelled-transitions">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:transition"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="value" type="xs:string"/>
+            <xs:element name="xsd">
+                <xs:complexType>
+                    <xs:sequence>
+                        <xs:element name="dir" type="xs:string"/>
+                        <xs:element name="namespace" type="xs:string"/>
+                    </xs:sequence>
+                </xs:complexType>
+            </xs:element>
+            <xs:element name="xsdRule">
+                <xs:complexType>
+                    <xs:complexContent>
+                        <xs:extension base="rr:RuleType">
+                            <xs:sequence>
+                                <xs:element maxOccurs="unbounded" minOccurs="0" ref="rr:xsd"/>
+                            </xs:sequence>
+                        </xs:extension>
+                    </xs:complexContent>
+                </xs:complexType>
+            </xs:element>
+        </xs:schema>
+    </wsdl:types>
+    <wsdl:service name="CodeReview">
+        <wsdl:port binding="tns:CodeReviewBinding" name="CodeReview">
+            <soap:address location="http://localhost:9090/CodeReview"/>
+        </wsdl:port>
+    </wsdl:service>
+    <wsdl:portType name="CodeReview">
+        <wsdl:operation name="stopEngine">
+            <wsdl:input message="tns:stop-in"/>
+            <wsdl:output message="tns:stop-out"/>
+        </wsdl:operation>
+        <wsdl:operation name="isStarted">
+            <wsdl:input message="tns:start-in"/>
+            <wsdl:output message="tns:start-out"/>
+        </wsdl:operation>
+        <wsdl:operation name="review">
+            <wsdl:input message="tns:code-review-msg"/>
+            <wsdl:output message="tns:null-msg"/>
+        </wsdl:operation>
+    </wsdl:portType>
+    <wsdl:binding name="CodeReviewBinding" type="tns:CodeReview">
+        <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+        <wsdl:operation name="stopEngine">
+            <soap:operation soapAction="/CodeReview/stopEngine" style="document"/>
+            <wsdl:input>
+                <soap:body parts="" use="literal"/>
+            </wsdl:input>
+            <wsdl:output>
+                <soap:body parts="" use="literal"/>
+            </wsdl:output>
+        </wsdl:operation>
+        <wsdl:operation name="isStarted">
+            <soap:operation soapAction="/CodeReview/isStarted" style="document"/>
+            <wsdl:input>
+                <soap:body parts="" use="literal"/>
+            </wsdl:input>
+            <wsdl:output>
+                <soap:body parts="" use="literal"/>
+            </wsdl:output>
+        </wsdl:operation>
+        <wsdl:operation name="review">
+            <soap:operation soapAction="/CodeReview/review" style="document"/>
+            <wsdl:input>
+                <soap:body parts="code-review" use="literal"/>
+            </wsdl:input>
+            <wsdl:output>
+                <soap:body parts="" use="literal"/>
+            </wsdl:output>
+        </wsdl:operation>
+    </wsdl:binding>
+    <wsdl:message name="stop-in"/>
+    <wsdl:message name="stop-out"/>
+    <wsdl:message name="start-in"/>
+    <wsdl:message name="start-out"/>
+    <wsdl:message name="code-review-msg">
+        <wsdl:part element="ns0:code-review" name="code-review"/>
+    </wsdl:message>
+    <wsdl:message name="null-msg"/>
+</wsdl:definitions>

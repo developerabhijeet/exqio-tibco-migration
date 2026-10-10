@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pd:ProcessDefinition xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:ns="http://www.tibco.com/namespaces/tnt/plugins/file" xmlns:ns5="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/RuleCard.xsd" xmlns:pfx="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/TestResult.xsd" xmlns:ns2="http://fastconnect.fr/tibco/bw/fccodereview/projectcontent" xmlns:pd="http://xmlns.tibco.com/bw/process/2003" xmlns:ns1="http://www.tibco.com/pe/DeployedVarsType" xmlns:ns4="http://www.tibco.com/pe/WriteToLogActivitySchema" xmlns:ns3="http://www.fastconnect.fr/FCCodeReview/ReviewProcessInput.xsd" xmlns:ns0="http://www.fastconnect.fr/FCCodeReview/ReviewProcessInput.xs" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:tib="http://www.tibco.com/bw/xslt/custom-functions" xmlns:pfx3="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd" xmlns:pfx2="http://www.fastconnect.fr/FCTibcoFactory/CodeReview.xsd">
+    <xsd:import namespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview.xsd" schemaLocation="/CodeReview/Resources/XSD/CodeReview.xsd"/>
+    <xsd:import namespace="http://www.fastconnect.fr/FCTibcoFactory/CodeReview/ReviewResult.xsd" schemaLocation="/CodeReview/Resources/XSD/ReviewResult.xsd"/>
+    <pd:name>CodeReview/Processes/All review process.process</pd:name>
+    <pd:startName>Start</pd:startName>
+    <pd:startType>
+        <xsd:element name="root">
+            <xsd:complexType>
+                <xsd:sequence>
+                    <xsd:element name="start" type="xsd:dateTime"/>
+                    <xsd:element ref="pfx2:code-review"/>
+                    <xsd:element name="project-name" type="xsd:string" minOccurs="0"/>
+                    <xsd:element name="reviewed-project-basedir" type="xsd:string"/>
+                </xsd:sequence>
+            </xsd:complexType>
+        </xsd:element>
+    </pd:startType>
+    <pd:startX>58</pd:startX>
+    <pd:startY>98</pd:startY>
+    <pd:returnBindings>
+        <root>
+            <current-project-uri>
+                <xsl:value-of select="$PrepareCodeReview/root/currentProjectURI"/>
+            </current-project-uri>
+            <xsl:copy-of select="$SetGrades/pfx3:review-result"/>
+            <lang>
+                <xsl:value-of select="if(string-length($Start/root/pfx2:code-review/pfx2:language)>0) then&#xA;$Start/root/pfx2:code-review/pfx2:language&#xA;else 'FR'"/>
+            </lang>
+        </root>
+    </pd:returnBindings>
+    <pd:endName>End</pd:endName>
+    <pd:endType>
+        <xsd:element name="root">
+            <xsd:complexType>
+                <xsd:sequence>
+                    <xsd:element name="current-project-uri" type="xsd:string"/>
+                    <xsd:element ref="pfx3:review-result"/>
+                    <xsd:element name="lang" type="xsd:string"/>
+                </xsd:sequence>
+            </xsd:complexType>
+        </xsd:element>
+    </pd:endType>
+    <pd:endX>1146</pd:endX>
+    <pd:endY>98</pd:endY>
+    <pd:errorSchemas/>
+    <pd:processVariables/>
+    <pd:targetNamespace>http://xmlns.example.com/1312906960312</pd:targetNamespace>
+    <pd:group name="Iterate over Review Rules">
+        <pd:type>com.tibco.pe.core.LoopGroup</pd:type>
+        <pd:resourceType>ae.process.group</pd:resourceType>
+        <pd:x>414</pd:x>
+        <pd:y>1</pd:y>
+        <pd:width>182</pd:width>
+        <pd:height>177</pd:height>
+        <pd:collapsedWidth>57</pd:collapsedWidth>
+        <pd:collapsedHeight>70</pd:collapsedHeight>
+        <pd:groupVariables/>
+        <pd:joinToggle>inherit</pd:joinToggle>
+        <config>
+            <pd:groupType>inputLoop</pd:groupType>
+            <pd:serializable>false</pd:serializable>
+            <pd:over>$PrepareCodeReview/root/review-process[not(exists($Start/root/pfx2:code-review/pfx2:disabled-rules/pfx2:disabled-rule[text() = current()]))]</pd:over>
+            <pd:iterationElementSlot>act</pd:iterationElementSlot>
+            <pd:indexSlot>pos</pd:indexSlot>
+            <pd:outSlot>accu</pd:outSlot>
+            <pd:activityOutputName>Call Review Rule</pd:activityOutputName>
+            <pd:accumulateOutput>true</pd:accumulateOutput>
+        </config>
+        <pd:inputBindings/>
+        <pd:expanded>true</pd:expanded>
+        <pd:transition>
+            <pd:from>start</pd:from>
+            <pd:to>Call Review Rule</pd:to>
+            <pd:lineType>Default</pd:lineType>
+            <pd:lineColor>-16777216</pd:lineColor>
+            <pd:conditionType>always</pd:conditionType>
+        </pd:transition>
+        <pd:transition>
+            <pd:from>Call Review Rule</pd:from>
+            <pd:to>end</pd:to>
+            <pd:lineType>Default</pd:lineType>
+            <pd:lineColor>-16777216</pd:lineColor>
+            <pd:conditionType>always</pd:conditionType>
+        </pd:transition>
+        <pd:activity name="Call Review Rule">
+            <pd:type>com.tibco.pe.core.CallProcessActivity</pd:type>
+            <pd:resourceType>ae.process.subprocess</pd:resourceType>
+            <pd:x>499</pd:x>
+            <pd:y>98</pd:y>
+            <config>
+                <processName>/CodeReview/Processes/Review process interface.process</processName>
+                <processNameXPath>$act/review-process</processNameXPath>
+            </config>
+            <pd:inputBindings>
+                <!--Workaround-->
+                <ns3:root>
+                    <xsl:variable name="trans" select="translate($act/review-process, '\\', '/')"/>
+                    <xsl:variable name="var" select="contains($trans, '/')"/>
+                    <xsl:variable name="var2" select="tib:substring-after-last($trans, '/')"/>
+                    <xsl:variable name="var3" select="$act/review-process"/>
+                    <ns3:disabled>
+                        <xsl:value-of select="exists($Start/root/pfx2:code-review/pfx2:disabled-rules/pfx2:disabled-rule[ . =&#xA;substring-before(&#xA;&#x9;if($var) then&#xA;&#x9;&#x9;$var2&#x9;&#xA;else $var3, &#xA;' ')&#xA;])"/>
+                    </ns3:disabled>
+                </ns3:root>
+            </pd:inputBindings>
+        </pd:activity>
+    </pd:group>
+    <pd:activity name="GetVariable">
+        <pd:type>com.tibco.pe.core.GetSharedVariableActivity</pd:type>
+        <pd:resourceType>ae.activities.getSharedVariable</pd:resourceType>
+        <pd:x>678</pd:x>
+        <pd:y>98</pd:y>
+        <config>
+            <variableConfig>/CodeReview/Resources/Shared Variables/Project Content.jobsharedvariable</variableConfig>
+        </config>
+        <pd:inputBindings/>
+    </pd:activity>
+    <pd:activity name="Format results">
+        <pd:type>com.tibco.plugin.mapper.MapperActivity</pd:type>
+        <pd:resourceType>ae.activities.MapperActivity</pd:resourceType>
+        <pd:x>910</pd:x>
+        <pd:y>98</pd:y>
+        <config>
+            <element ref="pfx3:review-result"/>
+        </config>
+        <pd:inputBindings>
+            <pfx3:review-result>
+                <xsl:variable name="now" select="current-dateTime()"/>
+                <xsl:choose>
+                    <xsl:when test="string-length($Start/root/project-name)>0">
+                        <xsl:if test="$Start/root/project-name">
+                            <xsl:attribute name="project-name">
+                                <xsl:value-of select="$Start/root/project-name"/>
+                            </xsl:attribute>
+                        </xsl:if>
+                    </xsl:when>
+                    <xsl:otherwise>
+                        <xsl:if test="$Build-Review-Informations/pfx3:review-result/@project-name">
+                            <xsl:attribute name="project-name">
+                                <xsl:value-of select="$Build-Review-Informations/pfx3:review-result/@project-name"/>
+                            </xsl:attribute>
+                        </xsl:if>
+                    </xsl:otherwise>
+                </xsl:choose>
+                <xsl:if test="$Build-Review-Informations/pfx3:review-result/@timestamp">
+                    <xsl:attribute name="timestamp">
+                        <xsl:value-of select="$Build-Review-Informations/pfx3:review-result/@timestamp"/>
+                    </xsl:attribute>
+                </xsl:if>
+                <xsl:attribute name="duration">
+                    <xsl:value-of select="tib:round-fraction(&#xA;(&#xA;tib:get-year-from-dateTime($now) * 365 * 24 * 60 * 60 +&#xA;tib:get-month-from-dateTime($now) * 12 * 24 * 60 * 60 + &#xA;tib:get-day-from-dateTime($now) * 24 * 60 * 60 +&#xA;tib:get-hours-from-dateTime($now) * 60 * 60 +&#xA;tib:get-minutes-from-dateTime($now) * 60 +&#xA;tib:get-seconds-from-dateTime($now)&#xA;)&#xA;-&#xA;(&#xA;tib:get-year-from-dateTime($Start/root/start) * 365 * 24 * 60 * 60 +&#xA;tib:get-month-from-dateTime($Start/root/start) * 12 * 24 * 60 * 60 + &#xA;tib:get-day-from-dateTime($Start/root/start) * 24 * 60 * 60 +&#xA;tib:get-hours-from-dateTime($Start/root/start) * 60 * 60 +&#xA;tib:get-minutes-from-dateTime($Start/root/start) * 60 +&#xA;tib:get-seconds-from-dateTime($Start/root/start)&#xA;), 3)"/>
+                </xsl:attribute>
+                <xsl:attribute name="project-basedir">
+                    <xsl:value-of select="$Start/root/reviewed-project-basedir"/>
+                </xsl:attribute>
+                <xsl:if test="$Start/root/pfx2:code-review/pfx2:home-page">
+                    <xsl:attribute name="home-page">
+                        <xsl:value-of select="$Start/root/pfx2:code-review/pfx2:home-page"/>
+                    </xsl:attribute>
+                </xsl:if>
+                <xsl:attribute name="language">
+                    <xsl:value-of select="$Start/root/pfx2:code-review/pfx2:language"/>
+                </xsl:attribute>
+                <xsl:copy-of select="$accu/AccumulatedOutput/pfx3:review-result/pfx3:general"/>
+                <pfx3:errors>
+                    <xsl:copy-of select="$accu/AccumulatedOutput/pfx3:review-result/pfx3:errors/pfx3:error"/>
+                </pfx3:errors>
+                <pfx3:additional-data>
+                    <pfx3:config>
+                        <xsl:for-each select="tib:evaluate(&quot;$_globalVariables/ns1:GlobalVariables/CodeReview/Criteria/*&quot;)">
+                            <pfx3:entry>
+                                <pfx3:key>
+                                    <xsl:value-of select="local-name(.)"/>
+                                </pfx3:key>
+                                <pfx3:value>
+                                    <xsl:value-of select="."/>
+                                </pfx3:value>
+                            </pfx3:entry>
+                        </xsl:for-each>
+                    </pfx3:config>
+                    <pfx3:files>
+                        <xsl:for-each select="$GetVariable/ns2:project/ns2:file">
+                            <pfx3:file>
+                                <xsl:value-of select="@fullName"/>
+                            </pfx3:file>
+                        </xsl:for-each>
+                    </pfx3:files>
+                </pfx3:additional-data>
+                <pfx3:aggregated-grades/>
+                <pfx3:categories>
+                    <xsl:copy-of select="$Categories/categories/ns5:category"/>
+                </pfx3:categories>
+                <xsl:copy-of select="$accu/AccumulatedOutput/pfx3:review-result/pfx3:rule"/>
+            </pfx3:review-result>
+        </pd:inputBindings>
+    </pd:activity>
+    <pd:activity name="Categories">
+        <pd:type>com.tibco.pe.core.CallProcessActivity</pd:type>
+        <pd:resourceType>ae.process.subprocess</pd:resourceType>
+        <pd:x>804</pd:x>
+        <pd:y>98</pd:y>
+        <config>
+            <processName>/CodeReview/Processes/Categories/Categories.process</processName>
+        </config>
+        <pd:inputBindings/>
+    </pd:activity>
+    <pd:activity name="PrepareCodeReview">
+        <pd:type>com.tibco.pe.core.CallProcessActivity</pd:type>
+        <pd:resourceType>ae.process.subprocess</pd:resourceType>
+        <pd:x>191</pd:x>
+        <pd:y>98</pd:y>
+        <config>
+            <processName>/CodeReview/Processes/PrepareCodeReview.process</processName>
+        </config>
+        <pd:inputBindings>
+            <xsl:copy-of select="$Start/root"/>
+        </pd:inputBindings>
+    </pd:activity>
+    <pd:activity name="Build Review Informations">
+        <pd:type>com.tibco.pe.core.CallProcessActivity</pd:type>
+        <pd:resourceType>ae.process.subprocess</pd:resourceType>
+        <pd:x>329</pd:x>
+        <pd:y>106</pd:y>
+        <config>
+            <processName>/CodeReview/Processes/Build Review Informations.process</processName>
+        </config>
+        <pd:inputBindings>
+            <root>
+                <baseDir>
+                    <xsl:value-of xmlns:xsl="http://www.w3.org/1999/XSL/Transform" select="$Start/root/pfx2:code-review/pfx2:project-path"/>
+                </baseDir>
+            </root>
+        </pd:inputBindings>
+    </pd:activity>
+    <pd:activity name="SetGrades">
+        <pd:type>com.tibco.pe.core.CallProcessActivity</pd:type>
+        <pd:resourceType>ae.process.subprocess</pd:resourceType>
+        <pd:x>1027</pd:x>
+        <pd:y>98</pd:y>
+        <config>
+            <processName>/CodeReview/Processes/Tools/SetGrades.process</processName>
+        </config>
+        <pd:inputBindings>
+            <xsl:copy-of select="$Format-results/pfx3:review-result"/>
+        </pd:inputBindings>
+    </pd:activity>
+    <pd:transition>
+        <pd:from>Start</pd:from>
+        <pd:to>PrepareCodeReview</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>Iterate over Review Rules</pd:from>
+        <pd:to>GetVariable</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>Format results</pd:from>
+        <pd:to>SetGrades</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>GetVariable</pd:from>
+        <pd:to>Categories</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>Categories</pd:from>
+        <pd:to>Format results</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>PrepareCodeReview</pd:from>
+        <pd:to>Build Review Informations</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>Build Review Informations</pd:from>
+        <pd:to>Iterate over Review Rules</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+    <pd:transition>
+        <pd:from>SetGrades</pd:from>
+        <pd:to>End</pd:to>
+        <pd:lineType>Default</pd:lineType>
+        <pd:lineColor>-16777216</pd:lineColor>
+        <pd:conditionType>always</pd:conditionType>
+    </pd:transition>
+</pd:ProcessDefinition>

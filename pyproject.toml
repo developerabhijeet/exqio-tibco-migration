@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exiqo-migrate"
+version = "0.1.0"
+description = "ExiQO Migrate: TIBCO BusinessWorks to .NET migration platform"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2",
+  "lxml",
+  "elementpath",
+  "saxonche",
+  "fastembed",
+  "jinja2",
+  "pyyaml",
+  "fastapi",
+  "uvicorn[standard]",
+  "sqlalchemy[asyncio]>=2",
+  "asyncpg",
+  "alembic",
+  "pydantic-settings",
+  "httpx",
+  "sse-starlette",
+  "python-multipart",
+  "openai",
+  "claude-agent-sdk",
+  "psycopg[binary]",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["engine*", "api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["engine/tests", "api/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["samples"]
