@@ -1115,3 +1115,15 @@ async def test_stale_service_runs_cleared_at_startup(client, app, monkeypatch):
         b = await s.get(Build, build_id)
         assert b.run_pid is None and b.run_port is None
     assert os.getpid()  # still alive: never killed a pid that is not the build's service
+
+
+def test_service_env_carries_the_web_origins_for_cors(monkeypatch):
+    """The child environment is scrubbed, so the generated service only learns the web origin
+    (the Verify tab's dev-token call) through ``Cors__Origins__<i>`` built from CORS_ORIGINS."""
+    monkeypatch.setenv("Cors__Origins__0", "http://localhost:9999")  # must not leak through
+    env = verify_svc.service_env("postgresql://u:p@localhost:5432/x_test", ["Funding"], [], None,
+                                 ["http://localhost:3300", "http://localhost:3000"])
+    assert env["Cors__Origins__0"] == "http://localhost:3300"
+    assert env["Cors__Origins__1"] == "http://localhost:3000"
+    assert verify_svc.service_env("postgresql://u:p@localhost:5432/x_test", [], [], None, []) \
+        .get("Cors__Origins__0") is None

@@ -45,9 +45,8 @@ export default defineConfig({
         DATABASE_URL: process.env.DATABASE_URL ?? "postgresql+asyncpg://exiqo:exiqo@localhost:5432/exiqo",
         // The browser calls the API directly: allow this run's web origin.
         CORS_ORIGINS: process.env.CORS_ORIGINS ?? `http://localhost:${webPort}`,
-        // The generated service inherits the API's environment: its Development CORS (default
-        // http://localhost:3000) must allow this run's web origin for the Verify tab's dev token.
-        Cors__Origins__0: process.env.Cors__Origins__0 ?? `http://localhost:${webPort}`,
+        // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),
+        // so the Verify tab's dev-token call from this run's web origin is allowed there too.
       },
     },
     {

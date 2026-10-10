@@ -2,15 +2,14 @@ PY ?= .venv/bin/python
 PYTEST ?= .venv/bin/pytest
 
 # Ports for `make api`, `make web` and `make demo-check`. The web calls the API from the browser.
-# Both CORS defaults (the API's CORS_ORIGINS and the generated service's Cors:Origins, which the
-# service reads from the API's environment as Cors__Origins__0) are http://localhost:3000; with
-# another WEB_PORT the API is started with both set to that origin, unless already set.
+# The API's CORS_ORIGINS defaults to http://localhost:3000; with another WEB_PORT the API is started
+# with that origin, unless already set. The API passes the same origins to the generated service it
+# starts in Verify (as Cors__Origins__<i>), so the service's Development CORS follows CORS_ORIGINS.
 API_PORT ?= 8000
 WEB_PORT ?= 3000
 API_URL ?= http://localhost:$(API_PORT)
 WEB_ORIGIN := http://localhost:$(WEB_PORT)
-WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)} \
-	Cors__Origins__0=$${Cors__Origins__0:-$(WEB_ORIGIN)})
+WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
 .PHONY: setup db api web test e2e demo-check toolchain samples samples-zip nuget-cache
 

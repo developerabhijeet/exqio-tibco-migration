@@ -415,7 +415,10 @@ def connection_names(build_root: Path, app_name: str) -> list[str]:
 
 
 def service_env(dsn: str, names: list[str], clients: list[str] | None = None,
-                stub_url: str | None = None) -> dict[str, str]:
+                stub_url: str | None = None, cors_origins: list[str] | None = None) -> dict[str, str]:
+    """Environment for the generated service. The child environment is scrubbed, so the web
+    origins the browser calls the service from (the Verify tab's dev-token request) are passed
+    explicitly as ``Cors__Origins__<i>``, taken from the API's own CORS_ORIGINS setting."""
     env = {"ASPNETCORE_ENVIRONMENT": "Development", "Auth__Mode": "Development",
            "Messaging__Mode": "InMemory", "KeyVault__Uri": ""}
     conn = npgsql_connection_string(dsn)
@@ -424,6 +427,8 @@ def service_env(dsn: str, names: list[str], clients: list[str] | None = None,
     for c in clients or []:
         if stub_url:
             env[f"Clients__{c}__BaseAddress"] = stub_url
+    for i, origin in enumerate(cors_origins or []):
+        env[f"Cors__Origins__{i}"] = origin
     return env
 
 
@@ -486,7 +491,8 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
 
     try:
         stubs = StubServer()
-        env = service_env(dsn, connection_names(root, app_name), clients, stubs.url)
+        env = service_env(dsn, connection_names(root, app_name), clients, stubs.url,
+                          settings.cors_origin_list)
         held, port = reserve_port()
         runner = DotnetRunner(root, dotnet=dotnet)
         sock, service_port = held, port

@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -31,6 +30,7 @@ from api.app.jobs.runner import JobContext
 from api.app.models import AzureConnection, Build, InfraAsset, Plan, Process
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from engine.child_env import child_env
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ async def _run_plan(ctx: JobContext, build_id: str, plan_id: str, env: dict[str,
 
     def go() -> tuple[int, str]:
         try:
-            proc = subprocess.run(argv, cwd=root, env={**os.environ, **env, "TF_INPUT": "0"},
+            proc = subprocess.run(argv, cwd=root, env=child_env({**env, "TF_INPUT": "0"}),
                                   capture_output=True, text=True, timeout=PLAN_TIMEOUT_S, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return 1, str(exc)

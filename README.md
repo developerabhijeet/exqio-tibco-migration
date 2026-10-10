@@ -62,8 +62,7 @@ shows each provider as configured or missing and never shows a value.
 | `EMBEDDINGS_BACKEND` | `fastembed` (downloads a model from Hugging Face on first use), `hash` (offline, lexical), unset tries fastembed and falls back to hash |
 | `EMBEDDINGS_LOAD_TIMEOUT` | seconds to wait for the fastembed model (default 30) |
 | `LANGFUSE_ENABLED`, `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | tracing of model calls to Langfuse |
-| `CORS_ORIGINS` | web origins the API accepts (default `http://localhost:3000`) |
-| `Cors__Origins__0` | passed by the API to the generated service it starts in Verify: the web origin its Development CORS allows (default `http://localhost:3000`) |
+| `CORS_ORIGINS` | web origins the API accepts (default `http://localhost:3000`); the API passes the same origins to the generated service it starts in Verify, whose Development CORS allows them |
 | `UPLOAD_MAX_BYTES`, `UPLOAD_ALLOWED_ROOTS` | upload size limit and the server folders a path upload may read |
 | `JOB_WORKERS` | concurrent background jobs (default 2) |
 | `EXIQO_NUGET_CACHE` | an offline NuGet feed for generated solutions (default `.tools/nuget-cache` when present) |
