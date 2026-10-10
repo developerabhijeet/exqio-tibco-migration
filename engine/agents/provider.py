@@ -10,6 +10,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
+from engine.knowledge.memory import MemoryItem  # noqa: F401  (re-exported; defined by Task 10)
+
 Tier = Literal["strong", "standard", "efficient"]
 TIERS: tuple[Tier, ...] = ("strong", "standard", "efficient")
 
@@ -60,16 +62,6 @@ class LLMProvider(Protocol):
     async def complete(self, req: LLMRequest) -> LLMResponse: ...
 
     def models(self) -> dict[Tier, str]: ...
-
-
-@dataclass
-class MemoryItem:
-    """Minimal stand-in for Task 10's knowledge ``MemoryItem`` (same field names)."""
-
-    id: str
-    kind: str
-    text: str
-    source: str
 
 
 class NullProvider:

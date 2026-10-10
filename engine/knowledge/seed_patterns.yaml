@@ -1,0 +1,215 @@
+# TIBCO BusinessWorks to .NET migration patterns authored by R Systems International.
+#
+# These are curated seed patterns: guidance written by RSI engineers from migration practice,
+# loaded into a project's migration memory so the analyst and designer agents can retrieve them
+# next to SME decisions. They are retrieved by search and shown to the model as hints. They are
+# not training data, and no model is fine-tuned on them.
+#
+# Each pattern: id, kind (pattern), source (rsi-seed), title, when (the TIBCO situation),
+# then (the recommended .NET treatment), plus short tibco / dotnet labels.
+patterns:
+  - id: jdbc-query-to-dapper
+    kind: pattern
+    source: rsi-seed
+    title: JDBC Query activity becomes a Dapper repository method
+    tibco: JDBC Query
+    dotnet: Dapper repository
+    when: >-
+      A process runs a JDBC Query or JDBC Update activity with a SQL statement and ? parameter
+      bindings.
+    then: >-
+      Create one repository method per statement and keep the SQL text verbatim, including the
+      ? placeholders translated to named Dapper parameters in the same order. Do not rewrite or
+      optimize the SQL during migration: parity testing compares results against the BW run.
+      Map the activity timeout to the command timeout and the BW connection resource to an
+      NpgsqlDataSource registered once.
+
+  - id: jms-receive-to-message-bus
+    kind: pattern
+    source: rsi-seed
+    title: JMS Queue Receiver becomes an IMessageBus consumer
+    tibco: JMS Queue Receiver / Wait for JMS Queue Message
+    dotnet: IMessageBus consumer
+    when: >-
+      A process starts from a JMS Queue Receiver (or a Wait for JMS Queue Message activity) with
+      an acknowledge mode and a destination queue name.
+    then: >-
+      Implement a consumer behind an IMessageBus abstraction so the broker (JMS bridge, Azure
+      Service Bus or RabbitMQ) is a deployment decision. Keep the queue name in configuration.
+      Map CLIENT_ACKNOWLEDGE and transacted receives to explicit complete or abandon calls after
+      the handler succeeds, and add a dead-letter path for poison messages, which BW handled by
+      redelivery limits on the server.
+
+  - id: transaction-group-to-npgsql-transaction
+    kind: pattern
+    source: rsi-seed
+    title: Transaction group becomes an Npgsql transaction scope
+    tibco: Group of kind transaction
+    dotnet: NpgsqlTransaction
+    when: >-
+      Activities are enclosed in a transaction group, usually several JDBC updates that must
+      commit or roll back together.
+    then: >-
+      Open one connection, begin an NpgsqlTransaction, run every statement of the group on that
+      connection and commit at the end of the group. A fault inside the group rolls back before
+      the fault handler runs. JMS and JDBC in one BW transaction group is an XA transaction:
+      flag it for an SME decision, because plain Npgsql does not enlist a broker.
+
+  - id: parallel-flow-to-task-whenall
+    kind: pattern
+    source: rsi-seed
+    title: Parallel transitions become Task.WhenAll
+    tibco: Parallel branches (multiple unconditional outgoing transitions)
+    dotnet: Task.WhenAll
+    when: >-
+      An activity has several unconditional outgoing transitions that rejoin later, so the
+      branches run in parallel.
+    then: >-
+      Start each branch as a Task and await Task.WhenAll at the join. Give each branch its own
+      connection and do not share a transaction across branches. Preserve the output merge: BW
+      exposes every branch output to later bindings, so return a typed result per branch.
+
+  - id: http-client-to-httpclientfactory
+    kind: pattern
+    source: rsi-seed
+    title: HTTP Client resource becomes IHttpClientFactory with resilience
+    tibco: HTTP Client shared resource / Send HTTP Request
+    dotnet: IHttpClientFactory with a resilience pipeline
+    when: >-
+      A process calls an external service through a Send HTTP Request or REST invoke activity
+      with a configured timeout and host.
+    then: >-
+      Register a named or typed client with IHttpClientFactory, base address from configuration.
+      Add a resilience pipeline (timeout, retry with jitter, circuit breaker) that matches the
+      timeout and retry the BW resource used. Do not add retries to non-idempotent calls unless
+      the SME approves, because BW did not retry them.
+
+  - id: timer-to-backgroundservice
+    kind: pattern
+    source: rsi-seed
+    title: Timer starter becomes a BackgroundService
+    tibco: Timer
+    dotnet: BackgroundService with PeriodicTimer
+    when: >-
+      A process starts from a Timer with a start time and an interval, or runs once.
+    then: >-
+      Implement a BackgroundService using PeriodicTimer for the interval. If more than one
+      instance of the service will run, decide who owns the schedule: BW used a single engine or
+      a fault-tolerant group, so add a distributed lock or move the schedule to a Kubernetes
+      CronJob. Record the missed-run behavior explicitly, as BW skipped overlapping runs.
+
+  - id: call-process-to-service-method
+    kind: pattern
+    source: rsi-seed
+    title: Call Process becomes a service method call
+    tibco: Call Process
+    dotnet: Injected service method
+    when: >-
+      An activity calls another BW process by name and passes an input message.
+    then: >-
+      Generate one application service per called process and call it through an interface
+      injected by the container. Keep request and response as the typed contracts generated from
+      the process schemas. A Call Process into a process that has its own starter is an
+      in-process call, not an HTTP call, unless the called process moves to another service.
+
+  - id: throw-to-typed-exception
+    kind: pattern
+    source: rsi-seed
+    title: Throw activity becomes a typed exception
+    tibco: Throw / Catch and fault handlers
+    dotnet: Typed exception with ProblemDetails mapping
+    when: >-
+      A process raises a named fault with a Throw activity or handles one in a catch branch.
+    then: >-
+      Define one exception type per named fault, carrying the fault message and detail fields.
+      Catch it where the BW catch scope was, not wider. At the API boundary map fault names to
+      HTTP status codes and a ProblemDetails body once, in middleware, and record the mapping as
+      an SME decision because BW SOAP faults and REST errors differed.
+
+  - id: xslt-mapping-to-generated-csharp
+    kind: pattern
+    source: rsi-seed
+    title: Mapper and XSLT input bindings become generated C# with the expression kept in a comment
+    tibco: Mapper input binding / XSLT
+    dotnet: Generated C# mapping method
+    when: >-
+      An activity input binding uses XPath expressions or an XSLT transform to build a message,
+      including string functions, number formatting and date handling.
+    then: >-
+      Generate one C# mapping method per binding and put the original XPath expression in a
+      comment above the line that implements it, so reviewers can compare. Watch the XPath
+      semantics that differ from C#: empty sequences, numeric conversion of strings, string
+      comparison and date formats. Prove each mapping with parity scenarios, not by reading.
+
+  - id: substvar-to-configuration
+    kind: pattern
+    source: rsi-seed
+    title: Global variables and substvars become appsettings and Key Vault
+    tibco: Global Variables / substitution variables (substvar)
+    dotnet: IOptions configuration with Key Vault for secrets
+    when: >-
+      Activities read global variables, or properties are supplied per environment through
+      substitution variables or a deployment descriptor.
+    then: >-
+      Bind them to a typed options class loaded from appsettings with per-environment overrides.
+      Credentials, connection passwords and keys go to Azure Key Vault and are never written to
+      appsettings or the repository. Keep the BW variable name as a comment so the mapping back
+      to the TIBCO configuration stays traceable.
+
+  - id: iterate-group-to-foreach
+    kind: pattern
+    source: rsi-seed
+    title: Iterate group becomes foreach, with a chunking decision
+    tibco: Group of kind iterate
+    dotnet: foreach with optional batching
+    when: >-
+      A group iterates over a repeating element, optionally accumulating output, with an index.
+    then: >-
+      Translate to a foreach over the typed collection and keep the accumulated output as a
+      list. If the body calls the database or a service per item, raise a chunking note: BW ran
+      the loop sequentially, so batch only when the SME confirms ordering and partial-failure
+      behavior do not matter. Preserve what happens on a fault mid-iteration.
+
+  - id: critical-section-lock-decision
+    kind: pattern
+    source: rsi-seed
+    title: Critical section needs an explicit locking decision
+    tibco: Group of kind critical section
+    dotnet: Lock chosen by deployment topology
+    when: >-
+      A group is a critical section, serializing access to a shared resource across process
+      instances.
+    then: >-
+      Do not translate it to a C# lock statement by default. Ask where the migrated service
+      runs: a single instance can use SemaphoreSlim, several instances need a distributed lock
+      such as a Postgres advisory lock. Record the choice as a decision, because the BW critical
+      section was scoped to the engine, and the new scope changes the behavior.
+
+  - id: rest-starter-to-minimal-api
+    kind: pattern
+    source: rsi-seed
+    title: REST or SOAP service starter becomes a minimal API endpoint
+    tibco: HTTP Receiver / SOAP Event Source / REST binding
+    dotnet: ASP.NET Core minimal API endpoint
+    when: >-
+      A process starts from an HTTP, REST or SOAP listener with a path, verb and request schema.
+    then: >-
+      Generate one endpoint per operation with the same verb and path, request and response
+      records generated from the schema, and a thin handler that calls the generated service.
+      Keep the success and error response shapes identical to BW until the consumers are
+      migrated, even where the shape is unattractive.
+
+  - id: file-poller-to-hosted-service
+    kind: pattern
+    source: rsi-seed
+    title: File Poller becomes a hosted service with an idempotency key
+    tibco: File Poller / Wait for File Change
+    dotnet: BackgroundService with a processed-file ledger
+    when: >-
+      A process starts when a file appears in a directory, then reads, transforms and moves or
+      deletes it.
+    then: >-
+      Poll the directory in a BackgroundService and record each processed file name and
+      checksum in a ledger table, so a restart does not reprocess it. Make the move or delete
+      the last step. Decide with the SME whether the shared directory stays or becomes blob
+      storage, since file locking semantics differ.
