@@ -1,5 +1,7 @@
 """Tests for the neutral IR: models, catalogue, complexity and spec hash."""
 import copy
+import re
+from pathlib import Path
 
 import pytest
 
@@ -87,7 +89,7 @@ def test_canonical_unknown_returns_none():
 
 def test_catalogue_consistency():
     assert "rest.receive" in catalogue.CANONICAL_TYPES
-    assert len(catalogue.CANONICAL_TYPES) == 33
+    assert len(catalogue.CANONICAL_TYPES) == 49
     assert set(catalogue.NATIVE_TO_CANONICAL.values()) <= catalogue.CANONICAL_TYPES
     # every canonical type is reachable from at least one native type
     assert set(catalogue.NATIVE_TO_CANONICAL.values()) == catalogue.CANONICAL_TYPES
@@ -97,15 +99,114 @@ def test_catalogue_consistency():
 
 
 def test_group_kind():
-    assert catalogue.group_kind("loop") == "loop"
+    # real BW5 pd:groupType values
+    assert catalogue.group_kind("inputLoop") == "iterate"
     assert catalogue.group_kind("repeat") == "loop"
+    assert catalogue.group_kind("while") == "loop"
+    assert catalogue.group_kind("repeatOnError") == "loop"
+    assert catalogue.group_kind("criticalSection") == "critical"
+    assert catalogue.group_kind("transactionGroup") == "transaction"
+    assert catalogue.group_kind("pick") == "scope"
+    assert catalogue.group_kind("none") == "scope"
+    # plain words and class names
+    assert catalogue.group_kind("loop") == "loop"
     assert catalogue.group_kind("iterate") == "iterate"
     assert catalogue.group_kind("transaction") == "transaction"
     assert catalogue.group_kind("critical") == "critical"
-    assert catalogue.group_kind("none") == "scope"
     assert catalogue.group_kind("com.tibco.pe.core.LoopGroup") == "loop"
+    assert catalogue.group_kind("com.tibco.pe.core.TransactionGroup") == "transaction"
     assert catalogue.group_kind("pd:group") is None
     assert catalogue.group_kind("bogus") is None
+
+
+@pytest.mark.parametrize(
+    "native,expected",
+    [
+        ("bw.internal.end", "end"),
+        ("bw.internal.accumulateend", "end"),
+        ("bw.http.sendHTTPResponse", "reply"),
+        ("bw.java.javamethod", "java.invoke"),
+        ("bw.file.create", "file.write"),
+        ("bw.internal.setEPR", "assign"),
+        ("bw.restjson.JsonParser", "json.parse"),
+        ("bw.restjson.JsonRender", "json.render"),
+        ("bw.xml.parsexml", "xml.parse"),
+        ("bw.xml.renderxml", "xml.render"),
+        ("bw.mail.receive", "mail.receive"),
+        ("bw.mail.sendmail", "mail.send"),
+        ("com.tibco.pe.core.GetSharedVariableActivity", "shared.get"),
+        ("com.tibco.pe.core.SetSharedVariableActivity", "shared.set"),
+        ("com.tibco.plugin.xml.XMLParseActivity", "xml.parse"),
+        ("com.tibco.plugin.parse.ParseActivity", "xml.parse"),
+        ("com.tibco.plugin.xml.XMLRendererActivity", "xml.render"),
+        ("com.tibco.plugin.json.activities.JSONParserActivity", "json.parse"),
+        ("com.tibco.plugin.timer.NullActivity", "noop"),
+        ("com.tibco.plugin.cmdexec.CmdExecActivity", "cmd.exec"),
+        ("com.tibco.plugin.jms.JMSReplyActivity", "jms.reply"),
+        ("com.tibco.plugin.jms.JMSQueueRequestReplyActivity", "jms.request_reply"),
+        ("com.tibco.plugin.jms.JMSQueueSignalInActivity", "jms.receive"),
+        ("com.tibco.plugin.jdbc.JDBCGeneralActivity", "jdbc.call"),
+        ("com.tibco.plugin.ftp.FTPGetActivity", "ftp.get"),
+        ("com.tibco.plugin.ftp.FTPPutActivity", "ftp.put"),
+        ("com.tibco.plugin.file.ListFilesActivity", "file.list"),
+        ("com.tibco.plugin.file.FileCreateActivity", "file.write"),
+        ("com.tibco.plugin.mail.MailPubActivity", "mail.send"),
+        ("com.tibco.pe.core.EngineCommandActivity", "engine.command"),
+        ("com.tibco.plugin.json.activities.RestActivity", "rest.invoke"),
+        ("com.tibco.plugin.json.rest.server.activities.RestAdapterActivity", "rest.invoke"),
+    ],
+)
+def test_canonical_evidenced_types(native, expected):
+    assert catalogue.canonical(native) == expected
+
+
+def test_deliberately_unmapped_types():
+    # Twitter and BusinessEvents plugins stay unmapped; parsers report them, never drop them.
+    assert catalogue.canonical("com.tibco.plugin.twitter.activities.TwitterPublishActivity") is None
+    assert catalogue.canonical("com.tibco.be.bw.plugin.BESendEvent") is None
+
+
+# ------------------------------------------- harvested sample types (source of truth)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_BW6_TYPE = re.compile(r'activityTypeID="([^"]+)"')
+_BW5_TYPE = re.compile(r"<pd:type>\s*(com\.tibco\.[^<\s]+)\s*</pd:type>")  # pd:type also holds line styles such as "solid"
+
+# Types under samples/public that are deliberately NOT mapped, each with a reason.
+PUBLIC_UNMAPPED_ALLOWLIST = {
+    # Twitter plugin: no business-system equivalent in the .NET target; reported, not dropped.
+    "com.tibco.plugin.twitter.activities.TwitterPublishActivity",
+    # TIBCO BusinessEvents bridge: out of scope for BW to .NET migration; reported, not dropped.
+    "com.tibco.be.bw.plugin.BESendEvent",
+    # SOAP URL-access resource fetch (WSDL retrieval): no canonical type, needs an SME mapping decision.
+    "com.tibco.plugin.soap.urlaccess.RetrieveResource",
+}
+
+
+def _harvest(root: Path) -> set:
+    found = set()
+    for path in list(root.glob("**/*.bwp")) + list(root.glob("**/*.process")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        found.update(_BW6_TYPE.findall(text))
+        found.update(_BW5_TYPE.findall(text))
+    return found
+
+
+def test_harvested_synthetic_types_all_map():
+    root = REPO_ROOT / "samples" / "synthetic-gmf"
+    found = _harvest(root)
+    assert found, "no activity types harvested from samples/synthetic-gmf"
+    unmapped = sorted(t for t in found if catalogue.canonical(t) is None)
+    assert unmapped == [], f"unmapped synthetic types: {unmapped}"
+
+
+def test_harvested_public_types_subset_of_allowlist():
+    root = REPO_ROOT / "samples" / "public"
+    found = _harvest(root)
+    assert found, "no activity types harvested from samples/public"
+    unmapped = {t for t in found if catalogue.canonical(t) is None}
+    print("unmapped public types:", sorted(unmapped))
+    assert unmapped <= PUBLIC_UNMAPPED_ALLOWLIST, sorted(unmapped - PUBLIC_UNMAPPED_ALLOWLIST)
 
 
 # ------------------------------------------------------------------- models
@@ -269,6 +370,10 @@ def test_spec_hash_stable_and_sensitive():
 
     # key order does not matter
     assert spec_hash.spec_hash({"activities": [{"a": 2, "z": 1, "id": "a1"}], "id": "p1"}, rules, decisions) == h1
+    # rule and decision list order does not matter
+    assert spec_hash.spec_hash(ir, list(reversed(rules)), decisions) == h1
+    two = decisions + [{"finding": "f2", "decision": "keep"}]
+    assert spec_hash.spec_hash(ir, rules, two) == spec_hash.spec_hash(ir, rules, list(reversed(two)))
 
     changed = copy.deepcopy(rules)
     changed[0]["text"] = "Reject negative or zero amounts"

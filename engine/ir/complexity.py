@@ -5,6 +5,9 @@ so ``sum(factors.values())`` equals the score before clamping. Bands: low up
 to 3, medium 4 to 6, high 7 and above (the continuous score is banded at the
 half-point, so 3.5 and above is medium and 6.5 and above is high).
 
+A branch is any transition that is not a plain success edge, so conditional,
+otherwise and error transitions all count.
+
 Weights are calibrated so that a process with 25 activities, 8 branches and an
 XSLT transform scores exactly 7.0 on those three factors alone.
 """
