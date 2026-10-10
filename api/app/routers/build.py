@@ -14,7 +14,7 @@ from api.app.deps import RunnerDep, SessionDep, SettingsDep
 from api.app.models import Build, BuildFile, Process, TestResult
 from api.app.services import build as svc
 from api.app.services import verify as verify_svc
-from api.app.services.context import active_job
+from api.app.services.context import active_job, engine_app
 
 router = APIRouter(tags=["build"])
 
@@ -153,7 +153,9 @@ async def run_service(build_id: str, request: Request, session: SessionDep,
         return verify_svc.run_status(current)
     proc = await session.get(Process, build.process_id)
     try:
-        info = await verify_svc.start_service(settings, build, proc.project_id)
+        app = await engine_app(session, proc)
+        info = await verify_svc.start_service(settings, build, proc.project_id, app,
+                                              request.app.state.scenario_lock)
     except (RuntimeError, OSError, verify_svc.ScenarioDBUnavailable) as exc:
         raise HTTPException(status_code=409, detail=f"the service did not start: {exc}") from exc
     services[build_id] = info

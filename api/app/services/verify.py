@@ -398,9 +398,10 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
     return text[-limit:]
 
 
-async def start_service(settings: Settings, build: Build, project_id: str,
-                        timeout_s: float = 240.0) -> RunInfo:
-    """``dotnet run`` of the build's Api project on a free port (raises ``RuntimeError`` with the log)."""
+async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
+                        lock: asyncio.Lock, timeout_s: float = 240.0) -> RunInfo:
+    """``dotnet run`` of the build's Api project on a free port against the seeded scenario
+    database (raises ``RuntimeError`` with the log tail)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise RuntimeError("the build has no solution on disk")
     dotnet = find_dotnet()
@@ -411,8 +412,16 @@ async def start_service(settings: Settings, build: Build, project_id: str,
     if app_name is None:
         raise RuntimeError("no .sln in the build folder")
     dsn = scenario_dsn(settings, project_id)
-    if not settings.scenario_database_url:
-        await asyncio.to_thread(ensure_database, dsn, psycopg_url(settings.database_url))
+
+    def seed() -> None:
+        db = open_db(settings, project_id)
+        try:
+            reset_db(db, app)
+        finally:
+            db.close()
+
+    async with lock:
+        await asyncio.to_thread(seed)
     env = service_env(dsn, connection_names(root, app_name))
     port = free_port()
     runner = DotnetRunner(root, dotnet=dotnet)

@@ -26,6 +26,7 @@ from api.app.models import (
     ScenarioRun,
     TestResult,
 )
+from api.app.services.evidence import latest_verify_runs
 from api.app.services.knowledge import Knowledge
 
 EXPECTATIONS: list[tuple[str, str]] = [
@@ -165,8 +166,9 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         rows.append(_row("functional_tests", "missing", [], "no tests generated yet"))
 
     # Swagger parity
-    runs = (await session.execute(select(ScenarioRun).where(ScenarioRun.build_id.in_([b.id for b in builds]))
-                                  )).scalars().all() if builds else []
+    last_run = await session.scalar(select(ScenarioRun).where(ScenarioRun.build_id.in_([b.id for b in builds]))
+                                    .order_by(ScenarioRun.created_at.desc()).limit(1)) if builds else None
+    runs = await latest_verify_runs(session, last_run.build_id) if last_run is not None else []
     if runs:
         unexplained = sum(int((r.report or {}).get("unexplained") or 0) for r in runs)
         errors = sum(1 for r in runs if r.status == "error")
