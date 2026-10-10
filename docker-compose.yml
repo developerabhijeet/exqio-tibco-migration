@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-exiqo} -d exiqo"]
       interval: 5s
@@ -22,7 +23,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-exiqo}:${POSTGRES_PASSWORD:-exiqo}@postgres:5432/exiqo
+      DATABASE_URL: postgresql://${POSTGRES_USER:-exiqo}:${POSTGRES_PASSWORD:-exiqo}@postgres:5432/langfuse
       NEXTAUTH_URL: http://localhost:3001
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me}
       SALT: ${LANGFUSE_SALT:-change-me}

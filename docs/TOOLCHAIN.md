@@ -33,3 +33,15 @@ Local binaries live in `.tools/` (git-ignored). `scripts/toolchain.py` (`make to
 - Export `DOTNET_CLI_TELEMETRY_OPTOUT=1` and `DOTNET_NOLOGO=1`; prepend `.tools/bin` to `PATH` to use the local tools.
 - Side effect: `apt-get update` was run and `liblttng-ust*` runtime libs were installed system-wide
   (dependency of the .NET runtime); nothing else was installed outside the repo.
+
+## Database for tests
+
+This container runs a native Postgres 16 with pgvector 0.6.0 (installed from Ubuntu packages) at
+`localhost:5432`, user `exiqo` / password `exiqo`, with databases `exiqo` and `exiqo_test`. Tests read
+`TEST_DATABASE_URL` (default `postgresql://exiqo:exiqo@localhost:5432/exiqo_test`). Docker Compose is
+for developer machines; there is no Docker daemon here.
+
+## NuGet
+
+`api.nuget.org` is refused here and on the device shell, so generated .NET code can only be
+restore-verified on a developer machine or with an offline package cache.
