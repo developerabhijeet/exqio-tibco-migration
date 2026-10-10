@@ -11,11 +11,18 @@ import { errorText, Panel } from "@/components/tabs/build/Panel";
 
 export type ServiceState = "idle" | "starting" | "running" | "stopped";
 
-/** Last meaningful line of a service log: the exception or the last error line. */
+/**
+ * Last meaningful line of a service log: the last line that starts with "restore failed", "error"
+ * or "exception" (or names an exception type), else the last line mentioning a failure, else the
+ * last line.
+ */
 function reasonFromLog(log: string | undefined): string | null {
   if (!log) return null;
   const lines = log.split("\n").map((l) => l.trim()).filter(Boolean);
-  const hit = [...lines].reverse().find((l) => /error|exception|fail|unable/i.test(l));
+  const back = [...lines].reverse();
+  const hit =
+    back.find((l) => /^(restore failed|error|exception|unhandled exception)\b/i.test(l) || /^[\w.]+Exception\b/.test(l)) ??
+    back.find((l) => /fail|unable/i.test(l));
   return hit ?? lines[lines.length - 1] ?? null;
 }
 
@@ -151,6 +158,21 @@ export function SwaggerFrame({ run, state, reason }: { run: RunState | null; sta
       </div>
     );
   }
+  if (state === "running") {
+    return (
+      <div
+        data-testid="swagger-placeholder"
+        data-reason="no-swagger-url"
+        className="flex min-h-[160px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-warm/60 px-6 py-8 text-center"
+      >
+        <p className="font-medium text-plum">Service running, Swagger URL not reported</p>
+        <p className="mt-1 max-w-[640px] text-[14px] text-slate">
+          The API reports the service as running but gave no Swagger address.
+          {run?.url ? ` Try ${run.url}/swagger in a new tab.` : ""}
+        </p>
+      </div>
+    );
+  }
   return (
     <div
       data-testid="swagger-placeholder"
@@ -217,7 +239,9 @@ export function DevTokenHelper({ run, running }: { run: RunState | null; running
       </ol>
       {token ? (
         <div className="mt-2 flex items-start gap-2">
-          <code className="block max-h-20 flex-1 overflow-auto break-all rounded-btn bg-page p-2 font-mono text-[11.5px]">{token}</code>
+          <code data-testid="dev-token-value" className="block max-h-20 flex-1 overflow-auto break-all rounded-btn bg-page p-2 font-mono text-[11.5px]">
+            {token}
+          </code>
           <button type="button" className="btn-ghost" aria-label="Copy token" onClick={() => navigator.clipboard?.writeText(token)}>
             <Copy size={15} />
           </button>

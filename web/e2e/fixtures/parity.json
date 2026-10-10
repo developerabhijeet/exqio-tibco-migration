@@ -1,0 +1,61 @@
+{
+  "build_id": "fixture",
+  "job_id": "fixture-job",
+  "created_at": "2026-10-10T15:10:00Z",
+  "source": "model",
+  "label": "expected output derived from the TIBCO model",
+  "parity": 0.889,
+  "unexplained": 1,
+  "matched": 8,
+  "compared": 9,
+  "intended": 1,
+  "errors": 0,
+  "unconfirmed_intended": 1,
+  "unconfirmed_note": "not confirmed: no TIBCO sandbox run; derived from the TIBCO model",
+  "counterfactual": false,
+  "report_hash": "fixture-hash",
+  "noise_rules": [{ "path_glob": "*At", "reason": "timestamps differ run to run" }],
+  "reports": [
+    {
+      "scenario_id": "FundingStatusLookup:happy",
+      "scenario_key": "FundingStatusLookup:happy",
+      "scenario_name": "happy path",
+      "run_id": "fixture-r1",
+      "status": "differs",
+      "parity": 0.875,
+      "unexplained": 1,
+      "unconfirmed_intended": 1,
+      "fields": [
+        { "path": "output.status", "expected": 200, "actual": 200, "status": "match", "finding_id": null },
+        { "path": "output.body.dealId", "expected": "DL-50001", "actual": "DL-50001", "status": "match", "finding_id": null },
+        { "path": "output.body.amount", "expected": "31500.00", "actual": "31500.00", "status": "match", "finding_id": null },
+        { "path": "output.body.dealerName", "expected": "Lakeside Motors", "actual": "Lakeside Motors", "status": "match", "finding_id": null },
+        { "path": "output.body.currency", "expected": "USD", "actual": "USD", "status": "match", "finding_id": null },
+        { "path": "output.body.status", "expected": "FUNDED", "actual": "PENDING", "status": "defect", "finding_id": null },
+        {
+          "path": "output.body.dealerId",
+          "expected": "D10021 ",
+          "actual": "D10021",
+          "status": "intended",
+          "finding_id": "S2-trim-dealer",
+          "confirmed": false
+        },
+        { "path": "output.body.fundedAt", "expected": "2026-09-02T10:00:00Z", "actual": "2026-09-02T10:00:01Z", "status": "noise", "finding_id": null }
+      ],
+      "side_effects": [
+        { "path": "message_published[funding.status][0].dealId", "expected": "DL-50001", "actual": "DL-50001", "status": "match", "finding_id": null }
+      ]
+    },
+    {
+      "scenario_id": "FundingStatusLookup:branch:QueryFundingStatusToReplyNotFound",
+      "scenario_key": "FundingStatusLookup:branch:QueryFundingStatusToReplyNotFound",
+      "scenario_name": "QueryFundingStatus to ReplyNotFound",
+      "run_id": "fixture-r2",
+      "status": "match",
+      "parity": 1.0,
+      "unexplained": 0,
+      "fields": [{ "path": "output.status", "expected": 404, "actual": 404, "status": "match", "finding_id": null }],
+      "side_effects": []
+    }
+  ]
+}

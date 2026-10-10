@@ -3,14 +3,15 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useLatestBuildId } from "@/lib/buildQueries";
+import { useBuild, useLatestBuildId } from "@/lib/buildQueries";
 import { useJob } from "@/lib/jobs";
 import { useGates, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
 import { Empty } from "@/components/ui/Empty";
 import { GateButton } from "@/components/gates/GateButton";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
-import { shortHash, useScrollToHash } from "@/components/tabs/build/Panel";
+import { FailedBuildStrip } from "@/components/tabs/build/BuildStatusStrip";
+import { OutcomePill, shortHash, useScrollToHash } from "@/components/tabs/build/Panel";
 import { ParityTable } from "./ParityTable";
 import { ScenarioRunner } from "./ScenarioRunner";
 import { DevTokenHelper, ServiceControl, SwaggerFrame, useService } from "./SwaggerFrame";
@@ -23,6 +24,7 @@ export function VerifyTab() {
   const processes = useProcesses(projectId);
   const gates = useGates(processId);
   const { buildId, loading } = useLatestBuildId(processId);
+  const build = useBuild(buildId);
   const svc = useService(buildId);
   const { stream, watch } = useJob("verify", processId);
   const proc = processes.data?.find((p) => p.id === processId) ?? null;
@@ -61,18 +63,34 @@ export function VerifyTab() {
           {!buildId && !loading ? (
             <Empty title="No build yet">Build {proc?.name ?? "this process"} first; Verify runs the service of the latest build.</Empty>
           ) : null}
-          {buildId ? (
-            <p className="text-[13px] text-slate">
-              Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}.
+          {build.data?.status === "failed" ? (
+            <FailedBuildStrip
+              build={build.data}
+              processName={proc?.name}
+              consequence="Verify cannot start the generated service until a build of this process passes."
+            />
+          ) : buildId ? (
+            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+              Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
+              {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>
           ) : null}
-          <GateButton
-            processId={processId}
-            gate={g5}
-            name="G5"
-            started={!!buildId}
-            hint="QA approves parity when no difference is unexplained and no scenario errored."
-          />
+          <div>
+            <GateButton
+              processId={processId}
+              gate={g5}
+              name="G5"
+              started={!!buildId}
+              hint="QA approves parity when no difference is unexplained and no scenario errored."
+            />
+            {g5?.notes?.length ? (
+              <ul data-testid="g5-notes" className="mt-1.5 space-y-0.5 text-[13px] text-decision">
+                {g5.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           {buildId ? (
             <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
               <ServiceControl svc={svc} />

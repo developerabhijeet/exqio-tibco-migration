@@ -5,6 +5,20 @@ import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import type { JobStream } from "@/lib/jobs";
 
+/** Lets a tab state the result of the work a finished job did (a build can fail inside a job that ended `done`). */
+export interface JobOutcomeOverride {
+  /** Replaces the job's status pill. */
+  pill?: { tone: "gate" | "error" | "decision" | "det"; text: string };
+  /** The tone of one stage chip, or null to keep the job's own. */
+  stage?: (stage: string) => "passed" | "failed" | "skipped" | null;
+}
+
+const STAGE_TONE: Record<"passed" | "failed" | "skipped", string> = {
+  passed: "bg-gate-bg text-gate",
+  failed: "bg-error-bg text-error",
+  skipped: "bg-warm text-slate",
+};
+
 /** A job's streamed log: stage chips, then one line per event tagged `code` or `ai`. */
 export function JobLog({
   title,
@@ -12,12 +26,15 @@ export function JobLog({
   stages,
   testId,
   idle,
+  outcome,
 }: {
   title: string;
   stream: JobStream | null;
   stages: string[];
   testId: string;
   idle: React.ReactNode;
+  /** Only applied once the job has finished. */
+  outcome?: JobOutcomeOverride | null;
 }) {
   const logRef = useRef<HTMLOListElement>(null);
   const n = stream?.events.length ?? 0;
@@ -27,12 +44,18 @@ export function JobLog({
 
   const reached = stages.indexOf(stream?.stage ?? "");
   const lines = (stream?.events ?? []).filter((e) => e.event === "log" || e.event === "error");
+  const over = stream && stream.status !== "running" ? (outcome ?? null) : null;
   return (
     <section className="card p-4" data-testid={testId} aria-live="polite">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-[16px] font-semibold text-plum">{title}</h3>
         {stream ? (
-          stream.status === "running" ? (
+          over?.pill ? (
+            <Pill tone={over.pill.tone} testId={`${testId}-outcome`}>
+              {over.pill.tone === "error" ? <XCircle size={12} aria-hidden /> : <CheckCircle2 size={12} aria-hidden />}{" "}
+              {over.pill.text}
+            </Pill>
+          ) : stream.status === "running" ? (
             <Pill tone="purple">
               <Loader2 size={12} className="animate-spin" aria-hidden /> running
             </Pill>
@@ -52,11 +75,20 @@ export function JobLog({
           {stages.map((s, i) => {
             const done = stream.status === "done" || i < reached;
             const current = stream.status === "running" && i === reached;
+            const forced = over?.stage?.(s) ?? null;
             return (
               <li
                 key={s}
+                data-stage={s}
+                data-tone={forced ?? (done ? "passed" : current ? "running" : "pending")}
                 className={`rounded-full px-2 py-0.5 ${
-                  done ? "bg-gate-bg text-gate" : current ? "bg-purple-lt text-purple-dk" : "bg-warm text-slate"
+                  forced
+                    ? STAGE_TONE[forced]
+                    : done
+                      ? "bg-gate-bg text-gate"
+                      : current
+                        ? "bg-purple-lt text-purple-dk"
+                        : "bg-warm text-slate"
                 }`}
               >
                 {s}

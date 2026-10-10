@@ -3,14 +3,15 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useLatestBuildId } from "@/lib/buildQueries";
+import { useBuild, useLatestBuildId } from "@/lib/buildQueries";
 import { useJob } from "@/lib/jobs";
 import { useGates, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
 import { Empty } from "@/components/ui/Empty";
 import { GateButton } from "@/components/gates/GateButton";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
-import { shortHash } from "@/components/tabs/build/Panel";
+import { FailedBuildStrip } from "@/components/tabs/build/BuildStatusStrip";
+import { OutcomePill, shortHash } from "@/components/tabs/build/Panel";
 import { AzureConnectForm } from "./AzureConnectForm";
 import { PlanView } from "./PlanView";
 
@@ -20,6 +21,7 @@ export function DeployTab() {
   const processes = useProcesses(projectId);
   const gates = useGates(processId);
   const { buildId, loading } = useLatestBuildId(processId);
+  const build = useBuild(buildId);
   const { stream, watch } = useJob("plan", processId);
   const proc = processes.data?.find((p) => p.id === processId) ?? null;
   const g6 = (gates.data ?? []).find((g) => g.gate === "G6");
@@ -55,9 +57,16 @@ export function DeployTab() {
         <Empty title="No process open">Pick a process above, or open one from Discover.</Empty>
       ) : (
         <>
-          {buildId ? (
-            <p className="text-[13px] text-slate">
-              Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}.
+          {build.data?.status === "failed" ? (
+            <FailedBuildStrip
+              build={build.data}
+              processName={proc?.name}
+              consequence="Deploy cannot plan an image of the service until a build of this process passes."
+            />
+          ) : buildId ? (
+            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+              Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
+              {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>
           ) : !loading ? (
             <Empty title="No build yet">Build {proc?.name ?? "this process"} first; the plan uses the infrastructure of the latest build.</Empty>

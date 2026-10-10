@@ -23,6 +23,7 @@ export const JOB_STAGES = [
   "design check",
   "generate",
   "tests",
+  "test engineer",
   "builder",
   "review",
   "restore",
@@ -60,11 +61,14 @@ export interface BuildStepRow {
   label: string;
   tag: "code" | "ai";
   status: StepRunStatus;
+  /** Replaces the status pill's text (dotnet format after a failed restore is a reduced check). */
+  statusText?: string;
   summary: string;
   log: string;
 }
 
-const stepOf = (stage: string): BuildStepName | null =>
+/** The step a job stage marker belongs to ("infra validate" is the validate step), or null. */
+export const stepOfStage = (stage: string): BuildStepName | null =>
   stage === "infra validate" ? "validate" : (BUILD_STEPS as readonly string[]).includes(stage) ? (stage as BuildStepName) : null;
 
 /** Log lines grouped under the stage marker that precedes them. */
@@ -97,10 +101,10 @@ export function buildStepRows(
 ): BuildStepRow[] {
   const groups = linesByStage(events);
   const stageEvents = events.filter((e) => e.event === "stage").map((e) => e.text);
-  const current = jobStatus === "running" ? stepOf(stageEvents[stageEvents.length - 1] ?? "") : null;
-  const reached = new Set(stageEvents.map(stepOf).filter(Boolean) as BuildStepName[]);
+  const current = jobStatus === "running" ? stepOfStage(stageEvents[stageEvents.length - 1] ?? "") : null;
+  const reached = new Set(stageEvents.map(stepOfStage).filter(Boolean) as BuildStepName[]);
   const finished = !!build && (build.status === "passed" || build.status === "failed") && !!build.finished_at;
-  const failedAt = jobStatus === "failed" ? stepOf(stageEvents[stageEvents.length - 1] ?? "") : null;
+  const failedAt = jobStatus === "failed" ? stepOfStage(stageEvents[stageEvents.length - 1] ?? "") : null;
 
   return BUILD_STEPS.map((name): BuildStepRow => {
     const stageName = name === "validate" ? "infra validate" : name;
@@ -148,6 +152,16 @@ export function buildStepRows(
         status = "passed";
       }
     }
-    return { name, label: LABELS[name], tag: AI_STEPS.has(name) ? "ai" : "code", status, summary, log };
+    let statusText: string | undefined;
+    if (finished && build && name === "format" && status === "passed") {
+      const restore = build.steps.find((s) => s.name === "restore");
+      if (restore && !restore.ok) {
+        statusText = "passed (reduced check)";
+        const detail = build.metrics?.details?.standards_adherence ?? "";
+        const reduced = /\(reduced check:[^)]*\)/.exec(detail)?.[0];
+        if (reduced) summary = reduced.slice(1, -1);
+      }
+    }
+    return { name, label: LABELS[name], tag: AI_STEPS.has(name) ? "ai" : "code", status, statusText, summary, log };
   });
 }

@@ -221,6 +221,8 @@ export interface Gate {
   design_hash?: string | null;
   build_hash?: string | null;
   evidence_hash?: string | null;
+  /** Notes the server attaches to a gate (a newer API; G5 names unconfirmed intended differences). */
+  notes?: string[];
 }
 
 export interface Citation {

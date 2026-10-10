@@ -177,6 +177,8 @@ function Routing({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =
       onSaved(await api.putSettings(body));
     } catch (e) {
       setError(errorText(e));
+      // A refused toggle goes back to what the server holds.
+      if (body.langfuse_enabled !== undefined) setLangfuse(!body.langfuse_enabled);
     } finally {
       setBusy(false);
     }

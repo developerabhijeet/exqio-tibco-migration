@@ -50,11 +50,23 @@ export interface InfraValidation {
   notes?: string[];
 }
 
+/** A soft assertion the Test Engineer could not make exact (a newer API reports these). */
+export interface TestWarning {
+  path: string;
+  method: string;
+  reason: string;
+}
+
 export interface BuilderResult {
   filled: string[];
   rejections: { path: string; attempt: number; reason: string }[];
   provider?: string | null;
   ai_available?: boolean;
+  test_engineer?: {
+    filled?: string[];
+    rejections?: { path: string; attempt?: number; reason: string }[];
+    warnings?: TestWarning[];
+  } | null;
 }
 
 export interface RepairAttempt {
@@ -202,6 +214,8 @@ export interface FieldDiff {
   actual: unknown;
   status: "match" | "defect" | "intended" | "noise" | string;
   finding_id: string | null;
+  /** false on an intended difference no TIBCO sandbox run has confirmed (newer API). */
+  confirmed?: boolean;
 }
 
 export interface ScenarioReport {
@@ -228,6 +242,9 @@ export interface ParityView {
   compared: number;
   intended: number;
   errors: number;
+  /** Intended differences derived from the TIBCO model and not confirmed by a sandbox run. */
+  unconfirmed_intended?: number;
+  unconfirmed_note?: string;
   noise_rules: { path_glob: string; reason: string }[];
   reports: ScenarioReport[];
 }

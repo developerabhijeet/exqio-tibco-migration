@@ -135,6 +135,8 @@ export function AzureConnectForm({
         className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
         onSubmit={(e) => {
           e.preventDefault();
+          // Enter submits too: the same guard as the button.
+          if (busy || !form.tenant || !form.subscription) return;
           connect();
         }}
       >

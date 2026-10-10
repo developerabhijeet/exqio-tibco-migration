@@ -43,17 +43,25 @@ export function CodeViewer({
   entry,
   empty = "Select a generated file, or a step on the TIBCO canvas, to see its code here.",
   testId = "code-viewer",
+  showRef = true,
+  height = 520,
 }: {
   buildId: string;
   entry: BuildFileEntry | null;
   empty?: string;
   testId?: string;
+  /** false when the caller shows the TIBCO steps itself (the source and target explorer). */
+  showRef?: boolean;
+  height?: number;
 }) {
   const { jumpToStep, processId } = useAppState();
   const file = useBuildFile(buildId, entry?.path ?? null);
   if (!entry) {
     return (
-      <div className="flex h-full min-h-[520px] items-center justify-center rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[14px] text-slate">
+      <div
+        style={{ minHeight: height }}
+        className="flex h-full items-center justify-center rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[14px] text-slate"
+      >
         {empty}
       </div>
     );
@@ -61,7 +69,7 @@ export function CodeViewer({
   const ref = entry.tibco_ref;
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid={testId}>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-h-[28px] flex-wrap items-center gap-2">
         <FileCode2 size={15} className="text-slate" aria-hidden />
         <span data-testid="code-path" className="min-w-0 truncate font-mono text-[12.5px] font-semibold text-plum">
           {entry.path}
@@ -70,47 +78,56 @@ export function CodeViewer({
         {file.data ? <span className="text-[12px] text-slate">{file.data.language}</span> : null}
         <span className="ml-auto text-[12px] text-slate">{formatBytes(entry.size)}</span>
       </div>
-      <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-[12.5px]">
-        {ref ? (
-          <>
-            <p>
-              <span className="label mr-1.5">TIBCO source</span>
-              <span className="font-mono">{ref.source_path}</span>
+      {showRef ? (
+        <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-[12.5px]">
+          {ref ? (
+            <>
+              <p>
+                <span className="label mr-1.5">TIBCO source</span>
+                <span className="font-mono">{ref.source_path}</span>
+              </p>
+              <ul className="mt-1 flex min-w-0 flex-wrap gap-1.5">
+                {ref.rows.map((r) => (
+                  <li key={`${r.activity_id}:${r.method}`}>
+                    <button
+                      type="button"
+                      title={`Line ${ref.source_lines[r.activity_id] ?? "?"} of the process; open it on the canvas`}
+                      onClick={() => jumpToStep(r.activity_id, processId)}
+                      className="inline-flex max-w-full flex-wrap items-center gap-x-1 rounded-full border border-line bg-white px-2 py-0.5 text-left hover:border-purple hover:text-purple"
+                    >
+                      <Crosshair size={11} aria-hidden />
+                      <span className="font-medium">{r.activity_name}</span>
+                      <span className="text-slate">
+                        {r.class_name}.{r.method}
+                      </span>
+                      {ref.source_lines[r.activity_id] ? (
+                        <span className="text-slate">line {ref.source_lines[r.activity_id]}</span>
+                      ) : null}
+                      {r.rule_ids.length ? <span className="text-gate">{r.rule_ids.join(", ")}</span> : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-slate">
+              No TIBCO step: {entry.origin === "infra" ? "infrastructure for the whole solution" : "shared by every workflow in the solution"}.
             </p>
-            <ul className="mt-1 flex min-w-0 flex-wrap gap-1.5">
-              {ref.rows.map((r) => (
-                <li key={`${r.activity_id}:${r.method}`}>
-                  <button
-                    type="button"
-                    title={`Line ${ref.source_lines[r.activity_id] ?? "?"} of the process; open it on the canvas`}
-                    onClick={() => jumpToStep(r.activity_id, processId)}
-                    className="inline-flex max-w-full flex-wrap items-center gap-x-1 rounded-full border border-line bg-white px-2 py-0.5 text-left hover:border-purple hover:text-purple"
-                  >
-                    <Crosshair size={11} aria-hidden />
-                    <span className="font-medium">{r.activity_name}</span>
-                    <span className="text-slate">
-                      {r.class_name}.{r.method}
-                    </span>
-                    {ref.source_lines[r.activity_id] ? (
-                      <span className="text-slate">line {ref.source_lines[r.activity_id]}</span>
-                    ) : null}
-                    {r.rule_ids.length ? <span className="text-gate">{r.rule_ids.join(", ")}</span> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <p className="text-slate">
-            No TIBCO step: {entry.origin === "infra" ? "infrastructure for the whole solution" : "shared by every workflow in the solution"}.
-          </p>
-        )}
-      </div>
+          )}
+        </div>
+      ) : null}
       {file.error ? <ErrorNote error={file.error} /> : null}
       {file.data ? (
-        <CodeView value={file.data.content} language={monacoLanguage(file.data.language, entry.path)} height={520} />
+        <CodeView
+          value={file.data.content}
+          language={monacoLanguage(file.data.language, entry.path)}
+          height={height}
+          testId={`${testId}-editor`}
+        />
       ) : file.isLoading ? (
-        <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-[13px] text-slate">Loading file</div>
+        <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-[13px] text-slate">
+          Loading file
+        </div>
       ) : null}
     </div>
   );

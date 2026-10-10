@@ -14,7 +14,8 @@ import { Pill } from "@/components/ui/Pill";
 import { GateButton, gateDisplayState } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
-import { BuildJobLog, BuildSteps } from "./BuildLog";
+import { BuildJobLog, BuildSteps, failedBuildOutcome } from "./BuildLog";
+import { Remedy, restoreFailure } from "./BuildStatusStrip";
 import { InfraPanel } from "./InfraPanel";
 import { MetricsRadar } from "./MetricsRadar";
 import { errorText, OutcomePill, shortHash, useScrollToHash } from "./Panel";
@@ -76,7 +77,7 @@ export function BuildTab() {
     [stream, jobId, build.data, files.data],
   );
   const restoreFailed = finished && rows.find((r) => r.name === "restore")?.status === "failed";
-  const restoreReason = build.data?.steps.find((s) => s.name === "restore")?.log.split("\n").find((l) => l.trim());
+  const restore = restoreFailure(build.data);
 
   const start = async () => {
     if (!processId) return;
@@ -194,12 +195,25 @@ export function BuildTab() {
                   <span className="font-semibold">
                     {restoreFailed ? "G4 blocked: restore failed" : `G4 blocked: ${g4?.reason ?? "the build did not pass"}`}
                   </span>
-                  {restoreFailed && restoreReason ? <span className="mt-1 block text-[13px]">{restoreReason}</span> : null}
+                  {restoreFailed && restore ? (
+                    <span className="mt-1 block text-[13px]">
+                      <Remedy text={restore.reason} />
+                    </span>
+                  ) : null}
+                  {restoreFailed && restore?.remedy ? (
+                    <span className="mt-1 block text-[13px] text-ink" data-testid="g4-remedy">
+                      <span className="label mr-1.5">Remedy</span>
+                      <Remedy text={restore.remedy} />
+                    </span>
+                  ) : null}
                 </p>
               ) : null}
               {buildId ? <BuildSteps rows={rows} /> : null}
             </div>
-            <BuildJobLog stream={stream && (!jobId || stream.jobId === jobId) ? stream : null} />
+            <BuildJobLog
+              stream={stream && (!jobId || stream.jobId === jobId) ? stream : null}
+              outcome={finished ? failedBuildOutcome(build.data?.status, rows) : null}
+            />
           </div>
 
           {build.data && buildId ? (
@@ -210,7 +224,11 @@ export function BuildTab() {
                   <MetricsRadar metrics={build.data.metrics} />
                   <ReviewPanel buildId={buildId} builder={build.data.builder} />
                 </div>
-                <TestResults buildId={buildId} compiled={build.data.metrics?.compile_ok ?? null} />
+                <TestResults
+                  buildId={buildId}
+                  compiled={build.data.metrics?.compile_ok ?? null}
+                  warnings={build.data.builder?.test_engineer?.warnings ?? []}
+                />
                 <InfraPanel buildId={buildId} />
               </>
             ) : (

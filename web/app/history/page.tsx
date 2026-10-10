@@ -32,13 +32,32 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-function entryText(e: TimelineEntry): { title: string; detail: string } {
+/** A raw error (often a whole HTTP body) on one line, with a toggle for the full text. */
+function ErrorText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return (
+    <p className="flex min-w-0 items-start gap-2 text-error" data-testid="timeline-error">
+      <span className={open ? "whitespace-pre-wrap break-words" : "min-w-0 truncate"} title={open ? undefined : oneLine}>
+        {open ? text : oneLine}
+      </span>
+      {oneLine.length > 90 || text.includes("\n") ? (
+        <button type="button" className="shrink-0 text-[12px] font-medium text-purple hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "hide" : "show"}
+        </button>
+      ) : null}
+    </p>
+  );
+}
+
+function entryText(e: TimelineEntry): { title: string; detail: string; error: string | null } {
   if (e.kind === "job")
     return {
       title: `${e.job_kind} job ${e.status}`,
-      detail: [e.process_name, e.stage ? `stage ${e.stage}` : null, e.duration_ms != null ? `${Math.round(e.duration_ms)} ms` : null, e.error]
+      detail: [e.process_name, e.stage ? `stage ${e.stage}` : null, e.duration_ms != null ? `${Math.round(e.duration_ms)} ms` : null]
         .filter(Boolean)
         .join(" · "),
+      error: e.error || null,
     };
   if (e.kind === "model_call")
     return {
@@ -51,12 +70,13 @@ function entryText(e: TimelineEntry): { title: string; detail: string } {
         usd(e.cost_usd),
         `${Math.round(e.latency_ms)} ms`,
         e.fallback_from ? `fallback from ${e.fallback_from}` : null,
-        e.ok ? null : `failed: ${e.error ?? ""}`,
+        e.ok ? null : "failed",
       ]
         .filter(Boolean)
         .join(" · "),
+      error: e.ok ? null : e.error || null,
     };
-  return { title: `${e.actor}: ${e.action}${e.gate ? ` ${e.gate}` : ""}`, detail: e.process_name ?? "" };
+  return { title: `${e.actor}: ${e.action}${e.gate ? ` ${e.gate}` : ""}`, detail: e.process_name ?? "", error: null };
 }
 
 const KIND_ICON = { job: Cog, model_call: Bot, decision: Gavel };
@@ -261,6 +281,7 @@ export default function Page() {
                           ) : null}
                         </p>
                         {t.detail ? <p className="break-words text-slate">{t.detail}</p> : null}
+                        {t.error ? <ErrorText text={t.error} /> : null}
                       </div>
                       <time className="shrink-0 text-[12px] text-slate">{new Date(e.ts).toLocaleString()}</time>
                     </li>

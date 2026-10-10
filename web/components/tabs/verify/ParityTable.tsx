@@ -38,6 +38,11 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
             <td className="px-3 py-1.5">
               <span className="flex flex-wrap items-center gap-1.5">
                 <Pill tone={s.tone}>{s.text}</Pill>
+                {f.status === "intended" && f.confirmed === false ? (
+                  <Pill tone="det" testId="unconfirmed-pill" title="No TIBCO sandbox run confirmed this difference; it is derived from the TIBCO model">
+                    not confirmed
+                  </Pill>
+                ) : null}
                 {f.status === "intended" && f.finding_id ? (
                   <button
                     type="button"
@@ -102,6 +107,14 @@ function ScenarioCard({ r }: { r: ScenarioReport }) {
   );
 }
 
+const STATIC_LABEL = "Expected output derived from the TIBCO model";
+
+/** The API's label with a capital first letter, or the static text. */
+function sourceLabel(label: string | null | undefined): string {
+  const t = (label ?? "").trim();
+  return t ? t[0].toUpperCase() + t.slice(1) : STATIC_LABEL;
+}
+
 /** Field-by-field parity of the latest verify run, against the expected output of the TIBCO model. */
 export function ParityTable({ buildId }: { buildId: string | null }) {
   const parity = useParity(buildId);
@@ -126,8 +139,8 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
         ) : null
       }
     >
-      <p className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-ai-bg px-3 py-1 text-[12.5px] font-medium text-ai">
-        Expected output derived from the TIBCO model
+      <p data-testid="parity-label" className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-ai-bg px-3 py-1 text-[12.5px] font-medium text-ai">
+        {sourceLabel(p?.label)}
       </p>
       {parity.error ? <ErrorNote error={parity.error} /> : null}
       {!p ? (
@@ -143,6 +156,12 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
               <CheckCircle2 size={16} aria-hidden /> Unexplained differences: 0
             </p>
           )}
+          {p.unconfirmed_intended ? (
+            <p data-testid="unconfirmed-intended" className="rounded-card border border-decision/30 bg-decision-bg px-4 py-2 text-[13.5px] text-decision">
+              <span className="font-semibold">{p.unconfirmed_intended} intended difference(s)</span>{" "}
+              {p.unconfirmed_note ?? "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"}
+            </p>
+          ) : null}
           <p className="text-[13px] text-slate">
             {p.intended} intended (findings decided Fix), {p.errors} scenario(s) errored. Run{" "}
             {p.created_at ? new Date(p.created_at).toLocaleString() : ""}.

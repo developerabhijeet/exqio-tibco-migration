@@ -45,11 +45,11 @@ const OUTCOME: Record<string, { tone: "gate" | "error" | "det" | "decision" | "p
   pending: { tone: "det", text: "pending" },
 };
 
-export function OutcomePill({ outcome, testId }: { outcome: Outcome; testId?: string }) {
+export function OutcomePill({ outcome, testId, text }: { outcome: Outcome; testId?: string; text?: string }) {
   const o = OUTCOME[outcome] ?? { tone: "det" as const, text: outcome.replace(/_/g, " ") };
   return (
     <Pill tone={o.tone} testId={testId}>
-      {o.text}
+      {text ?? o.text}
     </Pill>
   );
 }

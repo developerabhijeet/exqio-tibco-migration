@@ -2,18 +2,35 @@
 
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { JobLog } from "@/components/jobs/JobLog";
+import { JobLog, type JobOutcomeOverride } from "@/components/jobs/JobLog";
 import type { JobStream } from "@/lib/jobs";
-import { JOB_STAGES, type BuildStepRow } from "@/lib/buildSteps";
+import { JOB_STAGES, stepOfStage, type BuildStepRow } from "@/lib/buildSteps";
 import { OutcomePill, TagPill } from "./Panel";
 
+/**
+ * When the job ended but the build failed, the card says so and the stage chips take the color
+ * of their step rows (restore failed red, build and test skipped grey); otherwise null.
+ */
+export function failedBuildOutcome(buildStatus: string | null | undefined, rows: BuildStepRow[]): JobOutcomeOverride | null {
+  if (buildStatus !== "failed") return null;
+  return {
+    pill: { tone: "error", text: "job finished, build failed" },
+    stage: (stage) => {
+      const name = stepOfStage(stage);
+      const row = name ? rows.find((r) => r.name === name) : undefined;
+      return row?.status === "failed" ? "failed" : row?.status === "skipped" ? "skipped" : null;
+    },
+  };
+}
+
 /** The build job's live log with stage markers. */
-export function BuildJobLog({ stream }: { stream: JobStream | null }) {
+export function BuildJobLog({ stream, outcome }: { stream: JobStream | null; outcome?: JobOutcomeOverride | null }) {
   return (
     <JobLog
       title="Build job"
       stream={stream}
       stages={JOB_STAGES}
+      outcome={outcome}
       testId="build-log"
       idle="No build yet. Generate and build writes the solution, the tests and the infrastructure, then runs dotnet."
     />
@@ -34,7 +51,7 @@ function StepRow({ row }: { row: BuildStepRow }) {
         <ChevronRight size={14} className={`shrink-0 text-slate transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
         <TagPill tag={row.tag} />
         <span className="w-[170px] shrink-0 text-[14px] font-medium text-plum">{row.label}</span>
-        <OutcomePill outcome={row.status} />
+        <OutcomePill outcome={row.status} text={row.statusText} />
         <span className={`min-w-0 flex-1 truncate text-[13px] ${failed ? "text-error" : "text-slate"}`} title={row.summary}>
           {row.summary}
         </span>
