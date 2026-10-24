@@ -25,7 +25,7 @@ from api.app.auth import router as auth_router
 from api.app.auth.oidc import Oidc
 from api.app.config import Settings
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
-from api.app.deps import require_signed_in
+from api.app.deps import require_admin_writes, require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
@@ -170,8 +170,10 @@ def _create_api(settings: Settings) -> FastAPI:
     for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build):
         app.include_router(module.router, dependencies=guarded)
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
-    for module in (verify, infra, settings_router, history, readiness):
+    for module in (verify, infra, readiness):
         app.include_router(module.router, dependencies=guarded)
+    for module in (settings_router, history):  # oidc: writing these needs admin
+        app.include_router(module.router, dependencies=[*guarded, Depends(require_admin_writes)])
     app.include_router(system.router)  # probes and brand public, /system/status admin only
     if settings.auth_mode == "oidc":
         app.include_router(auth_router.router)

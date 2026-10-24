@@ -267,6 +267,44 @@ async def test_oidc_mode_refuses_anonymous_api_calls(oidc_client):
     assert (await oidc_client.get("/health")).status_code == 200
 
 
+async def test_viewer_is_read_only(oidc_client):
+    viewer = as_roles("viewer")
+    assert (await oidc_client.get("/projects", headers=viewer)).status_code == 200
+    r = await oidc_client.post("/projects", json={"name": "v"}, headers=viewer)
+    assert r.status_code == 403 and r.json()["detail"] == "viewer is read only"
+    r = await oidc_client.post("/jobs/nope/cancel", headers=viewer)
+    assert r.status_code == 403 and r.json()["detail"] == "viewer is read only"
+    r = await oidc_client.post("/builds/nope/run/proxy/x", headers=viewer)
+    assert r.status_code == 403
+    # a viewer who also holds a write role writes; admin counts as one
+    assert (await oidc_client.post("/projects", json={"name": "a"},
+                                   headers=as_roles("viewer", "qa"))).status_code == 201
+    assert (await oidc_client.post("/projects", json={"name": "b"},
+                                   headers=as_roles("admin"))).status_code == 201
+
+
+async def test_settings_and_tokenomics_writes_need_admin(oidc_client):
+    engineer, admin = as_roles("engineer"), as_roles("admin")
+    assert (await oidc_client.get("/settings", headers=engineer)).status_code == 200
+    r = await oidc_client.put("/settings", json={"langfuse_enabled": False}, headers=engineer)
+    assert r.status_code == 403 and r.json()["detail"] == "this needs the admin role"
+    r = await oidc_client.post("/providers/eval", json={"process_ids": ["p"]}, headers=engineer)
+    assert r.status_code == 403
+    r = await oidc_client.put("/settings", json={"langfuse_enabled": False}, headers=admin)
+    assert 200 <= r.status_code < 300, r.text
+    pid = (await oidc_client.post("/projects", json={"name": "t"}, headers=engineer)).json()["id"]
+    r = await oidc_client.delete(f"/history/model-calls?project_id={pid}", headers=engineer)
+    assert r.status_code == 403
+    r = await oidc_client.delete(f"/history/model-calls?project_id={pid}", headers=admin)
+    assert r.status_code == 200, r.text
+
+
+async def test_dev_mode_writes_unchanged_for_any_persona(client):
+    r = await client.put("/settings", json={"langfuse_enabled": False}, headers={"X-User": "qa.priya"})
+    assert r.status_code == 200, r.text
+    assert (await client.post("/projects", json={"name": "d"})).status_code == 201
+
+
 async def test_auth_me_from_cookie(oidc_client):
     r = await oidc_client.get("/auth/me", headers=as_roles("qa", "engineer"))
     assert r.status_code == 200

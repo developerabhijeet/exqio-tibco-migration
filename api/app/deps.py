@@ -32,6 +32,10 @@ def get_settings(request: Request) -> Settings:
 UNAUTHENTICATED = "sign in required"
 NO_ROLE = "your account holds no ExiQO Migrate role: ask for one of the configured groups"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+#: Roles that may change anything; ``viewer`` alone reads only (oidc).
+WRITE_ROLES = frozenset({"admin", "sme", "architect", "engineer", "qa", "ops"})
+READ_ONLY = "viewer is read only"
+ADMIN_ONLY = "this needs the admin role"
 
 
 def unauthorized(detail: str = UNAUTHENTICATED) -> HTTPException:
@@ -79,20 +83,33 @@ async def current_principal(request: Request, *, bearer: bool = True) -> Princip
     return principal
 
 
-def _with_role(principal: Principal | None) -> Principal:
+def _with_role(principal: Principal | None, request: Request) -> Principal:
+    """oidc: signed in, holding a role, and for a write a role other than ``viewer``."""
     if principal is None:
         raise unauthorized()
     if not principal.roles:
         raise HTTPException(status_code=403, detail=NO_ROLE)
+    if request.method not in SAFE_METHODS and not principal.roles & WRITE_ROLES:
+        raise HTTPException(status_code=403, detail=READ_ONLY)
     return principal
 
 
 async def require_signed_in(request: Request) -> None:
-    """Router guard: in ``AUTH_MODE=oidc`` every call needs a signed-in user holding a role. In
+    """Router guard: in ``AUTH_MODE=oidc`` every call needs a signed-in user holding a role, and
+    every write (not GET/HEAD/OPTIONS) a role other than ``viewer``. In
     ``dev`` it lets everything through, as before (routes that record an actor use
     :func:`require_user`)."""
     if request.app.state.settings.auth_mode == "oidc":
-        _with_role(await current_principal(request))
+        _with_role(await current_principal(request), request)
+
+
+async def require_admin_writes(request: Request) -> None:
+    """Router guard for the platform's own configuration (settings, the tokenomics reset): in
+    ``AUTH_MODE=oidc`` a write there needs ``admin``. Reads, and ``dev``, are as before."""
+    if request.app.state.settings.auth_mode != "oidc" or request.method in SAFE_METHODS:
+        return
+    if "admin" not in _with_role(await current_principal(request), request).roles:
+        raise HTTPException(status_code=403, detail=ADMIN_ONLY)
 
 
 async def require_user(request: Request, x_user: Annotated[str | None, Header()] = None,
@@ -103,7 +120,7 @@ async def require_user(request: Request, x_user: Annotated[str | None, Header()]
     if x_agent is not None:
         raise HTTPException(status_code=403, detail="agents cannot perform this action")
     if request.app.state.settings.auth_mode == "oidc":
-        return _with_role(await current_principal(request))
+        return _with_role(await current_principal(request), request)
     user = (x_user or "").strip()
     if not user:
         raise HTTPException(status_code=401, detail="X-User header required")
@@ -117,7 +134,7 @@ async def require_actor(principal: Annotated[Principal, Depends(require_user)]) 
 
 async def require_admin(principal: Annotated[Principal, Depends(require_user)]) -> Principal:
     if "admin" not in principal.roles:
-        raise HTTPException(status_code=403, detail="this needs the admin role")
+        raise HTTPException(status_code=403, detail=ADMIN_ONLY)
     return principal
 
 
@@ -133,7 +150,7 @@ async def require_browser_user(request: Request, x_user: Annotated[str | None, H
     settings: Settings = request.app.state.settings
     if settings.auth_mode == "dev":
         return (x_user or "").strip() or "anonymous"
-    return _with_role(await current_principal(request, bearer=False)).actor
+    return _with_role(await current_principal(request, bearer=False), request).actor
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
