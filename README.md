@@ -78,7 +78,7 @@ shows each provider as configured or missing and never shows a value.
 | `AUTH_MODE`                                                                        | `dev` (default, the dev personas) or `oidc` (Entra ID sign-in) |
 | `DEPLOY_CREDENTIAL_MODE`                                                           | `local` (default, development only) or `workload_identity` for the Deploy step |
 | `API_BASE_PATH`                                                                    | URL prefix the API is served under (default empty) |
-| `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener |
+| `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener; a worker (`make worker`) refuses to start without `INTERNAL_TOKEN`, role `all` does not need it |
 | `JOB_STALE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS`                   | job heartbeat every 10 s (default), a job is stale after 90 s, at most 2 attempts |
 | `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`                                        | the Neo4j graph (user default `neo4j`) |
 | `BRAND_NAME`, `SUPPORT_CONTACT`                                                    | product name shown in the UI (default `ExiQO`) and the support contact line |

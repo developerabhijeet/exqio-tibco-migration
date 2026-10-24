@@ -5,8 +5,8 @@ import { Pill } from "@/components/ui/Pill";
 import { useService } from "@/components/tabs/verify/SwaggerFrame";
 
 /**
- * Compiles and runs the generated solution on the API host and shows what it did: the port it came
- * up on, a link to its Swagger UI, and the tail of its own log. The same service the Verify tab
+ * Compiles and runs the generated solution on a worker and shows what it did: the address the API
+ * proxies it at, a link to its Swagger UI, and the tail of its own log. The same service the Verify tab
  * drives, surfaced beside the download so the sequence is one place: take the code, run the code,
  * call the code.
  *
@@ -24,7 +24,7 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
         <TerminalSquare size={16} className="text-purple" aria-hidden />
         <span className="font-semibold text-plum">Run it here</span>
         <span className="text-[13px] text-slate">
-          Starts the generated service on this host and opens its Swagger UI, without downloading anything.
+          Starts the generated service on the platform and opens its Swagger UI, without downloading anything.
         </span>
         <span className="ml-auto flex items-center gap-2">
           <span title={blocked ?? undefined}>
@@ -60,7 +60,7 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
         </span>
         {state === "running" && run?.url ? (
           <span>
-            <span className="label mr-1.5">Listening on</span>
+            <span className="label mr-1.5">Reached at</span>
             <span className="font-mono text-ink">{run.url}</span>
           </span>
         ) : null}

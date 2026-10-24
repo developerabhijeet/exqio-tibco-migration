@@ -52,8 +52,16 @@ async def build(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
 
 @job("verify")
 async def verify(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
-    return await verify_svc.run_verify(ctx, ctx.payload["build_id"], w.settings, w.services,
+    return await verify_svc.run_verify(ctx, ctx.payload["build_id"], w.settings, w.hosting,
                                        scenario_lock(w.sessionmaker))
+
+
+@job("service_start")
+async def service_start(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Start the build's generated service on this worker (``POST /builds/{id}/run`` waits for it);
+    the build row then names this worker as ``run_host``/``run_owner``."""
+    await ctx.stage("start")
+    return verify_svc.run_status(await w.hosting.start(ctx.payload["build_id"]))
 
 
 @job("plan")

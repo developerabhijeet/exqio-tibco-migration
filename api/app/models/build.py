@@ -27,8 +27,12 @@ class Build(IdMixin, CreatedMixin, Base):
     steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)  # [{name, ok, log}]
     repair: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     reviews: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    # the running generated service (Verify): its loopback port and pid on the worker that hosts it,
+    # that worker's internal listener (host:port) and its name (the Verify job's affinity)
     run_port: Mapped[int | None]
     run_pid: Mapped[int | None]
+    run_host: Mapped[str | None] = mapped_column(Text)
+    run_owner: Mapped[str | None] = mapped_column(Text)
     infra_validation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # engine InfraValidation
     builder: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # {filled: [path], rejections: [...]}
     error: Mapped[str | None] = mapped_column(Text)

@@ -84,6 +84,7 @@ async def test_worker_sigterm_drains(app, settings, tmp_path):
     env = {**os.environ, "EXIQO_ROLE": "worker", "EXIQO_TEST_HANDLERS": "1",
            "POD_NAME": "sigterm-worker", "DATABASE_URL": settings.database_url,
            "DATA_DIR": str(tmp_path / "data"), "PROVIDER": "fake", "INTERNAL_PORT": str(port),
+           "INTERNAL_TOKEN": "roles-test-token",
            "JOB_DRAIN_SECONDS": "1", "JOB_HEARTBEAT_SECONDS": "1",
            "PYTHONPATH": str(REPO_ROOT)}
     proc = await asyncio.create_subprocess_exec(sys.executable, "-m", "api.app.worker",

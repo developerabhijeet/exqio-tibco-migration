@@ -35,7 +35,20 @@ def require_user(x_user: Annotated[str | None, Header()] = None,
     return user
 
 
+def require_browser_user(request: Request, x_user: Annotated[str | None, Header()] = None,
+                         x_agent: Annotated[str | None, Header()] = None) -> str:
+    """The principal behind a call the browser makes without the web app's fetch helper: the
+    Swagger UI frame of the generated service, a new tab on it. Such a navigation carries no
+    ``X-User``, which in ``AUTH_MODE=dev`` is an unverified claim anyway, so dev mode accepts the
+    call as ``anonymous``; ``oidc`` requires a signed-in user like :func:`require_user`."""
+    settings: Settings = request.app.state.settings
+    if settings.auth_mode == "dev" and x_agent is None:
+        return (x_user or "").strip() or "anonymous"
+    return require_user(x_user, x_agent)
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 RunnerDep = Annotated[JobRunner, Depends(get_runner)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 UserDep = Annotated[str, Depends(require_user)]
+BrowserUserDep = Annotated[str, Depends(require_browser_user)]

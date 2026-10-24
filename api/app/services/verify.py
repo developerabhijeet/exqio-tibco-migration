@@ -40,7 +40,7 @@ import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import psycopg
@@ -80,6 +80,9 @@ from engine.parity.models import Scenario as EngineScenario
 from engine.parity.scenarios import generate_scenarios, took_link
 from engine.parity.seed import SeedData, estate_root
 from engine.parity.stubs import DEFAULT_TIMEOUT_MS, StubRegistry, WireMockStubs
+
+if TYPE_CHECKING:
+    from api.app.services.hosting import Hosting
 
 MODEL_LABEL = "expected output derived from the TIBCO model"
 TEST_DATA_NOTE = ("Rows generated from the schemas, enumerations and branch predicates, with masking applied "
@@ -456,8 +459,11 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
     return text[-limit:]
 
 
+START_TIMEOUT_S = 240.0  # dotnet run until /health answers
+
+
 async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
-                        lock: ScenarioLock, timeout_s: float = 240.0) -> RunInfo:
+                        lock: ScenarioLock, timeout_s: float = START_TIMEOUT_S) -> RunInfo:
     """``dotnet run`` of the build's Api project on a free port against the seeded scenario
     database (raises ``RuntimeError`` with the log tail)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
@@ -496,8 +502,10 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
 
     try:
         stubs = StubServer()
+        # through the API's proxy the browser is same-origin with the service; only the local
+        # all-in-one process (role all) still lets the web origins call it directly
         env = service_env(dsn, connection_names(root, app_name), clients, stubs.url,
-                          settings.cors_origin_list)
+                          settings.cors_origin_list if settings.exiqo_role == "all" else [])
         held, port = reserve_port()
         runner = DotnetRunner(root, dotnet=dotnet)
         sock, service_port = held, port
@@ -830,8 +838,11 @@ def _derive_expected(
         db.close()
 
 
-async def run_verify(ctx: JobContext, build_id: str, settings: Settings, services: dict[str, RunInfo],
+async def run_verify(ctx: JobContext, build_id: str, settings: Settings, hosting: Hosting,
                      lock: ScenarioLock) -> dict[str, Any]:
+    """The verify job. It runs on the worker that hosts the build's service (the job's affinity is
+    ``builds.run_owner``), so it calls the service on loopback through ``hosting``, never through
+    the API's proxy."""
     async with ctx.sessionmaker() as s:
         build = await s.get(Build, build_id)
         if build is None:
@@ -848,7 +859,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                   + f", expected results {MODEL_LABEL}, derived again against this run's seed data")
     for n in notes:
         await ctx.log(n)
-    info = services.get(build_id)
+    info = hosting.get(build_id)
     if info is None or not info.running:
         raise ServiceNotRunning("the generated service is not running: start it first (POST /builds/{id}/run)")
     kind = proc.starter.kind if proc.starter else "subprocess"
@@ -1043,15 +1054,20 @@ def _owned_service(pid: int, build: Build) -> bool:
     return "dotnet" in cmdline and bool(build.output_dir) and build.output_dir in cmdline
 
 
-async def clear_stale_runs(sessionmaker: Any) -> int:
-    """At startup: services recorded by a previous API process are not managed any more. Stop the
-    ones still alive (their process group, only when the pid is still that build's ``dotnet``) and
-    clear ``run_pid``/``run_port``; returns how many rows were cleared."""
+async def clear_stale_runs(sessionmaker: Any, owner: str | None = None) -> int:
+    """At startup: services recorded by an earlier life of this process are not managed any more.
+    Stop the ones still alive (their process group, only when the pid is still that build's
+    ``dotnet``) and clear ``run_pid``/``run_port``/``run_host``/``run_owner``; returns how many rows
+    were cleared. A worker passes its ``owner`` name and clears only its own rows; the local
+    all-in-one process (role ``all``) clears every recorded run."""
     import os
     import signal
 
     async with sessionmaker() as s:
-        rows = (await s.execute(select(Build).where(Build.run_pid.is_not(None)))).scalars().all()
+        q = select(Build).where(Build.run_pid.is_not(None) | Build.run_owner.is_not(None))
+        if owner is not None:
+            q = q.where(Build.run_owner == owner)
+        rows = (await s.execute(q)).scalars().all()
         for b in rows:
             if b.run_pid and _owned_service(b.run_pid, b):
                 try:
@@ -1059,5 +1075,6 @@ async def clear_stale_runs(sessionmaker: Any) -> int:
                 except (ProcessLookupError, PermissionError):
                     pass
             b.run_pid = b.run_port = None
+            b.run_host = b.run_owner = None
         await s.commit()
     return len(rows)

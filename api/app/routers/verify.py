@@ -10,6 +10,7 @@ from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.jobs.locks import scenario_lock
 from api.app.models import Build, Process
 from api.app.schemas.job import JobCreated
+from api.app.services import hosting
 from api.app.services import verify as svc
 from api.app.services.context import active_job
 from engine.parity.evaluator import EvaluationError
@@ -90,12 +91,17 @@ async def test_data(process_id: str, session: SessionDep) -> dict[str, Any]:
 @router.post("/builds/{build_id}/verify", status_code=202, response_model=JobCreated)
 async def verify(build_id: str, request: Request, session: SessionDep, runner: RunnerDep,
                  settings: SettingsDep) -> JobCreated:
-    """Queue the verify job; 409 when the build's service is not running or a verify is in progress."""
+    """Queue the verify job; 409 when the build's service is not running or a verify is in progress.
+    The job is pinned (``affinity``) to the worker that hosts the service, which it calls on
+    loopback."""
     build = await session.get(Build, build_id)
     if build is None:
         raise HTTPException(status_code=404, detail="build not found")
-    info = request.app.state.services.get(build_id)
-    if info is None or not info.running:
+    try:
+        state = await hosting.service_state(request.app.state, session, build)
+    except hosting.HostError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not state["running"]:
         raise HTTPException(status_code=409, detail="the generated service is not running: POST /builds/{id}/run "
                                                     "first")
     running = await active_job(session, "verify", key="build_id", value=build_id)
@@ -103,7 +109,7 @@ async def verify(build_id: str, request: Request, session: SessionDep, runner: R
         raise HTTPException(status_code=409, detail=f"a verify run of this build is in progress: {running}")
     proc = await session.get(Process, build.process_id)
     job_id = await runner.submit("verify", {"build_id": build_id}, project_id=proc.project_id,
-                                 process_id=proc.id)
+                                 process_id=proc.id, affinity=build.run_owner)
     return JobCreated(job_id=job_id)
 
 

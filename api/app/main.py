@@ -4,7 +4,8 @@ Run with ``uvicorn api.app.main:app`` (``make api``). The schema is created by A
 (``make db``); if it is missing the API still starts and logs how to create it.
 
 ``EXIQO_ROLE`` decides what runs here: roles ``api`` and ``all`` hold the job-event listener
-(SSE); role ``all`` also runs an in-process job worker (``POD_NAME`` or ``<hostname>-<pid>``).
+(SSE); role ``all`` also runs an in-process job worker (``POD_NAME`` or ``<hostname>-<pid>``) and
+hosts the generated services that worker starts, reached in-process (no internal listener).
 Role ``worker`` is not this app: it runs ``python -m api.app.worker``.
 """
 from __future__ import annotations
@@ -35,9 +36,11 @@ from api.app.routers import (
     processes,
     projects,
     readiness,
+    run_proxy,
     verify,
 )
 from api.app.routers import settings as settings_router
+from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
 from api.app.services.settings import apply_stored, load_stored
@@ -56,13 +59,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = make_engine(settings.database_url)
         sessionmaker = make_sessionmaker(engine)
         knowledge = Knowledge(psycopg_url(settings.database_url))
-        services: dict = {}  # build id -> running generated service (verify.RunInfo)
         fernet, fernet_generated = make_fernet(settings)
+        name = worker_name()
+        # only role all's worker starts services here; in role api nothing ever registers one
+        hosting = Hosting(settings, sessionmaker, owner=name)
         worker_services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
-                                         services=services, fernet=fernet)
+                                         hosting=hosting, fernet=fernet)
         worker = None
         if settings.exiqo_role == "all":
-            worker = JobWorker(sessionmaker, worker_services, name=worker_name(),
+            worker = JobWorker(sessionmaker, worker_services, name=name,
                                slots=settings.job_workers, heartbeat_s=settings.job_heartbeat_seconds,
                                stale_s=settings.job_stale_seconds, max_attempts=settings.job_max_attempts)
         runner = JobRunner(sessionmaker, worker=worker)
@@ -78,17 +83,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.listener = listener
         app.state.knowledge = knowledge
         app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
-        app.state.services = services
-        app.state.start_locks = {}  # build id -> asyncio.Lock (one service start at a time)
+        app.state.hosting = hosting
+        app.state.http = http_client()  # the run proxy's and the worker host clients' connections
         app.state.fernet, app.state.fernet_generated = fernet, fernet_generated
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
         try:
             await runner.start()
             async with sessionmaker() as s:
                 apply_stored(settings, await load_stored(s))
-            cleared = await clear_stale_runs(sessionmaker)
-            if cleared:
-                log.warning("cleared %d service run(s) recorded by a previous API process", cleared)
+            if settings.exiqo_role == "all":  # role api never hosts: the workers clear their own
+                cleared = await clear_stale_runs(sessionmaker)
+                if cleared:
+                    log.warning("cleared %d service run(s) recorded by a previous API process", cleared)
         except Exception as exc:  # noqa: BLE001  start without a database; requests will report it
             log.error("job runner not started (database unavailable or schema missing; run `make db`): %s",
                       exc)
@@ -97,12 +103,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             if app.state.background:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
-            for info in list(app.state.services.values()):
-                try:
-                    await asyncio.to_thread(info.stop)
-                except Exception:  # best effort on shutdown
-                    log.exception("could not stop the service of build %s", info.build_id)
-            app.state.services.clear()
+            try:
+                await hosting.stop_all()
+            except Exception:  # best effort on shutdown (the database may be gone)
+                log.exception("could not stop the generated services")
+            await app.state.http.aclose()
             await runner.stop()
             if listener is not None:
                 await listener.stop()
@@ -121,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ask.router)
     app.include_router(design.router)
     app.include_router(build.router)
+    app.include_router(run_proxy.router)
     app.include_router(verify.router)
     app.include_router(infra.router)
     app.include_router(settings_router.router)

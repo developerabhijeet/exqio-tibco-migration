@@ -49,7 +49,8 @@ export function useService(buildId: string | null): ServiceHandle {
   const reason =
     state === "running" || state === "starting"
       ? null
-      : (error ?? (r?.exit_code != null ? `exited with code ${r.exit_code}: ${reasonFromLog(r.log_tail) ?? ""}` : null));
+      : (error ??
+        (r?.exit_code != null ? `exited with code ${r.exit_code}: ${reasonFromLog(r.log_tail) ?? ""}` : (r?.reason ?? null)));
 
   const start = async () => {
     if (!buildId) return;
@@ -149,6 +150,11 @@ export function ServiceControl({ svc, blocked = null }: { svc: ServiceHandle; bl
   );
 }
 
+/** A path under the service's base url (the API's proxy root for the build), slash or no slash. */
+function serviceUrl(base: string, path: string): string {
+  return `${base.replace(/\/$/, "")}/${path}`;
+}
+
 /** Swagger UI of the running service, or why it is not available. */
 export function SwaggerFrame({ run, state, reason }: { run: RunState | null; state: ServiceState; reason: string | null }) {
   if (state === "running" && run?.swagger_url) {
@@ -179,7 +185,7 @@ export function SwaggerFrame({ run, state, reason }: { run: RunState | null; sta
         <p className="font-medium text-plum">Service running, Swagger URL not reported</p>
         <p className="mt-1 max-w-[640px] text-[14px] text-slate">
           The API reports the service as running but gave no Swagger address.
-          {run?.url ? ` Try ${run.url}/swagger in a new tab.` : ""}
+          {run?.url ? ` Try ${serviceUrl(run.url, "swagger/index.html")} in a new tab.` : ""}
         </p>
       </div>
     );
@@ -206,15 +212,17 @@ export function DevTokenHelper({ run, running }: { run: RunState | null; running
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const url = run?.url ?? "http://127.0.0.1:<port>";
-  const curl = `curl -s -X POST ${url}/auth/dev-token -H 'content-type: application/json' -d '{"subject":"exiqo-verifier"}'`;
+  // run.url is the API's proxy root for this build's service (it ends in "/"), never the service's own port
+  const tokenUrl = run?.url ? serviceUrl(run.url, "auth/dev-token") : "<service URL>/auth/dev-token";
+  const curl = `curl -s -X POST ${tokenUrl} -H 'content-type: application/json' -d '{"subject":"exiqo-verifier"}'`;
 
   const get = async () => {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${url}/auth/dev-token`, {
+      const res = await fetch(tokenUrl, {
         method: "POST",
+        credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ subject: "exiqo-verifier" }),
       });
@@ -225,7 +233,7 @@ export function DevTokenHelper({ run, running }: { run: RunState | null; running
     } catch (e) {
       setError(
         e instanceof TypeError
-          ? "The browser could not call the service directly (it does not allow this page's origin). Run the command below instead."
+          ? "The browser could not reach the service through the API. Run the command below instead."
           : `No token: ${errorText(e)}.`,
       );
     } finally {

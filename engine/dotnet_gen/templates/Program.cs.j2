@@ -3,6 +3,7 @@ using {{ app }}.Api.Errors;
 using {{ app }}.Infrastructure;
 using {{ app }}.Infrastructure.Messaging;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.OpenApi.Models;
 #if EXIQO_DEV_ENDPOINTS
 using {{ app }}.Api.Auth;
@@ -108,6 +109,18 @@ else
 }
 
 var app = builder.Build();
+
+// Development only: ExiQO Migrate's Verify step reaches this service through its API proxy
+// (.../builds/{id}/run/proxy/). The proxy says where the browser is with X-Forwarded-Host, -Proto
+// and -Prefix; taking the path base from it makes Swagger's OpenAPI servers entry that prefix, so
+// "Try it out" calls go back through the proxy. Only loopback callers are trusted (the default).
+if (app.Environment.IsDevelopment())
+{
+    app.UseForwardedHeaders(new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedPrefix,
+    });
+}
 
 app.UseExceptionHandler();
 if (swagger)

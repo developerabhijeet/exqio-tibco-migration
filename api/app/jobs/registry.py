@@ -3,7 +3,7 @@
 Jobs used to be closures built by the router that queued them, which only works in the process
 that built them. Worker pods run jobs the API queued, so each kind registers one handler that
 rebuilds what it needs from the payload and :class:`WorkerServices` (settings, knowledge, database,
-the generated-service registry, the secret cipher). Handlers live in ``api.app.jobs.handlers``.
+the generated services this process hosts, the secret cipher). Handlers live in ``api.app.jobs.handlers``.
 """
 from __future__ import annotations
 
@@ -17,19 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 if TYPE_CHECKING:
     from api.app.config import Settings
     from api.app.jobs.runner import JobContext
+    from api.app.services.hosting import Hosting
     from api.app.services.knowledge import Knowledge
-    from api.app.services.verify import RunInfo
 
 
 @dataclass
 class WorkerServices:
-    """What a handler may use. ``services`` is the API's running-service registry, shared by
-    reference in role ``all`` (a later task replaces it)."""
+    """What a handler may use. ``hosting`` holds the generated services this process runs (Verify):
+    ``service_start`` starts one there and the Verify job, pinned to this worker, calls it."""
 
     settings: Settings
     knowledge: Knowledge
     sessionmaker: async_sessionmaker[AsyncSession]
-    services: dict[str, RunInfo]
+    hosting: Hosting
     fernet: Fernet
 
 

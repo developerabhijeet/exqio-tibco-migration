@@ -237,7 +237,8 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
     await startService.click();
     await expect(service).toHaveAttribute("data-state", "running", { timeout: 120_000 });
     const frame = page.getByTestId("swagger-frame");
-    await expect(frame).toHaveAttribute("src", /\/swagger$/);
+    // through the API's proxy: the worker that runs the service is never reached directly
+    await expect(frame).toHaveAttribute("src", /\/builds\/[^/]+\/run\/proxy\/swagger\/index\.html$/);
     const swagger = await page.request.get((await frame.getAttribute("src"))!);
     expect(swagger.status()).toBe(200);
     await page.getByRole("button", { name: "Get dev token" }).click();

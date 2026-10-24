@@ -6,7 +6,8 @@ session-level ``pg_advisory_lock(hashtext(name))`` on a dedicated connection hel
 it is released in ``finally`` (also on cancellation), and a connection whose unlock failed is
 invalidated so a held lock never returns to the pool.
 
-Lock names: ``scan``, ``analyse:<process_id>``, ``scenario``.
+Lock names: ``scan``, ``analyse:<process_id>``, ``scenario``, ``service:<build_id>`` (one start or
+stop of a build's generated service at a time, held by the API while it checks and queues).
 """
 from __future__ import annotations
 

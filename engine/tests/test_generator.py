@@ -299,6 +299,22 @@ def test_dev_token_endpoint_only_in_development(solution):
     assert dev["Cors"]["Origins"] == ["http://localhost:3000"] and "Cors" not in prod
 
 
+def test_development_honours_the_verify_proxy_headers(solution):
+    """Verify reaches the service through the platform API at ``.../builds/{id}/run/proxy/``. In
+    Development the service takes the host, scheme and path base from the proxy's X-Forwarded-*
+    headers, so Swagger's OpenAPI ``servers`` entry is that prefix and "Try it out" calls go back
+    through the proxy, not to the bare origin."""
+    program = _file(solution, "src/GmfCredit.Api/Program.cs").content
+    assert "using Microsoft.AspNetCore.HttpOverrides;" in program
+    forwarded = ("if (app.Environment.IsDevelopment())\n{\n    app.UseForwardedHeaders(new ForwardedHeadersOptions\n"
+                 "    {\n        ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto"
+                 " | ForwardedHeaders.XForwardedPrefix,\n    });\n}")
+    assert forwarded in program
+    # first in the pipeline: everything after it (Swagger, the exception handler) sees the path base
+    assert program.index("app.UseForwardedHeaders(") < program.index("app.UseExceptionHandler();")
+    assert program.index("app.UseForwardedHeaders(") < program.index("app.UseSwagger();")
+
+
 def test_configuration_contract_key_vault_and_service_bus(solution):
     prod = json.loads(_file(solution, "src/GmfCredit.Api/appsettings.json").content)
     dev = json.loads(_file(solution, "src/GmfCredit.Api/appsettings.Development.json").content)

@@ -203,6 +203,8 @@ export interface RunState {
   started_at: string | null;
   exit_code: number | null;
   log_tail?: string;
+  /** Why the service is not running when the API knows, e.g. "the worker hosting the service is gone". */
+  reason?: string | null;
 }
 
 export interface Scenario {
