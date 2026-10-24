@@ -1,0 +1,121 @@
+# Egress allowlist for scripts/egress_audit.py (make egress-audit).
+#
+# The audit scans our own code (the platform image's /app) and what the web image ships to the
+# browser (server.js, .next/server, .next/static, public) and fails on any host named there that is
+# not listed here. One pattern per line: `*.example.com` matches subdomains only, anything else is
+# an exact host. Every entry says why it is harmless; a blank line ends a comment block.
+# `# optional: <name>` opens a section that only applies with --allow-optional <name>.
+# Runtime egress is enforced separately by NetworkPolicy / the firewall; this is build-time evidence.
+
+# ---------------------------------------------------------------- GM Financial tenant services
+# Entra ID: sign-in authority and token endpoints (OIDC), also the default authority written into
+# generated solutions' appsettings.
+login.microsoftonline.com
+
+# Key Vault data plane: secrets read at runtime.
+*.vault.azure.net
+
+# GMF's Azure OpenAI resources: the only model endpoint when the Claude provider is off.
+*.openai.azure.com
+
+# Azure Resource Manager: the deploy step's Terraform / az calls.
+management.azure.com
+
+# Azure Database for PostgreSQL flexible server.
+*.postgres.database.azure.com
+
+# The token audience ("https://cognitiveservices.azure.com/.default") requested from Entra for
+# Azure OpenAI in api/app/services/providers.py. It is an OAuth scope string, never fetched.
+cognitiveservices.azure.com
+
+# ------------------------------------------------- names that appear in our code but are never fetched
+# The form placeholder for GM Financial's own Okta issuer in the generated-service identity screen
+# (web/lib/identity.ts); GMF's tenant, shown as hint text.
+gmfinancial.okta.com
+
+# Placeholder outputs for Terraform dependency mocks (engine/infra_gen/generator.py _mock_outputs):
+# only used so `terraform plan` / `validate` run before dependencies exist; nothing resolves them.
+mockacr.azurecr.io
+mock-sb.servicebus.windows.net
+
+# Suffixes the static rules use to skip XML namespace hosts (engine/analysis/static_rules.py
+# _NAMESPACE_HOSTS): compared against namespace text, never connected to.
+w3.org
+tibco.com
+
+# --------------------------------------------------------- third-party text inside the web bundle
+# These appear in the shipped JavaScript only as message text, doc links or dead code paths. None is
+# requested by the page; the browser only follows a link if a person clicks it.
+
+# Next.js and React error / not-found pages: "see https://nextjs.org/..." and issue-tracker
+# links inside error message strings.
+nextjs.org
+react.dev
+github.com
+
+# Immer's minified-error message ("Full error at: https://bit.ly/..."), Redux Toolkit's doc links.
+bit.ly
+redux.js.org
+redux-toolkit.js.org
+
+# React Flow: the attribution link is compiled in but not rendered (hideAttribution is true in
+# web/components/canvas/ProcessCanvas.tsx); the other string is the library's docs link.
+reactflow.dev
+
+# Next.js AMP support in pages/_document: only emitted for AMP pages, which this app never serves.
+cdn.ampproject.org
+
+# @monaco-editor/loader's built-in default CDN path. The app replaces it before any editor loads
+# (loader.config in web/components/canvas/CodeView.tsx points it at this app's own /monaco), and
+# the image test checks the bundle is same-origin; the default is never used.
+cdn.jsdelivr.net
+
+# A Java package name ("java.io") held in a string by a GWT-compiled library, not a host.
+java.io
+
+# Monaco editor (copied into public/monaco at install) and its TypeScript, CSS, HTML and JSON
+# language services embed documentation links, licence URLs and spec references inside string data
+# (hover text, lib.d.ts doc comments, HTML attribute descriptions). They are text shown on hover.
+aka.ms
+bugzilla.mozilla.org
+cldr.unicode.org
+code.google.com
+code.visualstudio.com
+developer.mozilla.org
+developers.google.com
+drafts.csswg.org
+en.wikipedia.org
+googlechrome.github.io
+hacks.mozilla.org
+help.yahoo.com
+html.spec.whatwg.org
+json-schema.org
+microsoft.com
+r12a.github.io
+sass-lang.com
+schema.org
+stackoverflow.com
+support.google.com
+tc39.es
+tools.ietf.org
+unicode.org
+unstats.un.org
+wiki.whatwg.org
+www.apache.org
+www.bing.com
+www.currency-iso.org
+www.dmoz.org
+www.iana.org
+www.ietf.org
+www.iso.org
+www.whatwg.org
+
+# --------------------------------------------------------------------------- optional sections
+# optional: claude
+# The Anthropic API, used only when providers.claude.enabled=true (claude-agent-sdk). It is not
+# part of the GMF tenant. Our own code names none of these hosts (the SDK lives in /opt/venv, out
+# of scope), so make egress-audit does not pass --allow-optional claude; the section is here for a
+# build that does hard-code a Claude endpoint and is audited with the flag.
+api.anthropic.com
+*.anthropic.com
+# end optional

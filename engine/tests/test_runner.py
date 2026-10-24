@@ -259,3 +259,58 @@ def test_core_runtime_masking_flow_and_values(tmp_path, apps):
     assert out["diamond"] == "A,B,D"
     assert out["join"] == "A,B,C,D"
     assert out["tib"] == "12.50|True|31500.00"
+
+
+# ------------------------------------------------------- NuGet probe: the configured source only
+LIST_SOURCE = """Registered Sources:
+
+  1.  nuget.org [Enabled]
+      https://api.nuget.org/v3/index.json
+  2.  gmf [Enabled]
+      https://pkgs.gmf.example/nuget/v3/index.json
+"""
+
+
+def test_nuget_probe_url_is_the_configured_mirror_without_asking_dotnet(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("dotnet must not be run when a mirror is configured")
+
+    monkeypatch.setattr(runner.subprocess, "run", boom)
+    assert runner.nuget_index_url(" https://mirror.gmf.example/v3/index.json ") == \
+        "https://mirror.gmf.example/v3/index.json"
+
+
+def test_nuget_probe_url_without_mirror_comes_from_dotnet_sources(monkeypatch):
+    class Done:
+        returncode, stdout = 0, LIST_SOURCE
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Done())
+    assert runner.nuget_index_url("", dotnet="dotnet").endswith("/v3/index.json")
+
+
+def test_nuget_probe_url_none_when_dotnet_lists_no_source(monkeypatch):
+    class Done:
+        returncode, stdout = 0, "Registered Sources:\n\n  No sources found.\n"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Done())
+    assert runner.nuget_index_url("", dotnet="dotnet") is None
+
+
+def test_nuget_available_probes_only_the_mirror(monkeypatch):
+    seen = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    monkeypatch.setattr(runner.urllib.request, "urlopen",
+                        lambda url, timeout: seen.append(url) or Resp())
+    assert runner.nuget_available(source="https://mirror.gmf.example/v3/index.json")
+    assert seen == ["https://mirror.gmf.example/v3/index.json"]

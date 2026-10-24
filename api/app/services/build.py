@@ -124,17 +124,26 @@ def nuget_available() -> bool:
     return nuget_probe()[0]
 
 
-def nuget_probe(timeout_s: float = 5.0) -> tuple[bool, str]:
-    """``(reachable, what was checked)``: the offline cache, else ``GET`` of the nuget.org index."""
+def nuget_probe(timeout_s: float = 5.0, source: str | None = None) -> tuple[bool, str]:
+    """``(reachable, what was checked)``: the offline cache, else ``GET`` of the package source.
+
+    The source is the GMF mirror (``NUGET_SOURCE``); without one it is dotnet's own first enabled
+    source, so a mirrored install never contacts a public feed."""
     import urllib.error
     import urllib.request
 
     if os.environ.get("EXIQO_NUGET_CACHE") or dotnet_runner.NUGET_CACHE.is_dir():
         return True, f"offline cache {os.environ.get('EXIQO_NUGET_CACHE') or dotnet_runner.NUGET_CACHE}"
-    url = "https://api.nuget.org/v3/index.json"
+    mirror = Settings().nuget_source if source is None else source
+    url = dotnet_runner.nuget_index_url(mirror, find_dotnet())
+    if url is None:
+        return False, "no NuGet package source is configured (set NUGET_SOURCE)"
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             return resp.status == 200, f"GET {url}: HTTP {resp.status}"
+    except urllib.error.HTTPError as exc:
+        # A mirror that answers 401/403 is reachable; restore reports the credential problem.
+        return exc.code < 500 and bool(mirror.strip()), f"GET {url}: HTTP {exc.code}"
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
         return False, f"GET {url} failed: {exc}"
 
@@ -582,7 +591,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     else:
         restore = await asyncio.to_thread(run_restore, solution.root, dotnet)
         if not restore.ok:
-            reachable, probe = await asyncio.to_thread(nuget_probe)
+            reachable, probe = await asyncio.to_thread(nuget_probe, 5.0, settings.nuget_source)
             note = NUGET_DOWN if (not reachable or dotnet_runner.nuget_unreachable(restore.log)) else \
                 "restore failed with the package source reachable: see the log above"
             restore = StepResult(ok=False, log=f"{restore.log.rstrip()}\n\n{note}\nprobe: {probe}")

@@ -21,7 +21,7 @@ PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); s
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
 .PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
-	images image-test image-lint image-scan pilot-up
+	images image-test image-lint image-scan pilot-up egress-audit
 
 setup:
 	python3 -m venv .venv
@@ -200,3 +200,19 @@ image-scan:
 # to create under deploy/docker/secrets/). Defaults to the images `make images` built here.
 pilot-up:
 	PLATFORM_IMAGE=$(PLATFORM_IMAGE) WEB_IMAGE=$(WEB_IMAGE) $(PILOT_COMPOSE) up -d --wait
+
+# Build-time egress evidence for GM Financial (scripts/egress_audit.py, deploy/egress-allowlist.txt):
+# every host named in our own code (/app of the platform image) and in what the web image ships to
+# the browser must be on the allowlist, each entry with its reason. Run `make images` first. Only
+# the listed paths are copied out of each image into a temporary directory, removed afterwards;
+# third-party runtimes (/opt/venv, the .NET SDK) and the web server's node_modules are out of scope.
+# The Claude hosts live in the allowlist's `# optional: claude` section, which this does not enable:
+# our own code names none of them. Source-level check without Docker: scripts/tests (make test).
+WEB_AUDIT_PATHS := --image-path /app/server.js --image-path /app/.next/server \
+	--image-path /app/.next/static --image-path /app/public
+
+egress-audit:
+	@rc=0; \
+	$(PY) scripts/egress_audit.py $(PLATFORM_IMAGE) --allowlist deploy/egress-allowlist.txt || rc=1; \
+	$(PY) scripts/egress_audit.py $(WEB_IMAGE) $(WEB_AUDIT_PATHS) --allowlist deploy/egress-allowlist.txt || rc=1; \
+	exit $$rc

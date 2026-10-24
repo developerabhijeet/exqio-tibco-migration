@@ -7,7 +7,7 @@ each test back to a rule, branch or scenario id by the naming convention in ``tr
 The binary comes from ``scripts/toolchain.detect()`` (``<repo>/.tools/bin``, ``.tools/dotnet``,
 then ``PATH``). When ``<repo>/.tools/nuget-cache`` exists (``make nuget-cache``) its path is passed
 as ``EXIQO_NUGET_CACHE``; the generated ``Directory.Build.props`` adds it as a restore source, so a
-machine without access to api.nuget.org can restore from the offline cache.
+machine without access to the public feed can restore from the offline cache.
 """
 from __future__ import annotations
 
@@ -140,17 +140,46 @@ def nuget_unreachable(log: str) -> bool:
     return bool(_NUGET_DOWN.search(log or ""))
 
 
-def nuget_available(timeout_s: float = 5.0) -> bool:
-    """True when packages can be restored: the offline cache exists or api.nuget.org answers.
+def nuget_index_url(source: str = "", dotnet: str | None = None) -> str | None:
+    """The package source to probe: the GMF mirror (``source``), else the first enabled source
+    ``dotnet nuget list source`` reports, so no public feed URL is hard-coded here and a machine
+    with a mirror never probes anything else."""
+    if source.strip():
+        return source.strip()
+    exe = dotnet or find_dotnet()
+    if not exe:
+        return None
+    try:
+        done = subprocess.run([exe, "nuget", "list", "source"], check=False, capture_output=True,
+                              text=True, timeout=30, env=child_env())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    enabled = False
+    for line in (done.stdout or "").splitlines():
+        if re.match(r"\s*\d+\.\s", line):
+            enabled = "[Enabled]" in line
+        elif enabled and re.match(r"\s*https?://\S+\s*$", line):
+            return line.strip()
+    return None
 
+
+def nuget_available(timeout_s: float = 5.0, source: str = "") -> bool:
+    """True when packages can be restored: the offline cache exists or the package source answers.
+
+    The source is ``source`` (the GMF mirror, ``NUGET_SOURCE``) or else dotnet's first enabled one.
     A cheap probe so callers can skip a restore that would spend a minute retrying an unreachable
     source; ``restore()`` itself still reports the real outcome.
     """
     if os.environ.get("EXIQO_NUGET_CACHE") or NUGET_CACHE.is_dir():
         return True
+    url = nuget_index_url(source)
+    if url is None:
+        return False
     try:
-        with urllib.request.urlopen("https://api.nuget.org/v3/index.json", timeout=timeout_s) as resp:
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             return resp.status == 200
+    except urllib.error.HTTPError as exc:
+        return exc.code < 500 and bool(source.strip())  # a mirror that answers (401) is reachable
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         return False
 

@@ -321,7 +321,7 @@ async def test_g4_disabled_when_restore_fails(client, app, monkeypatch):
 
         monkeypatch.setattr(build_svc, "run_restore", lambda root, dotnet: StepResult(
             ok=False, log="error NU1301: Unable to load the service index (simulated)"))
-        monkeypatch.setattr(build_svc, "nuget_probe", lambda: (False, "simulated: source unreachable"))
+        monkeypatch.setattr(build_svc, "nuget_probe", lambda *a: (False, "simulated: source unreachable"))
     _, proc_id, build_id, build = await _built(client, monkeypatch, dotnet=True)
     steps = {s["name"]: s for s in build["steps"]}
     assert steps["restore"]["ok"] is False and "NuGet unreachable" in steps["restore"]["log"]

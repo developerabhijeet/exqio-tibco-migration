@@ -52,7 +52,7 @@ include = ["engine*", "api*"]
 "engine.infra_gen" = ["templates/**/*", "templates/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["engine/tests", "api/tests"]
+testpaths = ["engine/tests", "api/tests", "scripts/tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
