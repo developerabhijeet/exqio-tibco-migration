@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -136,6 +137,7 @@ def _create_api(settings: Settings) -> FastAPI:
             await runner.start()
             async with sessionmaker() as s:
                 apply_stored(settings, await load_stored(s))
+            app.state.settings_loaded_at = time.monotonic()
             if settings.exiqo_role == "all":  # role api never hosts: the workers clear their own
                 cleared = await clear_stale_runs(sessionmaker)
                 if cleared:

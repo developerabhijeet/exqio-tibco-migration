@@ -20,6 +20,9 @@ and queued jobs pinned to a worker that has shown no running heartbeat for ``sta
 "worker lost". ``drain`` stops claiming, lets running jobs finish within its timeout, and requeues
 the rest (``attempts < max_attempts``) or fails them with "worker stopped".
 
+Each job gets its own copy of the worker's ``Settings`` with the Settings-screen edits stored when
+it starts (``services.settings.with_stored``): the PATCH lands on one API pod, the table reaches all.
+
 A running job writes events through :class:`JobContext` (``log``, ``stage``). Each event is
 inserted into ``job_events`` with a per-job ``seq`` and announced with
 ``pg_notify('job_events', '<job_id>:<seq>')`` in the same transaction; API processes hear it on
@@ -37,7 +40,7 @@ import logging
 import os
 import socket
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -298,7 +301,7 @@ class JobWorker:
                 async with self.sessionmaker() as s:  # a requeued job continues its sequence
                     ctx._seq = await s.scalar(select(func.max(JobEvent.seq))
                                               .where(JobEvent.job_id == job_id)) or 0
-                result = await handler_for(kind)(ctx, self.services)
+                result = await handler_for(kind)(ctx, await self._job_services())
             except asyncio.CancelledError:
                 await self._after_cancel(ctx, self._reasons.pop(job_id, "drain"))
                 return
@@ -322,6 +325,22 @@ class JobWorker:
             self._reasons.pop(job_id, None)
             self._finishing.discard(job_id)
             self._wake.set()  # a slot is free
+
+    async def _job_services(self) -> WorkerServices | None:
+        """The services for one job: this worker's, with a copy of its settings carrying the
+        Settings-screen edits stored now (another pod may have saved them since this one started).
+        The copy is the job's own, so a later edit never changes a job mid-run."""
+        if self.services is None:
+            return None
+        from api.app.services.settings import load_stored, with_stored  # imports this module
+
+        try:
+            async with self.sessionmaker() as s:
+                stored = await load_stored(s)
+        except Exception as exc:  # noqa: BLE001  the job still runs, on the values loaded at start
+            log.warning("worker %s: could not read the stored settings: %s", self.name, exc)
+            return self.services
+        return replace(self.services, settings=with_stored(self.services.settings, stored))
 
     async def _after_cancel(self, ctx: JobContext, reason: str) -> None:
         if reason == "lost":  # another worker already gave the job its outcome

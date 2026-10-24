@@ -14,6 +14,7 @@ from api.app.auth.roles import Principal, dev_principal, principal_from_claims
 from api.app.auth.session import SESSION_COOKIE, load_session
 from api.app.config import Settings
 from api.app.jobs.runner import JobRunner
+from api.app.services.settings import refresh_stale
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -25,7 +26,10 @@ def get_runner(request: Request) -> JobRunner:
     return request.app.state.runner
 
 
-def get_settings(request: Request) -> Settings:
+async def get_settings(request: Request) -> Settings:
+    """The live settings, with other replicas' Settings-screen edits at most
+    ``STORED_TTL_SECONDS`` old (``services.settings.refresh_stale``)."""
+    await refresh_stale(request.app.state)
     return request.app.state.settings
 
 

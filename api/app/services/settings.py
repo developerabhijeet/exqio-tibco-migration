@@ -1,10 +1,23 @@
 """Settings screen: providers (presence, never values), models per tier and stage, routing bands,
-toolchains, Langfuse. Edits are stored in ``settings`` and applied to the running API's ``Settings``
-(the next job reads them); keys and tokens stay in the environment.
+toolchains, Langfuse. Edits are stored in the ``settings`` table; keys and tokens otherwise stay in
+the environment.
+
+Stored edits reach every process through the table, not through memory: there are several API
+replicas and separate worker pods, and the PATCH lands on one API pod only.
+
+- A worker re-reads the table at the start of every job and gives that job its own copy of
+  ``Settings`` with the edits applied (:func:`with_stored`), so a job started after a PATCH uses it
+  and a job already running keeps the values it started with.
+- An API process applies the table to its live ``Settings`` at start, after its own PATCH, and
+  again when a request reads settings more than :data:`STORED_TTL_SECONDS` after the last load
+  (:func:`refresh_stale`), so another replica's edit shows within that time. ``apply_stored`` is
+  synchronous, so no request on the loop sees a half-applied set.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from cryptography.fernet import InvalidToken
@@ -17,6 +30,8 @@ from api.app.services.infra import make_fernet
 from engine.agents.routing import TASK_WEIGHTS, RoutingTable
 
 log = logging.getLogger(__name__)
+
+STORED_TTL_SECONDS = 10.0  # how stale an API replica's view of another replica's edit may be
 
 TIERS = ("strong", "standard", "efficient")
 # Pipeline stage -> (engine task kind, how its tier is chosen)
@@ -87,6 +102,40 @@ def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
             except (InvalidToken, ValueError):
                 # stored under a different APP_SECRET; the screen says so rather than guessing
                 log.warning("the stored Azure OpenAI key cannot be decrypted with this APP_SECRET")
+
+
+def with_stored(base: Settings, stored: dict[str, Any]) -> Settings:
+    """A copy of ``base`` with the stored edits applied; ``base`` is left as it was."""
+    fresh = base.model_copy()
+    apply_stored(fresh, stored)
+    return fresh
+
+
+async def refresh_stale(state: Any, ttl: float | None = None) -> None:
+    """Re-apply the stored edits to ``state.settings`` (an API app's state) when the last load is
+    older than ``ttl`` seconds. A database error keeps the current values: a settings read never
+    fails because of this refresh."""
+    ttl = STORED_TTL_SECONDS if ttl is None else ttl
+    sessionmaker = getattr(state, "sessionmaker", None)
+    loaded = getattr(state, "settings_loaded_at", None)
+    if sessionmaker is None or (loaded is not None and time.monotonic() - loaded < ttl):
+        return
+    lock: asyncio.Lock | None = getattr(state, "settings_lock", None)
+    if lock is None:
+        lock = state.settings_lock = asyncio.Lock()
+    async with lock:  # one reload at a time; the requests that waited use its result
+        loaded = getattr(state, "settings_loaded_at", None)
+        if loaded is not None and time.monotonic() - loaded < ttl:
+            return
+        try:
+            async with sessionmaker() as s:
+                stored = await load_stored(s)
+        except Exception as exc:  # noqa: BLE001  keep serving the values already loaded
+            log.warning("could not reload the stored settings: %s", exc)
+            state.settings_loaded_at = time.monotonic()
+            return
+        apply_stored(state.settings, stored)
+        state.settings_loaded_at = time.monotonic()
 
 
 def validate_bands(bands: dict[str, Any]) -> dict[str, tuple[int, int]]:
