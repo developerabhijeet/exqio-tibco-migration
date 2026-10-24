@@ -307,6 +307,8 @@ async def run_service(build_id: str, request: Request, session: SessionDep, runn
     build = await _build(session, build_id)
     sessionmaker = request.app.state.sessionmaker
     async with advisory_lock(sessionmaker, f"service:{build_id}"):  # one start per build at a time
+        # read again under the lock: another replica's start may have committed since the load
+        await session.refresh(build)
         state = await _state(request, session, build)
         if state["running"]:
             state.pop("log_tail", None)
@@ -314,9 +316,11 @@ async def run_service(build_id: str, request: Request, session: SessionDep, runn
         job_id = await active_job(session, "service_start", key="build_id", value=build_id)
         if job_id is None:
             proc = await session.get(Process, build.process_id)
+            # a worker still named on the row (its service exited) restarts it itself, so a build
+            # never has services on two workers; a gone worker was cleared by _state above
             job_id = await runner.submit("service_start", {"build_id": build_id},
                                          project_id=proc.project_id if proc else None,
-                                         process_id=build.process_id)
+                                         process_id=build.process_id, affinity=build.run_owner)
     job = await _wait_job(sessionmaker, job_id, START_WAIT_S)
     if job is None:
         raise HTTPException(status_code=409, detail=f"the service did not start within {START_WAIT_S:.0f} s "

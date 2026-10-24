@@ -33,6 +33,8 @@ def public_urls(request: Request, build_id: str, status: dict) -> dict:
                   include_in_schema=False)
 async def run_proxy(build_id: str, path: str, request: Request, session: SessionDep,
                     user: BrowserUserDep) -> Response:
+    if svc.unsafe_proxy_path(path, request.scope.get("raw_path")):
+        raise HTTPException(status_code=400, detail="dot segments are not allowed in a proxy path")
     build = await session.get(Build, build_id)
     if build is None:
         raise HTTPException(status_code=404, detail="build not found")

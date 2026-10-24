@@ -28,7 +28,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from sqlalchemy import update
@@ -70,7 +70,32 @@ class HostGone(Exception):
 
 
 class HostError(Exception):
-    """The hosting worker answered, but not as expected (for example a wrong internal token)."""
+    """The hosting worker answered, but not as expected (for example a wrong internal token), or
+    did not answer in time: it is alive, so the run is kept."""
+
+
+#: Only these mean the far end is not there: nothing listens, the address does not route, or the
+#: connection closed before any answer. A read timeout is a slow call, not a gone worker.
+GONE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError)
+
+
+def unsafe_proxy_path(path: str, raw_path: bytes | str | None = None) -> bool:
+    """Whether a proxy path has a ``.`` or ``..`` segment in any encoding (``%2e``, ``%2E``, an
+    encoded slash ``%2f``, double encoding), or a backslash. httpx and many servers resolve dot
+    segments, so ``proxy/../../OTHER`` would leave this build's proxy root and reach another
+    build's internal routes with the internal bearer."""
+    raw = raw_path.decode("latin-1") if isinstance(raw_path, bytes) else (raw_path or "")
+    for candidate in (path, raw):
+        text = candidate
+        for _ in range(4):  # decode until stable: catches %252e%252e too
+            segments = text.replace("\\", "/").split("/")
+            if "\\" in text or any(seg in (".", "..") for seg in segments):
+                return True
+            decoded = unquote(text)
+            if decoded == text:
+                break
+            text = decoded
+    return False
 
 
 def http_client() -> httpx.AsyncClient:
@@ -222,8 +247,14 @@ async def forward_local(hosting: Hosting, http: httpx.AsyncClient, build_id: str
         return _not_running()
     try:
         return await forward(http, method, _target(info.url, path, query), headers, body)
+    except httpx.TimeoutException as exc:
+        return _timed_out(exc)
     except httpx.TransportError as exc:
         return JSONResponse({"detail": f"the generated service did not answer: {exc}"}, status_code=502)
+
+
+def _timed_out(exc: Exception) -> Response:
+    return JSONResponse({"detail": f"the generated service did not answer in time: {exc!r}"}, status_code=504)
 
 
 # ------------------------------------------------------------------ the API side
@@ -276,8 +307,10 @@ class RemoteHostClient:
         try:
             r = await self.http.request(method, url, headers={"Authorization": self.auth},
                                         timeout=CONTROL_TIMEOUT)
-        except httpx.TransportError as exc:
+        except GONE_ERRORS as exc:
             raise HostGone(str(exc)) from exc
+        except httpx.TransportError as exc:  # a timeout or a broken answer: alive, keep the run
+            raise HostError(f"the worker hosting the service did not answer in time: {exc!r}") from exc
         if r.status_code != 200:
             raise HostError(f"the worker hosting the service answered {r.status_code}")
         return r.json()
@@ -298,8 +331,13 @@ class RemoteHostClient:
         try:
             return await forward(self.http, method, _target(f"{self._base(build_id)}/proxy", path, query),
                                  hop, body)
-        except httpx.TransportError as exc:
+        except GONE_ERRORS as exc:  # raised by send(): before any answer
             raise HostGone(str(exc)) from exc
+        except httpx.TimeoutException as exc:
+            return _timed_out(exc)
+        except httpx.TransportError as exc:
+            return JSONResponse({"detail": f"the worker hosting the service did not answer: {exc!r}"},
+                                status_code=502)
 
 
 def internal_headers(headers: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:

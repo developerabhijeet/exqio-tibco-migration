@@ -15,13 +15,16 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 import httpx
 import pytest
 import uvicorn
+from sqlalchemy import select, update
 
 from api.app import worker as worker_mod
 from api.app.jobs import registry
+from api.app.jobs.locks import advisory_lock
 from api.app.jobs.runner import JobWorker
 from api.app.models import Application, Build, Job, Process, Project, Upload
 from api.app.services import hosting as hosting_mod
@@ -352,3 +355,125 @@ async def test_worker_clears_its_own_stale_runs(app, settings):
     assert await hosting.clear_stale() == 1
     assert (await build_row(app, mine)).run_owner is None
     assert (await build_row(app, theirs)).run_owner == "w-other"
+
+
+# ------------------------------------------------------------------ review fixes
+async def asgi_status(app, method: str, raw_path: str, headers: list[tuple[bytes, bytes]] = ()) -> int:
+    """Call an ASGI app with this exact raw path, the way uvicorn hands it over (``path`` is the
+    percent-decoded form, nothing normalized). An HTTP client would resolve ``..`` before sending."""
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
+             "scheme": "http", "path": unquote(raw_path), "raw_path": raw_path.encode(), "query_string": b"",
+             "root_path": "", "headers": [(b"host", b"test"), *headers], "client": ("127.0.0.1", 1),
+             "server": ("test", 80)}
+    sent: list[dict] = []
+    requested = False
+
+    async def receive():
+        nonlocal requested
+        if not requested:
+            requested = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.Event().wait()  # no disconnect: a streaming answer runs to its end
+
+    async def send(message):
+        sent.append(message)
+
+    await app(scope, receive, send)
+    return next(m["status"] for m in sent if m["type"] == "http.response.start")
+
+
+DOT_PATHS = ["../../B", "%2e%2e/%2e%2e/B", "%2E%2e%2f%2e%2E%2fB", "./health", "a/%2e/b", "%252e%252e/B",
+             "..%5c..%5cB"]
+
+
+@pytest.fixture
+def forwarded(monkeypatch):
+    """Every call the proxy would forward (none, for a refused path)."""
+    calls: list[str] = []
+    real = hosting_mod.forward
+
+    async def recording(http, method, url, headers, body):
+        calls.append(url)
+        return await real(http, method, url, headers, body)
+
+    monkeypatch.setattr(hosting_mod, "forward", recording)
+    return calls
+
+
+async def test_dot_segments_refused_on_the_api_proxy(app, fake_hosting_worker, forwarded):
+    bid = fake_hosting_worker.build_id
+    for tail in DOT_PATHS:
+        for method in ("GET", "DELETE"):
+            status = await asgi_status(app, method, f"/builds/{bid}/run/proxy/{tail}")
+            assert status == 400, (method, tail, status)
+    assert forwarded == []  # no internal request was made
+    assert fake_hosting_worker.service.poll() is None and (await build_row(app, bid)).run_owner == "w-a"
+
+
+async def test_dot_segments_refused_on_the_internal_proxy(app, settings, local_service, forwarded):
+    internal = worker_mod.internal_app(app.state.hosting, TOKEN)
+    auth = [(b"authorization", f"Bearer {TOKEN}".encode())]
+    bid = local_service.build_id
+    for tail in DOT_PATHS:
+        status = await asgi_status(internal, "DELETE", f"/internal/services/{bid}/proxy/{tail}", auth)
+        assert status == 400, (tail, status)
+    assert forwarded == []
+    assert local_service.service.poll() is None
+    # a plain path still goes through
+    assert await asgi_status(internal, "GET", f"/internal/services/{bid}/proxy/health", auth) == 200
+
+
+def test_unsafe_proxy_path_cases():
+    for tail in DOT_PATHS:
+        assert hosting_mod.unsafe_proxy_path(unquote(tail), tail), tail
+    for tail in ("health", "swagger/index.html", "swagger/v1/swagger.json", "funding/DL-1.2", "a..b/c.",
+                 "%2e%2ex"):
+        assert not hosting_mod.unsafe_proxy_path(unquote(tail), tail), tail
+
+
+async def test_second_replica_start_returns_the_committed_run(client, app, local_service):
+    """Replica B loaded the build before replica A's start committed, and got the lock after it:
+    B must see A's run, not queue a second service_start that another worker could claim."""
+    bid = local_service.build_id
+    async with app.state.sessionmaker() as s:  # the run is not recorded yet when B loads the row
+        await s.execute(update(Build).where(Build.id == bid).values(run_owner=None, run_host=None,
+                                                                     run_port=None, run_pid=None))
+        await s.commit()
+    async with advisory_lock(app.state.sessionmaker, f"service:{bid}"):  # A holds the lock
+        b = asyncio.create_task(client.post(f"/builds/{bid}/run"))
+        await asyncio.sleep(0.5)  # B has loaded the build and waits for the lock
+        assert not b.done()
+        await app.state.hosting.register(app.state.hosting.get(bid))  # A's start commits
+    r = await b
+    assert r.status_code == 200 and r.json()["running"] is True
+    assert r.json()["port"] == local_service.service.port
+    async with app.state.sessionmaker() as s:
+        assert (await s.execute(select(Job).where(Job.kind == "service_start"))).scalars().all() == []
+
+
+@pytest.fixture
+async def stalled_worker():
+    """A worker that accepts the connection and never answers."""
+    writers: list[asyncio.StreamWriter] = []
+
+    async def stall(reader, writer):
+        writers.append(writer)
+        await reader.read()  # until the client gives up and closes
+
+    server = await asyncio.start_server(stall, "127.0.0.1", 0)
+    yield f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    for w in writers:
+        w.close()
+    server.close()
+
+
+async def test_slow_worker_is_not_gone(client, app, monkeypatch, stalled_worker):
+    app.state.http.timeout = httpx.Timeout(1.0, connect=1.0)
+    monkeypatch.setattr(hosting_mod, "CONTROL_TIMEOUT", httpx.Timeout(1.0, connect=1.0))
+    bid = await make_build(app, run_host=stalled_worker, run_owner="w-slow", run_port=5004, run_pid=1)
+    r = await client.get(f"/builds/{bid}/run/proxy/funding/DL-1")
+    assert r.status_code == 504, r.text
+    r = await client.get(f"/builds/{bid}/run")
+    assert r.status_code == 502 and "in time" in r.json()["detail"]
+    row = await build_row(app, bid)
+    assert (row.run_host, row.run_owner) == (stalled_worker, "w-slow")  # the run is kept

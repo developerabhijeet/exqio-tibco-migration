@@ -80,6 +80,9 @@ def internal_app(hosting: Hosting | None = None, token: str = "",
     @app.api_route("/internal/services/{build_id}/proxy/{path:path}", methods=hosting_svc.PROXY_METHODS,
                    dependencies=guarded)
     async def proxy(build_id: str, path: str, request: Request) -> Response:
+        # the API refuses these already; refused again here so no caller can leave the build's root
+        if hosting_svc.unsafe_proxy_path(path, request.scope.get("raw_path")):
+            raise HTTPException(status_code=400, detail="dot segments are not allowed in a proxy path")
         return await hosting_svc.forward_local(hosting, client, build_id, request.method, path,
                                                request.url.query,
                                                hosting_svc.internal_headers(request.headers.items()),
