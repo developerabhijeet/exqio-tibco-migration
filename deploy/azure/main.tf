@@ -22,6 +22,7 @@ locals {
   # migrate-job.yaml, neo4j-backup-cronjob.yaml; the Neo4j pod reads its auth through the CSI
   # driver). Deploy identities trust exiqo-worker only: Terraform in the worker exchanges the
   # worker's token for whichever identity ARM_CLIENT_ID names.
+  # The order is the platform_<account> credential resources' order (see there).
   platform_service_accounts = ["exiqo-api", "exiqo-worker", "exiqo-migrate", "exiqo-neo4j", "exiqo-neo4j-backup"]
   deploy_environments       = var.enable_identities ? toset(var.deploy_environments) : toset([])
 
@@ -152,14 +153,92 @@ resource "azurerm_user_assigned_identity" "platform" {
   }
 }
 
-resource "azurerm_federated_identity_credential" "platform" {
-  for_each = var.enable_identities ? toset(local.platform_service_accounts) : toset([])
+# Azure refuses concurrent federated-credential writes on one identity (409
+# ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity), and Terraform would create
+# a for_each's instances in parallel. So exiqo-platform's five credentials, one per entry of
+# local.platform_service_accounts in that order, are separate resources, each depending on the one
+# before: created one at a time (and destroyed in reverse).
+resource "azurerm_federated_identity_credential" "platform_api" {
+  count = var.enable_identities ? 1 : 0
 
-  name                      = "${var.namespace}-${each.key}"
+  name                      = "${var.namespace}-${local.platform_service_accounts[0]}"
   user_assigned_identity_id = azurerm_user_assigned_identity.platform[0].id
   audience                  = ["api://AzureADTokenExchange"]
   issuer                    = var.aks_oidc_issuer_url
-  subject                   = "system:serviceaccount:${var.namespace}:${each.key}"
+  subject                   = "system:serviceaccount:${var.namespace}:${local.platform_service_accounts[0]}"
+}
+
+resource "azurerm_federated_identity_credential" "platform_worker" {
+  count = var.enable_identities ? 1 : 0
+
+  name                      = "${var.namespace}-${local.platform_service_accounts[1]}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.platform[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.aks_oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.namespace}:${local.platform_service_accounts[1]}"
+
+  depends_on = [azurerm_federated_identity_credential.platform_api]
+}
+
+resource "azurerm_federated_identity_credential" "platform_migrate" {
+  count = var.enable_identities ? 1 : 0
+
+  name                      = "${var.namespace}-${local.platform_service_accounts[2]}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.platform[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.aks_oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.namespace}:${local.platform_service_accounts[2]}"
+
+  depends_on = [azurerm_federated_identity_credential.platform_worker]
+}
+
+resource "azurerm_federated_identity_credential" "platform_neo4j" {
+  count = var.enable_identities ? 1 : 0
+
+  name                      = "${var.namespace}-${local.platform_service_accounts[3]}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.platform[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.aks_oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.namespace}:${local.platform_service_accounts[3]}"
+
+  depends_on = [azurerm_federated_identity_credential.platform_migrate]
+}
+
+resource "azurerm_federated_identity_credential" "platform_neo4j_backup" {
+  count = var.enable_identities ? 1 : 0
+
+  name                      = "${var.namespace}-${local.platform_service_accounts[4]}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.platform[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.aks_oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.namespace}:${local.platform_service_accounts[4]}"
+
+  depends_on = [azurerm_federated_identity_credential.platform_neo4j]
+}
+
+moved {
+  from = azurerm_federated_identity_credential.platform["exiqo-api"]
+  to   = azurerm_federated_identity_credential.platform_api[0]
+}
+
+moved {
+  from = azurerm_federated_identity_credential.platform["exiqo-worker"]
+  to   = azurerm_federated_identity_credential.platform_worker[0]
+}
+
+moved {
+  from = azurerm_federated_identity_credential.platform["exiqo-migrate"]
+  to   = azurerm_federated_identity_credential.platform_migrate[0]
+}
+
+moved {
+  from = azurerm_federated_identity_credential.platform["exiqo-neo4j"]
+  to   = azurerm_federated_identity_credential.platform_neo4j[0]
+}
+
+moved {
+  from = azurerm_federated_identity_credential.platform["exiqo-neo4j-backup"]
+  to   = azurerm_federated_identity_credential.platform_neo4j_backup[0]
 }
 
 resource "azurerm_user_assigned_identity" "deploy" {

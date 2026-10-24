@@ -15,6 +15,14 @@ in `values.gmf.yaml` by hand.
 | `enable_data_share` | FileStorage account (Premium, SMB, NFS off) with the `exiqo-data` share for `DATA_DIR` |
 | `enable_backup_storage` | StorageV2 account (shared keys off) with the `neo4j-backups` container and a lifecycle rule that deletes old dumps. A FileStorage account cannot hold blobs, so this is a second account |
 
+`exiqo-platform`'s five federated credentials are created one after another, not in parallel:
+Azure refuses concurrent credential writes on one managed identity (409
+`ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity`), so they are separate
+resources (`azurerm_federated_identity_credential.platform_api`, `_worker`, `_migrate`, `_neo4j`,
+`_neo4j_backup`) chained with `depends_on`; `moved` blocks carry state from the earlier
+`for_each` addresses. A credential you add by hand to the same identity, while an apply runs,
+can still meet the 409: rerun the apply.
+
 Out of scope by design:
 
 - The AKS cluster and its network. These come in as ids: the OIDC issuer, the subnets and the

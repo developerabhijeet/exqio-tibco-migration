@@ -114,7 +114,13 @@ run "everything_enabled_maps_onto_the_values_keys" {
   }
 
   assert {
-    condition = toset([for c in azurerm_federated_identity_credential.platform : c.subject]) == toset([
+    condition = toset(concat(
+      azurerm_federated_identity_credential.platform_api[*].subject,
+      azurerm_federated_identity_credential.platform_worker[*].subject,
+      azurerm_federated_identity_credential.platform_migrate[*].subject,
+      azurerm_federated_identity_credential.platform_neo4j[*].subject,
+      azurerm_federated_identity_credential.platform_neo4j_backup[*].subject,
+      )) == toset([
       "system:serviceaccount:exiqo:exiqo-api", "system:serviceaccount:exiqo:exiqo-worker",
       "system:serviceaccount:exiqo:exiqo-migrate", "system:serviceaccount:exiqo:exiqo-neo4j",
       "system:serviceaccount:exiqo:exiqo-neo4j-backup",
