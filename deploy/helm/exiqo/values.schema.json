@@ -103,11 +103,29 @@
     },
     "ciEnv": {
       "type": "object",
-      "propertyNames": {
-        "pattern": "^[A-Z][A-Z0-9_]*$"
-      },
-      "additionalProperties": {
-        "type": "string"
+      "additionalProperties": false,
+      "properties": {
+        "PROVIDER": {
+          "enum": [
+            "fake"
+          ]
+        },
+        "EMBEDDINGS_BACKEND": {
+          "enum": [
+            "hash",
+            "fastembed"
+          ]
+        },
+        "BUILD_TOOLCHAIN": {
+          "enum": [
+            "true",
+            "false"
+          ]
+        },
+        "JOB_STALE_SECONDS": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
       }
     },
     "corsOrigins": {

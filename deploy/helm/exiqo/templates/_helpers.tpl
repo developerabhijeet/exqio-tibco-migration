@@ -148,9 +148,17 @@ objects: |
 {{- end }}
 {{- end -}}
 
-{{/* ciEnv (CI overlay only, see values.yaml): env entries that override the ConfigMap's. */}}
+{{/*
+ciEnv (CI overlay only, see values.yaml): env entries that override the ConfigMap's. Closed list,
+as the schema's: nothing here may touch sign-in, deploy credentials or a secret (<NAME>_FILE),
+which would otherwise win over the entries above it.
+*/}}
 {{- define "exiqo.ciEnv" -}}
+{{- $allowed := list "PROVIDER" "EMBEDDINGS_BACKEND" "BUILD_TOOLCHAIN" "JOB_STALE_SECONDS" -}}
 {{- range $name, $value := .Values.ciEnv }}
+{{- if not (has $name $allowed) }}
+{{- fail (printf "ciEnv.%s is not allowed: ciEnv may set only %s" $name (join ", " $allowed)) }}
+{{- end }}
 - name: {{ $name }}
   value: {{ $value | quote }}
 {{- end }}

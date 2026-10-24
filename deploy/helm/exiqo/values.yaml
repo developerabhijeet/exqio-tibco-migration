@@ -25,7 +25,8 @@
 x-ci: false
 # CI only (x-ci): variables set on the api and worker containers, overriding the ConfigMap (the kind
 # end to end sets PROVIDER=fake, EMBEDDINGS_BACKEND=hash, BUILD_TOOLCHAIN=false and a short
-# JOB_STALE_SECONDS). The schema refuses any entry without x-ci.
+# JOB_STALE_SECONDS), and nothing else: the schema allows only those four (and refuses ciEnv
+# without x-ci), and the template refuses any other name.
 ciEnv: {}
 
 image:

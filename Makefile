@@ -264,6 +264,10 @@ chart-check:
 			echo "chart-check: the schema accepted $$bad"; exit 1; \
 		fi; \
 	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source, CI env overrides"
+	@if $(HELM) template exiqo $(CHART) -f $(CHART_GMF) -f $(CHART_CI) --skip-schema-validation \
+		--set ciEnv.AUTH_MODE=oidc >/dev/null 2>&1; then \
+		echo "chart-check: the template accepted ciEnv.AUTH_MODE without the schema"; exit 1; \
+	fi; echo "chart-check: the template refuses a ciEnv name outside its list, schema or not"
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/helm/tests/values/backup-enabled.yaml \
 		| $(PY) -I deploy/helm/tests/subchart_contract.py
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)

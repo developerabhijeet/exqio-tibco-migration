@@ -169,6 +169,8 @@ finish() {
       log "KEEP_CLUSTER=1: cluster kind-$CLUSTER kept; API at http://$HOST:$HTTP_PORT/api (deploy/kind/setup.sh down removes it)"
     else
       log "tearing down kind-$CLUSTER"; teardown
+      # the cluster config and the watcher's pod logs; kept after a failure for diagnosis
+      if [ "$rc" -eq 0 ]; then rm -rf "$WORK"; fi
     fi
   fi
   if [ "$rc" -eq 0 ]; then log "PASS"; else log "FAIL (exit $rc)"; fi

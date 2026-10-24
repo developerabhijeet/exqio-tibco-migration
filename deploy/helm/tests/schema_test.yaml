@@ -122,3 +122,39 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: JOB_STALE_SECONDS, value: "20"}
         template: templates/worker-deployment.yaml
+  - it: ciEnv may not set a secret file variable, even with x-ci
+    set:
+      ciEnv.INTERNAL_TOKEN_FILE: /tmp/token
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv"
+  - it: ciEnv may not override AUTH_MODE, even with x-ci
+    set:
+      ciEnv.AUTH_MODE: oidc
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv"
+  - it: ciEnv may not override DEPLOY_CREDENTIAL_MODE, even with x-ci
+    set:
+      ciEnv.DEPLOY_CREDENTIAL_MODE: local
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv"
+  - it: ciEnv PROVIDER is fake only
+    set:
+      ciEnv.PROVIDER: claude
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv.PROVIDER"
+  - it: ciEnv JOB_STALE_SECONDS is a number of seconds
+    set:
+      ciEnv.JOB_STALE_SECONDS: "20s"
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv.JOB_STALE_SECONDS"
+  - it: ciEnv BUILD_TOOLCHAIN is "true" or "false"
+    set:
+      ciEnv.BUILD_TOOLCHAIN: "off"
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv.BUILD_TOOLCHAIN"
