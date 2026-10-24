@@ -38,6 +38,11 @@ gmfinancial.okta.com
 mockacr.azurecr.io
 mock-sb.servicebus.windows.net
 
+# Kubernetes label keys and API group names in the Terraform modules we generate
+# (engine/infra_gen/templates/modules/aks_workload/main.tf); identifiers, not hosts.
+app.kubernetes.io
+client.authentication.k8s.io
+
 # Suffixes the static rules use to skip XML namespace hosts (engine/analysis/static_rules.py
 # _NAMESPACE_HOSTS): compared against namespace text, never connected to.
 w3.org
@@ -51,7 +56,15 @@ tibco.com
 # links inside error message strings.
 nextjs.org
 react.dev
+
+# Issue-tracker links in those same error strings, and the Terragrunt release download in the
+# generated github_workflow / azure-pipelines templates: that command runs on the customer's CI
+# agents (their pipeline, their mirror to substitute), never in the platform's own pods.
 github.com
+
+# Terraform download in the generated azure-pipelines.yml template
+# (engine/infra_gen/templates/azure-pipelines.yml.j2): same CI-agent step as above.
+releases.hashicorp.com
 
 # Immer's minified-error message ("Full error at: https://bit.ly/..."), Redux Toolkit's doc links.
 bit.ly

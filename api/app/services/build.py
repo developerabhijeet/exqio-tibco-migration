@@ -138,12 +138,16 @@ def nuget_probe(timeout_s: float = 5.0, source: str | None = None) -> tuple[bool
     url = dotnet_runner.nuget_index_url(mirror, find_dotnet())
     if url is None:
         return False, "no NuGet package source is configured (set NUGET_SOURCE)"
+    if dotnet_runner.is_local_source(url):
+        return True, f"local package source {url}"
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             return resp.status == 200, f"GET {url}: HTTP {resp.status}"
     except urllib.error.HTTPError as exc:
         # A mirror that answers 401/403 is reachable; restore reports the credential problem.
         return exc.code < 500 and bool(mirror.strip()), f"GET {url}: HTTP {exc.code}"
+    except ValueError as exc:
+        return False, f"NUGET_SOURCE {url!r} is neither an existing folder nor an http(s) URL: {exc}"
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
         return False, f"GET {url} failed: {exc}"
 

@@ -19,10 +19,16 @@ skipped: they are fixtures, and .dockerignore keeps them out of the image.
 What counts as a host:
   * .py files: URLs and bare FQDNs inside string literals only (tokenize), never docstrings or
     comments, so documentation links do not count.
+  * Templates and config (.j2, .tf, .csproj, .cs, .sql, Dockerfile, .env*, ...) are scanned like
+    other text. Protocol-relative URLs ("//cdn.host/x.js") count as hosts too.
   * .js/.json/.html/.css/.md/... files: URLs anywhere in the text, and quoted bare FQDNs.
 Ignored: RFC 2606/6761 example names, localhost, single-label and .local names, private IPs, XML namespace and schema
 URIs (w3.org, schemas.*, the TIBCO namespaces the parser matches on, xmlns attribute values) and
 URLs built from a template (`https://${host}`), which name no fixed host.
+
+Next.js telemetry lives in node_modules/next/dist/telemetry (outside the web scope above) and is
+driven by the next CLI (build, dev), not by `node server.js`; the web image also sets
+NEXT_TELEMETRY_DISABLED=1 in both stages (deploy/docker/web.Dockerfile).
 
 Allowlist: one host pattern per line (`*.vault.azure.net` matches subdomains only, anything else is
 an exact host). Every entry needs a comment saying why it is allowed, either directly above it (a
@@ -47,7 +53,11 @@ from pathlib import Path
 TEXT_EXTS = {
     ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".json", ".html", ".htm", ".css", ".md",
     ".yaml", ".yml", ".sh", ".toml", ".txt",
+    # Shipped templates that generate customer code and infrastructure, and config formats.
+    ".tf", ".tfvars", ".hcl", ".tpl", ".j2", ".mako", ".props", ".csproj", ".xml", ".cs", ".sql",
+    ".ini", ".cfg", ".conf", ".env", ".ps1", ".sln",
 }
+TEXT_NAMES = ("dockerfile", "dockerignore", "gitignore", "editorconfig", "makefile")
 PY_EXT = ".py"
 
 URL_RE = re.compile(
@@ -55,6 +65,11 @@ URL_RE = re.compile(
     r"(?P<next>[^A-Za-z0-9.-]|$)",
     re.IGNORECASE,
 )
+# Protocol-relative URL ("//cdn.vendor.io/x.js"): a string or attribute value that starts with //.
+# The lookbehind rules out "https://..." (preceded by ":") and mid-word slashes; comments are gone
+# before this runs (JS) or never reach it (Python tokenize).
+PROTO_REL_RE = re.compile(
+    r"""(?:(?<=["'`(=])|(?<=[=:]\s))//(?P<host>(?:[a-z0-9-]+\.)+[a-z]{2,})(?=[/:"'`\s?#)>]|$)""", re.IGNORECASE)
 # A whole quoted string that is just a host (optionally with port or path), e.g. "vendor.io:443".
 QUOTED_FQDN_RE = re.compile(r"""["'`](?P<host>(?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:/[^"'`\s]*)?["'`]""", re.IGNORECASE)
 BARE_FQDN_RE = re.compile(r"(?P<host>(?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:/\S*)?", re.IGNORECASE)
@@ -163,8 +178,8 @@ def _candidates(text: str, quoted_fqdn: bool):
     """Yield (offset, host) for every non-ignored host named in text."""
     for m in URL_RE.finditer(text):
         host = m.group("host").lower().rstrip(".")
-        if m.group("next") and m.group("next") in TEMPLATE_CHARS:
-            continue  # https://${host}/ or https://foo.{region}.x: no fixed host
+        if m.group("host").endswith(".") and m.group("next") in TEMPLATE_CHARS:
+            continue  # https://foo.{region}.x: the host itself is incomplete, so no fixed host
         before = text[max(0, m.start() - 40):m.start()]
         if XMLNS_BEFORE_RE.search(before):
             continue
@@ -174,9 +189,15 @@ def _candidates(text: str, quoted_fqdn: bool):
         if _ignored(host, m.group("scheme"), before):
             continue
         yield m.start(), host
+    for m in PROTO_REL_RE.finditer(text):
+        host = m.group("host").lower()
+        if not _ignored(host, "", ""):
+            yield m.start(), host
     if quoted_fqdn:
         for m in QUOTED_FQDN_RE.finditer(text):
-            host = m.group("host").lower()
+            host = m.group("host")
+            if host != host.lower():
+                continue  # "Microsoft.AspNetCore.App": a dotted identifier, not a host
             if host.rsplit(".", 1)[-1] in TLDS and not _ignored(host, "", ""):
                 yield m.start(), host
 
@@ -220,8 +241,8 @@ def scan_python(path: Path, src: str) -> list[Violation]:
                 found.append((tok.start[0] + raw.count("\n", 0, off), host))
             if isinstance(value, str) and "\n" not in value:
                 m = BARE_FQDN_RE.fullmatch(value.strip())
-                if m:
-                    host = m.group("host").lower()
+                if m and m.group("host") == m.group("host").lower():
+                    host = m.group("host")
                     if host.rsplit(".", 1)[-1] in TLDS and not _ignored(host, "", ""):
                         found.append((tok.start[0], host))
         elif fstring_mid is not None and tok.type == fstring_mid:
@@ -344,7 +365,10 @@ def scan_text(path: Path, text: str) -> list[Violation]:
 
 def scan_file(path: Path) -> list[Violation]:
     ext = path.suffix.lower()
-    if ext != PY_EXT and ext not in TEXT_EXTS:
+    name = path.name.lower()
+    known = (ext in TEXT_EXTS or name.startswith(TEXT_NAMES) or name.startswith(".env")
+             or name.endswith(".dockerfile"))
+    if ext != PY_EXT and not known:
         return []
     try:
         text = path.read_text(encoding="utf-8", errors="replace")

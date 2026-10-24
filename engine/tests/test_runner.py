@@ -314,3 +314,17 @@ def test_nuget_available_probes_only_the_mirror(monkeypatch):
                         lambda url, timeout: seen.append(url) or Resp())
     assert runner.nuget_available(source="https://mirror.gmf.example/v3/index.json")
     assert seen == ["https://mirror.gmf.example/v3/index.json"]
+
+
+def test_nuget_available_accepts_a_local_folder_source(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    monkeypatch.setattr(runner.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP for a folder")))
+    assert runner.nuget_available(source=str(tmp_path))
+
+
+def test_nuget_available_false_not_a_crash_for_a_non_url_source(monkeypatch):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    assert runner.nuget_available(source="/no/such/folder/feed") is False

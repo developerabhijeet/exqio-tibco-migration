@@ -1286,3 +1286,17 @@ async def test_expected_is_derived_again_against_the_run_s_own_seed(client, app,
         assert "unexplained difference" not in (g5["reason"] or "")
     finally:
         await client.delete(f"/builds/{build_id}/run")
+
+
+def test_nuget_probe_local_folder_source_is_reachable(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(build_svc.dotnet_runner, "NUGET_CACHE", tmp_path / "no-cache")
+    ok, note = build_svc.nuget_probe(source=str(tmp_path))
+    assert ok is True and "local package source" in note
+
+
+def test_nuget_probe_non_url_source_is_unreachable_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(build_svc.dotnet_runner, "NUGET_CACHE", tmp_path / "no-cache")
+    ok, note = build_svc.nuget_probe(source="feeds-share/packages")
+    assert ok is False and "neither an existing folder nor an http(s) URL" in note

@@ -163,6 +163,12 @@ def nuget_index_url(source: str = "", dotnet: str | None = None) -> str | None:
     return None
 
 
+def is_local_source(url: str) -> bool:
+    """True for a NuGet source that is a folder (local path or UNC share), not a URL."""
+    return "://" not in url and os.path.isdir(url)
+
+
+
 def nuget_available(timeout_s: float = 5.0, source: str = "") -> bool:
     """True when packages can be restored: the offline cache exists or the package source answers.
 
@@ -175,13 +181,15 @@ def nuget_available(timeout_s: float = 5.0, source: str = "") -> bool:
     url = nuget_index_url(source)
     if url is None:
         return False
+    if is_local_source(url):
+        return True
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             return resp.status == 200
     except urllib.error.HTTPError as exc:
         return exc.code < 500 and bool(source.strip())  # a mirror that answers (401) is reachable
-    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
-        return False
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, ValueError):
+        return False  # ValueError: not a URL urlopen understands (a mistyped source)
 
 
 def _count_cs(root: Path) -> int:

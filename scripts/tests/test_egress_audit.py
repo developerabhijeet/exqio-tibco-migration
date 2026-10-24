@@ -115,6 +115,41 @@ def test_tests_directories_skipped_for_python_only(tmp_path):
     assert [v.host for v in out] == ["y.vendor.io"]
 
 
+def test_template_after_complete_host_is_still_flagged(tmp_path):
+    files = {
+        "a.py": 'u = f"https://telemetry.vendor.io{path}"\n',
+        "b.js": "const u = `https://api.vendor.io${p}`;\n",
+        "c.js": "const u = `https://api.${region}.vendor.io/x`;\nconst v = `https://${h}/x`;\n",
+    }
+    out = audit(tmp_path, files)
+    assert sorted((v.path.name, v.host) for v in out) == [
+        ("a.py", "telemetry.vendor.io"), ("b.js", "api.vendor.io")]
+
+
+def test_protocol_relative_urls_flagged(tmp_path):
+    files = {
+        "a.html": '<script src="//cdn.vendor.io/x.js"></script><a href=//b.vendor.io/y>',
+        "b.js": 'x = "//c.vendor.io/z"; // d.vendor.io is a comment\n'
+                '/* //e.vendor.io */ const u = "https://login.microsoftonline.com/x";\n',
+        "c.py": 'U = "//f.vendor.io/p"\n# //g.vendor.io\n',
+    }
+    out = audit(tmp_path, files)
+    assert sorted(v.host for v in out) == [
+        "b.vendor.io", "c.vendor.io", "cdn.vendor.io", "f.vendor.io"]
+
+
+def test_templates_and_config_files_scanned(tmp_path):
+    files = {
+        "gen/nuget.config.j2": '<add value="https://feed.vendor.io/v3" />\n',
+        "gen/main.tf": 'source = "https://registry.vendor.io/mod"\n',
+        "gen/Dockerfile": "RUN curl https://dl.vendor.io/x\n",
+        "gen/.env.example": "URL=https://env.vendor.io\n",
+        "gen/App.csproj": '<Project xmlns="http://schemas.microsoft.com/x"><P Include="Microsoft.AspNetCore.App"/>',
+    }
+    assert sorted(v.host for v in audit(tmp_path, files)) == [
+        "dl.vendor.io", "env.vendor.io", "feed.vendor.io", "registry.vendor.io"]
+
+
 def test_optional_section_needs_flag(tmp_path):
     files = {"a.py": 'URL = "https://api.anthropic.com/v1"'}
     assert [v.host for v in audit(tmp_path, files)] == ["api.anthropic.com"]

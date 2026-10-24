@@ -713,6 +713,7 @@ def test_nuget_config_uses_mirror(solution, app, designs, rules, findings, scena
     cfg = _file(mirrored, "nuget.config").content
     assert "<clear />" in cfg and f'<add key="gmf" value="{url}"' in cfg
     assert "nuget.org" not in cfg.split("<packageSources>")[1]  # the mirror is the only source
-    # unset: today's file, byte for byte
-    assert 'key="nuget.org"' in _file(solution, "nuget.config").content
-    assert "gmf" not in _file(solution, "nuget.config").content.split("<packageSources>")[1]
+    # unset: names no source (the generated file never hard-codes a public feed); NuGet's own
+    # configuration applies
+    plain = _file(solution, "nuget.config").content
+    assert "<add " not in plain and "<clear" not in plain and "api.nuget.org" not in plain
