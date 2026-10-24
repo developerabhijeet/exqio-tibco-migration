@@ -61,6 +61,7 @@ spec:
             - name: NUGET_PACKAGES
               value: /cache/nuget/packages
             {{- include "exiqo.secretFileEnv" (dict "ctx" .) | nindent 12 }}
+            {{- include "exiqo.ciEnv" . | nindent 12 }}
           ports:
             - name: internal
               containerPort: 9100

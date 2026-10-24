@@ -1,0 +1,45 @@
+# Vendor-side regression gate: `make kind-e2e` (deploy/kind/setup.sh) on every pull request. It
+# installs the chart on a throwaway kind cluster with the CI-only overlay
+# (deploy/helm/exiqo/ci/values.kind.yaml: dev sign-in, a plain Kubernetes Secret, the fake
+# provider, the build toolchain off), runs the demo check through the ingress and kills a worker
+# mid-build.
+#
+# This runs on GitHub's public runners and pulls public images (kindest/node, ingress-nginx,
+# pgvector, Neo4j, the base images of deploy/docker). It is not part of GM Financial's install:
+# GMF builds, scans, signs and deploys with its own release pipeline (deploy/pipelines) from its
+# mirrors and registry. kind, kubectl and helm are the linux/amd64 builds `make kind-tools`
+# downloads and verifies against the SHA256 pinned in deploy/kind/setup.sh.
+name: kind-e2e
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kind-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      # The demo check and the worker-kill script need httpx, the synthetic estate generator lxml
+      # (the versions in uv.lock).
+      - name: Python for the checks
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check httpx==0.28.1 lxml==6.1.3
+      - name: kind, kubectl and helm (pinned, SHA256-verified)
+        run: KIND_TOOLS_FORCE=1 make kind-tools
+      - name: make kind-e2e
+        run: KIND_TOOLS_FORCE=1 make kind-e2e

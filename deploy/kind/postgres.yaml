@@ -1,0 +1,78 @@
+# Postgres with pgvector for `make kind-e2e`, standing in for Azure Database for PostgreSQL: its own
+# namespace (the chart's egress policy admits it through egress.allowNamespaces), one replica, an
+# emptyDir (the cluster is thrown away after the run). The superuser password is the Secret
+# postgres-auth that deploy/kind/setup.sh creates from a random value; nothing here is a secret.
+# The init script creates exiqo_test beside exiqo and the vector extension in both.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: exiqo-db
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: exiqo-db
+data:
+  10-init.sql: |
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE DATABASE exiqo_test;
+    \c exiqo_test
+    CREATE EXTENSION IF NOT EXISTS vector;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: exiqo-db
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          # pgvector/pgvector:pg16, the multi-arch index (linux/amd64 and linux/arm64)
+          image: docker.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          env:
+            - {name: POSTGRES_DB, value: exiqo}
+            - {name: POSTGRES_USER, value: exiqo}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-auth, key: password}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - {name: postgres, containerPort: 5432, protocol: TCP}
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, exiqo, -d, exiqo]
+            periodSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 4Gi}
+        - name: init
+          configMap: {name: postgres-init}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: exiqo-db
+spec:
+  selector: {app: postgres}
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres, protocol: TCP}

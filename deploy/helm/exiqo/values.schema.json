@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ExiQO Migrate chart values",
-  "description": "Refuses what must never reach a GMF install: AUTH_MODE dev, local deploy credentials, image tags, fewer than two API or web replicas, a tenant that is not a GUID, NetworkPolicies off and a Kubernetes Secret in place of Key Vault. Only the CI overlay (x-ci: true) may use dev sign-in, a Kubernetes Secret and no NetworkPolicies.",
+  "description": "Refuses what must never reach a GMF install: AUTH_MODE dev, local deploy credentials, image tags, fewer than two API or web replicas, a tenant that is not a GUID, NetworkPolicies off and a Kubernetes Secret in place of Key Vault and environment overrides (ciEnv). Only the CI overlay (x-ci: true) may use dev sign-in, a Kubernetes Secret, no NetworkPolicies and ciEnv.",
   "type": "object",
   "definitions": {
     "guid": {
@@ -100,6 +100,15 @@
     },
     "x-ci": {
       "type": "boolean"
+    },
+    "ciEnv": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "corsOrigins": {
       "type": "string"
@@ -883,6 +892,9 @@
   "then": {},
   "else": {
     "properties": {
+      "ciEnv": {
+        "maxProperties": 0
+      },
       "auth": {
         "properties": {
           "mode": {

@@ -23,6 +23,10 @@
 # The CI-only overlay (ci/values.kind.yaml) sets this; the schema then allows AUTH_MODE=dev and a
 # Kubernetes Secret in place of Key Vault. Never set it in an install.
 x-ci: false
+# CI only (x-ci): variables set on the api and worker containers, overriding the ConfigMap (the kind
+# end to end sets PROVIDER=fake, EMBEDDINGS_BACKEND=hash, BUILD_TOOLCHAIN=false and a short
+# JOB_STALE_SECONDS). The schema refuses any entry without x-ci.
+ciEnv: {}
 
 image:
   # GMF's registry, e.g. gmfacr.azurecr.io. Images are pulled by digest only (no tags).

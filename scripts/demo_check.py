@@ -17,11 +17,17 @@ Two modes, because two parts of the run need the internet:
   restore failed with the NuGet reason and the ``make nuget-cache`` remedy, build and test
   skipped, G4 not enabled, the service not running and verify refused, the infrastructure
   validation reporting the unreachable registry. The plan still runs in connect-later mode.
+* ``toolchain-off``: the workers run with ``BUILD_TOOLCHAIN=false`` (the kind end to end,
+  ``make kind-e2e``). The solution is generated, filled and reviewed; restore, build, format and
+  test are skipped with the switched-off reason, G4 is not enabled, the service cannot start and
+  verify is refused. The infrastructure validation may pass or report the unreachable registry,
+  whichever the cluster's egress allows; either must be reported honestly.
 
 Without ``--mode`` the probes decide. The script starts nothing: ``make demo-check`` starts an API
 when none answers. It never prints key values.
 
-    python scripts/demo_check.py [--api URL | --base-url URL] [--token TOKEN] [--mode full|offline]
+    python scripts/demo_check.py [--api URL | --base-url URL] [--token TOKEN]
+                                 [--mode full|offline|toolchain-off]
                                  [--zip PATH]
 
 Without ``--api`` the API URL comes from API_URL, else from API_PORT in the environment or .env
@@ -75,6 +81,8 @@ def api_url_from_base(base_url: str) -> str:
 
 
 TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
+MODES = ("full", "offline", "toolchain-off")
+TOOLCHAIN_OFF_MARKER = "BUILD_TOOLCHAIN=false"
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
 NUGET_INDEX = "https://api.nuget.org/v3/index.json"
 REGISTRIES = {"opentofu": "https://registry.opentofu.org/.well-known/terraform.json",
@@ -146,6 +154,7 @@ class Flow:
         self.token = token  # a bearer token signs in (oidc install): X-User is ignored
         self.actor = ""  # the token's user, as the audit trail names them
         self.full = mode == "full"
+        self.toolchain_off = mode == "toolchain-off"
         self.project_id = ""
         self.process_ids: dict[str, str] = {}
         self.builds: dict[str, str] = {}
@@ -309,11 +318,28 @@ class Flow:
                        f"{len(te['filled'])} filled, {len(te['rejections'])} rejected, "
                        f"{len(te['warnings'])} warnings; review findings "
                        f"{sum(len(v) for v in (b.get('review_findings') or {}).values())}" if te else "missing")
-        self.run.check(s, "format check", steps.get("format", {}).get("ok") is True,
-                       _first_line(steps.get("format", {}).get("log")))
         g4 = b.get("g4") or {}
         restore = steps.get("restore", {})
-        if self.full:
+        if not self.toolchain_off:
+            self.run.check(s, "format check", steps.get("format", {}).get("ok") is True,
+                           _first_line(steps.get("format", {}).get("log")))
+        if self.toolchain_off:
+            names = ("restore", "build", "format", "test")
+            off = [n for n in names if steps.get(n, {}).get("skipped") is True and steps[n].get("ok") is False
+                   and TOOLCHAIN_OFF_MARKER in (steps[n].get("log") or "")]
+            self.run.check(s, "restore, build, format and test skipped", off == list(names),
+                           _first_line(restore.get("log")) if off == list(names)
+                           else f"skipped with the switched-off reason: {off or 'none'}")
+            # nothing ran: every runnable test is not run (the rest have no body or are blocked)
+            self.run.check(s, "tests listed, none run",
+                           tests["total"] > 0 and tests["passed"] == 0 and tests["failed"] == 0,
+                           f"{tests['total']} tests: {tests['not_run']} not run, {tests.get('no_body', 0)} "
+                           f"without a body, {tests.get('blocked', 0)} blocked, {tests['passed']} passed")
+            self.run.check(s, "build status failed", b["status"] == "failed", b["status"])
+            self.run.check(s, "G4 not enabled, reason given",
+                           g4.get("enabled") is False and "compile did not pass" in (g4.get("reason") or ""),
+                           g4.get("reason"))
+        elif self.full:
             self.run.check(s, "restore passed", restore.get("ok") is True,
                            _tail_line(restore.get("log") or "", "NuGet unreachable"))
             self.run.check(s, "compile passed", steps.get("build", {}).get("ok") is True,
@@ -351,12 +377,18 @@ class Flow:
         self.run.check(s, "terraform fmt and terragrunt hclfmt", v.get("fmt_ok") is True and v.get("hclfmt_ok") is True,
                        f"fmt {v.get('fmt_ok')}, hclfmt {v.get('hclfmt_ok')}")
         modules = v.get("modules") or []
-        if self.full:
+        unreachable = v.get("registry_unreachable") is True and all(m.get("registry_unreachable") for m in modules)
+        if self.toolchain_off:
+            # the cluster's egress decides: validated, or the unreachable registry said plainly
+            self.run.check(s, "infra validated or registry unreachable reported",
+                           v.get("ok") is True or (unreachable and v.get("ok") is False),
+                           f"{len(modules)} modules validated" if v.get("ok")
+                           else (v.get("notes") or ["no note"])[0])
+        elif self.full:
             bad = [m["name"] for m in modules if not (m.get("init_ok") and m.get("validate_ok"))]
             self.run.check(s, "infra validated", v.get("ok") is True and not bad,
                            f"{len(modules)} modules validated" if not bad else f"not validated: {bad}")
         else:
-            unreachable = v.get("registry_unreachable") is True and all(m.get("registry_unreachable") for m in modules)
             self.run.check(s, "registry unreachable reported", unreachable and v.get("ok") is False,
                            (v.get("notes") or ["no note"])[0])
 
@@ -399,10 +431,15 @@ class Flow:
             self.run.check(s, "service not running", state.get("running") is False, f"running {state.get('running')}")
             start = self.post(f"/builds/{build_id}/run")
             detail = start.json().get("detail") or ""
-            nu = re.search(r"NU1301[^.]*\.", detail)
-            self.run.check(s, "start refused with the NuGet reason",
-                           start.status_code == 409 and "nuget" in detail.lower(),
-                           f"HTTP {start.status_code}: {detail.split(':')[0]}: {nu.group(0) if nu else _first_line(detail)}")
+            if self.toolchain_off:  # nothing was compiled, so there is nothing to start
+                self.run.check(s, "start refused", start.status_code == 409,
+                               f"HTTP {start.status_code}: {_first_line(detail)}")
+            else:
+                nu = re.search(r"NU1301[^.]*\.", detail)
+                self.run.check(s, "start refused with the NuGet reason",
+                               start.status_code == 409 and "nuget" in detail.lower(),
+                               f"HTTP {start.status_code}: {detail.split(':')[0]}: "
+                               f"{nu.group(0) if nu else _first_line(detail)}")
             ver = self.post(f"/builds/{build_id}/verify")
             self.run.check(s, "verify refused", ver.status_code == 409, f"HTTP {ver.status_code}: "
                            f"{ver.json().get('detail')}")
@@ -418,7 +455,11 @@ class Flow:
         self.run.check(s, "connect-later plan", r.status_code == 200 and body.get("connected") is False
                        and plan.get("status") == "connect_later", body.get("reason") or body, fatal=True)
         last = body.get("last_validation") or {}
-        if self.full:
+        if self.toolchain_off:
+            self.run.check(s, "plan carries the validation outcome",
+                           last.get("ok") is True or last.get("registry_unreachable") is True,
+                           f"ok {last.get('ok')}" if last.get("ok") else (last.get("notes") or ["no note"])[0])
+        elif self.full:
             self.run.check(s, "plan carries a passing validation", last.get("ok") is True, f"ok {last.get('ok')}")
         else:
             self.run.check(s, "plan carries the registry reason", last.get("registry_unreachable") is True,
@@ -507,7 +548,8 @@ def main(argv: list[str] | None = None) -> int:
                     "is at <host>/api (overrides --api; the run is full unless --mode offline)")
     ap.add_argument("--token", default=os.environ.get("EXIQO_TOKEN", ""),
                     help="Entra access token for an AUTH_MODE=oidc install (default: EXIQO_TOKEN)")
-    ap.add_argument("--mode", choices=("full", "offline"), help="force a mode (default: decided by the probes)")
+    ap.add_argument("--mode", choices=MODES, help="force a mode (default: decided by the probes; "
+                    "toolchain-off for workers with BUILD_TOOLCHAIN=false)")
     ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
                     help="the synthetic estate zip (make samples-zip)")
     args = ap.parse_args(argv)

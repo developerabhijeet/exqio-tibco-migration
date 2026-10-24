@@ -148,6 +148,14 @@ objects: |
 {{- end }}
 {{- end -}}
 
+{{/* ciEnv (CI overlay only, see values.yaml): env entries that override the ConfigMap's. */}}
+{{- define "exiqo.ciEnv" -}}
+{{- range $name, $value := .Values.ciEnv }}
+- name: {{ $name }}
+  value: {{ $value | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "exiqo.neo4jUri" -}}
 {{- if .Values.neo4j.enabled -}}
 {{ .Values.neo4j.uri | default "bolt://exiqo-neo4j:7687" }}

@@ -51,6 +51,7 @@ spec:
               valueFrom:
                 fieldRef: {fieldPath: metadata.name}
             {{- include "exiqo.secretFileEnv" (dict "ctx" .) | nindent 12 }}
+            {{- include "exiqo.ciEnv" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8000

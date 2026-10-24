@@ -65,6 +65,12 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "keyVault.mode"
+  - it: rejects CI-only environment overrides (ciEnv) outside the CI overlay
+    set:
+      ciEnv.PROVIDER: fake
+    asserts:
+      - failedTemplate:
+          errorPattern: "ciEnv"
   - it: rejects a missing ingress host
     set:
       ingress.host: ""
@@ -79,6 +85,7 @@ values:
   - ../exiqo/ci/values.kind.yaml
 templates:
   - templates/api-deployment.yaml
+  - templates/worker-deployment.yaml
   - templates/configmap.yaml  # the deployment's checksum/config includes it
 tests:
   - it: ci/values.kind.yaml (x-ci) may use AUTH_MODE dev and a Kubernetes Secret
@@ -103,3 +110,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "image.platform"
+  - it: the CI overlay's ciEnv reaches the api and worker containers, overriding the ConfigMap
+    set:
+      ciEnv: {PROVIDER: fake, JOB_STALE_SECONDS: "20"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: PROVIDER, value: fake}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: JOB_STALE_SECONDS, value: "20"}
+        template: templates/worker-deployment.yaml

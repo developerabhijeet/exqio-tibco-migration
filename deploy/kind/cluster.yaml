@@ -1,0 +1,21 @@
+# The kind cluster of `make kind-e2e` (deploy/kind/setup.sh). One node: kind's local-path
+# provisioner only binds ReadWriteOnce, and on one node that volume is shared by every api and
+# worker pod, as Azure Files is on AKS. setup.sh replaces the host port below with a free one
+# (or KIND_HTTP_PORT) and the name with KIND_CLUSTER; nothing else is templated.
+#
+# ingress-nginx (deploy/kind/ingress-nginx.yaml) listens on the node's port 80 (hostPort), which
+# extraPortMappings publishes on 127.0.0.1 only. Images come from a local registry container
+# (setup.sh): kind's node images (v0.27 and later) point containerd at /etc/containerd/certs.d,
+# where setup.sh maps localhost:<registry port> to that container on the kind network, so pods
+# pull by digest as they do on AKS.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: exiqo-e2e
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 18080
+        listenAddress: 127.0.0.1
+        protocol: TCP

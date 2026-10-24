@@ -22,7 +22,7 @@ WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS
 
 .PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
-	azure-validate pipeline-lint
+	azure-validate pipeline-lint kind-tools kind-e2e
 
 setup:
 	python3 -m venv .venv
@@ -259,11 +259,11 @@ chart-check:
 	$(HELM) lint --strict $(CHART) -f $(CHART_GMF) -f $(CHART_CI)
 	$(HELM_UNITTEST) --strict -f '../tests/*_test.yaml' $(HELM_UNITTEST_CHART)
 	@for bad in auth.mode=dev deploy.credentialMode=local image.platform.tag=1.0 api.replicas=1 \
-		auth.tenantId=gmfinancial.onmicrosoft.com keyVault.mode=kubernetesSecret; do \
+		auth.tenantId=gmfinancial.onmicrosoft.com keyVault.mode=kubernetesSecret ciEnv.PROVIDER=fake; do \
 		if $(HELM) template exiqo $(CHART) -f $(CHART_GMF) --set $$bad >/dev/null 2>&1; then \
 			echo "chart-check: the schema accepted $$bad"; exit 1; \
 		fi; \
-	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source"
+	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source, CI env overrides"
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/helm/tests/values/backup-enabled.yaml \
 		| $(PY) -I deploy/helm/tests/subchart_contract.py
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)
@@ -338,3 +338,17 @@ pipeline-lint:
 		echo "pipeline-lint: actions above are not pinned by commit"; exit 1; fi
 	$(PY) -I -c "$$GH_CHECK" deploy/pipelines/github-release.yml
 	$(PY) -I -c "$$ADO_CHECK" deploy/pipelines/azure-pipelines.yml
+
+# ---------------------------------------------------------------- in-cluster end to end (kind)
+# deploy/kind/setup.sh: kind, kubectl and helm pinned and SHA256-verified into .tools/bin (those on
+# PATH are used instead), then a kind cluster with ingress-nginx, Postgres and a local registry,
+# both images built and pushed by digest, `helm upgrade --install --atomic` with the CI overlay
+# (2 api, 2 worker, PROVIDER=fake, EMBEDDINGS_BACKEND=hash, BUILD_TOOLCHAIN=false), the demo check
+# through the ingress and a worker killed mid-build. Tears the cluster down at the end unless
+# KEEP_CLUSTER=1; on failure prints pods, events and logs first. Needs Docker and the network
+# (images, the Neo4j chart repository). `deploy/kind/setup.sh down` removes a kept cluster.
+kind-tools:
+	deploy/kind/setup.sh tools
+
+kind-e2e: kind-tools
+	PY=$(PY) IMAGE_TAG=$(IMAGE_TAG) deploy/kind/setup.sh e2e
