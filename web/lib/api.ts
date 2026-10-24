@@ -61,6 +61,19 @@ export function requireApiUrl(): string {
   return API_URL;
 }
 
+export interface SystemStatus {
+  version: string;
+  role: string;
+  auth_mode: string;
+  deploy_credential_mode: string;
+  image_digests: Record<string, string>;
+  egress_allowlist: string[];
+  brand_name: string;
+  support_contact: string;
+  /** postgres, neo4j, secrets: "ok", "disabled" or "down: <Class>". */
+  checks: Record<string, string>;
+}
+
 let currentUser = "sme.vicky";
 
 export function setApiUser(user: string): void {
@@ -153,6 +166,8 @@ const post = (body?: unknown): RequestInit => ({ method: "POST", body: body === 
 
 export const api = {
   brand: () => json<Brand>("/system/brand"),
+  /** The About panel's data; 403 (or 401) for anyone but an admin. */
+  systemStatus: () => json<SystemStatus>("/system/status"),
   health: () => json<{ status: string; provider: string }>("/health"),
 
   listProjects: () => json<Project[]>("/projects"),

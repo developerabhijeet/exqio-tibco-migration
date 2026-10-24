@@ -38,6 +38,9 @@ COPY web/scripts/copy-monaco.mjs ./scripts/copy-monaco.mjs
 RUN npm ci
 
 COPY web/ ./
+# The deploy guides the Help & Support screen renders; scripts/copy-guides.mjs (prebuild) reads
+# them from ../docs/deploy, the same relative path as in the repository.
+COPY docs/deploy/ /docs/deploy/
 # The Next cache directory is pointed at /tmp: the runtime root filesystem is read-only, and
 # /tmp is the only writable path the pod has.
 RUN npm run build \

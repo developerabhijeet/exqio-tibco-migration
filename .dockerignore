@@ -13,6 +13,8 @@
 
 # web image: sources and the lockfile; dependencies are installed in the build stage
 !web/
+# the help guides web/scripts/copy-guides.mjs bundles into the Help & Support screen
+!docs/deploy/
 
 # Never shipped, even inside an allowed folder. api/tests holds the EXIQO_TEST_HANDLERS job
 # handlers, which must not exist in a production image; engine/tests holds fixtures only.
@@ -30,5 +32,6 @@ web/out
 web/test-results
 web/playwright-report
 web/e2e
+web/content
 web/tsconfig.tsbuildinfo
 web/public/monaco
