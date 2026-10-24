@@ -2,11 +2,15 @@
 
 Run with ``uvicorn api.app.main:app`` (``make api``). The schema is created by Alembic
 (``make db``); if it is missing the API still starts and logs how to create it.
+
+``EXIQO_ROLE`` decides what runs here: roles ``api`` and ``all`` hold the job-event listener
+(SSE); role ``all`` also runs the in-process job worker ``local-<pid>``.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,8 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import Settings
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
+from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
-from api.app.jobs.runner import JobRunner
+from api.app.jobs.runner import JobRunner, JobWorker
 from api.app.routers import (
     analysis,
     ask,
@@ -48,16 +53,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         engine = make_engine(settings.database_url)
         sessionmaker = make_sessionmaker(engine)
-        runner = JobRunner(sessionmaker, workers=settings.job_workers)
         knowledge = Knowledge(psycopg_url(settings.database_url))
         services: dict = {}  # build id -> running generated service (verify.RunInfo)
         fernet, fernet_generated = make_fernet(settings)
-        runner.services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
+        worker_services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
                                          services=services, fernet=fernet)
+        worker = None
+        if settings.exiqo_role == "all":
+            worker = JobWorker(sessionmaker, worker_services, name=f"local-{os.getpid()}",
+                               slots=settings.job_workers, heartbeat_s=settings.job_heartbeat_seconds,
+                               stale_s=settings.job_stale_seconds, max_attempts=settings.job_max_attempts)
+        runner = JobRunner(sessionmaker, worker=worker)
+        listener = None
+        if settings.exiqo_role in ("api", "all"):
+            listener = JobListener(psycopg_url(settings.database_url))
+            await listener.start()
         app.state.settings = settings
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.runner = runner
+        app.state.worker_services = worker_services
+        app.state.listener = listener
         app.state.knowledge = knowledge
         app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
         app.state.services = services
@@ -86,6 +102,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     log.exception("could not stop the service of build %s", info.build_id)
             app.state.services.clear()
             await runner.stop()
+            if listener is not None:
+                await listener.stop()
             await engine.dispose()
 
     app = FastAPI(title="ExiQO Migrate API", version="0.1.0", lifespan=lifespan)

@@ -1,4 +1,4 @@
-"""Job runner, SSE event stream, restart recovery and the user principal dependency (Task 17)."""
+"""Job runner, SSE event stream, lost-worker recovery and the user principal dependency (Task 17)."""
 from __future__ import annotations
 
 import asyncio
@@ -109,19 +109,20 @@ async def test_events_for_other_worker_are_polled(client, app):
     assert [e["data"]["text"] for e in events] == ["from elsewhere", "done"]
 
 
-async def test_restart_marks_running_jobs_failed(app):
+async def test_recovery_fails_running_job_without_heartbeat(app):
+    """A running job with no heartbeat (left by a process older than worker heartbeats) is lost."""
     sm = app.state.sessionmaker
     async with sm() as s:
         job = Job(kind="scan", status="running", payload={})
         s.add(job)
         await s.commit()
         job_id = job.id
-    await app.state.runner.recover()
+    await app.state.runner.worker.reap()
     async with sm() as s:
         job = await s.get(Job, job_id)
-        assert job.status == "failed" and job.error == "api restarted" and job.finished_at
+        assert job.status == "failed" and job.error == "worker lost" and job.finished_at
         evs = (await s.execute(select(JobEvent).where(JobEvent.job_id == job_id))).scalars().all()
-        assert [(e.event, e.text) for e in evs] == [("error", "api restarted")]
+        assert [(e.event, e.text) for e in evs] == [("error", "worker lost")]
 
 
 async def test_agent_header_forbidden(client, app):
