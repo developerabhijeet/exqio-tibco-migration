@@ -5,6 +5,7 @@
 
 # platform image: the Python packages, the toolchain detector the engine loads, the Alembic config
 !pyproject.toml
+!uv.lock
 !api/
 !engine/
 !scripts/toolchain.py

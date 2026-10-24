@@ -172,7 +172,8 @@ TRIVY_IMAGE ?= aquasec/trivy:0.58.1
 HADOLINT := $(if $(shell command -v hadolint 2>/dev/null),hadolint,\
 	docker run --rm -i -v "$(CURDIR)":/work -w /work $(HADOLINT_IMAGE) hadolint)
 TRIVY := $(if $(shell command -v trivy 2>/dev/null),trivy,\
-	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v exiqo-trivy-cache:/root/.cache $(TRIVY_IMAGE))
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v exiqo-trivy-cache:/root/.cache \
+		-v "$(CURDIR)/.trivyignore":/work/.trivyignore:ro -w /work $(TRIVY_IMAGE))
 PILOT_COMPOSE := docker compose -f deploy/docker/compose.pilot.yml
 
 images:
@@ -187,12 +188,13 @@ image-test:
 image-lint:
 	$(HADOLINT) --failure-threshold error $(DOCKERFILES)
 
-# Fails on any CRITICAL vulnerability, fixed upstream or not: a finding is reported, not hidden.
+# Fails on any CRITICAL vulnerability, fixed upstream or not, except those accepted in .trivyignore
+# (each with its reason and an expiry date).
 image-scan:
-	@for image in $(PLATFORM_IMAGE) $(WEB_IMAGE); do \
+	@rc=0; for image in $(PLATFORM_IMAGE) $(WEB_IMAGE); do \
 		echo "image-scan: $$image"; \
-		$(TRIVY) image --severity CRITICAL --exit-code 1 --no-progress $$image || exit 1; \
-	done
+		$(TRIVY) image --severity CRITICAL --exit-code 1 --no-progress --ignorefile .trivyignore $$image || rc=1; \
+	done; exit $$rc
 
 # The hardened single-VM pilot (deploy/docker/compose.pilot.yml; its header lists the secret files
 # to create under deploy/docker/secrets/). Defaults to the images `make images` built here.

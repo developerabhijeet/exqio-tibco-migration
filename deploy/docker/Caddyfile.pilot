@@ -22,6 +22,12 @@
 		Referrer-Policy no-referrer
 		-Server
 	}
+	# Belt and braces: the API serves no docs or schema in oidc mode, and the proxy refuses them too.
+	@apidocs path /api/docs /api/docs/* /api/redoc /api/redoc/* /api/openapi.json
+	handle @apidocs {
+		respond 404
+	}
+
 	# The API, unbuffered and uncompressed: job progress is a server-sent event stream.
 	@api path /api /api/*
 	handle @api {

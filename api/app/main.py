@@ -160,7 +160,10 @@ def _create_api(settings: Settings) -> FastAPI:
                 await listener.stop()
             await engine.dispose()
 
-    app = FastAPI(title="ExiQO Migrate API", version="0.1.0", lifespan=lifespan)
+    # The interactive docs and the OpenAPI schema are a development aid; with sign-in on (oidc, the
+    # installed product) they are not served, so nobody unauthenticated can map the API.
+    docs = {} if settings.auth_mode == "dev" else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    app = FastAPI(title="ExiQO Migrate API", version="0.1.0", lifespan=lifespan, **docs)
     app.state.settings = settings
     app.state.oidc = Oidc(settings) if settings.auth_mode == "oidc" else None
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True,

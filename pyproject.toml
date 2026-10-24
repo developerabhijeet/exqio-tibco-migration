@@ -37,6 +37,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff"]
 
+# fastembed caps pillow below 13, and pillow 12.x carries CRITICAL CVEs (CVE-2026-112393 and others,
+# fixed in 13.0.0). Only fastembed's image models use pillow; the engine embeds text only, and the
+# image test loads the text model with this override in place. Drop it once fastembed allows 13.
+[tool.uv]
+override-dependencies = ["pillow>=13.0.0"]
+
 [tool.setuptools.packages.find]
 include = ["engine*", "api*"]
 

@@ -128,3 +128,30 @@ def test_web_base_url_honours_same_origin():
     assert re.search(r"NEXT_PUBLIC_SAME_ORIGIN", cfg) and '"/api"' in cfg
     api_ts = (REPO / "web/lib/api.ts").read_text()
     assert "NEXT_PUBLIC_API_URL" in api_ts and "requireApiUrl" in api_ts
+
+
+def _route_paths(app) -> set[str]:
+    """Every route path, including those of an app mounted under ``api_base_path``."""
+    paths: set[str] = set()
+    for route in app.routes:
+        sub = getattr(route, "app", None)
+        if hasattr(sub, "routes") and hasattr(route, "path"):
+            paths |= {route.path + p for p in _route_paths(sub)}
+        elif hasattr(route, "path"):
+            paths.add(route.path)
+    return paths
+
+
+DOC_PATHS = {"/api/docs", "/api/redoc", "/api/openapi.json"}
+
+
+def test_oidc_mode_serves_no_api_docs(tmp_path):
+    # The installed product signs callers in; the schema and the docs UI are not served to anyone.
+    s = Settings(auth_mode="oidc", session_secret="s" * 32, oidc_tenant_id="t", oidc_client_id="c",
+                 api_base_path="/api", data_dir=tmp_path, _env_file=None)
+    assert not DOC_PATHS & _route_paths(create_app(s))
+
+
+def test_dev_mode_keeps_api_docs(tmp_path):
+    s = Settings(auth_mode="dev", api_base_path="/api", data_dir=tmp_path, _env_file=None)
+    assert DOC_PATHS <= _route_paths(create_app(s))

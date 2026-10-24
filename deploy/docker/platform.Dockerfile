@@ -15,11 +15,18 @@
 # Stages:
 #   toolchain  the SDK base plus Python 3.12 (Ubuntu 24.04's), tini, Terraform and Terragrunt,
 #              each download checked against a SHA256 build argument for the target architecture
-#   deps       the Python dependencies in /opt/venv and the fastembed model in /opt/models
+#   uv         only the uv binary, used to export uv.lock as a hash-pinned requirements file
+#   deps       the locked Python dependencies in /opt/venv and the fastembed model in /opt/models
 #   final      the application, no apt, UID 10001, read-only by design (writes: /tmp and /data)
 
 # mcr.microsoft.com/dotnet/sdk:10.0 (Ubuntu 24.04 "noble"), resolved 2026-10-24
 ARG BASE_IMAGE_DOTNET=mcr.microsoft.com/dotnet/sdk:10.0@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2
+# ghcr.io/astral-sh/uv:0.11.7 (the version that wrote uv.lock), resolved 2026-10-24; build only
+ARG BASE_IMAGE_UV=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+
+# --------------------------------------------------------------------------------------------- uv
+# hadolint ignore=DL3006
+FROM ${BASE_IMAGE_UV} AS uv
 
 # ------------------------------------------------------------------------------------- toolchain
 # The tag and digest come from the build argument (DL3006 cannot see through it).
@@ -27,14 +34,17 @@ ARG BASE_IMAGE_DOTNET=mcr.microsoft.com/dotnet/sdk:10.0@sha256:747cbade5bfd918a1
 FROM ${BASE_IMAGE_DOTNET} AS toolchain
 
 ARG TARGETARCH
-ARG TERRAFORM_VERSION=1.9.8
-# From https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_SHA256SUMS
-ARG TERRAFORM_SHA256_AMD64=186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8
-ARG TERRAFORM_SHA256_ARM64=f85868798834558239f6148834884008f2722548f84034c9b0f62934b2d73ebb
-ARG TERRAGRUNT_VERSION=0.68.17
-# From https://github.com/gruntwork-io/terragrunt/releases/download/v0.68.17/SHA256SUMS
-ARG TERRAGRUNT_SHA256_AMD64=a2ec458416e9560e3a7c8376818d07c5cc62abaa5627e884913b719622c1d7ae
-ARG TERRAGRUNT_SHA256_ARM64=b0f326a91e9d5944d8e3634bc4306984cc4f6ec25eb9ced4e6583957cfdedba1
+# The newest releases at the time of writing; Terraform 1.9.8 and Terragrunt 0.68.x carried CRITICAL
+# CVEs in their Go dependencies (grpc CVE-2026-33186, stdlib CVE-2025-68121, echo
+# GHSA-cxf3-9h37-7rr8), and the Plan step's `terragrunt run --all` needs Terragrunt 1.x anyway.
+ARG TERRAFORM_VERSION=1.17.0
+# From https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_SHA256SUMS
+ARG TERRAFORM_SHA256_AMD64=c168cab7c637a8769fdb90089ddd19de701bc6ff8aca64dc2e2185fe46f59f67
+ARG TERRAFORM_SHA256_ARM64=f32478134ffc6d710eec474bbd316652cdddc0f4e336973a3745e8d3a3309cdf
+ARG TERRAGRUNT_VERSION=1.2.1
+# From https://github.com/gruntwork-io/terragrunt/releases/download/v1.2.1/SHA256SUMS
+ARG TERRAGRUNT_SHA256_AMD64=f2f6238ad2348855a4e876b90fd31f3f5d106bb234794202a00b2bcc139fa753
+ARG TERRAGRUNT_SHA256_ARM64=01c0768aab01e0c183209ba7edce9d2ebc8f8a7690763bb52f1b8900aec224bc
 # GMF mirrors of the two release sites (Artifactory generic remotes, for example); same paths.
 ARG TERRAFORM_BASE_URL=https://releases.hashicorp.com/terraform
 ARG TERRAGRUNT_BASE_URL=https://github.com/gruntwork-io/terragrunt/releases/download
@@ -72,6 +82,9 @@ RUN case "${TARGETARCH}" in \
 # ------------------------------------------------------------------------------------------ deps
 FROM toolchain AS deps
 
+# Inherited from toolchain already; stated again so a pipe below can never mask a failure.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG HF_ENDPOINT=https://huggingface.co
 # Kept in step with engine/knowledge/embeddings.py (FASTEMBED_MODEL); the image test loads the
@@ -87,20 +100,27 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
     FASTEMBED_CACHE_PATH=/opt/models
 
-# Only pyproject.toml first: the dependency layer is rebuilt when the dependencies change, not on
-# every source edit. The project's own code is not installed into the venv: it runs from /app,
-# which the engine treats as the repository root (scripts/toolchain.py, .tools lookups).
-COPY pyproject.toml /src/pyproject.toml
-RUN python3 -m venv /opt/venv \
- && python3 -c 'import tomllib; print("\n".join(tomllib.load(open("/src/pyproject.toml", "rb"))["project"]["dependencies"]))' \
-      > /src/requirements.txt \
- && /opt/venv/bin/pip install --no-cache-dir -r /src/requirements.txt \
- && /opt/venv/bin/pip check
+# The dependency layer is rebuilt when pyproject.toml or uv.lock change, not on every source edit.
+# uv.lock is exported with every artifact's SHA256 and pip installs with --require-hashes, so the
+# image gets exactly the locked files, from PyPI or from GMF's mirror (PIP_INDEX_URL), or fails.
+# The project's own code is not installed into the venv: it runs from /app, which the engine
+# treats as the repository root (scripts/toolchain.py, .tools lookups). `pip check` must find
+# nothing but the one deliberate conflict: pyproject.toml overrides fastembed's pillow<13 cap.
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock /src/
+RUN uv export --project /src --frozen --no-dev --no-emit-project --format requirements-txt \
+      --output-file /src/requirements.txt \
+ && python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir --require-hashes --no-deps -r /src/requirements.txt \
+ && { /opt/venv/bin/pip check || true; } \
+      | { grep -v -e 'No broken requirements' -e '^fastembed .* has requirement pillow<13' || true; } \
+      | { ! grep .; }
 
 # The embedding model is part of the image: no pod ever calls Hugging Face.
 RUN /opt/venv/bin/python -c "import sys; from fastembed import TextEmbedding; TextEmbedding(sys.argv[1])" \
       "${FASTEMBED_MODEL}" \
- && chmod -R a+rX /opt/models
+ && chmod -R a+rX /opt/models \
+ && /opt/venv/bin/python -m pip uninstall --yes pip setuptools wheel
 
 # ----------------------------------------------------------------------------------------- final
 FROM toolchain AS final
@@ -112,11 +132,15 @@ LABEL org.opencontainers.image.title="exiqo-platform" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 
-# No package manager at run time: apt goes (and its state and caches), so nothing can fetch and
-# install packages. dpkg stays (it cannot download anything) because its database is what Trivy
+# No package manager at run time: apt goes (and its state and caches), pip, setuptools and wheel
+# were removed from /opt/venv in deps, and the venv/ensurepip packages that could bring pip back go
+# too, so nothing can fetch and install packages. curl and wget go as well: nothing at run time
+# uses them (health checks are Python). git stays for Terraform and Terragrunt `git::` sources. dpkg stays (it cannot download anything) because its database is what Trivy
 # and syft read to list the OS packages; without it the image would scan as empty. Setuid
 # and setgid bits are cleared so nothing in the image can raise privileges.
 RUN dpkg --purge --force-remove-essential --force-depends apt \
+ && dpkg --purge --force-depends python3-venv python3.12-venv python3-pip-whl python3-setuptools-whl \
+      curl wget \
  && rm -rf /var/lib/apt /var/cache/apt /etc/apt /var/log/apt /var/cache/debconf/*-old \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
  && groupadd --gid 10001 exiqo \

@@ -15,8 +15,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLATFORM="${PLATFORM_IMAGE:-exiqo-platform:test}"
 WEB="${WEB_IMAGE:-exiqo-web:test}"
-TERRAFORM_VERSION="1.9.8"
-TERRAGRUNT_VERSION="0.68.17"
+TERRAFORM_VERSION="1.17.0"
+TERRAGRUNT_VERSION="1.2.1"
 # The cluster's runtime constraints, applied to every container started here.
 # /data stands in for the DATA_DIR volume, which the pod gets writable through its fsGroup.
 HARDENED=(--read-only --tmpfs /tmp --tmpfs /data:mode=1777 --user 10001:10001 --cap-drop ALL
@@ -89,6 +89,12 @@ expect_output "platform image config sets USER 10001" "10001:10001" \
 # Exit 3 proves the shell ran and did not find the command (a missing shell is 127 as well).
 expect_status "platform has no apt-get" 3 docker run --rm --entrypoint sh "$PLATFORM" -c 'command -v apt-get || exit 3'
 expect_status "platform has no apt" 3 docker run --rm --entrypoint sh "$PLATFORM" -c 'command -v apt || exit 3'
+expect_status "platform has no pip (python -m pip fails)" 3 docker run --rm --entrypoint sh "$PLATFORM" -c \
+  'python -m pip --version >/dev/null 2>&1 || exit 3'
+expect_status "platform cannot bootstrap pip (python -m ensurepip fails)" 3 docker run --rm --entrypoint sh \
+  "$PLATFORM" -c 'python -m ensurepip --help >/dev/null 2>&1 || exit 3'
+expect_status "platform has no curl or wget" 3 docker run --rm --entrypoint sh "$PLATFORM" -c \
+  'command -v curl || command -v wget || exit 3'
 expect_status "platform does not ship api/tests (EXIQO_TEST_HANDLERS module)" 1 \
   docker run --rm --entrypoint python "$PLATFORM" -c 'import api.tests.support_handlers'
 expect_status "entrypoint refuses an unknown EXIQO_ROLE with 64" 64 \
