@@ -6,13 +6,18 @@
 #                       candidate tag, print their digests (platform_digest=..., web_digest=...)
 #   release.sh scan     pull by digest; make egress-audit; Trivy, failing on CRITICAL (make image-scan)
 #   release.sh sign     syft SBOM attached with cosign attest; cosign sign; add the release tag
-#   release.sh deploy   cosign verify; helm upgrade --install --atomic with the digests
+#   release.sh deploy   cosign verify (committed public key); helm upgrade --install --atomic
 #   release.sh lint     hadolint only; release.sh verify: cosign verify only
 #
 # Images move between stages by digest only. An image that fails the scan stays an unsigned
 # candidate, and deploy refuses anything that does not verify against GMF's signing key, so the
 # candidate tag never reaches the cluster. The release tag is added after signing; ACR retention of
 # untagged manifests can therefore not delete a running image.
+#
+# Each stage runs as its own identity (deploy/azure README.md): build/scan has AcrPush only; sign
+# has AcrPush and Key Vault Crypto User on the signing key; deploy has AcrPull and its AKS role, and
+# verifies with the public key committed in the repository (COSIGN_PUBLIC_KEY_FILE), so it needs no
+# Key Vault access and cannot sign.
 #
 # Nothing here pulls from a public registry or download site: the base images, the BuildKit
 # Dockerfile frontend, every tool image and the Trivy database come from GMF's mirror
@@ -47,6 +52,9 @@ TRIVY_IMAGE="${TRIVY_IMAGE:-$TOOL_REGISTRY/aquasec/trivy:0.58.1@sha256:ab70a0220
 SYFT_IMAGE="${SYFT_IMAGE:-$TOOL_REGISTRY/anchore/syft:v1.55.0@sha256:4cc92b64ca74ffca4c94d4c8fcc01f217731375300be14d0b6eeb2e82eaa110a}"
 # cosign 2.6 (the maintained 2.x line): its sign/attest/verify flags are the ones used below.
 COSIGN_IMAGE="${COSIGN_IMAGE:-$TOOL_REGISTRY/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca}"
+# crane adds the release tag by digest with plain push rights (az acr import would need the
+# importImage action, which AcrPush lacks).
+CRANE_IMAGE="${CRANE_IMAGE:-$TOOL_REGISTRY/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1}"
 HELM_IMAGE="${HELM_IMAGE:-$TOOL_REGISTRY/alpine/helm:3.16.4@sha256:9b25e60ae264940b276e32866d37e3088e70c4e2d1784b964dc3f90346281a74}"
 # The Dockerfiles' "# syntax=docker/dockerfile:1.10" line, served by the mirror (BUILDKIT_SYNTAX).
 DOCKERFILE_FRONTEND="${DOCKERFILE_FRONTEND:-$TOOL_REGISTRY/docker/dockerfile:1.10@sha256:865e5dd094beca432e8c0a1d5e1c465db5f998dca4e439981029b3b81fb39ed5}"
@@ -93,16 +101,26 @@ pull_by_digest() {
   for image in platform web; do docker pull --quiet "$(ref_of "$image")"; done
 }
 
-# cosign in a container, as this user (the docker config and the token file are private), with
-# Workload Identity to Key Vault: AZURE_FEDERATED_TOKEN_FILE holds the pipeline's OIDC token.
-cosign() {
+# Tool containers run as this user: the docker config (registry token) is private to it.
+as_me() {
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -e DOCKER_CONFIG=/docker-config -v "$DOCKER_CONFIG_DIR":/docker-config:ro "$@"
+}
+
+# cosign for signing, with Workload Identity to Key Vault: AZURE_FEDERATED_TOKEN_FILE holds the
+# pipeline's OIDC token for the signer identity.
+cosign_signer() {
   need COSIGN_KEY AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_FEDERATED_TOKEN_FILE
-  docker run --rm --user "$(id -u):$(id -g)" \
-    -e HOME=/tmp -e DOCKER_CONFIG=/docker-config -v "$DOCKER_CONFIG_DIR":/docker-config:ro \
-    -e AZURE_CLIENT_ID -e AZURE_TENANT_ID -e AZURE_FEDERATED_TOKEN_FILE=/var/run/azure/token \
+  as_me -e AZURE_CLIENT_ID -e AZURE_TENANT_ID -e AZURE_FEDERATED_TOKEN_FILE=/var/run/azure/token \
     -e AZURE_AUTHORITY_HOST="${AZURE_AUTHORITY_HOST:-https://login.microsoftonline.com/}" \
     -v "$AZURE_FEDERATED_TOKEN_FILE":/var/run/azure/token:ro \
     -v "$WORK":/work "$COSIGN_IMAGE" "$@"
+}
+
+# cosign for verifying: the public key from the repository, no Azure credentials.
+cosign_verifier() {
+  need COSIGN_PUBLIC_KEY_FILE
+  as_me -v "$ROOT/$COSIGN_PUBLIC_KEY_FILE":/keys/cosign.pub:ro "$COSIGN_IMAGE" "$@"
 }
 
 cmd_lint() {
@@ -168,13 +186,12 @@ cmd_sign() {
       -v /var/run/docker.sock:/var/run/docker.sock -v "$WORK":/out \
       "$SYFT_IMAGE" "docker:$ref" -o "spdx-json=/out/$image.spdx.json"
     # --tlog-upload=false: no upload to the public Rekor log; trust rests on GMF's key.
-    cosign attest --yes --key "$COSIGN_KEY" --tlog-upload=false --type spdxjson \
+    cosign_signer attest --yes --key "$COSIGN_KEY" --tlog-upload=false --type spdxjson \
       --predicate "/work/$image.spdx.json" "$ref"
-    cosign sign --yes --key "$COSIGN_KEY" --tlog-upload=false \
+    cosign_signer sign --yes --key "$COSIGN_KEY" --tlog-upload=false \
       -a "org.opencontainers.image.version=$VERSION" -a "org.opencontainers.image.revision=$REVISION" "$ref"
-    # The release tag, server side (same digest).
-    az acr import --name "$ACR_NAME" --source "$ref" \
-      --image "$(repo_of "$image"):$VERSION" --force --only-show-errors
+    # The release tag on the signed digest (a manifest push, no layers move).
+    as_me "$CRANE_IMAGE" tag "$ref" "$VERSION"
   done
 }
 
@@ -182,8 +199,8 @@ cmd_verify() {
   need_digests
   local image
   for image in platform web; do
-    cosign verify --key "$COSIGN_KEY" --insecure-ignore-tlog=true "$(ref_of "$image")" >/dev/null
-    cosign verify-attestation --key "$COSIGN_KEY" --insecure-ignore-tlog=true --type spdxjson \
+    cosign_verifier verify --key /keys/cosign.pub --insecure-ignore-tlog=true "$(ref_of "$image")" >/dev/null
+    cosign_verifier verify-attestation --key /keys/cosign.pub --insecure-ignore-tlog=true --type spdxjson \
       "$(ref_of "$image")" >/dev/null
     echo "release.sh: $(ref_of "$image") is signed and has its SBOM" >&2
   done
@@ -200,7 +217,8 @@ helm() {
 
 cmd_deploy() {
   need_digests
-  need AKS_RESOURCE_GROUP AKS_NAME NAMESPACE HELM_VALUES_FILES NEO4J_CHART_REPOSITORY
+  need AKS_RESOURCE_GROUP AKS_NAME NAMESPACE HELM_VALUES_FILES NEO4J_CHART_REPOSITORY \
+    COSIGN_PUBLIC_KEY_FILE
   acr_login
   cmd_verify
 
@@ -216,8 +234,9 @@ cmd_deploy() {
   echo "$NEO4J_CHART_SHA256  deploy/helm/exiqo/charts/neo4j-$version.tgz" | sha256sum -c -
 
   # The API server and CA from the cluster, and an Entra token for it (AKS with Entra ID and
-  # Azure RBAC: the pipeline identity needs a role that can manage the release's namespace). No
-  # kubelogin: helm gets a bearer token.
+  # Azure RBAC). The deployer's role needs cluster scope for the chart's StorageClass, unless the
+  # install sets data.storageClass.create=false (deploy/azure README.md). No kubelogin: helm gets
+  # a bearer token.
   local kubeconfig="$WORK/kubeconfig"
   trap 'rm -f "$WORK/kubeconfig" "$ROOT/deploy/helm/.cluster-ca.crt"' EXIT
   az aks get-credentials --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_NAME" \

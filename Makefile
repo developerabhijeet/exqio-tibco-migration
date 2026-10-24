@@ -278,7 +278,8 @@ chart-check:
 # terraform test (mocked providers: the outputs -> chart values mapping), and tflint with the
 # azurerm ruleset (pinned in deploy/azure/.tflint.hcl) against gmf.example.tfvars. pipeline-lint:
 # actionlint on the GitHub Actions template, shellcheck on release.sh (from the actionlint image),
-# and a YAML parse of the Azure DevOps template (there is no offline schema check for it).
+# action pins, every GitHub job in an environment, and a structure check of the Azure DevOps
+# template (there is no offline schema check for it).
 # Terraform matches the platform image's version (deploy/docker/platform.Dockerfile). Each tool
 # runs from its pinned image when it is not on PATH; init and tflint --init need the Terraform
 # registry and GitHub (or TF_CLI_CONFIG_FILE pointing at a provider mirror).
@@ -309,6 +310,17 @@ print("pipeline-lint: azure-pipelines.yml ok,", len(tasks), "tasks pinned")
 endef
 export ADO_CHECK
 
+# Every GitHub job runs in an environment: Entra federated credentials need exact subjects
+# (repo:<org>/<repo>:environment:<name>), and each environment carries its own identity.
+define GH_CHECK
+import sys, yaml
+jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+missing = [name for name, job in jobs.items() if not job.get("environment")]
+assert not missing, f"jobs without an environment: {missing}"
+print("pipeline-lint: github-release.yml ok, every job runs in an environment")
+endef
+export GH_CHECK
+
 azure-validate: pipeline-lint
 	$(TERRAFORM) -chdir=$(AZURE_TF) fmt -check -recursive -diff
 	$(TERRAFORM) -chdir=$(AZURE_TF) init -backend=false -input=false -lockfile=readonly
@@ -322,4 +334,5 @@ pipeline-lint:
 	$(SHELLCHECK) deploy/pipelines/release.sh
 	@if grep -nE '^\s*-?\s*uses:' deploy/pipelines/github-release.yml | grep -vE '@[0-9a-f]{40}( |$$)'; then \
 		echo "pipeline-lint: actions above are not pinned by commit"; exit 1; fi
+	$(PY) -I -c "$$GH_CHECK" deploy/pipelines/github-release.yml
 	$(PY) -I -c "$$ADO_CHECK" deploy/pipelines/azure-pipelines.yml

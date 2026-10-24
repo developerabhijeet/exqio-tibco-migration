@@ -30,8 +30,48 @@ Blob Data Contributor on the backup container. It also gets Cognitive Services O
 |---|---|---|
 | `aks_kubelet_identity_object_id` | AcrPull | the registry |
 | `aks_cluster_identity_principal_id` | Storage Account Contributor | the data account (the Azure Files CSI driver reads its key) |
-| `release_principal_id` | AcrPush | the registry |
-| `release_principal_id` | Key Vault Crypto User | the signing key |
+| `build_principal_id` | AcrPush | the registry |
+| `signer_principal_id` | AcrPush | the registry (signatures, attestations, the release tag) |
+| `signer_principal_id` | Key Vault Crypto User | the signing key only |
+| `deployer_principal_id` | AcrPull | the registry (to verify signatures) |
+| `deployer_principal_id` + `deployer_aks_role` (opt-in) | that role | `aks_cluster_id`, or its release namespace with `deployer_aks_role_scope = "namespace"` |
+
+## Release pipeline identities
+
+The release pipelines (`deploy/pipelines`) use three identities, one per privilege. The approval
+and the rule "sign only after the scan" then rest on what each stage can do, not only on stage
+order. Create them however GMF manages pipeline identities (user-assigned managed identities or
+app registrations), and pass their object ids to the variables above.
+
+| Identity | Stages | Rights | Federated to (exact subjects; one credential each) |
+|---|---|---|---|
+| build | Build, Scan | AcrPush | GitHub `repo:<org>/<repo>:environment:release-build`; ADO the build service connection |
+| signer | Sign | AcrPush, Key Vault Crypto User on the signing key | GitHub `repo:<org>/<repo>:environment:release-sign`; ADO the sign service connection |
+| deployer | Deploy | AcrPull, an AKS role (below) | GitHub `repo:<org>/<repo>:environment:production` (one per target environment); ADO the deploy service connection |
+
+Entra federated credentials match subjects exactly, with no wildcards. That is why every GitHub
+job runs in an environment. Restrict `release-sign` to `v*` tags (environment deployment
+branches and tags) and give `production` required reviewers. In Azure DevOps, add a Branch
+control check (`refs/tags/v*`) to the sign and deploy service connections, and Approvals to the
+deploy connection and environment.
+
+The release tag is added with `crane tag`, a manifest push that AcrPush allows. `az acr import`
+would need `importImage`, which AcrPush lacks. The deployer verifies signatures with the public
+key committed in the repository (`terraform output -raw cosign_public_key_pem >
+deploy/gmf/cosign.pub`, the pipelines' `COSIGN_PUBLIC_KEY_FILE`), so it has no Key Vault access
+and cannot sign.
+
+**The deployer's AKS role is GMF's call.** Nothing is granted unless `deployer_aks_role` is set.
+The chart creates a cluster-scoped StorageClass (`data.storageClass.create`, default true), so a
+namespace-scoped role is not enough as installed by default. The deployer needs either:
+
+- a role at cluster scope that can manage that StorageClass, e.g. Azure Kubernetes Service RBAC
+  Cluster Admin (or a custom role that adds `storage.k8s.io/storageclasses` to the namespace
+  rights); or
+- Azure Kubernetes Service RBAC Admin on the release namespace only
+  (`deployer_aks_role_scope = "namespace"`), with the install setting
+  `data.storageClass.create=false` and `data.storageClass.name` naming a class the platform team
+  created beforehand with the same parameters and mount options.
 
 ## Run it
 
@@ -101,7 +141,8 @@ Other outputs:
 
 - `platform_identity_principal_id` and `deploy_identity_principal_ids`: the identities' object
   ids, for role assignments.
-- `cosign_key`: the pipelines' `COSIGN_KEY`.
+- `cosign_key`: the sign stage's `COSIGN_KEY`.
+- `cosign_public_key_pem`: commit it as the deploy stage's `COSIGN_PUBLIC_KEY_FILE`.
 - `egress_fqdns`: hosts to add to `egress.fqdns` and to GMF's firewall.
 
 ## Not created here
@@ -121,15 +162,34 @@ Other outputs:
 
   These are kept out of Terraform so they never land in its state. The database password cannot
   be kept out, because Terraform sets it on the server.
-- **Deploy-target RBAC.** Grant each `exiqo-deploy-<env>` identity what its Terraform needs on its
-  subscription. Contributor is the broadest; a custom role limited to the generated modules'
-  resource types is narrower:
+- **Deploy-target RBAC.** Grant each `exiqo-deploy-<env>` identity only what the generated
+  Terraform needs on its subscription. Prefer a custom role whose actions list the resource
+  providers the generated modules declare (read them from `terraform providers` and the plan):
 
   ```sh
+  cat > exiqo-deploy-role.json <<'JSON'
+  {
+    "Name": "ExiQO deploy (dev)",
+    "Description": "Resources the ExiQO-generated Terraform manages",
+    "Actions": [
+      "Microsoft.Resources/subscriptions/resourceGroups/*",
+      "Microsoft.Resources/deployments/*",
+      "Microsoft.Web/*",
+      "Microsoft.ServiceBus/*",
+      "Microsoft.Insights/components/*"
+    ],
+    "AssignableScopes": ["/subscriptions/<dev subscription>"]
+  }
+  JSON
+  az role definition create --role-definition @exiqo-deploy-role.json
   az role assignment create --assignee-object-id <deploy_identity_principal_ids.dev> \
-    --assignee-principal-type ServicePrincipal --role Contributor \
+    --assignee-principal-type ServicePrincipal --role "ExiQO deploy (dev)" \
     --scope /subscriptions/<dev subscription>
   ```
+
+  Adjust the actions to the modules GMF actually generates; the list above is an example. Use
+  Contributor (scoped to a resource group where possible) only when a custom role is not
+  practical.
 
 - **Entra authentication for Postgres.** This configuration uses password authentication,
   because the app connects with the password in `DATABASE_URL`. Entra-only authentication

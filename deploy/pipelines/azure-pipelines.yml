@@ -4,24 +4,38 @@
 # Runs after CI (unit tests, make chart-check), on a v* tag or by hand. The tests are not rerun
 # here: this pipeline releases the commit CI already passed.
 #
-# Azure sign-in: an Azure Resource Manager service connection with workload identity federation
-# (parameter serviceConnection), so no secret is stored. Its identity needs AcrPush on the
-# registry, Key Vault Crypto User on the signing key (deploy/azure release_principal_id grants
-# both) and, for Deploy, Azure Kubernetes Service RBAC Admin (or a narrower role) on the release
-# namespace. cosign signs with the connection's federated token (idToken), so the key never
-# leaves Key Vault.
+# Three identities, one per privilege, each behind its own Azure Resource Manager service
+# connection with workload identity federation (no stored secret). The approval and the
+# sign-after-scan order then rest on what each stage can do, not only on stage order:
+#
+#   parameter                  stages        identity
+#   buildServiceConnection     Build, Scan   build: AcrPush on the registry only
+#   signServiceConnection      Sign          signer: AcrPush + Key Vault Crypto User on the key
+#   deployServiceConnection    Deploy        deployer: AcrPull + its AKS role (deploy/azure README)
+#
+# deploy/azure grants these from build_principal_id, signer_principal_id and deployer_principal_id
+# (the deployer's AKS role only if deployer_aks_role opts in). cosign signs with the sign
+# connection's federated token (idToken), so the key never leaves Key Vault; Deploy verifies with
+# the committed public key and holds no Key Vault access. Checks to add (Project settings >
+# Service connections > Approvals and checks):
+#   signServiceConnection     Branch control: allowed branches refs/tags/v* (verify branch
+#                             protection on), so only a release tag can sign.
+#   deployServiceConnection   Branch control refs/tags/v* and Approvals; the environment below
+#                             also carries an Approvals check.
 #
 # Variable group exiqo-release (plain variables, no secrets; Azure Pipelines exposes each one to
 # the scripts as an environment variable of the same name):
 #   ACR_NAME, REGISTRY                    GMF's registry and its login server (gmfacr.azurecr.io)
 #   PLATFORM_REPOSITORY, WEB_REPOSITORY   e.g. exiqo/exiqo-platform, exiqo/exiqo-web
-#   TOOL_REGISTRY                         GMF's mirror of Docker Hub/ghcr images (tool images)
+#   TOOL_REGISTRY                         GMF's mirror of Docker Hub/ghcr/gcr images (tool images)
 #   BASE_IMAGE_DOTNET, BASE_IMAGE_UV, BASE_IMAGE_NODE_BUILD, BASE_IMAGE_NODE_RUNTIME
 #                                         the mirrored base images, by digest
 #   PIP_INDEX_URL, HF_ENDPOINT, NPM_CONFIG_REGISTRY, TERRAFORM_BASE_URL, TERRAGRUNT_BASE_URL
 #                                         package and download mirrors for the image builds
 #   TRIVY_DB_REPOSITORY, TRIVY_JAVA_DB_REPOSITORY   mirrored Trivy databases (OCI references)
 #   COSIGN_KEY                            azurekms://<vault>.vault.azure.net/<key> (deploy/azure output)
+#   COSIGN_PUBLIC_KEY_FILE                the committed public key, e.g. deploy/gmf/cosign.pub
+#                                         (terraform output -raw cosign_public_key_pem)
 #   AKS_RESOURCE_GROUP, AKS_NAME, NAMESPACE           the target cluster
 #   HELM_VALUES_FILES                     space-separated, e.g. "deploy/gmf/values.gmf.yaml
 #                                         deploy/gmf/values.azure.json"
@@ -40,10 +54,18 @@ trigger:
 pr: none
 
 parameters:
-  - name: serviceConnection
-    displayName: Azure service connection (workload identity federation)
+  - name: buildServiceConnection
+    displayName: Build and Scan service connection (build identity, AcrPush)
     type: string
-    default: exiqo-release
+    default: exiqo-release-build
+  - name: signServiceConnection
+    displayName: Sign service connection (signer identity)
+    type: string
+    default: exiqo-release-sign
+  - name: deployServiceConnection
+    displayName: Deploy service connection (deployer identity)
+    type: string
+    default: exiqo-release-deploy
   - name: environment
     displayName: Azure DevOps environment (carries the approval)
     type: string
@@ -71,7 +93,7 @@ stages:
             name: build
             displayName: hadolint, build linux/amd64 and push the candidates
             inputs:
-              azureSubscription: ${{ parameters.serviceConnection }}
+              azureSubscription: ${{ parameters.buildServiceConnection }}
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
@@ -97,7 +119,7 @@ stages:
           - task: AzureCLI@2.282.2
             displayName: Egress audit and Trivy (fails on CRITICAL, .trivyignore applies)
             inputs:
-              azureSubscription: ${{ parameters.serviceConnection }}
+              azureSubscription: ${{ parameters.buildServiceConnection }}
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: deploy/pipelines/release.sh scan
@@ -118,7 +140,7 @@ stages:
           - task: AzureCLI@2.282.2
             displayName: SBOM attestation, signature and release tag
             inputs:
-              azureSubscription: ${{ parameters.serviceConnection }}
+              azureSubscription: ${{ parameters.signServiceConnection }}
               addSpnToEnvironment: true
               scriptType: bash
               scriptLocation: inlineScript
@@ -150,14 +172,7 @@ stages:
                 - task: AzureCLI@2.282.2
                   displayName: Verify the signatures, then helm upgrade --install --atomic
                   inputs:
-                    azureSubscription: ${{ parameters.serviceConnection }}
-                    addSpnToEnvironment: true
+                    azureSubscription: ${{ parameters.deployServiceConnection }}
                     scriptType: bash
                     scriptLocation: inlineScript
-                    inlineScript: |
-                      set -euo pipefail
-                      token_file="$(Agent.TempDirectory)/azure-federated-token"
-                      (umask 077 && printf '%s' "$idToken" >"$token_file")
-                      AZURE_CLIENT_ID="$servicePrincipalId" AZURE_TENANT_ID="$tenantId" \
-                        AZURE_FEDERATED_TOKEN_FILE="$token_file" deploy/pipelines/release.sh deploy
-                      rm -f "$token_file"
+                    inlineScript: deploy/pipelines/release.sh deploy

@@ -66,10 +66,15 @@ output "deploy_identity_principal_ids" {
 }
 
 output "cosign_key" {
-  description = "COSIGN_KEY for the release pipelines (cosign's Azure Key Vault reference)."
+  description = "COSIGN_KEY for the release pipelines' sign stage (cosign's Azure Key Vault reference)."
   value = var.enable_key_vault && var.enable_signing_key ? format(
     "azurekms://%s.vault.azure.net/%s", azurerm_key_vault.this[0].name, azurerm_key_vault_key.cosign[0].name,
   ) : null
+}
+
+output "cosign_public_key_pem" {
+  description = "The signing key's public half: commit it (COSIGN_PUBLIC_KEY_FILE) so the deploy stage verifies without Key Vault access."
+  value       = one(azurerm_key_vault_key.cosign[*].public_key_pem)
 }
 
 output "egress_fqdns" {

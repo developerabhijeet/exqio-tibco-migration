@@ -148,10 +148,49 @@ variable "aks_cluster_identity_principal_id" {
   default     = ""
 }
 
-variable "release_principal_id" {
-  description = "Optional: the release pipeline's identity, granted AcrPush and Key Vault Crypto User on the signing key."
+# The release pipelines use three identities, so no single stage holds every privilege: build/scan
+# (push candidates), signer (sign and tag) and deployer (verify, then helm). Each is federated only
+# to its own pipeline environment or service connection (README.md).
+
+variable "build_principal_id" {
+  description = "Optional: the release pipelines' build/scan identity, granted AcrPush on the registry (nothing else)."
   type        = string
   default     = ""
+}
+
+variable "signer_principal_id" {
+  description = "Optional: the signing identity, granted AcrPush (signatures, attestations, the release tag) and Key Vault Crypto User on the signing key only."
+  type        = string
+  default     = ""
+}
+
+variable "deployer_principal_id" {
+  description = "Optional: the deploying identity, granted AcrPull (to verify signatures). Its AKS role is GMF's call: see deployer_aks_role."
+  type        = string
+  default     = ""
+}
+
+variable "aks_cluster_id" {
+  description = "Optional: the AKS cluster's resource id, the scope for deployer_aks_role."
+  type        = string
+  default     = ""
+}
+
+variable "deployer_aks_role" {
+  description = "Opt-in: an AKS role for deployer_principal_id, e.g. \"Azure Kubernetes Service RBAC Cluster Admin\" (cluster scope: the chart creates a StorageClass) or \"Azure Kubernetes Service RBAC Admin\" with deployer_aks_role_scope = \"namespace\" and data.storageClass.create=false. Empty: no grant."
+  type        = string
+  default     = ""
+}
+
+variable "deployer_aks_role_scope" {
+  description = "cluster, or namespace (the release namespace only)."
+  type        = string
+  default     = "cluster"
+
+  validation {
+    condition     = contains(["cluster", "namespace"], var.deployer_aks_role_scope)
+    error_message = "deployer_aks_role_scope is cluster or namespace."
+  }
 }
 
 variable "azure_openai_account_id" {

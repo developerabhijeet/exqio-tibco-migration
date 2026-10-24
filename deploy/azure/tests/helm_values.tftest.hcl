@@ -29,6 +29,7 @@ mock_provider "azurerm" {
   mock_resource "azurerm_key_vault_key" {
     defaults = {
       resource_versionless_id = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-exiqo-prod/providers/Microsoft.KeyVault/vaults/kv-gmf-exiqo-prod/keys/exiqo-cosign"
+      public_key_pem          = "-----BEGIN PUBLIC KEY-----\nmock\n-----END PUBLIC KEY-----\n"
     }
   }
   mock_resource "azurerm_storage_account" {
@@ -80,6 +81,11 @@ run "everything_enabled_maps_onto_the_values_keys" {
     # The same file is rendered with the chart (make chart-check), so its keys are proven values keys.
     condition     = output.helm_values == jsondecode(file("tests/helm_values.expected.json"))
     error_message = "helm_values does not match the chart's values keys: ${jsonencode(output.helm_values)}"
+  }
+
+  assert {
+    condition     = startswith(output.cosign_public_key_pem, "-----BEGIN PUBLIC KEY-----")
+    error_message = "cosign_public_key_pem is the key's PEM."
   }
 
   assert {
@@ -174,4 +180,53 @@ run "postgres_without_key_vault_is_refused" {
   }
 
   expect_failures = [azurerm_postgresql_flexible_server.this]
+}
+
+# One identity per release stage: build/scan cannot sign, the signer cannot deploy, the deployer
+# cannot sign; no AKS role unless GMF opts in.
+run "release_identities_are_split" {
+  state_key = "release_identities_are_split"
+  command   = plan
+
+  variables {
+    build_principal_id    = "4c5d6e7f-8091-4a2b-b3c4-d5e6f7a8b9c0"
+    signer_principal_id   = "5d6e7f80-91a2-4b3c-84d5-e6f7a8b9c0d1"
+    deployer_principal_id = "6e7f8091-a2b3-4c4d-95e6-f7a8b9c0d1e2"
+    aks_cluster_id        = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-aks/providers/Microsoft.ContainerService/managedClusters/aks-gmf-prod"
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.build_acr_push[0].role_definition_name == "AcrPush" &&
+      azurerm_role_assignment.build_acr_push[0].principal_id == var.build_principal_id &&
+      azurerm_role_assignment.signer_acr_push[0].principal_id == var.signer_principal_id &&
+      azurerm_role_assignment.signer_key[0].role_definition_name == "Key Vault Crypto User" &&
+      azurerm_role_assignment.signer_key[0].principal_id == var.signer_principal_id &&
+      azurerm_role_assignment.deployer_acr_pull[0].role_definition_name == "AcrPull" &&
+      azurerm_role_assignment.deployer_acr_pull[0].principal_id == var.deployer_principal_id
+    )
+    error_message = "Build: AcrPush; signer: AcrPush + Crypto User on the key; deployer: AcrPull."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.deployer_aks) == 0
+    error_message = "No AKS role for the deployer unless deployer_aks_role opts in."
+  }
+}
+
+run "deployer_aks_role_is_opt_in" {
+  state_key = "deployer_aks_role_is_opt_in"
+  command   = plan
+
+  variables {
+    deployer_principal_id   = "6e7f8091-a2b3-4c4d-95e6-f7a8b9c0d1e2"
+    aks_cluster_id          = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-aks/providers/Microsoft.ContainerService/managedClusters/aks-gmf-prod"
+    deployer_aks_role       = "Azure Kubernetes Service RBAC Admin"
+    deployer_aks_role_scope = "namespace"
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.deployer_aks[0].scope == "${var.aks_cluster_id}/namespaces/exiqo"
+    error_message = "A namespace-scoped deployer role is scoped to the release namespace."
+  }
 }

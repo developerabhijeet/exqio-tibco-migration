@@ -23,7 +23,11 @@ deploy_environments = ["dev", "prod"]
 # az aks show ... --query identityProfile.kubeletidentity.objectId / identity.principalId
 aks_kubelet_identity_object_id    = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
 aks_cluster_identity_principal_id = "1f2e3d4c-5b6a-4978-8d6c-5b4a3f2e1d0c"
-release_principal_id              = "4c5d6e7f-8091-4a2b-b3c4-d5e6f7a8b9c0"
+build_principal_id                = "4c5d6e7f-8091-4a2b-b3c4-d5e6f7a8b9c0"
+signer_principal_id               = "5d6e7f80-91a2-4b3c-84d5-e6f7a8b9c0d1"
+deployer_principal_id             = "6e7f8091-a2b3-4c4d-95e6-f7a8b9c0d1e2"
+aks_cluster_id                    = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-aks/providers/Microsoft.ContainerService/managedClusters/aks-gmf-prod"
+deployer_aks_role                 = "" # GMF's call; e.g. "Azure Kubernetes Service RBAC Cluster Admin"
 azure_openai_account_id           = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-ai/providers/Microsoft.CognitiveServices/accounts/gmf-exiqo-aoai"
 
 public_network_access_enabled = false

@@ -228,20 +228,55 @@ resource "azurerm_role_assignment" "cluster_data_account" {
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_role_assignment" "release_acr_push" {
-  count = var.enable_acr && var.release_principal_id != "" ? 1 : 0
+# Release pipelines, one identity per stage (variables.tf). Build/scan pushes candidates only; it
+# cannot sign. The signer can sign and push tags but cannot deploy. The deployer can pull and
+# deploy but cannot sign: it verifies with the committed public key (cosign_public_key_pem).
+resource "azurerm_role_assignment" "build_acr_push" {
+  count = var.enable_acr && var.build_principal_id != "" ? 1 : 0
 
   scope                = azurerm_container_registry.this[0].id
   role_definition_name = "AcrPush"
-  principal_id         = var.release_principal_id
+  principal_id         = var.build_principal_id
 }
 
-resource "azurerm_role_assignment" "release_signer" {
-  count = var.enable_key_vault && var.enable_signing_key && var.release_principal_id != "" ? 1 : 0
+resource "azurerm_role_assignment" "signer_acr_push" {
+  count = var.enable_acr && var.signer_principal_id != "" ? 1 : 0
+
+  scope                = azurerm_container_registry.this[0].id
+  role_definition_name = "AcrPush"
+  principal_id         = var.signer_principal_id
+}
+
+resource "azurerm_role_assignment" "signer_key" {
+  count = var.enable_key_vault && var.enable_signing_key && var.signer_principal_id != "" ? 1 : 0
 
   scope                = azurerm_key_vault_key.cosign[0].resource_versionless_id
   role_definition_name = "Key Vault Crypto User"
-  principal_id         = var.release_principal_id
+  principal_id         = var.signer_principal_id
+}
+
+resource "azurerm_role_assignment" "deployer_acr_pull" {
+  count = var.enable_acr && var.deployer_principal_id != "" ? 1 : 0
+
+  scope                = azurerm_container_registry.this[0].id
+  role_definition_name = "AcrPull"
+  principal_id         = var.deployer_principal_id
+}
+
+# Opt-in only: what the deployer may do in the cluster is GMF's decision.
+resource "azurerm_role_assignment" "deployer_aks" {
+  count = var.deployer_principal_id != "" && var.deployer_aks_role != "" ? 1 : 0
+
+  scope                = var.deployer_aks_role_scope == "cluster" ? var.aks_cluster_id : "${var.aks_cluster_id}/namespaces/${var.namespace}"
+  role_definition_name = var.deployer_aks_role
+  principal_id         = var.deployer_principal_id
+
+  lifecycle {
+    precondition {
+      condition     = var.aks_cluster_id != ""
+      error_message = "deployer_aks_role needs aks_cluster_id."
+    }
+  }
 }
 
 # ------------------------------------------------------------------------------------- Postgres
