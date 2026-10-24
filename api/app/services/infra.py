@@ -167,7 +167,10 @@ def plan_out(plan: Plan | None) -> dict[str, Any] | None:
 def plan_ready(conn: AzureConnection | None, tools: dict[str, Any]) -> tuple[bool, str | None]:
     if conn is None:
         return False, "Azure is not connected (connect later is a supported state)"
-    missing = [t for t in ("terragrunt", "terraform", "az") if not (tools.get(t) or {}).get("present")]
+    # the Azure CLI only serves the local path (an existing az login); OIDC, Workload Identity and a
+    # client secret are Terraform's own, and the install image does not ship az
+    needed = ("terragrunt", "terraform", *(("az",) if (conn.auth_mode or "local") == "local" else ()))
+    missing = [t for t in needed if not (tools.get(t) or {}).get("present")]
     if missing:
         return False, f"missing tool(s) on the API host: {', '.join(missing)}"
     return True, None

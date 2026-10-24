@@ -61,6 +61,28 @@ def environments_out(settings: Settings) -> dict[str, Any]:
             "environments": [e.model_dump() for e in settings.deploy_environments]}
 
 
+def connection_for_plan(conn: AzureConnection, settings: Settings, environment: str) -> AzureConnection:
+    """The connection a plan of ``environment`` runs with, resolved when the job runs.
+
+    The payload fixes the environment at submit; the row may have been reconnected to another one
+    since. Outside local mode the ids, auth and Key Vault reference therefore come from the declared
+    environment of that name (a transient row, never saved). In local mode the stored row must
+    still be for that environment."""
+    if settings.deploy_credential_mode == "local":
+        stored = conn.environment or "dev"
+        if stored != environment:
+            raise DeployCredentialError(f"the Azure connection is now for environment {stored!r}, not "
+                                        f"{environment!r} as when this plan was queued: plan again")
+        return conn
+    env = declared_environment(settings, environment)
+    if env is None:
+        raise DeployCredentialError(f"deploy environment {environment!r} is no longer declared "
+                                    "(DEPLOY_ENVIRONMENTS): connect Azure again and plan")
+    return AzureConnection(project_id=conn.project_id, tenant=env.tenant, subscription=env.subscription,
+                           settings={}, environment=env.name, auth_mode=env.auth, client_id=env.client_id,
+                           key_vault_uri=env.key_vault_uri or None, secret_name=env.secret_name or None)
+
+
 def terraform_env(conn: AzureConnection, settings: Settings, *, secret_reader: SecretReader,
                   fernet: Fernet | None = None, environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """The ``ARM_*`` variables for ``terragrunt plan`` with this connection (the child env only)."""

@@ -360,3 +360,80 @@ def test_azure_openai_managed_identity_uses_token_provider(settings, monkeypatch
     assert client._azure_ad_token_provider() == "token"
     assert made == [("cred", "https://cognitiveservices.azure.com/.default")]
     assert client._azure_ad_token_provider() == "token" and len(made) == 1  # made once
+
+
+# ------------------------------------------------------------------ review fixes
+def test_plan_ready_needs_az_only_for_local():
+    from api.app.services.infra import plan_ready
+
+    no_az = {"terragrunt": {"present": True}, "terraform": {"present": True}, "az": {"present": False}}
+    assert plan_ready(conn_for(WI_ENV), no_az) == (True, None)
+    assert plan_ready(conn_for(KV_ENV), no_az) == (True, None)
+    local = AzureConnection(project_id="p", tenant="t", subscription="s", settings={}, auth_mode="local")
+    ready, reason = plan_ready(local, no_az)
+    assert ready is False and "az" in reason
+
+
+async def _queued_plan(app, build_id: str, environment: str) -> tuple[str, str]:
+    """A plan queued for ``environment`` the way the router queues one (payload fixed at submit)."""
+    from api.app.services import infra as infra_svc
+
+    async with app.state.sessionmaker() as s:
+        build = await s.get(Build, build_id)
+        plan = await infra_svc.record_connect_later(s, build, "")
+        plan.connected, plan.status = True, "running"
+        await s.commit()
+        plan_id = plan.id
+    job_id = await app.state.runner.submit("plan", {"build_id": build_id, "plan_id": plan_id,
+                                                    "environment": environment})
+    return job_id, plan_id
+
+
+async def test_plan_uses_the_queued_environment_after_a_reconnect(wi_settings, app, client, tmp_path,
+                                                                  token_file, monkeypatch):
+    script, record = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    monkeypatch.setattr(deploy_creds, "keyvault_secret", lambda uri, name: "kv-secret")
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    # queued for "test" (keyvault_sp); the project is reconnected to "dev" (workload identity) since
+    await client.put(f"/projects/{pid}/azure", json={"environment": "dev"}, headers=OPS)
+    job_id, _ = await _queued_plan(app, build_id, "test")
+    job = await wait_terminal(app, job_id, timeout=30)
+    assert job.status == "done", job.error
+    child = record.read_text()
+    assert "ARM_TENANT_ID=t-kv" in child and "ARM_SUBSCRIPTION_ID=s-kv" in child
+    assert "ARM_CLIENT_ID=c-kv" in child and "ARM_CLIENT_SECRET=kv-secret" in child
+    assert "ARM_USE_OIDC" not in child and child.rstrip().endswith("/infra/live/test")
+
+
+async def test_plan_fails_when_its_environment_is_no_longer_declared(wi_settings, app, client, tmp_path,
+                                                                    token_file, monkeypatch):
+    script, record = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    await client.put(f"/projects/{pid}/azure", json={"environment": "dev"}, headers=OPS)
+    wi_settings.deploy_environments = [KV_ENV]  # "dev" removed after the plan was queued
+    job_id, plan_id = await _queued_plan(app, build_id, "dev")
+    job = await wait_terminal(app, job_id, timeout=30)
+    assert job.status == "failed" and "'dev' is no longer declared" in job.error
+    async with app.state.sessionmaker() as s:
+        plan = await s.get(Plan, plan_id)
+    assert plan.status == "failed" and "no longer declared" in plan.output
+    assert not record.exists()  # terragrunt never ran
+
+
+async def test_local_plan_fails_when_the_connection_changed_environment(app, client, tmp_path, monkeypatch):
+    script, record = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    body = {"tenant": "t", "subscription": "s", "client_id": "c", "client_secret": "local-s3cr3t",
+            "environment": "prod"}
+    assert (await client.post(f"/projects/{pid}/azure", json=body, headers=OPS)).status_code == 200
+    job_id, plan_id = await _queued_plan(app, build_id, "dev")  # queued before the reconnect to prod
+    job = await wait_terminal(app, job_id, timeout=30)
+    assert job.status == "failed" and "now for environment 'prod', not 'dev'" in job.error
+    assert "local-s3cr3t" not in await _job_dump(app, job_id, plan_id)
+    assert not record.exists()

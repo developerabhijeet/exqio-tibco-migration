@@ -95,6 +95,8 @@ async def _plan_inputs(ctx: JobContext, w: WorkerServices) -> tuple[dict[str, st
                 if proc else None)
     if conn is None:
         raise RuntimeError("no Azure connection is stored for this build's project")
+    # the credentials follow the payload's environment, not whatever the row says now
+    conn = deploy_creds.connection_for_plan(conn, w.settings, p.get("environment") or infra_svc.PLAN_ENV)
     env = await asyncio.to_thread(deploy_creds.terraform_env, conn, w.settings,
                                   secret_reader=deploy_creds.keyvault_secret, fernet=w.fernet)
     return env, build_svc.toolchain()["terragrunt"]["path"]
