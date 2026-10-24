@@ -20,7 +20,7 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db api web test e2e demo-check toolchain samples samples-zip nuget-cache
+.PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache
 
 setup:
 	python3 -m venv .venv
@@ -52,6 +52,11 @@ api:
 		exit 1; \
 	fi
 	env $(WEB_CORS_ENV) .venv/bin/uvicorn api.app.main:app --reload --port $(API_PORT)
+
+# A job worker on its own, as in a worker pod: run it beside `make api` started with
+# EXIQO_ROLE=api to have the API only queue. Its internal listener is on INTERNAL_PORT (9100).
+worker:
+	EXIQO_ROLE=worker $(PY) -m api.app.worker
 
 # Two things are worth catching before `next dev` starts. A busy WEB_PORT means an older dev server
 # still serves this app with the API URL it was started with, so it would keep calling the old port

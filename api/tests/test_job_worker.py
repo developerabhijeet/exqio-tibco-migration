@@ -3,20 +3,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from datetime import timedelta
+from typing import Self
 
 import httpx
 import pytest
 from sqlalchemy import func, select
 
-from api.app.db import utcnow
+from api.app.db import make_engine, make_sessionmaker, utcnow
 from api.app.jobs import registry
 from api.app.jobs.runner import JobWorker
 from api.app.main import create_app
 from api.app.models import Job, JobEvent
 
 SLOW_SECONDS = 60
+BLOCK_STALE_SECONDS = 2
+BLOCK_SECONDS = BLOCK_STALE_SECONDS + 2  # the loop is stalled longer than a job may go silent
 
 
 @pytest.fixture
@@ -39,6 +43,13 @@ def test_kinds():
         await asyncio.sleep(SLOW_SECONDS)
         return {}
 
+    def blocking(ctx, w):  # synchronous work on the loop, like services/analysis.py
+        time.sleep(BLOCK_SECONDS)
+        return {"blocked": True}
+
+    async def block(ctx, w):
+        return blocking(ctx, w)
+
     async def short(ctx, w):
         await asyncio.sleep(0.5)
         return {"slept": True}
@@ -46,8 +57,9 @@ def test_kinds():
     registry.register("noop-test", noop)
     registry.register("slow-test", slow)
     registry.register("short-test", short)
+    registry.register("block-test", block)
     yield
-    for kind in ("noop-test", "slow-test", "short-test"):
+    for kind in ("noop-test", "slow-test", "short-test", "block-test"):
         registry.unregister(kind)
 
 
@@ -73,9 +85,10 @@ async def workers():
 
 @pytest.fixture
 def make_worker(workers):
-    def make(app, name: str, *, stale_s: int = 90, slots: int = 2, max_attempts: int = 2) -> JobWorker:
+    def make(app, name: str, *, stale_s: int = 90, slots: int = 2, max_attempts: int = 2,
+             heartbeat_s: float = 1) -> JobWorker:
         w = JobWorker(app.state.sessionmaker, app.state.worker_services, name=name, slots=slots,
-                      heartbeat_s=1, stale_s=stale_s, max_attempts=max_attempts, reap_s=0.5, poll_s=0.1)
+                      heartbeat_s=heartbeat_s, stale_s=stale_s, max_attempts=max_attempts, reap_s=0.5, poll_s=0.1)
         workers.append(w)
         return w
     return make
@@ -200,6 +213,47 @@ async def test_stream_ends_when_worker_dies(client, app_no_worker, make_worker):
     await reaper.start()
     events = await collect_sse(client, job, timeout=10)
     assert events[-1]["event"] == "error" and events[-1]["text"] == "worker lost"
+
+
+class ThreadReaper:
+    """A reaper on its own thread, event loop and engine, standing in for another worker pod: it
+    keeps reaping while the test's loop is blocked."""
+
+    def __init__(self, url: str, stale_s: int) -> None:
+        self.url, self.stale_s = url, stale_s
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True)
+
+    async def _run(self) -> None:
+        engine = make_engine(self.url)
+        try:
+            w = JobWorker(make_sessionmaker(engine), None, name="reaper", slots=1, heartbeat_s=1,
+                          stale_s=self.stale_s, max_attempts=2)
+            while not self.stop.is_set():
+                await w.reap()
+                await asyncio.sleep(0.2)
+        finally:
+            await engine.dispose()
+
+    def __enter__(self) -> Self:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stop.set()
+        self.thread.join(10)
+
+
+async def test_heartbeat_survives_blocked_event_loop(app_no_worker, make_worker):
+    """The heartbeat runs on the worker's own thread, so a handler that blocks the loop for longer
+    than ``stale_s`` is not reaped as lost."""
+    app = app_no_worker
+    with ThreadReaper(app.state.settings.database_url, BLOCK_STALE_SECONDS):
+        job_id = await app.state.runner.submit("block-test", {})
+        w1 = make_worker(app, "w1", stale_s=BLOCK_STALE_SECONDS, heartbeat_s=0.5)
+        await w1.start()
+        job = await wait_status(app, job_id, ("done", "failed"), timeout=BLOCK_SECONDS + 10)
+    assert (job.status, job.error, job.result) == ("done", None, {"blocked": True})
 
 
 async def test_cancel_flag_stops_running_job(client, app_with_slow_handler):

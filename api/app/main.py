@@ -4,13 +4,13 @@ Run with ``uvicorn api.app.main:app`` (``make api``). The schema is created by A
 (``make db``); if it is missing the API still starts and logs how to create it.
 
 ``EXIQO_ROLE`` decides what runs here: roles ``api`` and ``all`` hold the job-event listener
-(SSE); role ``all`` also runs the in-process job worker ``local-<pid>``.
+(SSE); role ``all`` also runs an in-process job worker (``POD_NAME`` or ``<hostname>-<pid>``).
+Role ``worker`` is not this app: it runs ``python -m api.app.worker``.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,7 +21,7 @@ from api.app.db import make_engine, make_sessionmaker, psycopg_url
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
-from api.app.jobs.runner import JobRunner, JobWorker
+from api.app.jobs.runner import JobRunner, JobWorker, worker_name
 from api.app.routers import (
     analysis,
     ask,
@@ -48,6 +48,8 @@ log = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    if settings.exiqo_role == "worker":
+        raise RuntimeError("EXIQO_ROLE=worker runs python -m api.app.worker, not the HTTP app")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -60,7 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                          services=services, fernet=fernet)
         worker = None
         if settings.exiqo_role == "all":
-            worker = JobWorker(sessionmaker, worker_services, name=f"local-{os.getpid()}",
+            worker = JobWorker(sessionmaker, worker_services, name=worker_name(),
                                slots=settings.job_workers, heartbeat_s=settings.job_heartbeat_seconds,
                                stale_s=settings.job_stale_seconds, max_attempts=settings.job_max_attempts)
         runner = JobRunner(sessionmaker, worker=worker)

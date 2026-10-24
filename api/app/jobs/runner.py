@@ -4,12 +4,17 @@
 naming the one worker allowed to run it). Workers claim queued jobs with one
 ``UPDATE ... FOR UPDATE SKIP LOCKED`` statement, so two workers never run the same job, and run
 ``handler_for(kind)`` in one of their ``slots``. In role ``all`` the runner owns an in-process
-worker named ``local-<pid>``; in role ``api`` it only queues, and worker processes run the jobs.
+worker (named by :func:`worker_name`); in role ``api`` it only queues, and worker processes
+(``python -m api.app.worker``) run the jobs.
 
 A worker proves it is alive by refreshing ``heartbeat_at`` on its running jobs every
 ``heartbeat_s``; the same statement reads ``cancel_requested`` and cancels the job's task when it is
 set (the services' ``CancelledError`` cleanup runs; the outcome is failed, "cancelled"). If a
 row is no longer ours (another worker's reaper failed it) the task is cancelled with no outcome.
+The heartbeat runs on its own daemon thread with a synchronous psycopg connection, not on the event
+loop: some handlers do synchronous work on the loop (``services/analysis.py``), and a stalled loop
+must not let a healthy job look lost. The thread hands cancellations to the loop with
+``call_soon_threadsafe``.
 ``reap`` (at start and every 30 s) fails running jobs whose heartbeat is older than ``stale_s``,
 and queued jobs pinned to a worker that has shown no running heartbeat for ``stale_s``, with
 "worker lost". ``drain`` stops claiming, lets running jobs finish within its timeout, and requeues
@@ -29,15 +34,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
+import threading
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal
 
+import psycopg
 from sqlalchemy import String, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from api.app.db import psycopg_url
 from api.app.jobs.registry import WorkerServices, handler_for
 from api.app.models import Job, JobEvent
 
@@ -60,6 +70,17 @@ WHERE id = (SELECT id FROM {_JOBS} WHERE status='queued' AND (affinity IS NULL O
 RETURNING id, kind, payload
 """).columns(id=String, kind=String, payload=JSONB)
 NOTIFY_SQL = text("SELECT pg_notify('job_events', :job_id || ':' || :seq)")
+HEARTBEAT_SQL = f"""
+UPDATE {_JOBS} SET heartbeat_at=now()
+WHERE id = ANY(%(ids)s) AND owner=%(me)s AND status='running'
+RETURNING id, cancel_requested
+"""
+
+
+def worker_name() -> str:
+    """``POD_NAME`` in Kubernetes, else ``<hostname>-<pid>``: unique across containers sharing a
+    database, which a bare pid is not."""
+    return os.environ.get("POD_NAME") or f"{socket.gethostname()}-{os.getpid()}"
 
 
 @dataclass(frozen=True)
@@ -162,8 +183,12 @@ class JobWorker:
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], services: WorkerServices | None,
                  *, name: str, slots: int, heartbeat_s: int, stale_s: int, max_attempts: int,
-                 reap_s: float = REAP_SECONDS, poll_s: float = POLL_SECONDS) -> None:
+                 reap_s: float = REAP_SECONDS, poll_s: float = POLL_SECONDS,
+                 dsn: str | None = None) -> None:
         self.sessionmaker = sessionmaker
+        if dsn is None:  # the sessionmaker's database, for the heartbeat thread's psycopg connection
+            dsn = psycopg_url(sessionmaker.kw["bind"].url.render_as_string(hide_password=False))
+        self.dsn = dsn
         self.services = services
         self.name = name
         self.slots = max(1, slots)
@@ -179,13 +204,22 @@ class JobWorker:
         self._loops: list[asyncio.Task[None]] = []
         self._wake = asyncio.Event()
         self._draining = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._running: set[str] = set()  # job ids the heartbeat thread refreshes
+        self._running_lock = threading.Lock()
+        self._hb_stop = threading.Event()
+        self._hb_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
         await self.reap()
+        self._loop = asyncio.get_running_loop()
+        self._hb_stop.clear()
+        self._hb_thread = threading.Thread(target=self._heartbeat_thread, daemon=True,
+                                           name=f"{self.name}-heartbeat")
+        self._hb_thread.start()
         self._claimer = asyncio.create_task(self._claim_loop(), name=f"{self.name}-claim")
-        self._loops = [asyncio.create_task(self._heartbeat_loop(), name=f"{self.name}-heartbeat"),
-                       asyncio.create_task(self._reap_loop(), name=f"{self.name}-reap")]
+        self._loops = [asyncio.create_task(self._reap_loop(), name=f"{self.name}-reap")]
 
     def wake(self) -> None:
         """A job was queued in this process: claim now instead of at the next poll."""
@@ -210,6 +244,10 @@ class JobWorker:
             t.cancel()
         await asyncio.gather(*self._loops, return_exceptions=True)
         self._loops = []
+        if self._hb_thread is not None:
+            self._hb_stop.set()
+            await asyncio.to_thread(self._hb_thread.join, self.heartbeat_s + 5)
+            self._hb_thread = None
 
     async def stop(self) -> None:
         """Drain without waiting: running jobs are requeued (or fail once out of attempts)."""
@@ -233,6 +271,8 @@ class JobWorker:
                     log.exception("worker %s: claim failed", self.name)
             if claimed is not None:  # also when drain began meanwhile: drain waits for it
                 job_id, kind, payload = claimed
+                with self._running_lock:
+                    self._running.add(job_id)
                 self._tasks[job_id] = asyncio.create_task(self._run(job_id, kind, payload),
                                                           name=f"job-{job_id}")
                 continue
@@ -267,6 +307,8 @@ class JobWorker:
         except Exception:
             log.exception("job %s: worker bookkeeping failed", job_id)
         finally:
+            with self._running_lock:
+                self._running.discard(job_id)
             self._tasks.pop(job_id, None)
             self._reasons.pop(job_id, None)
             self._finishing.discard(job_id)
@@ -291,25 +333,38 @@ class JobWorker:
                             "error", STOPPED_REASON)
 
     # ------------------------------------------------------------- heartbeat
-    async def _heartbeat_loop(self) -> None:
-        while True:
-            await asyncio.sleep(self.heartbeat_s)
-            try:
-                await self.heartbeat()
-            except Exception:
-                log.exception("worker %s: heartbeat failed", self.name)
+    def _heartbeat_thread(self) -> None:
+        """Every ``heartbeat_s`` until drained: refresh our running jobs from this thread."""
+        conn: psycopg.Connection | None = None
+        try:
+            while not self._hb_stop.wait(self.heartbeat_s):
+                try:
+                    if conn is None or conn.closed:
+                        conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=10)
+                    self._beat(conn)
+                except Exception:
+                    log.exception("worker %s: heartbeat failed", self.name)
+                    if conn is not None:
+                        conn.close()
+                    conn = None  # reconnect at the next beat
+        finally:
+            if conn is not None:
+                conn.close()
 
-    async def heartbeat(self) -> None:
-        """Refresh our running jobs; cancel those flagged ``cancel_requested`` or no longer ours."""
-        ids = list(self._tasks)
+    def _beat(self, conn: psycopg.Connection) -> None:
+        with self._running_lock:
+            ids = list(self._running)
         if not ids:
             return
-        async with self.sessionmaker() as s:
-            rows = (await s.execute(update(Job).where(
-                Job.id.in_(ids), Job.owner == self.name, Job.status == "running",
-            ).values(heartbeat_at=func.now()).returning(Job.id, Job.cancel_requested))).all()
-            await s.commit()
-        alive = {r.id: r.cancel_requested for r in rows}
+        rows = conn.execute(HEARTBEAT_SQL, {"ids": ids, "me": self.name}).fetchall()
+        alive = {job_id: bool(cancel) for job_id, cancel in rows}
+        try:
+            self._loop.call_soon_threadsafe(self._apply_heartbeat, ids, alive)
+        except RuntimeError:  # the loop is closed: nothing left to cancel
+            pass
+
+    def _apply_heartbeat(self, ids: list[str], alive: dict[str, bool]) -> None:
+        """On the loop: cancel the jobs flagged ``cancel_requested`` or no longer ours."""
         for job_id in ids:
             task = self._tasks.get(job_id)
             if task is None or task.done() or job_id in self._finishing or job_id in self._reasons:

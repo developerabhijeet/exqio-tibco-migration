@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     job_stale_seconds: int = 90
     job_heartbeat_seconds: int = 10
     job_max_attempts: int = 2
+    job_drain_seconds: int = 570  # on SIGTERM; inside the worker's 600 s termination grace period
     neo4j_uri: str = ""
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
