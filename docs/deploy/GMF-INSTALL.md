@@ -92,6 +92,60 @@ Network facts to settle with GMF's network team now:
 - Nothing else is allowed. Claude stays off unless `providers.claude.enabled` is true, and then its
   hosts (`*.anthropic.com`) must be added to the firewall.
 
+### Without Terraform: the platform identity and its grants
+
+If you skip `deploy/azure` (or its `enable_identities` switch), create these by hand **before the
+first `helm upgrade`**. The pre-install hook mounts Key Vault with the `exiqo-migrate` account, so
+its credential must exist before the hook runs.
+
+- [ ] The user-assigned managed identity `exiqo-platform`. Its client ID is
+  `identity.platformClientId`.
+
+  ```sh
+  az identity create -g <identity-rg> -n exiqo-platform
+  az identity show -g <identity-rg> -n exiqo-platform --query '{clientId:clientId, principalId:principalId}'
+  ```
+
+- [ ] A federated credential on it for every service account that uses it. The issuer is the
+  cluster's OIDC issuer URL, the audience `api://AzureADTokenExchange`, and each subject is exact
+  (`system:serviceaccount:<namespace>:<account>`):
+
+  | Service account | Used by |
+  |---|---|
+  | `exiqo-api` | api pods |
+  | `exiqo-worker` | worker pods |
+  | `exiqo-migrate` | the migration hook Job |
+  | `exiqo-neo4j` | the Neo4j pod (it mounts the Key Vault object `exiqo-neo4j-auth`); only with `neo4j.enabled` |
+  | `exiqo-neo4j-backup` | the backup CronJob; only with `neo4jBackup.enabled`, and unless `identity.backupClientId` names another identity |
+
+  ```sh
+  issuer="$(az aks show -g <aks-rg> -n <aks> --query oidcIssuerProfile.issuerUrl -o tsv)"
+  for sa in exiqo-api exiqo-worker exiqo-migrate exiqo-neo4j; do
+    az identity federated-credential create -g <identity-rg> --identity-name exiqo-platform \
+      --name "$sa-exiqo" --issuer "$issuer" --subject "system:serviceaccount:exiqo:$sa" \
+      --audiences api://AzureADTokenExchange
+  done
+  ```
+
+  The web pod uses no identity. Each deploy identity gets a credential for `exiqo-worker` only
+  (`DEPLOY-STEP-SECRETS.md`). The chart's install notes print the same list for your values.
+
+- [ ] Key Vault Secrets User for `exiqo-platform` on the vault (`keyVault.name`).
+- [ ] AcrPull for the cluster's kubelet identity on the registry.
+- [ ] Cognitive Services OpenAI User for `exiqo-platform` on the Azure OpenAI account, when
+  `providers.azureOpenAI.auth` is `managed_identity`. The Terraform path grants this only when
+  `azure_openai_account_id` is set, so check it there too.
+- [ ] With the Neo4j backup on: Storage Blob Data Contributor on the backup container for the
+  backup identity (`identity.backupClientId`, default `exiqo-platform`).
+
+```sh
+pid="$(az identity show -g <identity-rg> -n exiqo-platform --query principalId -o tsv)"
+az role assignment create --assignee-object-id "$pid" --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets User" --scope <key vault resource id>
+az role assignment create --assignee-object-id "$pid" --assignee-principal-type ServicePrincipal \
+  --role "Cognitive Services OpenAI User" --scope <azure openai resource id>
+```
+
 ## 2. Mirror images and toolchains
 
 ### Images
@@ -109,8 +163,9 @@ Point all four at GM Financial's registry. For Neo4j and the Azure CLI image, im
 image into the registry and override the key with the mirror's reference plus the same digest (a
 digest is the same whichever registry serves it). The Neo4j Helm chart (a subchart, pinned in
 `Chart.lock`) is fetched from `https://helm.neo4j.com/neo4j` at build time of the chart's
-dependencies; mirror it and fetch it from the mirror (the release pipeline's
-`NEO4J_CHART_REPOSITORY`, or `helm dependency build` after `helm repo add neo4j <mirror>`).
+dependencies. `Chart.yaml` names that repository by URL, so `helm repo add` of a mirror does not
+redirect `helm dependency build`: mirror the chart and pull it from the mirror yourself, as
+`deploy/pipelines/release.sh` does with `NEO4J_CHART_REPOSITORY` (section 7 has the commands).
 
 Build the two ExiQO images with the release pipeline (section 7), or by hand:
 
@@ -317,14 +372,24 @@ Terraform creates the two database URLs. Create the rest in the same vault, usin
 `keyVault.secrets` (commands in `deploy/azure/README.md`, "Not created here"). Generated with
 Terraform they would land in its state, so they are created by hand:
 
+Each value goes through a mode-600 temporary file and `--file`, never `--value`, so no secret
+appears in the process list or the shell history:
+
 ```sh
-az keyvault secret set --vault-name <vault> -n exiqo-app-secret \
-  --value "$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
-az keyvault secret set --vault-name <vault> -n exiqo-session-secret --value "$(openssl rand -hex 32)"
-az keyvault secret set --vault-name <vault> -n exiqo-internal-token --value "$(openssl rand -hex 32)"
+umask 077
+f="$(mktemp)"
+put() { az keyvault secret set --vault-name <vault> -n "$1" --file "$f" --output none; }
+
+python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode(), end="")' >"$f"
+put exiqo-app-secret
+openssl rand -hex 32 | tr -d '\n' >"$f";  put exiqo-session-secret
+openssl rand -hex 32 | tr -d '\n' >"$f";  put exiqo-internal-token
 pw="$(openssl rand -hex 24)"
-az keyvault secret set --vault-name <vault> -n exiqo-neo4j-password --value "$pw"
-az keyvault secret set --vault-name <vault> -n exiqo-neo4j-auth --value "neo4j/$pw"
+printf '%s' "$pw" >"$f";            put exiqo-neo4j-password
+printf 'neo4j/%s' "$pw" >"$f";      put exiqo-neo4j-auth
+
+unset pw
+shred -u "$f" 2>/dev/null || rm -f "$f"; unset f
 ```
 
 Use a password without `/` (hex, as above): Neo4j splits the initial credentials at the first `/`.
@@ -350,10 +415,11 @@ identity may touch is GMF's decision. Grant the narrowest role that works:
 
 - The platform only plans; `apply` is not part of this build (it goes through the generated
   pipeline). Plan needs read access plus access to the Terraform state account.
-- Lead with a custom role over Contributor. Include the action
-  `Microsoft.Resources/subscriptions/providers/register/action`, or disable provider
-  auto-registration in the generated provider configuration. Without one of the two, the first
-  plan can fail while the provider tries to register resource providers.
+- Lead with a custom role over Contributor. Include `*/register/action` (or the per-provider
+  `<Namespace>/register/action` entries for the namespaces the generated modules use; the list is
+  in `DEPLOY-STEP-SECRETS.md`), or disable provider auto-registration in the generated provider
+  configuration. Without one of the two, the first plan can fail while the provider tries to
+  register resource providers.
 - Contributor scoped to a resource group is the fallback when a custom role is impractical.
 
 The full procedure, with commands for the identity, the federated credential, both role options,
@@ -547,8 +613,15 @@ neo4jBackup:
 kubectl create namespace exiqo
 kubectl -n exiqo create secret tls exiqo-tls --cert=tls.crt --key=tls.key
 
-helm repo add neo4j <GMF mirror of https://helm.neo4j.com/neo4j>
-helm dependency build deploy/helm/exiqo
+# The Neo4j subchart: pull the archive Chart.lock pins from GMF's mirror. Do not run
+# `helm dependency build`; Chart.yaml names the public repository by URL.
+mkdir -p deploy/helm/exiqo/charts
+helm pull neo4j --repo <GMF mirror of https://helm.neo4j.com/neo4j> --version 5.26.32 \
+  --destination deploy/helm/exiqo/charts
+# or, for an OCI mirror:
+# helm pull oci://<registry>/<path>/neo4j --version 5.26.32 --destination deploy/helm/exiqo/charts
+echo "c7402735f1a4219db507d6c2c40a5106154092d680c7ff564da3db3c120312d7  deploy/helm/exiqo/charts/neo4j-5.26.32.tgz" \
+  | sha256sum -c -
 
 helm upgrade --install exiqo deploy/helm/exiqo -n exiqo \
   -f values.gmf.yaml -f values.azure.json \
@@ -660,12 +733,12 @@ Then the acceptance run, which drives the whole seven-step flow on the synthetic
 make setup                     # once: .venv with httpx and the tools
 make samples samples-zip       # the synthetic estate and samples/synthetic-gmf.zip
 export EXIQO_TOKEN=<an Entra access token, see below>
-.venv/bin/python scripts/demo_check.py --base-url https://<ingress.host> --token "$EXIQO_TOKEN"
+.venv/bin/python scripts/demo_check.py --base-url https://<ingress.host>
 ```
 
-`--base-url` addresses the install (the API is at `<host>/api`); `--token` (or the `EXIQO_TOKEN`
-environment variable, preferred because command lines are visible to other users) sends the token
-as a bearer. An `AUTH_MODE=oidc` install ignores the `X-User` persona header the local run uses, so
+`--base-url` addresses the install (the API is at `<host>/api`). The token is read from the
+`EXIQO_TOKEN` environment variable; `--token` also exists but is not used above, because command
+lines are visible to other users. Either sends the token as a bearer. An `AUTH_MODE=oidc` install ignores the `X-User` persona header the local run uses, so
 the token's user must hold the `sme`, `architect`, `engineer` and `ops` roles; the run checks that
 first and records the gate decisions under that one user's name. Without `--token`, an oidc install
 answers 401 and the script says so. Without either flag the script behaves as before, against the

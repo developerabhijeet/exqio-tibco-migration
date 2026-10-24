@@ -228,3 +228,43 @@ def test_readme_links_the_guides() -> None:
     readme = (REPO / "README.md").read_text()
     for name in GUIDES:
         assert f"docs/deploy/{name}" in readme
+
+
+@pytest.mark.parametrize("name", GUIDES)
+def test_no_secret_on_a_command_line(name: str) -> None:
+    """`az keyvault secret set --value "<expansion>"` shows the secret in the process list."""
+    for m in FENCE.finditer(read(name)):
+        for line in m.group("body").splitlines():
+            if "keyvault secret set" in line or line.lstrip().startswith("--value"):
+                assert not re.search(r'--value\s+"?\$', line), f"{name}: {line.strip()}"
+
+
+def test_demo_check_example_does_not_pass_the_token_on_the_command_line() -> None:
+    for m in FENCE.finditer(read("GMF-INSTALL.md")):
+        for line in m.group("body").splitlines():
+            if "demo_check.py" in line:
+                assert "--token" not in line, line
+
+
+def test_neo4j_subchart_is_pulled_from_the_mirror_not_built() -> None:
+    """Chart.yaml names the Neo4j repository by URL, so `helm dependency build` would go public."""
+    text = read("GMF-INSTALL.md")
+    code = "\n".join(m.group("body") for m in FENCE.finditer(text))
+    assert "helm pull neo4j --repo" in code and "oci://" in code
+    assert "helm dependency build" not in code and "helm repo add neo4j" not in code
+
+
+def test_register_action_is_a_real_one() -> None:
+    for name in GUIDES:
+        assert "subscriptions/providers/register/action" not in read(name)
+    assert "*/register/action" in read("DEPLOY-STEP-SECRETS.md")
+
+
+def test_platform_identity_checklist_names_every_federated_service_account() -> None:
+    text = read("GMF-INSTALL.md")
+    section = text.split("### Without Terraform", 1)[1].split("\n## 2.", 1)[0]
+    for account in ("exiqo-api", "exiqo-worker", "exiqo-migrate", "exiqo-neo4j", "exiqo-neo4j-backup"):
+        assert f"`{account}`" in section, account
+    for needle in ("api://AzureADTokenExchange", "Key Vault Secrets User", "AcrPull",
+                   "Cognitive Services OpenAI User", "Storage Blob Data Contributor"):
+        assert needle in section, needle

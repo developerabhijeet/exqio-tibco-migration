@@ -62,7 +62,7 @@ cat > exiqo-deploy-plan-role.json <<'JSON'
   "Description": "Read access for terragrunt plan of ExiQO-generated infrastructure",
   "Actions": [
     "*/read",
-    "Microsoft.Resources/subscriptions/providers/register/action"
+    "*/register/action"
   ],
   "AssignableScopes": ["/subscriptions/<dev subscription>"]
 }
@@ -74,8 +74,12 @@ az role assignment create --assignee-object-id <principalId> --assignee-principa
 
 The registration action is there because the generated provider block is `features {}` with
 the azurerm provider's default behavior, which tries to register resource providers on the
-subscription. Either keep that action in the role (or the per-provider
-`<namespace>/register/action` entries your policy prefers), or turn auto-registration off in the
+subscription. Either keep `*/register/action` in the role, or list only the providers the generated
+modules use (`Microsoft.Resources`, `Microsoft.ManagedIdentity`, `Microsoft.Authorization`,
+`Microsoft.KeyVault`, `Microsoft.ContainerRegistry`, `Microsoft.App`,
+`Microsoft.DBforPostgreSQL`, `Microsoft.ServiceBus`, `Microsoft.OperationalInsights`,
+`Microsoft.Insights`, `Microsoft.ContainerService`), each as `<Namespace>/register/action`, or turn
+auto-registration off in the
 generated provider configuration (`resource_provider_registrations = "none"` in the azurerm 4.x
 provider block, in the generated `root.hcl`) and register the providers once yourself. Without one
 of the two, the first plan fails with a provider registration error.
@@ -155,13 +159,19 @@ as `ARM_CLIENT_SECRET`, and redacts it from the plan output.
 1. Create the service principal with a role from the previous section, and store its secret in Key
    Vault (the vault may be the platform's or another one):
 
+   The secret goes through a mode-600 temporary file and `--file`, never `--value`, so it is not
+   visible in the process list:
+
    ```sh
+   umask 077
+   f="$(mktemp)"
    sp="$(az ad sp create-for-rbac --name exiqo-deploy-prod-sp --years 1 \
      --role "ExiQO deploy plan (prod)" --scopes /subscriptions/<prod subscription> -o json)"
-   az keyvault secret set --vault-name <vault> -n exiqo-deploy-prod-sp \
-     --value "$(printf '%s' "$sp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')"
+   printf '%s' "$sp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"], end="")' >"$f"
+   az keyvault secret set --vault-name <vault> -n exiqo-deploy-prod-sp --file "$f" --output none
    printf '%s' "$sp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["appId"])'  # the clientId
    unset sp
+   shred -u "$f" 2>/dev/null || rm -f "$f"; unset f
    ```
 
 2. Let the worker read it. The worker reads Key Vault with its Workload Identity, which is the
@@ -189,10 +199,24 @@ An environment may use either mode; they can be mixed in one install.
 
 - **Managed identities have no secret.** Nothing expires. Review the role assignments on a schedule
   and remove an identity's federated credential or role assignment to revoke access at once.
-- **Key Vault service principal.** Write a new version of the Key Vault secret before the service
-  principal's secret expires. The next plan reads the latest version (nothing is cached), so no
-  restart is needed. Then delete the old credential in Entra
-  (`az ad app credential delete`).
+- **Key Vault service principal.** Before the service principal's secret expires, add a second
+  secret and write it to Key Vault as a new version, again through a mode-600 file:
+
+  ```sh
+  umask 077; f="$(mktemp)"
+  az ad app credential reset --id <clientId> --append --years 1 --query password -o tsv >"$f"
+  tr -d '\n' <"$f" >"$f.v" && mv "$f.v" "$f"
+  az keyvault secret set --vault-name <vault> -n exiqo-deploy-prod-sp --file "$f" --output none
+  shred -u "$f" 2>/dev/null || rm -f "$f"; unset f
+  ```
+
+  The next plan reads the latest version (nothing is cached), so no restart is needed. Then delete
+  the old credential, naming it by key ID:
+
+  ```sh
+  az ad app credential list --id <clientId> --query '[].{keyId:keyId, end:endDateTime}' -o table
+  az ad app credential delete --id <clientId> --key-id <old keyId>
+  ```
 - **Moving the install** to another namespace or cluster: create a new federated credential with
   the new subject (and issuer, for a new cluster) on each deploy identity before cutting over.
 - **Removing an environment:** delete it from `deploy.environments` and `identity.deployIdentities`,
