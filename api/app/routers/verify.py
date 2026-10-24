@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
+from api.app.jobs.locks import scenario_lock
 from api.app.models import Build, Process
 from api.app.schemas.job import JobCreated
 from api.app.services import verify as svc
@@ -54,7 +55,7 @@ async def generate_scenarios(process_id: str, request: Request, session: Session
     cannot be created or seeded."""
     proc = await _process(session, process_id)
     try:
-        rows, notes, fresh = await svc.ensure_scenarios(session, settings, proc, request.app.state.scenario_lock,
+        rows, notes, fresh = await svc.ensure_scenarios(session, settings, proc, scenario_lock(request.app.state.sessionmaker),
                                                         refresh=(body or GenerateRequest()).refresh)
     except svc.ScenarioDBUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -69,7 +70,7 @@ async def add_scenario(process_id: str, body: SmeScenario, request: Request, ses
     """Add an SME scenario; its expected result comes from the evaluator (the TIBCO model)."""
     proc = await _process(session, process_id)
     try:
-        row, notes = await svc.add_sme_scenario(session, settings, proc, request.app.state.scenario_lock, user,
+        row, notes = await svc.add_sme_scenario(session, settings, proc, scenario_lock(request.app.state.sessionmaker), user,
                                                 body.name, body.input, body.stub_responses, body.seed_state)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -101,12 +102,7 @@ async def verify(build_id: str, request: Request, session: SessionDep, runner: R
     if running is not None:
         raise HTTPException(status_code=409, detail=f"a verify run of this build is in progress: {running}")
     proc = await session.get(Process, build.process_id)
-    app = request.app
-
-    async def run(ctx):
-        return await svc.run_verify(ctx, build_id, settings, app.state.services, app.state.scenario_lock)
-
-    job_id = await runner.submit("verify", {"build_id": build_id}, run, project_id=proc.project_id,
+    job_id = await runner.submit("verify", {"build_id": build_id}, project_id=proc.project_id,
                                  process_id=proc.id)
     return JobCreated(job_id=job_id)
 

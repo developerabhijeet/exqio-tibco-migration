@@ -51,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import psycopg_url, utcnow
+from api.app.jobs.locks import ScenarioLock
 from api.app.jobs.runner import JobContext
 from api.app.models import Build, FieldDiff, Process, Scenario, ScenarioRun
 from api.app.services import evidence
@@ -238,7 +239,7 @@ async def load_scenarios(session: AsyncSession, process_id: str) -> list[Scenari
                                        .order_by(Scenario.created_at, Scenario.key))).scalars().all())
 
 
-async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Process, lock: asyncio.Lock,
+async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Process, lock: ScenarioLock,
                            *, refresh: bool = False) -> tuple[list[Scenario], list[str], bool]:
     """Generate (and cache) the scenarios of a process when there are none, or always with
     ``refresh``. ``POST /processes/{id}/scenarios/generate``, the build job and the verify job call
@@ -250,7 +251,7 @@ async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Proc
     rows = await load_scenarios(session, proc.id)
     if rows and not refresh and any(r.origin == "generated" for r in rows):
         return rows, [], False
-    async with lock:
+    async with lock():
         rows = await load_scenarios(session, proc.id)
         if rows and not refresh and any(r.origin == "generated" for r in rows):
             return rows, [], False
@@ -272,7 +273,7 @@ async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Proc
     return await load_scenarios(session, proc.id), notes, True
 
 
-async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Process, lock: asyncio.Lock,
+async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Process, lock: ScenarioLock,
                            user: str, name: str, data: dict[str, Any], stub_responses: dict[str, Any],
                            seed_state: list[dict[str, Any]]) -> tuple[Scenario, list[str]]:
     app = await engine_app(session, proc)
@@ -284,7 +285,7 @@ async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Proc
     sc = EngineScenario(id=key, process_id=ip.id, name=name, kind="sme", input=data, source="sme",
                         stub_responses={k: StubResponse.model_validate(v) for k, v in stub_responses.items()},
                         seed_state=[SeedRow.model_validate(s) for s in seed_state])
-    async with lock:
+    async with lock():
         filled, notes = await asyncio.to_thread(_evaluate_sync, settings, proc.project_id, app, [sc])
     if not filled:
         raise EvaluationError("; ".join(notes) or "the evaluator could not run the scenario")
@@ -456,7 +457,7 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
 
 
 async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
-                        lock: asyncio.Lock, timeout_s: float = 240.0) -> RunInfo:
+                        lock: ScenarioLock, timeout_s: float = 240.0) -> RunInfo:
     """``dotnet run`` of the build's Api project on a free port against the seeded scenario
     database (raises ``RuntimeError`` with the log tail)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
@@ -477,7 +478,7 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
         finally:
             db.close()
 
-    async with lock:
+    async with lock():
         await asyncio.to_thread(seed)
     clients = client_names(root)
     stubs: StubServer | None = None
@@ -830,7 +831,7 @@ def _derive_expected(
 
 
 async def run_verify(ctx: JobContext, build_id: str, settings: Settings, services: dict[str, RunInfo],
-                     lock: asyncio.Lock) -> dict[str, Any]:
+                     lock: ScenarioLock) -> dict[str, Any]:
     async with ctx.sessionmaker() as s:
         build = await s.get(Build, build_id)
         if build is None:
@@ -861,7 +862,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     app_name = next((p.stem for p in Path(build.output_dir or ".").glob("*.sln")), "App")
     await ctx.stage("run")
     results: list[dict[str, Any]] = []
-    async with lock, httpx.AsyncClient(base_url=info.url, timeout=60) as client:
+    async with lock(), httpx.AsyncClient(base_url=info.url, timeout=60) as client:
         token = await dev_token(client)
         client.headers["Authorization"] = f"Bearer {token}"
         await ctx.log(f"development token issued by {info.url}/auth/dev-token")

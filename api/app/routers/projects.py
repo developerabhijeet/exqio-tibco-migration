@@ -16,6 +16,7 @@ from starlette.datastructures import UploadFile
 from api.app.config import Settings
 from api.app.db import new_id
 from api.app.deps import RunnerDep, SessionDep, SettingsDep
+from api.app.jobs.locks import advisory_lock
 from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
@@ -30,7 +31,6 @@ from api.app.schemas.project import (
 )
 from api.app.services import uploads
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
-from api.app.services.scan import scan_job
 
 router = APIRouter(tags=["projects"])
 log = logging.getLogger(__name__)
@@ -193,13 +193,12 @@ async def scan(project_id: str, request: Request, session: SessionDep, runner: R
         upload_row = await _latest_upload(session, project_id)
         if upload_row is None:
             raise HTTPException(status_code=409, detail="nothing uploaded yet")
-    async with request.app.state.scan_lock:  # the check and the submit are one step
+    async with advisory_lock(request.app.state.sessionmaker, "scan"):  # the check and the submit are one step
         active = await session.scalar(select(Job.id).where(
             Job.project_id == project_id, Job.kind == "scan", Job.status.in_(("queued", "running"))).limit(1))
         if active is not None:
             raise HTTPException(status_code=409, detail=f"a scan of this project is already in progress: {active}")
         job_id = await runner.submit("scan", {"project_id": project_id, "upload_id": upload_row.id},
-                                     scan_job(project_id, upload_row.id, request.app.state.knowledge),
                                      project_id=project_id)
     return JobCreated(job_id=job_id)
 

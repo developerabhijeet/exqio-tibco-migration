@@ -1003,7 +1003,7 @@ async def test_start_service_cleans_up_when_it_cannot_start(monkeypatch, tmp_pat
             raise RuntimeError("runner cannot be created")
         monkeypatch.setattr(verify_svc, "DotnetRunner", broken)
     with pytest.raises(RuntimeError):
-        await verify_svc.start_service(settings, build, "proj", None, asyncio.Lock())
+        await verify_svc.start_service(settings, build, "proj", None, asyncio.Lock)
     assert [s.stopped for s in _TrackedStubs.instances] == [True]
     assert verify_svc._RESERVED_PORTS == reserved  # no port stays reserved
 
@@ -1036,7 +1036,7 @@ async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch,
             return Handle()
 
     monkeypatch.setattr(verify_svc, "DotnetRunner", SlowRunner)
-    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock))
     await asyncio.sleep(0.2)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1047,7 +1047,7 @@ async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch,
 
     # a second cancellation while the handler waits for the launch: the stubs and the port are
     # released at once and the service the launch returns is still stopped
-    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock))
     await asyncio.sleep(0.2)
     task.cancel()
     await asyncio.sleep(0.1)

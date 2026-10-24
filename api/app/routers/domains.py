@@ -39,8 +39,7 @@ async def name_domains(project_id: str, session: SessionDep, runner: RunnerDep,
     """Queue the ``discover`` job: the model proposes a business name per domain. A name the
     SME set is kept; ``suggested_name`` always takes the model's proposal."""
     await _project(session, project_id)
-    job_id = await runner.submit("discover", {"project_id": project_id},
-                                 svc.naming_job(project_id, settings), project_id=project_id)
+    job_id = await runner.submit("discover", {"project_id": project_id}, project_id=project_id)
     return JobCreated(job_id=job_id)
 
 

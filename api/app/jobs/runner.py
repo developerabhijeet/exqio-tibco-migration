@@ -1,6 +1,7 @@
 """In-process job runner: a bounded asyncio worker pool over persisted ``jobs`` and ``job_events``.
 
-``submit`` stores a queued job and hands its coroutine to the pool (``JOB_WORKERS`` workers).
+``submit`` stores a queued job (``kind`` + ``payload``) and queues its id to the pool
+(``JOB_WORKERS`` workers), which resolves ``handler_for(kind)`` and runs it.
 A running job writes events through :class:`JobContext` (``log``, ``stage``); every event is
 committed to ``job_events`` with a per-job ``seq`` and then published to in-process
 subscribers, which the SSE endpoint reads (with a database poll as the fallback for events
@@ -19,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -27,6 +27,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.app.db import utcnow
+from api.app.jobs.registry import WorkerServices, handler_for
 from api.app.models import Job, JobEvent
 
 log = logging.getLogger(__name__)
@@ -98,14 +99,13 @@ class JobContext:
         return out
 
 
-RunFn = Callable[[JobContext], Awaitable[dict[str, Any]]]
-
-
 class JobRunner:
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], workers: int = 2) -> None:
+    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], workers: int = 2,
+                 services: WorkerServices | None = None) -> None:
         self.sessionmaker = sessionmaker
+        self.services = services  # handed to handlers; the app sets it once its parts exist
         self.size = max(1, workers)
-        self._queue: asyncio.Queue[tuple[str, RunFn]] = asyncio.Queue()
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         self._subscribers: dict[str, set[asyncio.Queue[EventOut]]] = {}
 
@@ -138,15 +138,17 @@ class JobRunner:
         return len(stale)
 
     # ------------------------------------------------------------- submit
-    async def submit(self, kind: str, payload: dict[str, Any], run: RunFn, *,
-                     project_id: str | None = None, process_id: str | None = None) -> str:
+    async def submit(self, kind: str, payload: dict[str, Any], *, project_id: str | None = None,
+                     process_id: str | None = None, affinity: str | None = None) -> str:
+        """Store a queued job; the handler registered for ``kind`` runs it from ``payload``.
+        ``affinity`` is accepted now and stored once the jobs table has the column."""
         async with self.sessionmaker() as s:
             job = Job(kind=kind, status="queued", payload=payload, project_id=project_id,
                       process_id=process_id)
             s.add(job)
             await s.commit()
             job_id = job.id
-        await self._queue.put((job_id, run))
+        await self._queue.put(job_id)
         return job_id
 
     # ------------------------------------------------------------- pub/sub
@@ -169,15 +171,15 @@ class JobRunner:
     # ------------------------------------------------------------- workers
     async def _work(self, index: int) -> None:
         while True:
-            job_id, run = await self._queue.get()
+            job_id = await self._queue.get()
             try:
-                await self._execute(job_id, run)
+                await self._execute(job_id)
             except Exception:
                 log.exception("job %s: runner bookkeeping failed", job_id)
             finally:
                 self._queue.task_done()
 
-    async def _execute(self, job_id: str, run: RunFn) -> None:
+    async def _execute(self, job_id: str) -> None:
         async with self.sessionmaker() as s:
             job = await s.get(Job, job_id)
             if job is None or job.status != "queued":
@@ -185,10 +187,11 @@ class JobRunner:
             job.status = "running"
             job.started_at = utcnow()
             payload = dict(job.payload or {})
+            kind = job.kind
             await s.commit()
         ctx = JobContext(self, job_id, payload)
         try:
-            result = await run(ctx)
+            result = await handler_for(kind)(ctx, self.services)
         except asyncio.CancelledError:
             await self._finish(job_id, "failed", None, "cancelled")
             await ctx.emit("error", "cancelled")

@@ -29,7 +29,6 @@ async def generate_design(process_id: str, request: Request, session: SessionDep
     if running is not None:
         raise HTTPException(status_code=409, detail=f"a design job for this process is in progress: {running}")
     job_id = await runner.submit("design", {"process_id": process_id, "provider": settings.resolved_provider()},
-                                 svc.design_job(process_id, settings, request.app.state.knowledge),
                                  project_id=proc.project_id, process_id=process_id)
     return JobCreated(job_id=job_id)
 

@@ -8,6 +8,7 @@ from fastapi import Depends
 from sqlalchemy import select
 
 from api.app.deps import require_user
+from api.app.jobs import registry
 from api.app.jobs.runner import JobContext
 from api.app.models import Job, JobEvent
 
@@ -38,7 +39,8 @@ async def _demo(ctx: JobContext) -> dict:
 
 async def test_sse_streams_log_events(client, app):
     runner = app.state.runner
-    job_id = await runner.submit("demo", {"n": 3}, _demo)
+    registry.register("demo", lambda ctx, w: _demo(ctx))
+    job_id = await runner.submit("demo", {"n": 3})
     async with client.stream("GET", f"/jobs/{job_id}/events") as r:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
@@ -74,7 +76,8 @@ async def test_failed_job_streams_error(client, app):
         await ctx.log("about to fail")
         raise RuntimeError("parser exploded")
 
-    job_id = await app.state.runner.submit("demo", {}, boom)
+    registry.register("demo", lambda ctx, w: boom(ctx))
+    job_id = await app.state.runner.submit("demo", {})
     async with client.stream("GET", f"/jobs/{job_id}/events") as r:
         events = _parse_sse("".join([c async for c in r.aiter_text()]))
     assert [e["event"] for e in events] == ["log", "error"]

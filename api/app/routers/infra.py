@@ -102,15 +102,13 @@ async def plan(build_id: str, request: Request, session: SessionDep, runner: Run
     if running is not None:
         raise HTTPException(status_code=409, detail=f"a plan of this build is in progress: {running}")
     try:
-        secret = svc.decrypt_secret(request.app.state.fernet, conn)
+        svc.decrypt_secret(request.app.state.fernet, conn)  # readable now; the job decrypts it when it runs
     except svc.SecretUnreadable as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     p = await svc.record_connect_later(session, build, "")
     p.connected, p.status, p.note = True, "running", None
     await session.commit()
-    job_id = await runner.submit("plan", {"build_id": build_id, "plan_id": p.id},
-                                 svc.plan_job(build_id, p.id, svc.plan_env(conn, secret),
-                                              tools["terragrunt"]["path"]),
+    job_id = await runner.submit("plan", {"build_id": build_id, "plan_id": p.id, "environment": svc.PLAN_ENV},
                                  project_id=proc.project_id, process_id=proc.id)
     p.job_id = job_id
     await session.commit()

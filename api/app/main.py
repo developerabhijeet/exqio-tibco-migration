@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.app.config import Settings
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
+from api.app.jobs import handlers  # noqa: F401  registers the job kinds
+from api.app.jobs.registry import WorkerServices
 from api.app.jobs.runner import JobRunner
 from api.app.routers import (
     analysis,
@@ -47,18 +49,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = make_engine(settings.database_url)
         sessionmaker = make_sessionmaker(engine)
         runner = JobRunner(sessionmaker, workers=settings.job_workers)
+        knowledge = Knowledge(psycopg_url(settings.database_url))
+        services: dict = {}  # build id -> running generated service (verify.RunInfo)
+        fernet, fernet_generated = make_fernet(settings)
+        runner.services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
+                                         services=services, fernet=fernet)
         app.state.settings = settings
         app.state.engine = engine
         app.state.sessionmaker = sessionmaker
         app.state.runner = runner
-        app.state.scan_lock = asyncio.Lock()
-        app.state.analyse_lock = asyncio.Lock()
-        app.state.knowledge = Knowledge(psycopg_url(settings.database_url))
+        app.state.knowledge = knowledge
         app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
-        app.state.scenario_lock = asyncio.Lock()  # one scenario-database user at a time (reseeds)
-        app.state.services = {}  # build id -> running generated service (verify.RunInfo)
+        app.state.services = services
         app.state.start_locks = {}  # build id -> asyncio.Lock (one service start at a time)
-        app.state.fernet, app.state.fernet_generated = make_fernet(settings)
+        app.state.fernet, app.state.fernet_generated = fernet, fernet_generated
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
         try:
             await runner.start()

@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import utcnow
+from api.app.jobs.locks import ScenarioLock
 from api.app.jobs.runner import JobContext
 from api.app.models import Build, BuildFile, DesignRecord, InfraAsset, Metric, Process, TestResult
 from api.app.services import evidence
@@ -175,7 +176,7 @@ async def approved_design(session: AsyncSession, process: Process) -> DesignReco
     return design
 
 
-def build_job(build_id: str, settings: Settings, knowledge: Knowledge, scenario_lock: asyncio.Lock):
+def build_job(build_id: str, settings: Settings, knowledge: Knowledge, scenario_lock: ScenarioLock):
     async def run(ctx: JobContext) -> dict[str, Any]:
         try:
             return await run_build(ctx, build_id, settings, knowledge, scenario_lock)
@@ -348,7 +349,7 @@ def call_closure(app: Any, process: Any) -> list[str]:
 
 # ------------------------------------------------------------------ the job
 async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledge: Knowledge,
-                    scenario_lock: asyncio.Lock) -> dict[str, Any]:
+                    scenario_lock: ScenarioLock) -> dict[str, Any]:
     from api.app.services import verify as verify_svc
 
     async with ctx.sessionmaker() as s:

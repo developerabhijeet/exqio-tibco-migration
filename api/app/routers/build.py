@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
+from api.app.jobs.locks import scenario_lock
 from api.app.models import Build, BuildFile, Process, TestResult
 from api.app.services import build as svc
 from api.app.services import verify as verify_svc
@@ -62,7 +63,6 @@ async def start_build(process_id: str, request: Request, session: SessionDep, ru
     await session.commit()
     job_id = await runner.submit(
         "build", {"process_id": process_id, "build_id": build.id, "runtime": runtime},
-        svc.build_job(build.id, settings, request.app.state.knowledge, request.app.state.scenario_lock),
         project_id=proc.project_id, process_id=process_id)
     build.job_id = job_id
     await session.commit()
@@ -285,7 +285,7 @@ async def run_service(build_id: str, request: Request, session: SessionDep,
         try:
             app = await engine_app(session, proc)
             info = await verify_svc.start_service(settings, build, proc.project_id, app,
-                                                  request.app.state.scenario_lock)
+                                                  scenario_lock(request.app.state.sessionmaker))
         except (RuntimeError, OSError, verify_svc.ScenarioDBUnavailable) as exc:
             raise HTTPException(status_code=409, detail=f"the service did not start: {exc}") from exc
         services[build_id] = info

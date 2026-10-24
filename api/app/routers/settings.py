@@ -69,7 +69,6 @@ async def start_eval(body: EvalRequest, session: SessionDep, runner: RunnerDep,
     session.add(ev)
     await session.commit()
     job_id = await runner.submit("eval", {"eval_id": ev.id, "process_ids": body.process_ids},
-                                 provider_svc.eval_job(ev.id, body.process_ids, settings),
                                  project_id=first.project_id)
     ev.job_id = job_id
     await session.commit()
