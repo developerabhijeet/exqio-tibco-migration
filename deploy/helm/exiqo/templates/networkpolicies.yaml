@@ -130,7 +130,11 @@ spec:
         - podSelector:
             matchLabels: {app: exiqo-neo4j}
         {{- else }}
-        {{- range required "neo4j.externalCidrs is required when neo4j.enabled is false" .Values.neo4j.externalCidrs }}
+        {{- /* required passes an empty list, and an empty "to" would allow any address. */}}
+        {{- if not .Values.neo4j.externalCidrs }}
+        {{- fail "neo4j.externalCidrs must list the external Neo4j's addresses when neo4j.enabled is false" }}
+        {{- end }}
+        {{- range .Values.neo4j.externalCidrs }}
         - ipBlock: {cidr: {{ . }}}
         {{- end }}
         {{- end }}

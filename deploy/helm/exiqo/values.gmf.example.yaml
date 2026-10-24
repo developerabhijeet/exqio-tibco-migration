@@ -85,7 +85,7 @@ egress:
 
 networkPolicy:
   ingressNamespaces: [ingress-nginx]
-  kubeApiCidrs: [10.50.0.4/32]   # the private cluster's API server address
+  kubeApiCidrs: [10.50.0.4/32]   # the API server address, for the Neo4j backup when enabled
 
 providers:
   azureOpenAI:
@@ -104,6 +104,8 @@ mirrors:
       }
     }
 
-neo4jBackup:
-  storageAccount: stgmfexiqobackup
-  container: neo4j-backups
+# The Neo4j backup stays off until sub-project 2 (see neo4jBackup in values.yaml). To turn it on:
+# neo4jBackup:
+#   enabled: true
+#   storageAccount: stgmfexiqobackup
+#   container: neo4j-backups

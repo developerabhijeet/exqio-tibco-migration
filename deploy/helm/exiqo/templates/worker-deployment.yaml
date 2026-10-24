@@ -56,9 +56,10 @@ spec:
                 fieldRef: {fieldPath: status.podIP}
             - name: JOB_WORKERS
               value: {{ .Values.worker.slots | quote }}
-            # NuGet packages on the shared volume, not the node's disk, and kept across restarts.
+            # Per pod (an emptyDir): NuGet's lock is per machine, so a cache shared by several
+            # workers collides, and SMB is slow for many small files.
             - name: NUGET_PACKAGES
-              value: /data/nuget/packages
+              value: /cache/nuget/packages
             {{- include "exiqo.secretFileEnv" (dict "ctx" .) | nindent 12 }}
           ports:
             - name: internal
@@ -82,5 +83,10 @@ spec:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:
             {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
+            - name: cache
+              mountPath: /cache
       volumes:
         {{- include "exiqo.platformVolumes" (dict "ctx" . "tmpSize" .Values.worker.tmpSize) | nindent 8 }}
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.worker.nugetCacheSize }}

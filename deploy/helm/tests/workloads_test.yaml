@@ -29,6 +29,34 @@ tests:
       - equal: {path: "spec.template.spec.containers[0].readinessProbe.httpGet", value: {path: /internal/healthz, port: internal}}
       - equal: {path: "spec.template.spec.containers[0].ports", value: [{name: internal, containerPort: 9100, protocol: TCP}]}
       - notExists: {path: spec.replicas}
+  - it: NuGet packages go to a per-pod cache, not the shared Azure Files volume
+    template: templates/worker-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: NUGET_PACKAGES, value: /cache/nuget/packages}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: cache, mountPath: /cache}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: cache, emptyDir: {sizeLimit: 10Gi}}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tmp, emptyDir: {sizeLimit: 16Gi}}
+  - it: the worker's ephemeral storage covers /tmp (16Gi) and the NuGet cache (10Gi)
+    template: templates/worker-deployment.yaml
+    asserts:
+      - equal: {path: 'spec.template.spec.containers[0].resources.requests["ephemeral-storage"]', value: 26Gi}
+      - equal: {path: 'spec.template.spec.containers[0].resources.limits["ephemeral-storage"]', value: 32Gi}
+  - it: the api's /tmp holds 2 GiB uploads while they unpack, and its ephemeral storage covers it
+    template: templates/api-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tmp, emptyDir: {sizeLimit: 6Gi}}
+      - equal: {path: 'spec.template.spec.containers[0].resources.requests["ephemeral-storage"]', value: 6Gi}
+      - equal: {path: 'spec.template.spec.containers[0].resources.limits["ephemeral-storage"]', value: 8Gi}
   - it: the worker's replicas are set by the HPA, from worker.replicas to worker.maxReplicas
     template: templates/worker-hpa.yaml
     asserts:
@@ -111,7 +139,7 @@ tests:
   - it: the data volume is Azure Files RWX and survives an uninstall
     template: templates/data-pvc.yaml
     asserts:
-      - equal: {path: spec.storageClassName, value: azurefile-csi-premium}
+      - equal: {path: spec.storageClassName, value: exiqo-azurefile-premium}
       - equal: {path: spec.accessModes, value: [ReadWriteMany]}
       - equal: {path: 'metadata.annotations["helm.sh/resource-policy"]', value: keep}
 
@@ -125,7 +153,7 @@ tests:
   - it: an environment without a client id fails the render
     values:
       - ../exiqo/values.gmf.example.yaml
-      - values/env-without-client-id.yaml
+      - ../tests/values/env-without-client-id.yaml
     asserts:
       - failedTemplate:
           errorPattern: 'deploy environment "qa" needs clientId'

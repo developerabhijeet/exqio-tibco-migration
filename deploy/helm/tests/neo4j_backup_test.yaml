@@ -1,8 +1,10 @@
 # Nightly Neo4j dump to GMF Blob. Community edition dumps only a stopped database, so the job stops
-# the StatefulSet, dumps the store from the same disk, starts Neo4j again and then uploads.
+# the StatefulSet, dumps the store from the same disk, starts Neo4j again and then uploads. Off by
+# default (controller ruling): sub-project 2 picks the backup strategy.
 suite: neo4j backup
 values:
   - ../exiqo/values.gmf.example.yaml
+  - ../tests/values/backup-enabled.yaml
 templates:
   - templates/neo4j-backup-cronjob.yaml
 tests:
@@ -59,5 +61,24 @@ tests:
     set:
       neo4j.enabled: false
       neo4j.uri: bolt+s://neo4j.gmf.example:7687
+      neo4j.externalCidrs: [10.60.0.0/28]
     asserts:
       - hasDocuments: {count: 0}
+
+---
+# Test-level values add to the suite's, so the default needs a suite without the overlay.
+suite: neo4j backup default
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/neo4j-backup-cronjob.yaml
+  - templates/networkpolicies.yaml
+tests:
+  - it: is off by default, and the GMF example leaves it off
+    template: templates/neo4j-backup-cronjob.yaml
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: so is its NetworkPolicy
+    template: templates/networkpolicies.yaml
+    asserts:
+      - notEqual: {path: metadata.name, value: exiqo-neo4j-backup-egress}

@@ -74,3 +74,28 @@ tests:
           content:
             to: [{ipBlock: {cidr: 10.40.0.0/24}}, {ipBlock: {cidr: 20.190.128.0/18}}]
             ports: [{port: 443, protocol: TCP}]
+
+---
+suite: network policies, external Neo4j
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/networkpolicies.yaml
+tests:
+  - it: an external Neo4j without externalCidrs fails (an empty "to" would allow any address)
+    values:
+      - ../exiqo/values.gmf.example.yaml
+      - ../tests/values/external-neo4j-no-cidrs.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "externalCidrs"
+  - it: an external Neo4j is reached at its CIDRs on 7687 only
+    set:
+      neo4j.enabled: false
+      neo4j.uri: bolt+s://neo4j.gmf.example:7687
+      neo4j.externalCidrs: [10.60.0.0/28]
+    documentSelector: {path: metadata.name, value: exiqo-neo4j-egress}
+    asserts:
+      - equal:
+          path: spec.egress
+          value: [{to: [{ipBlock: {cidr: 10.60.0.0/28}}], ports: [{port: 7687, protocol: TCP}]}]

@@ -1,9 +1,11 @@
 """Infrastructure endpoints: liveness, readiness, the About panel's status and the brand.
 
 ``/healthz`` answers without touching a dependency, so a slow database never gets a pod killed.
-``/readyz`` checks Postgres, Neo4j (when configured) and that every ``<NAME>_FILE`` secret is
-readable, and answers 503 naming the check that failed, so a pod takes traffic only when it can
-serve it. Messages carry the failing check's name and exception class, never a value or a URL.
+``/readyz`` checks Postgres and that every ``<NAME>_FILE`` secret is readable, and answers 503
+naming the check that failed, so a pod takes traffic only when it can serve it. Neo4j (when
+configured) is checked and reported (``ok``, ``down: <exception class>``) but does not gate
+readiness: nothing uses it until sub-project 2, and the Community edition's nightly dump stops it.
+Messages carry the check's name and exception class, never a value or a URL.
 """
 from __future__ import annotations
 
@@ -36,7 +38,8 @@ async def check_postgres(request: Request) -> str:
 
 
 async def check_neo4j(settings: Settings) -> str:
-    """Connectivity only: nothing is written to Neo4j. ``disabled`` when no URI is configured."""
+    """Connectivity only: nothing is written to Neo4j. ``disabled`` when no URI is configured,
+    ``down: <exception class>`` when it does not answer."""
     if not settings.neo4j_uri:
         return "disabled"
     from neo4j import AsyncGraphDatabase
@@ -49,7 +52,7 @@ async def check_neo4j(settings: Settings) -> str:
         await asyncio.wait_for(driver.verify_connectivity(), CHECK_TIMEOUT_S)
         return "ok"
     except Exception as exc:  # noqa: BLE001
-        return f"error: {type(exc).__name__}"
+        return f"down: {type(exc).__name__}"
     finally:
         if driver is not None:
             await driver.close()
@@ -71,8 +74,12 @@ async def run_checks(request: Request) -> dict[str, str]:
     return {"postgres": postgres, "neo4j": neo4j, "secrets": check_secrets()}
 
 
+# Checks that decide readiness; neo4j is reported only (until sub-project 2 uses it).
+GATING_CHECKS = ("postgres", "secrets")
+
+
 def _ready(checks: dict[str, str]) -> bool:
-    return all(v in ("ok", "disabled") for v in checks.values())
+    return all(checks[name] in ("ok", "disabled") for name in GATING_CHECKS)
 
 
 def package_version() -> str:

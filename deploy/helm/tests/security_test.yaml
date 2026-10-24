@@ -57,6 +57,9 @@ tests:
           value: "true"
   - it: backup kubectl/az steps run as 10001; the dump step as the Neo4j image's user
     template: templates/neo4j-backup-cronjob.yaml
+    values:
+      - ../exiqo/values.gmf.example.yaml
+      - ../tests/values/backup-enabled.yaml
     documentSelector: {path: kind, value: CronJob}
     asserts:
       - equal:

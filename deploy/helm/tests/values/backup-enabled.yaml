@@ -1,0 +1,4 @@
+# The Neo4j backup is off by default; its tests turn it on.
+neo4jBackup:
+  enabled: true
+  storageAccount: stgmfexiqobackup

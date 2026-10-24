@@ -221,7 +221,9 @@ egress-audit:
 
 # ---------------------------------------------------------------- Helm chart (deploy/helm/exiqo)
 # Dependencies (the pinned Neo4j subchart), lint, the helm-unittest suites in deploy/helm/tests, the
-# schema's refusals, and kubeconform -strict on what the GMF example and the CI overlay render.
+# schema's refusals, the Neo4j subchart contract (deploy/helm/tests/subchart_contract.py: the pod
+# label, Service, data claim and service accounts this chart relies on), and kubeconform -strict on
+# what the GMF example (with and without the backup) and the CI overlay render.
 # helm, the unittest plugin and kubeconform run from pinned images when they are not on PATH (the
 # images need network for the Neo4j chart repository and the schemas). SecretProviderClass is a
 # CRD, validated against the datreeio CRDs catalog; nothing is skipped as an unknown kind.
@@ -256,5 +258,9 @@ chart-check:
 			echo "chart-check: the schema accepted $$bad"; exit 1; \
 		fi; \
 	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source"
+	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/helm/tests/values/backup-enabled.yaml \
+		| $(PY) -I deploy/helm/tests/subchart_contract.py
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)
+	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/helm/tests/values/backup-enabled.yaml \
+		| $(KUBECONFORM) $(KUBECONFORM_FLAGS)
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f $(CHART_CI) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)

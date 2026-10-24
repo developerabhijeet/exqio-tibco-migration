@@ -10,7 +10,7 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   accessModes: [{{ .Values.data.accessMode }}]
-  storageClassName: {{ .Values.data.storageClass }}
+  storageClassName: {{ required "data.storageClass.name is required" .Values.data.storageClass.name }}
   resources:
     requests:
       storage: {{ .Values.data.size }}

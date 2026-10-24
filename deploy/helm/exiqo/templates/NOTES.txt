@@ -27,5 +27,5 @@ Checks:
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=exiqo
   The About panel (admin role) shows /system/status: image digests, egress allowlist, readiness.
 {{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled }}
-  Neo4j backup: "{{ .Values.neo4jBackup.schedule }}" (Neo4j stops for the dump; /readyz reports it)
+  Neo4j backup: "{{ .Values.neo4jBackup.schedule }}" (Neo4j stops for the dump; /readyz reports it as down without failing)
 {{- end }}

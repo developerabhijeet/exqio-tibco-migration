@@ -126,18 +126,20 @@ ingress:
       nginx.ingress.kubernetes.io/proxy-buffering: "off"
       nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
 
+# ephemeral-storage covers the pod's emptyDirs (they count against it): /tmp for the api, /tmp and
+# the NuGet cache for the worker. Keep requests >= the sizes below.
 api:
   replicas: 2
   resources:
-    requests: {cpu: 500m, memory: 1Gi}
-    limits: {cpu: "2", memory: 2Gi}
-  tmpSize: 4Gi  # uploads are unpacked under /tmp before they reach DATA_DIR
+    requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 6Gi}
+    limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 8Gi}
+  tmpSize: 6Gi  # an upload (up to 2 GiB) is received and unpacked under /tmp before DATA_DIR
 
 web:
   replicas: 2
   resources:
-    requests: {cpu: 100m, memory: 256Mi}
-    limits: {cpu: "1", memory: 512Mi}
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 512Mi}
+    limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi}
 
 worker:
   replicas: 2       # the autoscaler's minimum
@@ -145,15 +147,29 @@ worker:
   slots: 2          # JOB_WORKERS: concurrent jobs per worker pod
   targetCPUUtilization: 70
   resources:
-    requests: {cpu: "2", memory: 4Gi}
-    limits: {cpu: "4", memory: 8Gi}
+    requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 26Gi}
+    limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 32Gi}
   tmpSize: 16Gi     # dotnet, MSBuild and Terraform work under /tmp
+  # NUGET_PACKAGES, per pod: NuGet's lock is per machine, so restores from several workers into one
+  # shared folder collide, and SMB is slow for many small files. Refilled from the mirror.
+  nugetCacheSize: 10Gi
 
-# DATA_DIR (uploads, generated builds), shared by api and worker pods. The built-in
-# azurefile-csi-premium class mounts world-writable (0777); a GMF class with
-# mountOptions uid=10001,gid=10001,dir_mode=0770,file_mode=0660 is tighter.
+# DATA_DIR, shared by api and worker pods: the api writes and unpacks uploads under
+# /data/uploads (api/app/routers/projects.py); the worker writes each generated solution under
+# /data/builds/<build id> (api/app/services/build.py) and runs dotnet restore, build, format and
+# test there, and Verify starts the built service from it (the apphost needs its exec bit). On
+# Azure Files the built-in classes mount the share root-owned 0777 and fsGroup does not apply to
+# SMB, so UID 10001 could not chmod or set times (copystat, tar -p, the apphost, git). The chart's
+# StorageClass mounts the share as 10001; storageClass.create: false uses storageClass.name, an
+# existing class with the same mount options. StorageClasses are cluster-scoped: a second install
+# in another namespace sets create: false and names this one.
 data:
-  storageClass: azurefile-csi-premium
+  storageClass:
+    create: true
+    name: exiqo-azurefile-premium
+    skuName: Premium_LRS
+    mountOptions: [uid=10001, gid=10001, dir_mode=0770, file_mode=0770, mfsymlinks, cache=strict,
+                   nosharesock, actimeo=30]
   size: 200Gi
   accessMode: ReadWriteMany
   existingClaim: ""
@@ -204,15 +220,16 @@ langfuse:
 migration:
   activeDeadlineSeconds: 900
   resources:
-    requests: {cpu: 100m, memory: 256Mi}
-    limits: {cpu: "1", memory: 1Gi}
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
+    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 512Mi}
 
-# Nightly neo4j-admin dump to a GMF Blob container. Community edition dumps only a stopped
-# database: the job stops Neo4j (StatefulSet to 0), dumps the store, starts Neo4j and uploads, so
-# Neo4j (and with it the API's /readyz) is down for the stop-dump-start window, about a minute
-# while the graph is small. Retention is the storage account's lifecycle policy.
+# Nightly neo4j-admin dump to a GMF Blob container: off until sub-project 2, which puts data in
+# Neo4j and picks the backup strategy. Community edition dumps only a stopped database, so this job
+# stops Neo4j (StatefulSet to 0), dumps the store, starts Neo4j and uploads: Neo4j is down for the
+# stop-dump-start window (about a minute while the graph is small). Enterprise has online backup.
+# Retention is the storage account's lifecycle policy. Needs networkPolicy.kubeApiCidrs.
 neo4jBackup:
-  enabled: true
+  enabled: false
   schedule: "30 2 * * *"
   storageAccount: ""
   container: neo4j-backups
@@ -220,9 +237,10 @@ neo4jBackup:
   stopTimeoutSeconds: 360
   scratchSize: 32Gi  # the dump, before upload (emptyDir on the node)
   azureCliImage: mcr.microsoft.com/azure-cli:2.91.0-azurelinux4.0@sha256:1487a97d4fdd27b91e502bd568871a3dbf7e70b8777218a7dc7d51abd45b236f
+  # per step; the pod's emptyDirs (the dump scratch above, the CLI's /tmp) count against the sum
   resources:
-    requests: {cpu: 250m, memory: 512Mi}
-    limits: {cpu: "1", memory: 2Gi}
+    requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+    limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 40Gi}
 
 # The official Neo4j chart (Community, one instance), plus uri for an external Neo4j when
 # enabled is false (then neo4jBackup does not apply). The names below are fixed (exiqo-neo4j) like

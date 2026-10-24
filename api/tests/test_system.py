@@ -41,12 +41,14 @@ async def test_readyz_ok_and_neo4j_disabled(client):
     assert r.json() == {"postgres": "ok", "neo4j": "disabled", "secrets": "ok"}
 
 
-async def test_readyz_reports_neo4j_down(app, client):
+async def test_readyz_reports_neo4j_down_but_stays_ready(app, client):
+    # Controller ruling: nothing uses Neo4j until sub-project 2, so a stopped Neo4j (the nightly
+    # Community dump stops it) is reported, never a reason to take the API out of service.
     app.state.settings.neo4j_uri = "bolt://127.0.0.1:1"
     r = await client.get("/readyz")
-    assert r.status_code == 503
+    assert r.status_code == 200
     body = r.json()
-    assert body["neo4j"] != "ok" and body["neo4j"] != "disabled"
+    assert body["neo4j"].startswith("down: ")
     assert body["postgres"] == "ok" and body["secrets"] == "ok"
 
 
