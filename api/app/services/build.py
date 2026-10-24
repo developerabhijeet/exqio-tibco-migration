@@ -405,7 +405,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                       f"{', '.join(sorted(i.rsplit('.', 1)[-1] for i in closure))}")
     solution: GeneratedSolution = await asyncio.to_thread(
         generate_solution, app, [proc.id, *closure], {proc.id: design}, {proc.id: rules},
-        {proc.id: findings}, scenarios, out_dir)
+        {proc.id: findings}, scenarios, out_dir, settings.nuget_source)
     agent_files = [f for f in solution.files if f.origin == "agent" and not f.path.startswith("tests/")]
     await ctx.log(f"solution {solution.name}: {len(solution.files)} file(s) in {out_dir}; "
                   f"{len(agent_files)} production file(s) with bodies left to the Code Builder")
@@ -721,7 +721,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     await ctx.stage(STAGES[12])
     tools = await asyncio.to_thread(toolchain)
     validation = await asyncio.to_thread(validate_infra, solution.root, (tools.get("terraform") or {}).get("path"),
-                                         (tools.get("terragrunt") or {}).get("path"))
+                                         (tools.get("terragrunt") or {}).get("path"),
+                                         {"TF_CLI_CONFIG_FILE": settings.tf_cli_config_file}
+                                         if settings.tf_cli_config_file else None)
     await ctx.log(f"terraform fmt -check: {validation.fmt_ok}; module validate: "
                   f"{sum(1 for m in validation.modules if m.validate_ok)} of {len(validation.modules)}; "
                   f"terragrunt hcl fmt --check: {validation.hclfmt_ok}; ok: {validation.ok}")

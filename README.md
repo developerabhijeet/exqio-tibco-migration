@@ -77,6 +77,7 @@ shows each provider as configured or missing and never shows a value.
 | `EXIQO_ROLE`                                                                       | `all` (default, one process), `api`, or `worker` |
 | `AUTH_MODE`                                                                        | `dev` (default, the dev personas) or `oidc` (Entra ID sign-in) |
 | `DEPLOY_CREDENTIAL_MODE`                                                           | `local` (default, development only) or `workload_identity` for the Deploy step |
+| `NUGET_SOURCE`, `TF_CLI_CONFIG_FILE`                                              | GMF package mirrors: the generated `nuget.config` uses this feed as its only source (source `gmf`; the offline cache is still added), and Terraform/Terragrunt run with this CLI config (provider network mirror). Empty keeps nuget.org and the public registry |
 | `API_BASE_PATH`                                                                    | URL prefix the API is served under (default empty) |
 | `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener; a worker (`make worker`) refuses to start without `INTERNAL_TOKEN`, role `all` does not need it |
 | `JOB_STALE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS`                   | job heartbeat every 10 s (default), a job is stale after 90 s, at most 2 attempts |

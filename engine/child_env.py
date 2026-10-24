@@ -16,6 +16,7 @@ from collections.abc import Mapping
 ALLOWED_NAMES = frozenset({
     "PATH", "HOME", "TMPDIR", "LANG", "TZ",
     "EXIQO_NUGET_CACHE",
+    "TF_CLI_CONFIG_FILE",  # the provider network mirror (GM Financial: no registry egress)
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
     # Testcontainers finds the Docker daemon through these when no TEST_DATABASE_URL is passed.

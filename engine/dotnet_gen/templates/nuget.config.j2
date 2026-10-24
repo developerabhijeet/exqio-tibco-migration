@@ -6,6 +6,10 @@
 <configuration>
   <packageSources>
     <clear />
+{% if nuget_source %}
+    <add key="gmf" value="{{ nuget_source | e }}" />
+{% else %}
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
+{% endif %}
   </packageSources>
 </configuration>

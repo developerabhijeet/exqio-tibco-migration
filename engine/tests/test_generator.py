@@ -704,3 +704,15 @@ def test_a_build_with_nothing_measured_has_no_accuracy_rather_than_zero():
     assert score is None and "nothing to average" in detail
     # standards_adherence is never None in a real build, so compute_metrics still returns a number
     assert metrics.compute_metrics([], 0, run, build, True, None).conversion_accuracy is not None
+
+
+def test_nuget_config_uses_mirror(solution, app, designs, rules, findings, scenarios, tmp_path):
+    url = "https://nuget.gmf.example/v3/index.json"
+    mirrored = generator.generate_solution(app, PROCESS_IDS, designs, rules, findings, scenarios,
+                                           tmp_path / "GmfCredit", nuget_source=url)
+    cfg = _file(mirrored, "nuget.config").content
+    assert "<clear />" in cfg and f'<add key="gmf" value="{url}"' in cfg
+    assert "nuget.org" not in cfg.split("<packageSources>")[1]  # the mirror is the only source
+    # unset: today's file, byte for byte
+    assert 'key="nuget.org"' in _file(solution, "nuget.config").content
+    assert "gmf" not in _file(solution, "nuget.config").content.split("<packageSources>")[1]

@@ -601,3 +601,12 @@ def test_run_local_sh_says_what_is_missing_instead_of_hanging(generated, tmp_pat
     )
     assert done.returncode == 1, done.stdout + done.stderr
     assert f"{missing} is not on PATH" in done.stderr
+
+
+def test_child_env_passes_tf_cli_config(monkeypatch):
+    from engine import child_env as ce
+
+    assert "TF_CLI_CONFIG_FILE" in ce.ALLOWED_NAMES  # named, not only covered by the TF_ prefix
+    monkeypatch.delenv("TF_CLI_CONFIG_FILE", raising=False)
+    env = ce.child_env({"TF_CLI_CONFIG_FILE": "/etc/gmf/terraform.rc"})
+    assert env["TF_CLI_CONFIG_FILE"] == "/etc/gmf/terraform.rc"

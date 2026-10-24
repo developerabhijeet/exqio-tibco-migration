@@ -2718,7 +2718,8 @@ def _designs(app: Application, process_ids: list[str], design: Any, rules: dict[
 
 def generate_solution(app: Application, process_ids: list[str], design: DesignRecord | dict[str, DesignRecord] | list[DesignRecord],
                       rules: dict[str, list[Rule]] | list[Rule], findings: dict[str, list[Finding]] | list[Finding],
-                      scenarios: list[Scenario], out_dir: Path) -> GeneratedSolution:
+                      scenarios: list[Scenario], out_dir: Path,
+                      nuget_source: str = "") -> GeneratedSolution:
     """Generate the solution for ``process_ids`` of ``app`` into ``out_dir`` (the solution root).
 
     ``design`` is the design record of each process (a dict keyed by process id, a list, or one
@@ -2726,6 +2727,9 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     are keyed by process id or flat lists (assigned to the processes their citations name).
     Files from an earlier generation that are no longer produced are removed (``.exiqo`` manifest);
     the infrastructure paths in ``RESERVED_FOR_INFRA`` are never touched.
+
+    ``nuget_source`` (a package mirror URL) replaces nuget.org as the only source in ``nuget.config``;
+    empty keeps nuget.org. The offline cache is unaffected: ``Directory.Build.props`` adds it itself.
     """
     if not process_ids:
         raise ValueError("process_ids is empty")
@@ -2775,7 +2779,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     add(f"{a}.sln", render("sln.j2", projects=sln_projects))
     add("Directory.Build.props", render("Directory.Build.props.j2"))
     add("Directory.Packages.props", render("Directory.Packages.props.j2", packages=PACKAGES))
-    add("nuget.config", render("nuget.config.j2"))
+    add("nuget.config", render("nuget.config.j2", nuget_source=nuget_source.strip()))
     add(".editorconfig", render("editorconfig.j2"))
     add(".gitignore", render("gitignore.j2"))
 
