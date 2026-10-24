@@ -1,0 +1,87 @@
+{{- /*
+Install settings shared by the api and worker pods (envFrom). No credential here: secrets are files
+under /mnt/secrets, named by <NAME>_FILE in each pod spec. The migration hook does not use this
+ConfigMap: hooks run before release resources exist.
+*/ -}}
+{{- $host := include "exiqo.host" . -}}
+{{- $v := .Values -}}
+{{- $envs := list -}}
+{{- range $v.deploy.environments -}}
+{{- $clientId := .clientId | default (index $v.identity.deployIdentities .name) | default "" -}}
+{{- if not $clientId -}}
+{{- fail (printf "deploy environment %q needs clientId or identity.deployIdentities.%s" .name .name) -}}
+{{- end -}}
+{{- $envs = append $envs (dict "name" .name "tenant" (.tenant | default $v.auth.tenantId)
+    "subscription" .subscription "client_id" $clientId "auth" .auth
+    "key_vault_uri" (.keyVaultUri | default "") "secret_name" (.secretName | default "")) -}}
+{{- end -}}
+{{- $digests := dict "exiqo-platform" (include "exiqo.image" (dict "ctx" . "which" "platform"))
+    "exiqo-web" (include "exiqo.image" (dict "ctx" . "which" "web")) -}}
+{{- if $v.neo4j.enabled }}{{ $_ := set $digests "neo4j" $v.neo4j.image.customImage }}{{ end -}}
+{{- $egress := $v.egress.fqdns | default list -}}
+{{- if $v.postgres.host }}{{ $egress = append $egress $v.postgres.host }}{{ end -}}
+{{- $aoai := $v.providers.azureOpenAI -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exiqo-platform
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+data:
+  DATA_DIR: /data
+  API_BASE_PATH: /api
+  AUTH_MODE: {{ $v.auth.mode | quote }}
+  OIDC_TENANT_ID: {{ $v.auth.tenantId | quote }}
+  OIDC_CLIENT_ID: {{ $v.auth.clientId | quote }}
+  OIDC_REDIRECT_URI: {{ printf "https://%s/api/auth/callback" $host | quote }}
+  ROLE_GROUPS: {{ $v.auth.roleGroups | toJson | quote }}
+  CORS_ORIGINS: {{ $v.corsOrigins | default (printf "https://%s" $host) | quote }}
+  BRAND_NAME: {{ $v.brand.name | quote }}
+  SUPPORT_CONTACT: {{ $v.brand.supportContact | quote }}
+  DEPLOY_CREDENTIAL_MODE: {{ $v.deploy.credentialMode | quote }}
+  DEPLOY_ENVIRONMENTS: {{ $envs | toJson | quote }}
+  IMAGE_DIGESTS: {{ $digests | toJson | quote }}
+  EGRESS_ALLOWLIST: {{ $egress | uniq | toJson | quote }}
+  NEO4J_URI: {{ include "exiqo.neo4jUri" . | quote }}
+  NEO4J_USER: neo4j
+  {{- if $v.providers.claude.enabled }}
+  PROVIDER: auto
+  {{- else if $aoai.endpoint }}
+  PROVIDER: azure
+  {{- else }}
+  PROVIDER: auto
+  {{- end }}
+  AZURE_OPENAI_ENDPOINT: {{ $aoai.endpoint | quote }}
+  AZURE_OPENAI_API_VERSION: {{ $aoai.apiVersion | quote }}
+  AZURE_OPENAI_AUTH: {{ $aoai.auth | quote }}
+  AZURE_OPENAI_DEPLOYMENT_STRONG: {{ $aoai.deployments.strong | quote }}
+  AZURE_OPENAI_DEPLOYMENT_STANDARD: {{ $aoai.deployments.standard | quote }}
+  AZURE_OPENAI_DEPLOYMENT_EFFICIENT: {{ $aoai.deployments.efficient | quote }}
+  NUGET_SOURCE: {{ $v.mirrors.nuget | quote }}
+  {{- with $v.mirrors.npm }}
+  NPM_CONFIG_REGISTRY: {{ . | quote }}
+  {{- end }}
+  {{- if $v.mirrors.terraformConfig }}
+  TF_CLI_CONFIG_FILE: /etc/exiqo/terraform.rc
+  {{- end }}
+  LANGFUSE_ENABLED: {{ $v.langfuse.enabled | toString | quote }}
+  LANGFUSE_HOST: {{ $v.langfuse.host | quote }}
+  JOB_HEARTBEAT_SECONDS: "10"
+  JOB_STALE_SECONDS: "90"
+  JOB_MAX_ATTEMPTS: "2"
+  JOB_DRAIN_SECONDS: "570"
+  INTERNAL_PORT: "9100"
+  NEXT_TELEMETRY_DISABLED: "1"
+  HF_HUB_OFFLINE: "1"
+{{- if $v.mirrors.terraformConfig }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exiqo-terraform
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+data:
+  terraform.rc: |
+    {{- $v.mirrors.terraformConfig | nindent 4 }}
+{{- end }}

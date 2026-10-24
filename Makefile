@@ -21,7 +21,7 @@ PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); s
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
 .PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
-	images image-test image-lint image-scan pilot-up egress-audit
+	images image-test image-lint image-scan pilot-up egress-audit chart-check
 
 setup:
 	python3 -m venv .venv
@@ -218,3 +218,43 @@ egress-audit:
 	$(PY) scripts/egress_audit.py $(PLATFORM_IMAGE) --allowlist deploy/egress-allowlist.txt || rc=1; \
 	$(PY) scripts/egress_audit.py $(WEB_IMAGE) $(WEB_AUDIT_PATHS) --allowlist deploy/egress-allowlist.txt || rc=1; \
 	exit $$rc
+
+# ---------------------------------------------------------------- Helm chart (deploy/helm/exiqo)
+# Dependencies (the pinned Neo4j subchart), lint, the helm-unittest suites in deploy/helm/tests, the
+# schema's refusals, and kubeconform -strict on what the GMF example and the CI overlay render.
+# helm, the unittest plugin and kubeconform run from pinned images when they are not on PATH (the
+# images need network for the Neo4j chart repository and the schemas). SecretProviderClass is a
+# CRD, validated against the datreeio CRDs catalog; nothing is skipped as an unknown kind.
+HELM_IMAGE ?= alpine/helm:3.16.4
+HELM_UNITTEST_IMAGE ?= helmunittest/helm-unittest:3.19.0-1.0.3
+KUBECONFORM_IMAGE ?= ghcr.io/yannh/kubeconform:v0.6.7
+KUBE_VERSION ?= 1.31.0
+CHART := deploy/helm/exiqo
+CHART_GMF := $(CHART)/values.gmf.example.yaml
+CHART_CI := $(CHART)/ci/values.kind.yaml
+HELM := $(if $(shell command -v helm 2>/dev/null),helm,\
+	docker run --rm -i -v "$(CURDIR)":/work -w /work -v exiqo-helm-cache:/root/.cache/helm \
+		-v exiqo-helm-config:/root/.config/helm $(HELM_IMAGE))
+HELM_UNITTEST := $(if $(shell helm plugin list 2>/dev/null | grep -w unittest),helm unittest,\
+	docker run --rm -v "$(CURDIR)/deploy/helm":/apps -w /apps $(HELM_UNITTEST_IMAGE))
+KUBECONFORM := $(if $(shell command -v kubeconform 2>/dev/null),kubeconform,\
+	docker run --rm -i $(KUBECONFORM_IMAGE))
+KUBECONFORM_FLAGS := -strict -summary -kubernetes-version $(KUBE_VERSION) -schema-location default \
+	-schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+# The suites live beside the chart, not in it (they are not packaged); -f is relative to the chart.
+HELM_UNITTEST_CHART := $(if $(findstring docker,$(HELM_UNITTEST)),exiqo,$(CHART))
+
+chart-check:
+	$(HELM) repo add neo4j https://helm.neo4j.com/neo4j --force-update >/dev/null
+	$(HELM) dependency build $(CHART)
+	$(HELM) lint --strict $(CHART) -f $(CHART_GMF)
+	$(HELM) lint --strict $(CHART) -f $(CHART_GMF) -f $(CHART_CI)
+	$(HELM_UNITTEST) --strict -f '../tests/*_test.yaml' $(HELM_UNITTEST_CHART)
+	@for bad in auth.mode=dev deploy.credentialMode=local image.platform.tag=1.0 api.replicas=1 \
+		auth.tenantId=gmfinancial.onmicrosoft.com keyVault.mode=kubernetesSecret; do \
+		if $(HELM) template exiqo $(CHART) -f $(CHART_GMF) --set $$bad >/dev/null 2>&1; then \
+			echo "chart-check: the schema accepted $$bad"; exit 1; \
+		fi; \
+	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source"
+	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)
+	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f $(CHART_CI) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)

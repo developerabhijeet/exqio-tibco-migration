@@ -1,0 +1,71 @@
+# CI only (kind, Task 16): dev sign-in and a plain Kubernetes Secret instead of Key Vault. x-ci is
+# what lets values.schema.json accept AUTH_MODE=dev and keyVault.mode kubernetesSecret; never use
+# this file, or x-ci, for an install. Layer it over values.gmf.example.yaml.
+#
+# The Secret (exiqo-ci-secrets) has one key per file under /mnt/secrets: database_url, app_secret,
+# session_secret, internal_token, neo4j_password; the Neo4j subchart reads exiqo-neo4j-auth
+# (key NEO4J_AUTH, "neo4j/<password>"). The CI job creates both before installing.
+x-ci: true
+
+auth:
+  mode: dev
+
+keyVault:
+  mode: kubernetesSecret
+  kubernetesSecretName: exiqo-ci-secrets
+  secrets:
+    testDatabaseUrl: ""
+    oidcClientSecret: ""
+
+ingress:
+  host: exiqo.localtest.me
+  tlsSecretName: ""
+
+api:
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1536Mi}
+
+web:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+worker:
+  replicas: 1
+  maxReplicas: 1
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  tmpSize: 4Gi
+
+# kind's local-path provisioner: one node, so ReadWriteOnce is shared by every pod.
+data:
+  storageClass: standard
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+neo4jBackup:
+  enabled: false
+
+neo4j:
+  volumes:
+    data:
+      dynamic:
+        storageClassName: standard
+        requests: {storage: 2Gi}
+  neo4j:
+    resources: {cpu: 500m, memory: 2Gi}
+  config:
+    server.memory.heap.initial_size: 512m
+    server.memory.heap.max_size: 512m
+    server.memory.pagecache.size: 256m
+  # No CSI driver in kind: the auth Secret is created by the CI job.
+  additionalVolumes:
+    - name: tmp
+      emptyDir: {sizeLimit: 1Gi}
+    - name: runtime-conf
+      emptyDir: {sizeLimit: 16Mi}
+  additionalVolumeMounts:
+    - {name: tmp, mountPath: /tmp}
+    - {name: runtime-conf, mountPath: /var/lib/neo4j/conf}

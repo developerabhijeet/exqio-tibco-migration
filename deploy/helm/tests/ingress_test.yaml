@@ -1,0 +1,70 @@
+# One host, two Ingresses: /api to the API unchanged (it is mounted at /api), the rest to web.
+suite: ingress
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/ingress.yaml
+tests:
+  - it: the /api ingress carries the upload and streaming annotations (Review Focus 4)
+    documentSelector: {path: metadata.name, value: exiqo-api}
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: 2100m
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"]
+          value: "3600"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-buffering"]
+          value: "off"
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/rewrite-target"]
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/server-snippet"]
+      - equal: {path: spec.ingressClassName, value: nginx}
+      - equal:
+          path: spec.rules[0].http.paths
+          value:
+            - path: /api
+              pathType: Prefix
+              backend: {service: {name: exiqo-api, port: {name: http}}}
+      - equal: {path: "spec.rules[0].host", value: exiqo.apps.gmfinancial.example}
+      - equal:
+          path: spec.tls
+          value: [{hosts: [exiqo.apps.gmfinancial.example], secretName: exiqo-tls}]
+  - it: / goes to web
+    documentSelector: {path: metadata.name, value: exiqo-web}
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /
+            pathType: Prefix
+            backend: {service: {name: exiqo-web, port: {name: http}}}
+  - it: the API documentation paths never reach the API, without a configuration snippet
+    documentSelector: {path: metadata.name, value: exiqo-web}
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /api/docs
+            pathType: Prefix
+            backend: {service: {name: exiqo-web, port: {name: http}}}
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /api/redoc
+            pathType: Prefix
+            backend: {service: {name: exiqo-web, port: {name: http}}}
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /api/openapi.json
+            pathType: Exact
+            backend: {service: {name: exiqo-web, port: {name: http}}}
+  - it: the class name is configurable (AGIC)
+    set:
+      ingress.className: azure-application-gateway
+    documentSelector: {path: metadata.name, value: exiqo-api}
+    asserts:
+      - equal: {path: spec.ingressClassName, value: azure-application-gateway}

@@ -1,0 +1,88 @@
+# Pod hardening on every workload this chart owns (spec section 2, "Pod hardening"). The Neo4j
+# server comes from the official subchart and the backup's dump step uses the official Neo4j image:
+# both run as the image's neo4j user (7474), asserted separately below.
+suite: pod security
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/api-deployment.yaml
+  - templates/web-deployment.yaml
+  - templates/worker-deployment.yaml
+  - templates/migrate-job.yaml
+  - templates/neo4j-backup-cronjob.yaml
+  - templates/configmap.yaml
+tests:
+  - it: api containers run as 10001, read-only, no capabilities
+    template: templates/api-deployment.yaml
+    asserts: &hardened
+      - equal: {path: "spec.template.spec.containers[*].securityContext.runAsUser", value: 10001}
+      - equal: {path: "spec.template.spec.containers[*].securityContext.runAsNonRoot", value: true}
+      - equal: {path: "spec.template.spec.containers[*].securityContext.readOnlyRootFilesystem", value: true}
+      - equal: {path: "spec.template.spec.containers[*].securityContext.allowPrivilegeEscalation", value: false}
+      - equal: {path: "spec.template.spec.containers[*].securityContext.capabilities.drop", value: [ALL]}
+      - equal: {path: "spec.template.spec.securityContext.seccompProfile.type", value: RuntimeDefault}
+      - equal: {path: "spec.template.spec.automountServiceAccountToken", value: false}
+      - exists: {path: "spec.template.spec.containers[*].resources.limits.memory"}
+      - exists: {path: "spec.template.spec.containers[*].resources.requests.cpu"}
+  - it: web containers run as 10001, read-only, no capabilities
+    template: templates/web-deployment.yaml
+    asserts: *hardened
+  - it: worker containers run as 10001, read-only, no capabilities
+    template: templates/worker-deployment.yaml
+    asserts: *hardened
+  - it: migration hook runs as 10001, read-only, no capabilities
+    template: templates/migrate-job.yaml
+    documentSelector: {path: kind, value: Job}
+    asserts: *hardened
+  - it: the api, worker and migrate pods have a writable /tmp and only /tmp and /data
+    template: templates/worker-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: tmp, mountPath: /tmp}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: data, mountPath: /data}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: secrets, mountPath: /mnt/secrets, readOnly: true}
+      - equal:
+          path: "spec.template.spec.containers[0].volumeMounts[?(@.name != 'tmp' && @.name != 'data')].readOnly"
+          value: true
+  - it: api and worker pods carry the Workload Identity label
+    template: templates/worker-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: "true"
+  - it: backup kubectl/az steps run as 10001; the dump step as the Neo4j image's user
+    template: templates/neo4j-backup-cronjob.yaml
+    documentSelector: {path: kind, value: CronJob}
+    asserts:
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.containers[*].securityContext.runAsUser"
+          value: 10001
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.initContainers[?(@.name == 'stop')].securityContext.runAsUser"
+          value: 10001
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.initContainers[?(@.name == 'dump')].securityContext.runAsUser"
+          value: 7474
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.initContainers[*].securityContext.readOnlyRootFilesystem"
+          value: true
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.containers[*].securityContext.readOnlyRootFilesystem"
+          value: true
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.initContainers[*].securityContext.capabilities.drop"
+          value: [ALL]
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.securityContext.seccompProfile.type"
+          value: RuntimeDefault
+  - it: images are referenced by digest from the configured registry
+    template: templates/api-deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^gmfacr\.azurecr\.io/exiqo/exiqo-platform@sha256:[0-9a-f]{64}$

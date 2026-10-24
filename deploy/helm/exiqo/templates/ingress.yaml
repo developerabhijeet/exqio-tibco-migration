@@ -1,0 +1,70 @@
+{{- /*
+One host, two Ingresses. exiqo-api: /api to the API unchanged (it is mounted at /api), with the
+upload and streaming annotations. exiqo-web: / to the web, plus the API's documentation paths.
+The API turns its docs off in oidc mode; the ingress also keeps them from reaching it, without a
+configuration snippet (often disabled by cluster admins): /api/docs, /api/redoc (Prefix) and
+/api/openapi.json (Exact) are more specific than /api, so they win and go to the web, which has no
+such page and answers 404. Ingress path matching works the same on AGIC.
+*/ -}}
+{{- if .Values.ingress.enabled }}
+{{- $host := include "exiqo.host" . -}}
+{{- $common := .Values.ingress.annotations | default dict -}}
+{{- $apiAnnotations := merge (deepCopy (.Values.ingress.api.annotations | default dict)) $common -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: exiqo-api
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+  {{- with $apiAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ $host }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: exiqo-api
+                port: {name: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: exiqo-web
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  {{- with $common }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ $host }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- range $path := list (list "/api/docs" "Prefix") (list "/api/redoc" "Prefix") (list "/api/openapi.json" "Exact") (list "/" "Prefix") }}
+          - path: {{ index $path 0 }}
+            pathType: {{ index $path 1 }}
+            backend:
+              service:
+                name: exiqo-web
+                port: {name: http}
+          {{- end }}
+{{- end }}

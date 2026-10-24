@@ -1,0 +1,131 @@
+# Worker drain, downward API, probes, replicas, autoscaling and disruption budgets.
+suite: workloads
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/worker-deployment.yaml
+  - templates/api-deployment.yaml
+  - templates/web-deployment.yaml
+  - templates/worker-hpa.yaml
+  - templates/pdb.yaml
+  - templates/configmap.yaml
+  - templates/serviceaccounts.yaml
+  - templates/data-pvc.yaml
+  - templates/worker-service.yaml
+tests:
+  - it: the worker drains for up to 600 s and advertises its pod IP
+    template: templates/worker-deployment.yaml
+    asserts:
+      - equal: {path: spec.template.spec.terminationGracePeriodSeconds, value: 600}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: WORKER_HOST, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: EXIQO_ROLE, value: worker}
+      - equal: {path: "spec.template.spec.containers[0].readinessProbe.httpGet", value: {path: /internal/healthz, port: internal}}
+      - equal: {path: "spec.template.spec.containers[0].ports", value: [{name: internal, containerPort: 9100, protocol: TCP}]}
+      - notExists: {path: spec.replicas}
+  - it: the worker's replicas are set by the HPA, from worker.replicas to worker.maxReplicas
+    template: templates/worker-hpa.yaml
+    asserts:
+      - equal: {path: spec.minReplicas, value: 2}
+      - equal: {path: spec.maxReplicas, value: 6}
+      - equal: {path: spec.scaleTargetRef, value: {apiVersion: apps/v1, kind: Deployment, name: exiqo-worker}}
+      - equal: {path: "spec.metrics[0].resource.name", value: cpu}
+  - it: the worker service is cluster-internal
+    template: templates/worker-service.yaml
+    asserts:
+      - equal: {path: spec.type, value: ClusterIP}
+      - equal: {path: spec.ports, value: [{name: internal, port: 9100, targetPort: internal, protocol: TCP}]}
+  - it: the api probes /healthz and /readyz at the root of port 8000
+    template: templates/api-deployment.yaml
+    asserts:
+      - equal: {path: spec.replicas, value: 2}
+      - equal: {path: "spec.template.spec.containers[0].livenessProbe.httpGet", value: {path: /healthz, port: http}}
+      - equal: {path: "spec.template.spec.containers[0].readinessProbe.httpGet", value: {path: /readyz, port: http}}
+      - equal: {path: "spec.template.spec.containers[0].startupProbe.httpGet", value: {path: /healthz, port: http}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: EXIQO_ROLE, value: api}
+  - it: web probes / on 3000 and mounts no secret
+    template: templates/web-deployment.yaml
+    asserts:
+      - equal: {path: spec.replicas, value: 2}
+      - equal: {path: "spec.template.spec.containers[0].readinessProbe.httpGet", value: {path: /, port: http}}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: secrets}
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: NEXT_TELEMETRY_DISABLED, value: "1"}
+  - it: install settings reach the platform pods
+    template: templates/configmap.yaml
+    documentSelector: &platformCm {path: metadata.name, value: exiqo-platform}
+    asserts:
+      - equal: {path: data.API_BASE_PATH, value: /api}
+      - equal: {path: data.AUTH_MODE, value: oidc}
+      - equal: {path: data.OIDC_TENANT_ID, value: 3b2f8a64-1c2d-4e5f-9a8b-7c6d5e4f3a2b}
+      - equal: {path: data.OIDC_REDIRECT_URI, value: https://exiqo.apps.gmfinancial.example/api/auth/callback}
+      - equal: {path: data.CORS_ORIGINS, value: https://exiqo.apps.gmfinancial.example}
+      - equal: {path: data.DEPLOY_CREDENTIAL_MODE, value: workload_identity}
+      - equal: {path: data.NEO4J_URI, value: bolt://exiqo-neo4j:7687}
+      - equal: {path: data.LANGFUSE_ENABLED, value: "false"}
+      - equal: {path: data.JOB_STALE_SECONDS, value: "90"}
+      - equal: {path: data.JOB_MAX_ATTEMPTS, value: "2"}
+      - equal: {path: data.JOB_DRAIN_SECONDS, value: "570"}
+      - equal: {path: data.BRAND_NAME, value: ExiQO}
+      - equal: {path: data.TF_CLI_CONFIG_FILE, value: /etc/exiqo/terraform.rc}
+      - matchRegex:
+          path: data.DEPLOY_ENVIRONMENTS
+          pattern: '"client_id":"0d9e8f7a-6b5c-4d3e-a2f1-0e9d8c7b6a50"'
+      - matchRegex:
+          path: data.IMAGE_DIGESTS
+          pattern: '"exiqo-platform":"gmfacr.azurecr.io/exiqo/exiqo-platform@sha256:'
+      - matchRegex: {path: data.EGRESS_ALLOWLIST, pattern: login.microsoftonline.com}
+      - matchRegex: {path: data.ROLE_GROUPS, pattern: '^\{"admin":\["'}
+  - it: CORS follows an explicit override
+    template: templates/configmap.yaml
+    documentSelector: *platformCm
+    set:
+      corsOrigins: https://exiqo.gmfinancial.example
+    asserts:
+      - equal: {path: data.CORS_ORIGINS, value: https://exiqo.gmfinancial.example}
+  - it: disruption budgets allow one pod down at a time
+    template: templates/pdb.yaml
+    asserts:
+      - hasDocuments: {count: 3}
+      - equal: {path: spec.maxUnavailable, value: 1}
+  - it: service accounts carry the platform identity and mount no API token
+    template: templates/serviceaccounts.yaml
+    documentSelector: {path: metadata.name, value: exiqo-worker}
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: 6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f
+      - equal: {path: automountServiceAccountToken, value: false}
+  - it: the data volume is Azure Files RWX and survives an uninstall
+    template: templates/data-pvc.yaml
+    asserts:
+      - equal: {path: spec.storageClassName, value: azurefile-csi-premium}
+      - equal: {path: spec.accessModes, value: [ReadWriteMany]}
+      - equal: {path: 'metadata.annotations["helm.sh/resource-policy"]', value: keep}
+
+---
+# Rendered alone: in a suite with the deployments, the failure surfaces first in their
+# checksum/config include, not in configmap.yaml.
+suite: deploy environments
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: an environment without a client id fails the render
+    values:
+      - ../exiqo/values.gmf.example.yaml
+      - values/env-without-client-id.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'deploy environment "qa" needs clientId'

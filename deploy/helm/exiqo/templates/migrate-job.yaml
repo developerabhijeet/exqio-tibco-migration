@@ -1,0 +1,88 @@
+{{- /*
+Alembic to head (EXIQO_ROLE=migrate) before install and before every upgrade, so new api and worker
+pods start on the new schema. Hooks run before any release resource exists, so everything the Job
+needs is a hook too, created in weight order: its service account (-20), its SecretProviderClass
+(-10, DATABASE_URL only), then the Job (0). The account and class are removed once the Job has
+succeeded; the Job stays until the next run (before-hook-creation) so its logs can be read. On a
+first install no NetworkPolicy exists yet; on upgrades exiqo-platform-egress admits it to Postgres.
+The platform identity needs a federated credential for exiqo-migrate.
+*/ -}}
+{{- $hook := "pre-install,pre-upgrade" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: exiqo-migrate
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-20"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+{{- if eq .Values.keyVault.mode "csi" }}
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: exiqo-migrate
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  provider: azure
+  parameters:
+    {{- $db := required "keyVault.secrets.databaseUrl is required" .Values.keyVault.secrets.databaseUrl }}
+    {{- include "exiqo.spcParameters" (dict "ctx" . "objects" (list (dict "object" $db "file" "database_url"))) | nindent 4 }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: exiqo-migrate
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "exiqo.componentLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: exiqo-migrate
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "exiqo.podSecurityContext" . | nindent 8 }}
+      {{- include "exiqo.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "exiqo.image" (dict "ctx" . "which" "platform") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "exiqo.containerSecurityContext" dict | nindent 12 }}
+          env:
+            - name: EXIQO_ROLE
+              value: migrate
+            {{- include "exiqo.secretFileEnv" (dict "ctx" . "only" (list "databaseUrl")) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- include "exiqo.secretsVolume" (dict "ctx" . "class" "exiqo-migrate") | nindent 8 }}

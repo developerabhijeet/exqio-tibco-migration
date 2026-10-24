@@ -1,0 +1,242 @@
+{{- /*
+Default deny for every pod in the namespace, both directions, then one policy per allowed path:
+
+  ingress controller -> web:3000, api:8000      api -> worker:9100
+  api, worker, backup -> neo4j:7687             every pod -> kube-dns:53
+  api, worker, migrate -> Postgres:5432, egress.allowCidrs / allowNamespaces on egress.ports
+  backup -> the API server (scale Neo4j) and egress.allowCidrs (Blob, Entra ID)
+
+web -> api is not allowed: the web server never calls the API (the browser does, through the
+ingress). NetworkPolicies match addresses, not names: Key Vault, Entra ID, ARM, Azure OpenAI, Blob
+and the mirrors are reached through private endpoints or GMF's Azure Firewall, whose subnets go in
+egress.allowCidrs, and the firewall enforces the host names (egress.fqdns). Kubelet probes are not
+subject to these policies on AKS (Azure CNI / Cilium).
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+{{- if not (or $np.ingressNamespaces $np.ingressCidrs) -}}
+{{- /* An empty "from" would admit every source. */ -}}
+{{- fail "networkPolicy.ingressNamespaces or networkPolicy.ingressCidrs must name the ingress controller" -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-default-deny
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-dns-egress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $np.dnsNamespace }}}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+{{- range $c := list (list "web" 3000) (list "api" 8000) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-{{ index $c 0 }}-ingress
+  labels:
+    {{- include "exiqo.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" $ "component" (index $c 0)) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $np.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ . }}}
+        {{- end }}
+        {{- range $np.ingressCidrs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        - {port: {{ index $c 1 }}, protocol: TCP}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-worker-ingress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" . "component" "worker") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "exiqo.selector" (dict "ctx" . "component" "api") | nindent 14 }}
+      ports:
+        - {port: 9100, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-api-to-worker
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "exiqo.selector" (dict "ctx" . "component" "worker") | nindent 14 }}
+      ports:
+        - {port: 9100, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-neo4j-egress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: exiqo
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [api, worker]}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- if .Values.neo4j.enabled }}
+        - podSelector:
+            matchLabels: {app: exiqo-neo4j}
+        {{- else }}
+        {{- range required "neo4j.externalCidrs is required when neo4j.enabled is false" .Values.neo4j.externalCidrs }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+        {{- end }}
+      ports:
+        - {port: 7687, protocol: TCP}
+{{- if .Values.neo4j.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-neo4j-ingress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: exiqo-neo4j}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: exiqo
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - {key: app.kubernetes.io/component, operator: In, values: [api, worker, neo4j-backup]}
+      ports:
+        - {port: 7687, protocol: TCP}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-platform-egress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: exiqo
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [api, worker, migrate]}
+  policyTypes: [Egress]
+  {{- if not (or .Values.postgres.cidrs .Values.egress.allowCidrs .Values.egress.allowNamespaces) }}
+  egress: []
+  {{- else }}
+  egress:
+    {{- with .Values.postgres.cidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        - {port: 5432, protocol: TCP}
+    {{- end }}
+    {{- with .Values.egress.allowCidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        {{- range $.Values.egress.ports }}
+        - {port: {{ . }}, protocol: TCP}
+        {{- end }}
+    {{- end }}
+    {{- with .Values.egress.allowNamespaces }}
+    - to:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ . }}}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+{{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-neo4j-backup-egress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" . "component" "neo4j-backup") | nindent 6 }}
+  policyTypes: [Egress]
+  {{- if not (or $np.kubeApiCidrs .Values.egress.allowCidrs) }}
+  egress: []
+  {{- else }}
+  egress:
+    {{- with $np.kubeApiCidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+    {{- with .Values.egress.allowCidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

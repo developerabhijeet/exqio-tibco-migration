@@ -1,0 +1,19 @@
+{{- /*
+Cluster-internal only. The API calls each worker at its own pod IP (the run row records
+WORKER_HOST); this Service names the port for the NetworkPolicy and for diagnostics.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: exiqo-worker
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "exiqo.selector" (dict "ctx" . "component" "worker") | nindent 4 }}
+  ports:
+    - name: internal
+      port: 9100
+      targetPort: internal
+      protocol: TCP

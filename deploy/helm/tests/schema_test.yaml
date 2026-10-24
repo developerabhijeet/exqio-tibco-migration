@@ -1,0 +1,105 @@
+# values.schema.json refuses the configurations that must never reach a GMF install. Helm validates
+# the values before rendering, so each case is a failed render with the schema's message.
+suite: values schema
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/api-deployment.yaml
+  - templates/configmap.yaml  # the deployment's checksum/config includes it
+tests:
+  - it: the GMF example renders
+    asserts:
+      - hasDocuments: {count: 1}
+        template: templates/api-deployment.yaml
+  - it: rejects AUTH_MODE dev outside the CI overlay
+    set:
+      auth.mode: dev
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth.mode"
+  - it: rejects DEPLOY_CREDENTIAL_MODE local
+    set:
+      deploy.credentialMode: local
+    asserts:
+      - failedTemplate:
+          errorPattern: "deploy.credentialMode"
+  - it: rejects an image tag
+    set:
+      image.platform.tag: "1.0.0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.platform"
+  - it: rejects a missing digest
+    set:
+      image.web.digest: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.web.digest"
+  - it: rejects a digest that is not sha256
+    set:
+      image.platform.digest: "latest"
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.platform.digest"
+  - it: rejects fewer than 2 api replicas
+    set:
+      api.replicas: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "api.replicas"
+  - it: rejects fewer than 2 web replicas
+    set:
+      web.replicas: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "web.replicas"
+  - it: rejects a tenant id that is not a GUID (the OIDC issuer is built from it)
+    set:
+      auth.tenantId: gmfinancial.onmicrosoft.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth.tenantId"
+  - it: rejects the CI-only kubernetesSecret secret source
+    set:
+      keyVault.mode: kubernetesSecret
+    asserts:
+      - failedTemplate:
+          errorPattern: "keyVault.mode"
+  - it: rejects a missing ingress host
+    set:
+      ingress.host: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.host"
+
+---
+suite: values schema, CI overlay
+values:
+  - ../exiqo/values.gmf.example.yaml
+  - ../exiqo/ci/values.kind.yaml
+templates:
+  - templates/api-deployment.yaml
+  - templates/configmap.yaml  # the deployment's checksum/config includes it
+tests:
+  - it: ci/values.kind.yaml (x-ci) may use AUTH_MODE dev and a Kubernetes Secret
+    asserts:
+      - hasDocuments: {count: 1}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: secrets
+            secret: {secretName: exiqo-ci-secrets, defaultMode: 0440}
+        template: templates/api-deployment.yaml
+  - it: the CI overlay still refuses DEPLOY_CREDENTIAL_MODE local
+    set:
+      deploy.credentialMode: local
+    asserts:
+      - failedTemplate:
+          errorPattern: "deploy.credentialMode"
+  - it: the CI overlay still requires digests
+    set:
+      image.platform.tag: dev
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.platform"

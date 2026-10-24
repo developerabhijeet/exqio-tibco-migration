@@ -1,0 +1,63 @@
+# Nightly Neo4j dump to GMF Blob. Community edition dumps only a stopped database, so the job stops
+# the StatefulSet, dumps the store from the same disk, starts Neo4j again and then uploads.
+suite: neo4j backup
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/neo4j-backup-cronjob.yaml
+tests:
+  - it: runs nightly, one at a time, with a deadline
+    documentSelector: {path: kind, value: CronJob}
+    asserts:
+      - equal: {path: spec.schedule, value: "30 2 * * *"}
+      - equal: {path: spec.concurrencyPolicy, value: Forbid}
+      - equal: {path: spec.jobTemplate.spec.backoffLimit, value: 0}
+      - exists: {path: spec.jobTemplate.spec.activeDeadlineSeconds}
+  - it: stop, dump, then start and upload, in that order
+    documentSelector: {path: kind, value: CronJob}
+    asserts:
+      - lengthEqual: {path: spec.jobTemplate.spec.template.spec.initContainers, count: 2}
+      - equal: {path: "spec.jobTemplate.spec.template.spec.initContainers[0].name", value: stop}
+      - equal: {path: "spec.jobTemplate.spec.template.spec.initContainers[1].name", value: dump}
+      - lengthEqual: {path: spec.jobTemplate.spec.template.spec.containers, count: 1}
+      - equal: {path: "spec.jobTemplate.spec.template.spec.containers[0].name", value: start-and-upload}
+      - matchRegex:
+          path: spec.jobTemplate.spec.template.spec.initContainers[1].args[0]
+          pattern: neo4j-admin database dump neo4j --to-path=/backup
+      - matchRegex:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args[0]
+          pattern: "az storage blob upload .*--auth-mode login"
+      - equal:
+          path: "spec.jobTemplate.spec.template.spec.volumes[?(@.name == 'neo4j-data')].persistentVolumeClaim.claimName"
+          value: data-exiqo-neo4j-0
+  - it: lands on the Neo4j pod's node so the ReadWriteOnce disk can be mounted
+    documentSelector: {path: kind, value: CronJob}
+    asserts:
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]
+          value:
+            labelSelector: {matchLabels: {app: exiqo-neo4j}}
+            topologyKey: kubernetes.io/hostname
+  - it: uses Workload Identity for Blob and may only scale the Neo4j StatefulSet
+    documentSelector: {path: kind, value: Role}
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [apps]
+            resources: [statefulsets/scale]
+            resourceNames: [exiqo-neo4j]
+            verbs: [get, patch]
+      - lengthEqual: {path: rules, count: 2}
+  - it: the backup identity is the platform identity unless set
+    documentSelector: {path: kind, value: ServiceAccount}
+    asserts:
+      - equal:
+          path: metadata.annotations["azure.workload.identity/client-id"]
+          value: 6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f
+  - it: nothing is rendered with Neo4j disabled
+    set:
+      neo4j.enabled: false
+      neo4j.uri: bolt+s://neo4j.gmf.example:7687
+    asserts:
+      - hasDocuments: {count: 0}
