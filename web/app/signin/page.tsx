@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Check, ChevronLeft, Loader2, LogIn, ShieldCheck } from "lucide-react";
+import { useBrand } from "@/lib/brand";
 import { MicrosoftIcon } from "@/components/ui/BrandIcons";
 import { useIdentity } from "@/lib/identity";
 import { ACCOUNTS, useSession, type Account } from "@/lib/signin";
@@ -24,6 +25,7 @@ export default function SignInPage() {
   const router = useRouter();
   const { setUser } = useAppState();
   const { config } = useIdentity();
+  const { brand_name } = useBrand();
   const { session, signIn } = useSession();
   const [stage, setStage] = useState<"provider" | "account" | "signing" | "done">("provider");
   const [account, setAccount] = useState<Account | null>(null);
@@ -60,10 +62,10 @@ export default function SignInPage() {
 
       <div className="relative w-full max-w-[460px]">
         <div className="flex items-center justify-center gap-3">
-          <img src="/rsi-logo-white.svg" alt="RSI" className="h-9 w-auto" />
+          <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
           <span className="leading-tight">
             <span className="block font-display text-[19px] font-semibold tracking-[-0.01em] text-white">
-              ExiQO Migrate
+              {brand_name} Migrate
             </span>
             <span className="block text-[12px] text-lilac">TIBCO BusinessWorks to .NET</span>
           </span>

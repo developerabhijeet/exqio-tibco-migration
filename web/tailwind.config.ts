@@ -1,6 +1,6 @@
 import type { Config } from "tailwindcss";
 
-// RSI tokens. The same values live as CSS variables in lib/theme.css for non-Tailwind consumers
+// Design tokens. The same values live as CSS variables in lib/theme.css for non-Tailwind consumers
 // (Cytoscape styles, React Flow edges, Monaco decorations).
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],

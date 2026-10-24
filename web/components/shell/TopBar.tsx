@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ClipboardCheck, Coins, History, Settings } from "lucide-react";
+import { useBrand } from "@/lib/brand";
 import { useStepStates } from "@/lib/steps";
 import { ProjectSelector } from "./ProjectSelector";
 import { UserMenu } from "./UserMenu";
@@ -30,14 +31,15 @@ function PhasePill() {
 
 export function TopBar() {
   const path = usePathname();
+  const { brand_name } = useBrand();
   return (
     <header className="z-30 border-b border-black/20 bg-plum shadow-pop">
       <div className="flex h-16 w-full items-center gap-5 px-6">
         <Link href="/" className="flex shrink-0 items-center gap-3">
-          <img src="/rsi-logo-white.svg" alt="RSI" className="h-9 w-auto" />
+          <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
           <span className="leading-tight">
             <span className="block font-display text-[16.5px] font-semibold tracking-[-0.01em] text-white">
-              ExiQO Migrate
+              {brand_name} Migrate
             </span>
             <span className="block text-[11.5px] text-lilac">TIBCO BusinessWorks to .NET</span>
           </span>

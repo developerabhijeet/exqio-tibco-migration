@@ -218,7 +218,7 @@ def user_text(fake: FakeProvider, i: int = 0) -> str:
 
 
 MEMORY = [MemoryItem(id="pat-7", kind="pattern", text="XPath n + 1 maps to decimal addition",
-                     source="rsi-seed")]
+                     source="seed")]
 
 
 # ---------------------------------------------------------------- designer

@@ -41,7 +41,9 @@ import type {
   TestReport,
 } from "./buildTypes";
 
-// next.config.ts bakes this in from the environment or the repo-root .env (scripts/root-env.ts),
+// next.config.ts bakes this in from the environment or the repo-root .env (scripts/root-env.ts);
+// "/api" when the build is same-origin (NEXT_PUBLIC_SAME_ORIGIN=1, the image: the ingress routes
+// /api to the API),
 // so there is no port literal here to drift out of step with the API the Makefile starts. Empty
 // means the build was made without it: every call then fails with that name rather than quietly
 // going to the web origin or to whatever else is listening on a guessed port.
@@ -113,6 +115,7 @@ async function optional<T>(path: string): Promise<T | null> {
 const post = (body?: unknown): RequestInit => ({ method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
 export const api = {
+  brand: () => json<{ brand_name: string; support_contact: string }>("/system/brand"),
   health: () => json<{ status: string; provider: string }>("/health"),
 
   listProjects: () => json<Project[]>("/projects"),

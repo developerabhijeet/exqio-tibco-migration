@@ -27,6 +27,7 @@ dependencies = [
   "openai",
   "claude-agent-sdk",
   "psycopg[binary]",
+  "neo4j>=5.20,<6",
 ]
 
 [project.optional-dependencies]

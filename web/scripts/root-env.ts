@@ -6,7 +6,7 @@
 //
 // Precedence: an explicit NEXT_PUBLIC_API_URL, then the run's ports (E2E_API_PORT/E2E_WEB_PORT,
 // which `make e2e` sets to two free ports), then API_PORT/WEB_PORT from the environment or .env,
-// then the defaults below. api/tests/test_dev_ports.py keeps these defaults and the Makefile's in
+// then the defaults below. NEXT_PUBLIC_SAME_ORIGIN=1 (image builds) makes the base "/api" instead. api/tests/test_dev_ports.py keeps these defaults and the Makefile's in
 // step, so the two cannot drift apart again.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -51,4 +51,9 @@ function port(runKey: string, key: string, fallback: string): string {
 
 export const apiPort = port("E2E_API_PORT", "API_PORT", DEFAULT_API_PORT);
 export const webPort = port("E2E_WEB_PORT", "WEB_PORT", DEFAULT_WEB_PORT);
-export const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${apiPort}`).replace(/\/$/, "");
+// In the cluster the web and the API share one origin and the ingress sends /api to the API without
+// rewriting it, so a build made with NEXT_PUBLIC_SAME_ORIGIN=1 (and no NEXT_PUBLIC_API_URL) calls "/api".
+const sameOrigin = process.env.NEXT_PUBLIC_SAME_ORIGIN === "1";
+export const apiUrl = (
+  process.env.NEXT_PUBLIC_API_URL ?? (sameOrigin ? "/api" : `http://localhost:${apiPort}`)
+).replace(/\/$/, "");

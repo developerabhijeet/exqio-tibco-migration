@@ -328,7 +328,7 @@ def test_memory_record_and_retrieve(store, clean):
 
 def test_memory_item_is_the_provider_memory_item():
     assert ProviderMemoryItem is MemoryItem
-    legacy = ProviderMemoryItem(id="m1", kind="decision", text="APR is by tier", source="rsi-seed")
+    legacy = ProviderMemoryItem(id="m1", kind="decision", text="APR is by tier", source="seed")
     assert legacy.score is None and legacy.context == {} and legacy.project_id == ""
 
 
@@ -338,7 +338,7 @@ def test_seed_patterns_load(store, clean):
     ids = [p["id"] for p in patterns]
     assert len(ids) == len(set(ids))
     for p in patterns:
-        assert p["source"] == "rsi-seed" and p["kind"] == "pattern"
+        assert p["source"] == "seed" and p["kind"] == "pattern"
         assert p["when"].strip() and p["then"].strip()
         assert "fine-tun" not in json.dumps(p).lower()
     required = {"jdbc", "jms", "transaction", "parallel", "http", "timer", "call-process",
@@ -346,15 +346,15 @@ def test_seed_patterns_load(store, clean):
     assert all(any(r in i for i in ids) for r in required), required
 
     mem = MigrationMemory(store)
-    seeded = mem.seed_rsi_patterns(P)
+    seeded = mem.seed_patterns(P)
     assert len(seeded) == len(patterns)
-    assert len(mem.seed_rsi_patterns(P)) == len(patterns)  # idempotent
+    assert len(mem.seed_patterns(P)) == len(patterns)  # idempotent
     assert store.count("memory_items", P) == len(patterns)
 
     top = mem.retrieve(P, "JDBC query SQL Dapper repository")[0]
-    assert top.source == "rsi-seed" and top.kind == "pattern"
-    assert "Dapper" in top.text and top.created_by == "rsi"
-    assert top.context["authored_by"] == "R Systems"
+    assert top.source == "seed" and top.kind == "pattern"
+    assert "Dapper" in top.text and top.created_by == "seed"
+    assert top.context["authored_by"] == "ExiQO"
     assert "parallel" in mem.retrieve(P, "parallel flow Task.WhenAll", kinds=["pattern"])[0].text.lower()
     assert mem.retrieve(P, "JMS queue receiver", kinds=["decision"]) == []
 
@@ -363,7 +363,7 @@ def test_seed_patterns_load(store, clean):
 async def test_ask_without_provider_returns_hits(store, clean):
     load_corpus(store)
     mem = MigrationMemory(store)
-    mem.seed_rsi_patterns(P)
+    mem.seed_patterns(P)
     ans = await ask(store, mem, P, "what does numofpulls do", None)
     assert "numOfPulls" in ans.text and ans.citations and not ans.used_model
     assert ans.citations[0].kind == "rule"
@@ -409,3 +409,19 @@ async def test_ask_with_provider_and_no_hits_skips_the_model(store, clean):
 
 def test_wrap_source_is_used_for_data():
     assert wrap_source("x").startswith("<source>")
+
+
+def test_seed_label_neutral(store, clean):
+    """The seed source label names no vendor: the patterns are curated guidance of the platform."""
+    import re
+
+    from engine.knowledge.memory import SEED_FILE, SEED_SOURCE
+
+    assert SEED_SOURCE == "seed"
+    text = SEED_FILE.read_text()
+    assert not re.search(r"\brsi\b|R Systems", text, re.IGNORECASE)
+    MigrationMemory(store).seed_patterns(P)
+    rows = store.connection().execute(
+        "SELECT DISTINCT source, created_by FROM knowledge.memory_items WHERE project_id = %s",
+        [P]).fetchall()
+    assert [(r["source"], r["created_by"]) for r in rows] == [("seed", "seed")]

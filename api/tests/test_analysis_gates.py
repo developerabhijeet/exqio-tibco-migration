@@ -314,7 +314,7 @@ async def test_decisions_recorded_in_memory(client, app):
     rows = await asyncio.to_thread(app.state.knowledge.query,
                                    "SELECT kind, text, context, created_by, source FROM "
                                    "knowledge.memory_items WHERE project_id = %s AND source <> "
-                                   "'rsi-seed' ORDER BY created_at",
+                                   "'seed' ORDER BY created_at",
                                    [pid])
     assert [r["kind"] for r in rows] == ["decision"] * 3
     edit, keep, rename = rows
@@ -613,7 +613,7 @@ async def test_owner_may_reject_a_gate_that_is_not_enabled(client):
 async def test_project_creation_seeds_rsi_patterns(client, app):
     r = await client.post("/projects", json={"name": "seeded"})
     pid = r.json()["id"]
-    sql = "SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s AND source = 'rsi-seed'"
+    sql = "SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s AND source = 'seed'"
     for _ in range(150):
         rows = await asyncio.to_thread(app.state.knowledge.query, sql, [pid])
         if rows[0]["n"]:

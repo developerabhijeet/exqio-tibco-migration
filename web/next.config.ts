@@ -9,6 +9,8 @@ const nextConfig: NextConfig = {
   // The URL is resolved once in scripts/root-env.ts (the environment, else the repo-root .env) and
   // baked in here, so `npm run dev` on its own calls the same API as `make web`.
   env: { NEXT_PUBLIC_API_URL: apiUrl },
+  // Telemetry: the image sets NEXT_TELEMETRY_DISABLED=1 (Next reads it from the environment, not from
+  // this file), so the installed UI sends nothing to Vercel.
   // No framework badge over the application: the dev server is what the product is shown from.
   devIndicators: false,
 };

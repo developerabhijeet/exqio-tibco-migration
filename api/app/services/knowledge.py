@@ -83,8 +83,8 @@ class Knowledge:
             project_id, "decision", masked_text, masked_ctx, MEMORY_SOURCE, user))
 
     async def seed_patterns(self, project_id: str) -> int:
-        """Load the R Systems seed patterns (``source: rsi-seed``) into a project. Idempotent."""
-        return len(await self.run(lambda s: MigrationMemory(s).seed_rsi_patterns(project_id)))
+        """Load the seed patterns (``source: seed``) into a project. Idempotent."""
+        return len(await self.run(lambda s: MigrationMemory(s).seed_patterns(project_id)))
 
     async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[Any]:
         return await self.run(lambda s: MigrationMemory(s).retrieve(project_id, query, k=k))

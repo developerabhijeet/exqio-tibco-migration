@@ -45,8 +45,8 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
 
 @router.post("/projects", status_code=201, response_model=ProjectOut)
 async def create_project(body: ProjectCreate, request: Request, session: SessionDep) -> Project:
-    """Create a project and, in the background, seed its migration memory with the R Systems
-    TIBCO-to-.NET patterns (``source: rsi-seed``). Seeding failures are logged, never fatal."""
+    """Create a project and, in the background, seed its migration memory with the
+    TIBCO-to-.NET seed patterns (``source: seed``). Seeding failures are logged, never fatal."""
     project = Project(name=body.name.strip())
     session.add(project)
     await session.commit()
@@ -60,9 +60,9 @@ async def create_project(body: ProjectCreate, request: Request, session: Session
 async def _seed(knowledge: Knowledge, project_id: str) -> None:
     try:
         n = await knowledge.seed_patterns(project_id)
-        log.info("project %s: %d RSI seed patterns loaded into migration memory", project_id, n)
+        log.info("project %s: %d seed patterns loaded into migration memory", project_id, n)
     except KnowledgeUnavailable as exc:
-        log.warning("project %s: RSI seed patterns not loaded: %s", project_id, exc)
+        log.warning("project %s: seed patterns not loaded: %s", project_id, exc)
 
 
 @router.get("/projects", response_model=list[ProjectOut])

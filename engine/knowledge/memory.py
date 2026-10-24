@@ -1,11 +1,11 @@
-"""Migration memory: SME decisions, mapping choices and RSI seed patterns that grow with every
+"""Migration memory: SME decisions, mapping choices and seed patterns that grow with every
 migration and are retrieved by hybrid search.
 
 ``MemoryItem`` is defined here and imported by ``engine.agents.provider`` (this module must not
 import the store at module level, or that import would become circular).
 
-Honesty note: the seed patterns in ``seed_patterns.yaml`` are TIBCO-to-.NET patterns authored
-by R Systems (``source: rsi-seed``). They are curated guidance, retrieved by search. Nothing in
+Honesty note: the seed patterns in ``seed_patterns.yaml`` are TIBCO-to-.NET patterns shipped
+with the platform (``source: seed``). They are curated guidance, retrieved by search. Nothing in
 this module trains or fine-tunes a model, and nothing here should be described as such.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 MemoryKind = Literal["decision", "pattern", "mapping", "note", "seed"]
 MEMORY_KINDS: tuple[str, ...] = ("decision", "pattern", "mapping", "note", "seed")
 SEED_FILE = Path(__file__).with_name("seed_patterns.yaml")
-SEED_SOURCE = "rsi-seed"
+SEED_SOURCE = "seed"
 
 
 class MemoryItem(BaseModel):
@@ -119,18 +119,18 @@ class MigrationMemory:
             for r in rows
         ]
 
-    def seed_rsi_patterns(self, project_id: str) -> list[str]:
-        """Load the R Systems seed patterns into a project. Idempotent: ids are
+    def seed_patterns(self, project_id: str) -> list[str]:
+        """Load the seed patterns into a project. Idempotent: ids are
         ``seed:<project>:<pattern id>``, so a second call updates rather than duplicates."""
         ids: list[str] = []
         for p in load_seed_patterns():
             context = {
                 "title": p["title"], "when": p["when"].strip(), "then": p["then"].strip(),
                 "tibco": p.get("tibco", ""), "dotnet": p.get("dotnet", ""),
-                "authored_by": "R Systems",
+                "authored_by": "ExiQO",
             }
             ids.append(self.record(
-                project_id, p["kind"], pattern_text(p), context, p["source"], "rsi",
+                project_id, p["kind"], pattern_text(p), context, p["source"], "seed",
                 item_id=f"seed:{project_id}:{p['id']}",
             ))
         return ids

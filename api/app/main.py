@@ -37,6 +37,7 @@ from api.app.routers import (
     projects,
     readiness,
     run_proxy,
+    system,
     verify,
 )
 from api.app.routers import settings as settings_router
@@ -50,7 +51,34 @@ log = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    """The API app. With ``api_base_path`` set (``/api`` in the cluster, where the ingress routes
+    that prefix without rewriting it) an outer app mounts the API there, so every route and every
+    ``url_for`` link carries the prefix. The outer app keeps ``/healthz`` and ``/readyz`` at the
+    root for probes, shares the API's state and runs its lifespan (Starlette does not run a
+    mounted app's)."""
     settings = settings or Settings()
+    inner = _create_api(settings)
+    base = settings.api_base_path.rstrip("/")
+    if not base:
+        return inner
+    outer = FastAPI(title=inner.title, version=inner.version, lifespan=_delegate(inner), docs_url=None, redoc_url=None, openapi_url=None)
+    outer.state = inner.state
+    outer.add_api_route("/healthz", system.healthz, methods=["GET"], tags=["system"])
+    outer.add_api_route("/readyz", system.readyz, methods=["GET"], tags=["system"])
+    outer.mount(base, inner)
+    return outer
+
+
+def _delegate(inner: FastAPI):
+    @asynccontextmanager
+    async def lifespan(_outer: FastAPI):
+        async with inner.router.lifespan_context(inner):
+            yield
+
+    return lifespan
+
+
+def _create_api(settings: Settings) -> FastAPI:
     if settings.exiqo_role == "worker":
         raise RuntimeError("EXIQO_ROLE=worker runs python -m api.app.worker, not the HTTP app")
 
@@ -132,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(history.router)
     app.include_router(readiness.router)
+    app.include_router(system.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, str]:

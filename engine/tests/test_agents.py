@@ -447,7 +447,7 @@ async def test_tibco_text_stays_inside_data_blocks_in_every_agent_prompt():
 async def test_analyst_parses_rules_and_marks_unverified():
     fake = FakeProvider([ANALYST_JSON])
     rp, records = routed(fake)
-    memory = [MemoryItem(id="m1", kind="decision", text="APR is by tier", source="rsi-seed")]
+    memory = [MemoryItem(id="m1", kind="decision", text="APR is by tier", source="seed")]
     out = await analyse(make_process(), [], memory, rp, verifier=minimal_verifier)
     assert isinstance(out, AnalystOutput)
     assert out.summary.startswith("Looks up the APR")
@@ -460,7 +460,7 @@ async def test_analyst_parses_rules_and_marks_unverified():
     req = fake.requests[0]
     assert req.json_schema == jsonout.ANALYST_SCHEMA
     body = req.messages[0]["content"]
-    assert "<source>" in body and "APR is by tier" in body and "rsi-seed" in body
+    assert "<source>" in body and "APR is by tier" in body and "seed" in body
     assert "SELECT apr\n    FROM rates WHERE tier = ?" in body
     assert records[0].task_kind == "analyse"
 
