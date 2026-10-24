@@ -5,9 +5,14 @@ Azure credentials (a service principal) are stored encrypted with Fernet. The ke
 ``APP_SECRET`` is unset (local development) a key is generated at startup with a warning; secrets
 stored with it cannot be read after a restart.
 
+How the plan authenticates (Workload Identity, a Key Vault secret, or this local Fernet secret) is
+in :mod:`api.app.services.deploy_creds`. Whatever it is, a secret goes to the Terraform child process
+only: the plan output is redacted before it is logged or stored.
+
 ``POST /builds/{id}/plan`` runs ``terragrunt run --all -- plan`` over ``infra/live/<env>`` (Terragrunt
-1.x syntax) when Azure is connected and ``terragrunt`` and ``az`` are present, and parses the adds,
-changes and destroys per unit. Otherwise it records and returns the connect-later state with the
+1.x syntax; ``<env>`` is the connection's deploy environment, ``dev`` by default) when Azure is
+connected and ``terragrunt`` and ``az`` are present, and parses the adds, changes and destroys per
+unit. Otherwise it records and returns the connect-later state with the
 last validation. G6 is enabled by a plan, or by connect-later acknowledged by an operations user
 with a note.
 """
@@ -25,7 +30,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app.config import Settings
+from api.app.config import DeployEnvironment, Settings
 from api.app.jobs.runner import JobContext
 from api.app.models import AzureConnection, Build, InfraAsset, Plan, Process
 from api.app.services import evidence
@@ -39,6 +44,9 @@ PLAN_TIMEOUT_S = 1800
 OUTPUT_LIMIT = 200_000
 RESET_REASON = "new plan"
 SECRET_FIELDS = ("client_secret",)
+SECRET_ENV = ("ARM_CLIENT_SECRET",)  # values never shown: redacted from the plan output
+REDACTED = "[redacted]"
+_ENV_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _PLAN = re.compile(r"Plan:\s+(\d+)\s+to add,\s+(\d+)\s+to change,\s+(\d+)\s+to destroy")
 _NO_CHANGES = re.compile(r"No changes\.")
@@ -71,6 +79,9 @@ def connection_out(conn: AzureConnection | None, generated_key: bool) -> dict[st
         return {"connected": False}
     return {"connected": True, "project_id": conn.project_id, "tenant": conn.tenant,
             "subscription": conn.subscription, "settings": conn.settings or {},
+            "environment": conn.environment, "auth_mode": conn.auth_mode or "local",
+            "client_id": conn.client_id or (conn.settings or {}).get("client_id"),
+            "key_vault_uri": conn.key_vault_uri, "secret_name": conn.secret_name,
             "secret_stored": bool(conn.secret_enc),
             "warning": ("APP_SECRET is not set: the stored secret cannot be read after an API restart"
                         if generated_key else None),
@@ -86,10 +97,30 @@ async def save_connection(session: AsyncSession, fernet: Fernet, project_id: str
     conn.tenant = body["tenant"]
     conn.subscription = body["subscription"]
     conn.settings = {k: v for k, v in body.items()
-                     if k not in ("tenant", "subscription", *SECRET_FIELDS) and v not in (None, "")}
+                     if k not in ("tenant", "subscription", "environment", *SECRET_FIELDS)
+                     and v not in (None, "")}
+    conn.environment = body.get("environment") or None
+    conn.auth_mode = "local"
+    conn.client_id = conn.key_vault_uri = conn.secret_name = None
     secret = body.get("client_secret")
     if secret:
         conn.secret_enc = fernet.encrypt(str(secret).encode("utf-8")).decode("ascii")
+    await session.flush()
+    return conn
+
+
+async def save_environment_connection(session: AsyncSession, project_id: str,
+                                      env: DeployEnvironment) -> AzureConnection:
+    """The connection for a declared deploy environment: its ids and secret reference, no secret."""
+    conn = await session.scalar(select(AzureConnection).where(AzureConnection.project_id == project_id))
+    if conn is None:
+        conn = AzureConnection(project_id=project_id, tenant=env.tenant, subscription=env.subscription)
+        session.add(conn)
+    conn.tenant, conn.subscription, conn.client_id = env.tenant, env.subscription, env.client_id
+    conn.environment, conn.auth_mode = env.name, env.auth
+    conn.key_vault_uri = env.key_vault_uri or None
+    conn.secret_name = env.secret_name or None
+    conn.settings, conn.secret_enc = {}, None
     await session.flush()
     return conn
 
@@ -184,29 +215,53 @@ def parse_plan(output: str) -> dict[str, Any]:
             "destroy": sum(r["destroy"] for r in rows)}
 
 
-def plan_job(build_id: str, plan_id: str, env: dict[str, str], terragrunt: str):
+def redact(text: str, env: dict[str, str]) -> str:
+    """``text`` without the value of any secret variable in ``env``."""
+    for key in SECRET_ENV:
+        value = env.get(key)
+        if value:
+            text = text.replace(value, REDACTED)
+    return text
+
+
+def plan_job(build_id: str, plan_id: str, env: dict[str, str], terragrunt: str, environment: str = PLAN_ENV):
     async def run(ctx: JobContext) -> dict[str, Any]:
         import asyncio
 
         try:
-            return await _run_plan(ctx, build_id, plan_id, env, terragrunt, asyncio)
+            return await _run_plan(ctx, build_id, plan_id, env, terragrunt, asyncio, environment)
         except Exception as exc:
             async with ctx.sessionmaker() as s:  # the plan row never stays "running"
                 plan = await s.get(Plan, plan_id)
                 if plan is not None and plan.status == "running":
                     plan.status = "failed"
-                    plan.output = f"{type(exc).__name__}: {exc}"
+                    plan.output = redact(f"{type(exc).__name__}: {exc}", env)
                     await s.commit()
             raise
 
     return run
 
 
+class UnknownEnvironment(Exception):
+    """The deploy environment has no generated ``infra/live/<env>`` directory."""
+
+
+def live_root(output_dir: str | None, environment: str) -> Path:
+    """``infra/live/<environment>`` of the build, or ``UnknownEnvironment`` naming the ones there are."""
+    live = Path(output_dir or ".") / "infra" / "live"
+    if _ENV_NAME.match(environment) and (live / environment).is_dir():
+        return live / environment
+    found = sorted(p.name for p in live.iterdir() if p.is_dir()) if live.is_dir() else []
+    raise UnknownEnvironment(f"deploy environment {environment!r} is not among the generated live "
+                             f"environments ({', '.join(found) or 'none'}): declare a matching environment "
+                             "or generate it")
+
+
 async def _run_plan(ctx: JobContext, build_id: str, plan_id: str, env: dict[str, str], terragrunt: str,
-                    asyncio: Any) -> dict[str, Any]:
+                    asyncio: Any, environment: str = PLAN_ENV) -> dict[str, Any]:
     async with ctx.sessionmaker() as s:
         build = await s.get(Build, build_id)
-        root = Path(build.output_dir or ".") / "infra" / "live" / PLAN_ENV
+        root = live_root(build.output_dir, environment)
     await ctx.stage("plan")
     await ctx.log(f"terragrunt run --all --non-interactive -- plan in {root}")
     argv = [terragrunt, "run", "--all", "--non-interactive", "--", "plan", "-no-color", "-input=false"]
@@ -220,6 +275,7 @@ async def _run_plan(ctx: JobContext, build_id: str, plan_id: str, env: dict[str,
         return proc.returncode, _ANSI.sub("", (proc.stdout or "") + (proc.stderr or ""))
 
     code, output = await asyncio.to_thread(go)
+    output = redact(output, env)
     summary = parse_plan(output)
     await ctx.log(f"plan {'succeeded' if code == 0 else 'failed'}: {summary['add']} to add, "
                   f"{summary['change']} to change, {summary['destroy']} to destroy over "

@@ -9,9 +9,11 @@ import { api } from "./api";
 export interface Brand {
   brand_name: string;
   support_contact: string;
+  /** "local": the Connect Azure form takes a secret (local development); otherwise none is entered. */
+  deploy_credential_mode: "workload_identity" | "local";
 }
 
-export const DEFAULT_BRAND: Brand = { brand_name: "ExiQO", support_contact: "" };
+export const DEFAULT_BRAND: Brand = { brand_name: "ExiQO", support_contact: "", deploy_credential_mode: "local" };
 
 export function useBrand(): Brand {
   const { data } = useQuery({ queryKey: ["brand"], queryFn: api.brand, staleTime: Infinity, retry: 0 });

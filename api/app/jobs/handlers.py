@@ -1,10 +1,12 @@
 """One handler per job kind. Each rebuilds the existing job factory from the stored payload.
 
-The ``plan`` payload carries no credentials: the handler reads the Azure connection and decrypts
-the client secret when it runs, so a secret never sits in the ``jobs`` table.
+The ``plan`` payload carries no credentials: the handler reads the Azure connection when it runs and
+builds the Terraform env then (``deploy_creds.terraform_env``: Workload Identity, a Key Vault read
+or the local decrypted secret), so a secret never sits in the ``jobs`` table.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import select
@@ -15,6 +17,7 @@ from api.app.jobs.runner import JobContext
 from api.app.models import AzureConnection, Build, Plan, Process
 from api.app.services import analysis as analysis_svc
 from api.app.services import build as build_svc
+from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
 from api.app.services import infra as infra_svc
@@ -77,10 +80,13 @@ async def plan(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                 row.output = f"{type(exc).__name__}: {exc}"
                 await s.commit()
         raise
-    return await infra_svc.plan_job(p["build_id"], p["plan_id"], env, terragrunt)(ctx)
+    environment = p.get("environment") or infra_svc.PLAN_ENV
+    return await infra_svc.plan_job(p["build_id"], p["plan_id"], env, terragrunt, environment)(ctx)
 
 
 async def _plan_inputs(ctx: JobContext, w: WorkerServices) -> tuple[dict[str, str], str]:
+    """The Terraform env (Workload Identity, a Key Vault secret read now, or the local secret) and
+    the ``terragrunt`` binary; the env goes to the child process only."""
     p = ctx.payload
     async with w.sessionmaker() as s:
         build_row = await s.get(Build, p["build_id"])
@@ -89,7 +95,8 @@ async def _plan_inputs(ctx: JobContext, w: WorkerServices) -> tuple[dict[str, st
                 if proc else None)
     if conn is None:
         raise RuntimeError("no Azure connection is stored for this build's project")
-    env = infra_svc.plan_env(conn, infra_svc.decrypt_secret(w.fernet, conn))
+    env = await asyncio.to_thread(deploy_creds.terraform_env, conn, w.settings,
+                                  secret_reader=deploy_creds.keyvault_secret, fernet=w.fernet)
     return env, build_svc.toolchain()["terragrunt"]["path"]
 
 

@@ -30,6 +30,8 @@ dependencies = [
   "neo4j>=5.20,<6",
   "pyjwt[crypto]>=2.8",
   "itsdangerous>=2.1",
+  "azure-identity>=1.17",
+  "azure-keyvault-secrets>=4.8",
 ]
 
 [project.optional-dependencies]

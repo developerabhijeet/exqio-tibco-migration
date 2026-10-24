@@ -77,7 +77,8 @@ async def test_system_status_and_brand(app, client):
     assert set(s) >= {"deploy_credential_mode", "image_digests", "egress_allowlist", "checks"}
     assert s["checks"]["postgres"] == "ok"
     assert (await client.get("/system/brand")).json() == {
-        "brand_name": "ExiQO", "support_contact": "platform-team@example.com"}
+        "brand_name": "ExiQO", "support_contact": "platform-team@example.com",
+        "deploy_credential_mode": "local"}
 
 
 @pytest.fixture

@@ -109,4 +109,5 @@ async def system_status(request: Request, _admin: AdminDep) -> dict:
 async def brand(request: Request) -> dict[str, str]:
     """Public: the sign-in screen needs the name before anyone has signed in."""
     s: Settings = request.app.state.settings
-    return {"brand_name": s.brand_name, "support_contact": s.support_contact}
+    return {"brand_name": s.brand_name, "support_contact": s.support_contact,
+            "deploy_credential_mode": s.deploy_credential_mode}

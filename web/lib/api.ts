@@ -19,10 +19,12 @@ import type {
   ScenarioSet,
   UploadResult,
 } from "./types";
+import type { Brand } from "./brand";
 import type {
   AzureConnectBody,
   AzureConnection,
   BuildFileContent,
+  DeployEnvironments,
   BuildFiles,
   BuildSummary,
   BuildView,
@@ -150,7 +152,7 @@ async function optional<T>(path: string): Promise<T | null> {
 const post = (body?: unknown): RequestInit => ({ method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
 export const api = {
-  brand: () => json<{ brand_name: string; support_contact: string }>("/system/brand"),
+  brand: () => json<Brand>("/system/brand"),
   health: () => json<{ status: string; provider: string }>("/health"),
 
   listProjects: () => json<Project[]>("/projects"),
@@ -269,6 +271,10 @@ export const api = {
   azure: (projectId: string) => json<AzureConnection>(`/projects/${projectId}/azure`),
   connectAzure: (projectId: string, body: AzureConnectBody) =>
     json<AzureConnection>(`/projects/${projectId}/azure`, post(body)),
+  /** Workload Identity install: connect a declared environment; the server copies its ids. */
+  connectAzureEnvironment: (projectId: string, environment: string) =>
+    json<AzureConnection>(`/projects/${projectId}/azure`, { method: "PUT", body: JSON.stringify({ environment }) }),
+  deployEnvironments: () => json<DeployEnvironments>("/deploy/environments"),
   disconnectAzure: (projectId: string) =>
     json<AzureConnection>(`/projects/${projectId}/azure`, { method: "DELETE" }),
   startPlan: (buildId: string) => json<PlanStart>(`/builds/${buildId}/plan`, post()),

@@ -171,6 +171,11 @@ class Settings(BaseSettings):
             return self.provider
         if self.claude_code_oauth_token:
             return "claude"
-        if self.azure_openai_endpoint and self.azure_openai_api_key:
+        if self.azure_openai_configured():
             return "azure"
         return "none"
+
+    def azure_openai_configured(self) -> bool:
+        """An endpoint and a way to sign in: the key, or the pod's managed identity."""
+        return bool(self.azure_openai_endpoint
+                    and (self.azure_openai_api_key or self.azure_openai_auth == "managed_identity"))

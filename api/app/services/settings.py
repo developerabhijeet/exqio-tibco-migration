@@ -106,7 +106,7 @@ def validate_bands(bands: dict[str, Any]) -> dict[str, tuple[int, int]]:
 
 def settings_view(settings: Settings, toolchains: dict[str, Any],
                   stored_azure: dict[str, Any] | None = None) -> dict[str, Any]:
-    azure = bool(settings.azure_openai_endpoint and settings.azure_openai_api_key)
+    azure = settings.azure_openai_configured()
     bands = settings.routing_bands or RoutingTable().bands
     return {
         "provider": {"choice": settings.provider, "active": settings.resolved_provider()},

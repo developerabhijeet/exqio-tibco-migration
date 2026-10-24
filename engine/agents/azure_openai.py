@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import openai
@@ -52,10 +52,13 @@ class AzureOpenAIProvider:
         env: Mapping[str, str] | None = None,
         api_version: str | None = None,
         use_completion_tokens: bool | None = None,
+        ad_token_provider: Callable[[], str] | None = None,
     ) -> None:
         e: Mapping[str, str] = os.environ if env is None else env
         self.endpoint = endpoint or e.get("AZURE_OPENAI_ENDPOINT") or None
-        self.api_key = api_key or e.get("AZURE_OPENAI_API_KEY") or None
+        # an Entra token provider (managed identity) replaces the key: then no key is read or sent
+        self._ad_token_provider = ad_token_provider
+        self.api_key = None if ad_token_provider else (api_key or e.get("AZURE_OPENAI_API_KEY") or None)
         self.api_version = api_version or e.get(API_VERSION_ENV) or DEFAULT_API_VERSION
         self._use_completion_tokens = use_completion_tokens
         if deployments is None:
@@ -67,7 +70,8 @@ class AzureOpenAIProvider:
 
     @property
     def available(self) -> bool:
-        return bool(self.endpoint and self.api_key and any(self._deployments.values()))
+        signed_in = self.api_key or self._ad_token_provider is not None
+        return bool(self.endpoint and signed_in and any(self._deployments.values()))
 
     def models(self) -> dict[Tier, str]:
         return dict(self._deployments)
@@ -76,9 +80,14 @@ class AzureOpenAIProvider:
         if self._client is None:
             if not self.available:
                 raise ProviderUnavailable("Azure OpenAI endpoint, key or deployments are not set")
-            self._client = openai.AsyncAzureOpenAI(
-                azure_endpoint=self.endpoint, api_key=self.api_key, api_version=self.api_version
-            )
+            if self._ad_token_provider is not None:
+                self._client = openai.AsyncAzureOpenAI(
+                    azure_endpoint=self.endpoint, azure_ad_token_provider=self._ad_token_provider,
+                    api_version=self.api_version)
+            else:
+                self._client = openai.AsyncAzureOpenAI(
+                    azure_endpoint=self.endpoint, api_key=self.api_key, api_version=self.api_version
+                )
         return self._client
 
     async def complete(self, req: LLMRequest) -> LLMResponse:

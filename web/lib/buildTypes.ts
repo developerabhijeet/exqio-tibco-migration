@@ -289,9 +289,33 @@ export interface AzureConnection {
   tenant?: string;
   subscription?: string;
   settings?: Record<string, string | null>;
+  /** The deploy environment: credentials and infra/live/<environment> (dev when null). */
+  environment?: string | null;
+  auth_mode?: "local" | DeployAuth;
+  client_id?: string | null;
+  key_vault_uri?: string | null;
+  secret_name?: string | null;
   secret_stored?: boolean;
   warning?: string | null;
   updated_at?: string | null;
+}
+
+export type DeployAuth = "workload_identity" | "keyvault_sp";
+
+/** One declared Azure target (GET /deploy/environments): ids and where a secret lives, no value. */
+export interface DeployEnvironment {
+  name: string;
+  tenant: string;
+  subscription: string;
+  client_id: string;
+  auth: DeployAuth;
+  key_vault_uri: string;
+  secret_name: string;
+}
+
+export interface DeployEnvironments {
+  mode: "workload_identity" | "local";
+  environments: DeployEnvironment[];
 }
 
 export interface AzureConnectBody {

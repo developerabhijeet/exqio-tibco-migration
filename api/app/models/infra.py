@@ -23,7 +23,9 @@ class InfraAsset(IdMixin, CreatedMixin, Base):
 
 
 class AzureConnection(IdMixin, CreatedMixin, Base):
-    """Connect Azure form; the service principal secret is Fernet-encrypted with APP_SECRET."""
+    """Connect Azure form. ``auth_mode`` ``local``: the service principal secret is Fernet-encrypted
+    with APP_SECRET. ``workload_identity``/``keyvault_sp``: copied from a declared deploy environment,
+    no secret stored (Key Vault holds it; only its vault and name are here)."""
 
     __tablename__ = "azure_connections"
 
@@ -32,6 +34,11 @@ class AzureConnection(IdMixin, CreatedMixin, Base):
     subscription: Mapped[str]
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)  # non-secret fields
     secret_enc: Mapped[str | None] = mapped_column(Text)
+    environment: Mapped[str | None] = mapped_column(Text)  # infra/live/<environment>; None: dev
+    auth_mode: Mapped[str] = mapped_column(Text, default="local", server_default="local")
+    client_id: Mapped[str | None] = mapped_column(Text)
+    key_vault_uri: Mapped[str | None] = mapped_column(Text)
+    secret_name: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                  onupdate=func.now())
 
