@@ -92,11 +92,13 @@ tests:
     asserts:
       - hasDocuments: {count: 1}
         template: templates/api-deployment.yaml
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: secrets
-            secret: {secretName: exiqo-ci-secrets, defaultMode: 0440}
+      - equal:
+          path: "spec.template.spec.volumes[?(@.name == 'secrets')].secret.secretName"
+          value: exiqo-ci-secrets
+        template: templates/api-deployment.yaml
+      - equal:
+          path: "spec.template.spec.volumes[?(@.name == 'secrets')].secret.defaultMode"
+          value: 0440
         template: templates/api-deployment.yaml
   - it: the CI overlay still refuses DEPLOY_CREDENTIAL_MODE local
     set:

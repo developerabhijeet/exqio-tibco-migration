@@ -346,6 +346,32 @@ verified are generated from GMF's own estate, so the code is GMF's code; this is
 boundary, not a sandbox. Restrict who holds the `engineer` role (the role that builds and
 verifies), and do not run Verify on an estate GMF does not trust.
 
+### Known trust boundary: generated code on the worker
+
+The worker also runs generated code as its own user: `dotnet test` and `dotnet run` in Build and
+Verify, and Terraform (with the generated providers and modules) in Deploy's plan. That code runs
+with everything the worker pod holds:
+
+- the secrets mounted at `/mnt/secrets` in the worker: `DATABASE_URL`, `TEST_DATABASE_URL`,
+  `APP_SECRET`, `INTERNAL_TOKEN`, `NEO4J_PASSWORD`, and the model credentials
+  (`AZURE_OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `LANGFUSE_SECRET_KEY`) when they are
+  configured, since the build agents call the model from the worker. The sign-in secrets
+  (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`) are mounted in the api only: the worker has its own
+  SecretProviderClass, `exiqo-platform-worker`, without them;
+- the projected Workload Identity token (`AZURE_FEDERATED_TOKEN_FILE`), which it can exchange
+  with Entra for the platform identity (`exiqo-platform`: Key Vault Secrets User on the vault, and
+  whatever else GMF grants it) and for **every** deploy identity, because each one trusts the
+  `exiqo-worker` service account.
+
+So size the deploy identities for planning only: Reader, or the narrow custom role of
+DEPLOY-STEP-SECRETS.md (read actions, provider registration, and the data-plane reads a refresh
+needs), never write actions or role-assignment rights; applying goes through GMF's pipeline with
+its own identity. Give `exiqo-platform` nothing beyond what section 4 lists. As for Verify, the
+code is generated from GMF's own estate and reviewed at the gates, and the same rule applies:
+restrict the `engineer` role and do not build an estate GMF does not trust. Running the
+untrusted execution (tests, the service, Terraform) in a separate pod with no mounted secret and no
+platform identity is the planned hardening.
+
 ## 4. Key Vault secrets
 
 Secrets live in GMF's Key Vault and reach the pods as files under `/mnt/secrets` through the CSI
@@ -359,11 +385,11 @@ Secrets User on the vault. The object names below are the defaults of `keyVault.
 | `DATABASE_URL` | `exiqo-database-url` (`keyVault.secrets.databaseUrl`), `postgresql+asyncpg://<user>:<password>@<host>:5432/exiqo?ssl=require` | Terraform (`deploy/azure`) or the database team | api, worker, migration hook (its own SecretProviderClass) | change the server password, update the secret, restart api and worker |
 | `TEST_DATABASE_URL` | `exiqo-test-database-url` (`keyVault.secrets.testDatabaseUrl`), a database whose name ends `_test` | same | worker | with the database password |
 | `APP_SECRET` | `exiqo-app-secret` (`keyVault.secrets.appSecret`), a Fernet key | platform team | api, worker | see section 10: values encrypted with it become unreadable |
-| `SESSION_SECRET` | `exiqo-session-secret` (`keyVault.secrets.sessionSecret`) | platform team | api, worker | signs everyone out |
+| `SESSION_SECRET` | `exiqo-session-secret` (`keyVault.secrets.sessionSecret`) | platform team | api only (not mounted in the worker) | signs everyone out |
 | `INTERNAL_TOKEN` | `exiqo-internal-token` (`keyVault.secrets.internalToken`) | platform team | api, worker (bearer between them on port 9100) | restart api and worker together |
 | `NEO4J_PASSWORD` | `exiqo-neo4j-password` (`keyVault.secrets.neo4jPassword`), the bare password | platform team | api, worker | together with the next row, with an `ALTER USER` (section 10) |
 | Neo4j initial credentials | `exiqo-neo4j-auth` (`keyVault.secrets.neo4jAuth`), `neo4j/<the same password>` | platform team | the Neo4j pod, through the Kubernetes Secret the CSI driver syncs | together with the previous row |
-| `OIDC_CLIENT_SECRET` | `exiqo-oidc-client-secret` (`keyVault.secrets.oidcClientSecret`), empty for a public client | Entra app owner | api, worker (the API runs the sign-in; the web pod holds no secret) | before the Entra secret expires |
+| `OIDC_CLIENT_SECRET` | `exiqo-oidc-client-secret` (`keyVault.secrets.oidcClientSecret`), empty for a public client | Entra app owner | api only (the API runs the sign-in; the web pod and the worker hold no copy) | before the Entra secret expires |
 | `AZURE_OPENAI_API_KEY` | (`keyVault.secrets.azureOpenaiApiKey`), omit with `providers.azureOpenAI.auth: managed_identity` | Azure OpenAI owner | api, worker | regenerate the key in Azure, new Key Vault version, restart |
 | `CLAUDE_CODE_OAUTH_TOKEN` | (`keyVault.secrets.claudeCodeOauthToken`), only with `providers.claude.enabled` | platform team | api, worker | new version, restart |
 | `LANGFUSE_SECRET_KEY` | (`keyVault.secrets.langfuseSecretKey`), only with `langfuse.enabled` | platform team | api, worker | new version, restart |

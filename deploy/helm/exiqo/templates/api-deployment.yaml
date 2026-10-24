@@ -50,7 +50,7 @@ spec:
             - name: POD_NAME
               valueFrom:
                 fieldRef: {fieldPath: metadata.name}
-            {{- include "exiqo.secretFileEnv" (dict "ctx" .) | nindent 12 }}
+            {{- include "exiqo.secretFileEnv" (dict "ctx" . "role" "api") | nindent 12 }}
             {{- include "exiqo.ciEnv" . | nindent 12 }}
           ports:
             - name: http
@@ -75,4 +75,4 @@ spec:
           volumeMounts:
             {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
       volumes:
-        {{- include "exiqo.platformVolumes" (dict "ctx" . "tmpSize" .Values.api.tmpSize) | nindent 8 }}
+        {{- include "exiqo.platformVolumes" (dict "ctx" . "role" "api" "tmpSize" .Values.api.tmpSize) | nindent 8 }}

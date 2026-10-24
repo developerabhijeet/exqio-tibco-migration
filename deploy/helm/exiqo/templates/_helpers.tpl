@@ -74,29 +74,36 @@ imagePullSecrets:
 The platform secrets: logical key (keyVault.secrets), the file name under /mnt/secrets (the CSI
 objectAlias, or the CI Secret's key) and the variable the app reads it from (<NAME>_FILE).
 neo4jAuth is not here: only the Neo4j server reads it, from the Secret the CSI driver syncs.
+"roles" limits a secret to those pods: the worker runs generated code (dotnet test, terraform) as
+its own UID, so it gets only what its jobs use; sign-in secrets stay on the api.
 */}}
 {{- define "exiqo.secretTable" -}}
 - {key: databaseUrl, file: database_url, env: DATABASE_URL}
 - {key: testDatabaseUrl, file: test_database_url, env: TEST_DATABASE_URL}
 - {key: appSecret, file: app_secret, env: APP_SECRET}
-- {key: sessionSecret, file: session_secret, env: SESSION_SECRET}
+- {key: sessionSecret, file: session_secret, env: SESSION_SECRET, roles: [api]}
 - {key: internalToken, file: internal_token, env: INTERNAL_TOKEN}
 - {key: neo4jPassword, file: neo4j_password, env: NEO4J_PASSWORD}
-- {key: oidcClientSecret, file: oidc_client_secret, env: OIDC_CLIENT_SECRET}
+- {key: oidcClientSecret, file: oidc_client_secret, env: OIDC_CLIENT_SECRET, roles: [api]}
 - {key: azureOpenaiApiKey, file: azure_openai_api_key, env: AZURE_OPENAI_API_KEY}
 - {key: claudeCodeOauthToken, file: claude_code_oauth_token, env: CLAUDE_CODE_OAUTH_TOKEN, when: claude}
 - {key: langfuseSecretKey, file: langfuse_secret_key, env: LANGFUSE_SECRET_KEY, when: langfuse}
 {{- end -}}
 
-{{/* The secrets this install uses, as a YAML list of the table's rows plus "object". */}}
+{{/*
+The secrets this install gives one role, as a YAML list of the table's rows plus "object":
+(dict "ctx" $ "role" "api"|"worker"). A row without "roles" goes to both.
+*/}}
 {{- define "exiqo.platformSecrets" -}}
-{{- $v := .Values -}}
+{{- $v := .ctx.Values -}}
+{{- $role := required "exiqo.platformSecrets needs a role" .role -}}
 {{- $rows := list -}}
-{{- range (include "exiqo.secretTable" . | fromYamlArray) -}}
+{{- range (include "exiqo.secretTable" .ctx | fromYamlArray) -}}
 {{- $object := index $v.keyVault.secrets .key | default "" -}}
 {{- $on := true -}}
 {{- if eq (.when | default "") "claude" }}{{ $on = $v.providers.claude.enabled }}{{ end -}}
 {{- if eq (.when | default "") "langfuse" }}{{ $on = $v.langfuse.enabled }}{{ end -}}
+{{- if and .roles (not (has $role .roles)) }}{{ $on = false }}{{ end -}}
 {{- if and $on $object -}}
 {{- $rows = append $rows (merge (dict "object" $object) .) -}}
 {{- end -}}
@@ -104,10 +111,18 @@ neo4jAuth is not here: only the Neo4j server reads it, from the Secret the CSI d
 {{- toYaml $rows -}}
 {{- end -}}
 
-{{/* <NAME>_FILE entries for the secrets in (dict "ctx" $ "only" (list "databaseUrl")) or all. */}}
+{{/* The SecretProviderClass of a role's platform secrets: exiqo-platform (api), exiqo-platform-worker. */}}
+{{- define "exiqo.platformClass" -}}
+{{- if eq . "api" }}exiqo-platform{{ else }}exiqo-platform-{{ . }}{{ end -}}
+{{- end -}}
+
+{{/*
+<NAME>_FILE entries for one role's secrets, (dict "ctx" $ "role" "worker"), optionally narrowed
+with "only" (list "databaseUrl").
+*/}}
 {{- define "exiqo.secretFileEnv" -}}
 {{- $only := .only | default list -}}
-{{- range (include "exiqo.platformSecrets" .ctx | fromYamlArray) }}
+{{- range (include "exiqo.platformSecrets" (dict "ctx" .ctx "role" .role) | fromYamlArray) }}
 {{- if or (not $only) (has .key $only) }}
 - name: {{ .env }}_FILE
   value: /mnt/secrets/{{ .file }}
@@ -115,13 +130,21 @@ neo4jAuth is not here: only the Neo4j server reads it, from the Secret the CSI d
 {{- end }}
 {{- end -}}
 
-{{/* The volume behind /mnt/secrets: (dict "ctx" $ "class" "exiqo-platform") */}}
+{{/*
+The volume behind /mnt/secrets: (dict "ctx" $ "class" "exiqo-platform" "files" (list "database_url")).
+With keyVault.mode kubernetesSecret only "files" are projected from the CI Secret, as the class
+would mount only its objects.
+*/}}
 {{- define "exiqo.secretsVolume" -}}
 - name: secrets
 {{- if eq .ctx.Values.keyVault.mode "kubernetesSecret" }}
   secret:
     secretName: {{ required "keyVault.kubernetesSecretName is required with keyVault.mode kubernetesSecret" .ctx.Values.keyVault.kubernetesSecretName }}
     defaultMode: 0440
+    items:
+{{- range .files }}
+      - {key: {{ . }}, path: {{ . }}}
+{{- end }}
 {{- else }}
   csi:
     driver: secrets-store.csi.k8s.io
@@ -188,6 +211,7 @@ which would otherwise win over the entries above it.
 {{- end }}
 {{- end -}}
 
+{{/* The api and worker pod volumes: (dict "ctx" $ "role" "api" "tmpSize" "1Gi") */}}
 {{- define "exiqo.platformVolumes" -}}
 - name: tmp
   emptyDir:
@@ -195,7 +219,9 @@ which would otherwise win over the entries above it.
 - name: data
   persistentVolumeClaim:
     claimName: {{ .ctx.Values.data.existingClaim | default "exiqo-data" }}
-{{ include "exiqo.secretsVolume" (dict "ctx" .ctx "class" "exiqo-platform") }}
+{{- $files := list }}
+{{- range (include "exiqo.platformSecrets" (dict "ctx" .ctx "role" .role) | fromYamlArray) }}{{ $files = append $files .file }}{{ end }}
+{{ include "exiqo.secretsVolume" (dict "ctx" .ctx "class" (include "exiqo.platformClass" .role) "files" $files) }}
 {{- if .ctx.Values.mirrors.terraformConfig }}
 - name: terraform-config
   configMap:

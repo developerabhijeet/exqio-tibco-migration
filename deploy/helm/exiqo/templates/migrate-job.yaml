@@ -72,7 +72,7 @@ spec:
           env:
             - name: EXIQO_ROLE
               value: migrate
-            {{- include "exiqo.secretFileEnv" (dict "ctx" . "only" (list "databaseUrl")) | nindent 12 }}
+            {{- include "exiqo.secretFileEnv" (dict "ctx" . "role" "migrate" "only" (list "databaseUrl")) | nindent 12 }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:
@@ -85,4 +85,4 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
-        {{- include "exiqo.secretsVolume" (dict "ctx" . "class" "exiqo-migrate") | nindent 8 }}
+        {{- include "exiqo.secretsVolume" (dict "ctx" . "class" "exiqo-migrate" "files" (list "database_url")) | nindent 8 }}

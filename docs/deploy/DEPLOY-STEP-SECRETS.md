@@ -47,6 +47,17 @@ exchanges it for whichever identity `ARM_CLIENT_ID` names, and Entra accepts the
 that identity trusts the `exiqo-worker` subject. That is why every deploy identity is federated to
 the same account.
 
+The consequence: whatever runs in the worker pod can make that exchange, and the worker runs
+generated code (`dotnet test`, `dotnet run`, and the generated Terraform providers and modules of
+the plan) under its own user. That code can read the projected token and obtain a token for any
+environment's deploy identity and for `exiqo-platform`, as well as read the secrets mounted in the
+worker (GMF-INSTALL.md, "Known trust boundary: generated code on the worker"). Every deploy
+identity must therefore hold only what a plan needs (Reader, or the custom role below, plus the
+state and data-plane reads), never write or role-assignment rights; one identity per environment
+still keeps a plan's configuration from naming another environment by mistake, but it is not an
+isolation boundary against code on the worker. Moving the untrusted execution into a separate pod
+without mounted secrets or a platform identity is the planned hardening.
+
 ### Role assignment
 
 Grant the identity access on the target subscription (or a narrower scope). Start with the narrow
