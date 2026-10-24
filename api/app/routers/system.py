@@ -27,11 +27,16 @@ router = APIRouter(tags=["system"])
 CHECK_TIMEOUT_S = 3.0
 
 
+async def _select_one(engine) -> None:
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
 async def check_postgres(request: Request) -> str:
+    # The timeout covers taking a connection too: a pool waiting on a hung TCP connect (asyncpg's
+    # own connect timeout is 60 s) must not hold the probe past CHECK_TIMEOUT_S.
     try:
-        engine = request.app.state.engine
-        async with engine.connect() as conn:
-            await asyncio.wait_for(conn.execute(text("SELECT 1")), CHECK_TIMEOUT_S)
+        await asyncio.wait_for(_select_one(request.app.state.engine), CHECK_TIMEOUT_S)
         return "ok"
     except Exception as exc:  # noqa: BLE001  any failure means "not ready"
         return f"error: {type(exc).__name__}"

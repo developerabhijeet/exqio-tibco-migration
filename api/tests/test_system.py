@@ -157,3 +157,26 @@ def test_oidc_mode_serves_no_api_docs(tmp_path):
 def test_dev_mode_keeps_api_docs(tmp_path):
     s = Settings(auth_mode="dev", api_base_path="/api", data_dir=tmp_path, _env_file=None)
     assert DOC_PATHS <= _route_paths(create_app(s))
+
+
+async def test_readyz_times_out_on_a_hung_database_connect(tmp_path):
+    """A connect that never completes (a non-routable address drops the SYN) is cut at the
+    check's timeout: the probe answers 503 well before asyncpg's own 60 s connect timeout."""
+    import time
+
+    from api.app.db import make_engine
+    from api.app.routers import system
+
+    hung = Settings(database_url="postgresql+asyncpg://nobody:x@10.255.255.1:5432/none",
+                    data_dir=tmp_path / "data", provider="fake", _env_file=None)
+    app = create_app(hung)  # no lifespan: it would wait on the same address
+    app.state.engine = make_engine(hung.database_url)
+    try:
+        started = time.monotonic()
+        async with _client(app) as c:
+            r = await c.get("/readyz")
+        elapsed = time.monotonic() - started
+    finally:
+        await app.state.engine.dispose()
+    assert r.status_code == 503 and r.json()["postgres"].startswith("error: ")
+    assert elapsed < system.CHECK_TIMEOUT_S + 2

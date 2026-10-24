@@ -227,20 +227,27 @@ def redact(text: str, env: dict[str, str]) -> str:
     return text
 
 
+class PlanFailed(Exception):
+    """A plan failed; the message is already redacted (``redact``)."""
+
+
 def plan_job(build_id: str, plan_id: str, env: dict[str, str], terragrunt: str, environment: str = PLAN_ENV):
     async def run(ctx: JobContext) -> dict[str, Any]:
         import asyncio
 
         try:
             return await _run_plan(ctx, build_id, plan_id, env, terragrunt, asyncio, environment)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  re-raised below, redacted
+            message = redact(f"{type(exc).__name__}: {exc}", env)
             async with ctx.sessionmaker() as s:  # the plan row never stays "running"
                 plan = await s.get(Plan, plan_id)
                 if plan is not None and plan.status == "running":
                     plan.status = "failed"
-                    plan.output = redact(f"{type(exc).__name__}: {exc}", env)
+                    plan.output = message
                     await s.commit()
-            raise
+            # The runner writes the exception into jobs.error and the log: only the redacted text
+            # goes on, without the original as its context (a keyvault_sp secret may be in it).
+            raise PlanFailed(message) from None
 
     return run
 

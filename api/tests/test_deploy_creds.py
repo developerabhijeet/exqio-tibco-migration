@@ -468,3 +468,28 @@ async def test_local_plan_fails_when_the_connection_changed_environment(app, cli
     assert job.status == "failed" and "now for environment 'prod', not 'dev'" in job.error
     assert "local-s3cr3t" not in await _job_dump(app, job_id, plan_id)
     assert not record.exists()
+
+
+async def test_plan_exception_reaches_jobs_error_redacted(wi_settings, app, client, tmp_path, token_file,
+                                                         monkeypatch, caplog):
+    """An unexpected failure whose message carries the Key Vault service principal's secret is
+    stored redacted in jobs.error, the error event, the plan row and the log."""
+    from api.app.services import infra as infra_svc
+
+    script, _ = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    monkeypatch.setattr(deploy_creds, "keyvault_secret", lambda uri, name: "s3cr3t-in-exc")
+
+    async def boom(ctx, build_id, plan_id, env, *args):
+        raise RuntimeError(f"terragrunt crashed with ARM_CLIENT_SECRET={env['ARM_CLIENT_SECRET']}")
+
+    monkeypatch.setattr(infra_svc, "_run_plan", boom)
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    await client.put(f"/projects/{pid}/azure", json={"environment": "test"}, headers=OPS)
+    r = await client.post(f"/builds/{build_id}/plan", headers=OPS)
+    job = await wait_terminal(app, r.json()["job_id"], timeout=30)
+    assert job.status == "failed"
+    assert "s3cr3t-in-exc" not in job.error and "ARM_CLIENT_SECRET=[redacted]" in job.error
+    assert "s3cr3t-in-exc" not in await _job_dump(app, r.json()["job_id"], r.json()["plan_id"])
+    assert "s3cr3t-in-exc" not in caplog.text
