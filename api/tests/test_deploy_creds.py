@@ -330,6 +330,37 @@ async def test_plan_local_mode_default_environment_and_secret_redacted(app, clie
     assert "ARM_CLIENT_SECRET=local-s3cr3t" in record.read_text()
 
 
+async def test_plan_carries_tf_cli_config_from_settings_in_workload_identity(
+        wi_settings, app, client, tmp_path, token_file, monkeypatch):
+    monkeypatch.delenv("TF_CLI_CONFIG_FILE", raising=False)  # set by settings only, not the process
+    wi_settings.tf_cli_config_file = "/etc/gmf/terraform.rc"
+    script, record = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    monkeypatch.setattr(deploy_creds, "keyvault_secret", fail_if_called)
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    await client.put(f"/projects/{pid}/azure", json={"environment": "dev"}, headers=OPS)
+    r = await client.post(f"/builds/{build_id}/plan", headers=OPS)
+    job = await wait_terminal(app, r.json()["job_id"], timeout=30)
+    assert job.status == "done", job.error
+    assert "TF_CLI_CONFIG_FILE=/etc/gmf/terraform.rc" in record.read_text()
+
+
+async def test_plan_carries_tf_cli_config_from_settings_in_local_mode(app, client, tmp_path, monkeypatch):
+    monkeypatch.delenv("TF_CLI_CONFIG_FILE", raising=False)
+    app.state.settings.tf_cli_config_file = "/etc/gmf/terraform.rc"
+    script, record = fake_terragrunt(tmp_path)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: tools(script))
+    build_id = await make_build(app, output_dir=str(tmp_path / "out"))
+    pid = await _project_of(app, build_id)
+    body = {"tenant": "t", "subscription": "s", "client_id": "c", "client_secret": "local-s3cr3t"}
+    assert (await client.post(f"/projects/{pid}/azure", json=body, headers=OPS)).status_code == 200
+    r = await client.post(f"/builds/{build_id}/plan", headers=OPS)
+    job = await wait_terminal(app, r.json()["job_id"], timeout=30)
+    assert job.status == "done", job.error
+    assert "TF_CLI_CONFIG_FILE=/etc/gmf/terraform.rc" in record.read_text()
+
+
 # ------------------------------------------------------------------ Azure OpenAI managed identity
 def test_azure_openai_managed_identity_uses_token_provider(settings, monkeypatch):
     import openai
