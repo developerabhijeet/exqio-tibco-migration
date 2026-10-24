@@ -33,3 +33,20 @@ tests:
         template: templates/storageclass.yaml
       - equal: {path: spec.storageClassName, value: gmf-azurefile-10001}
         template: templates/data-pvc.yaml
+  - it: binds to a share created beforehand (deploy/azure) when its account is named
+    template: templates/storageclass.yaml
+    set:
+      data.storageClass.storageAccount: stgmfexiqodata
+      data.storageClass.resourceGroup: rg-gmf-exiqo
+      data.storageClass.shareName: exiqo-data
+    asserts:
+      - equal: {path: parameters.storageAccount, value: stgmfexiqodata}
+      - equal: {path: parameters.resourceGroup, value: rg-gmf-exiqo}
+      - equal: {path: parameters.shareName, value: exiqo-data}
+      - equal: {path: parameters.skuName, value: Premium_LRS}
+  - it: leaves the account to the driver by default
+    template: templates/storageclass.yaml
+    asserts:
+      - notExists: {path: parameters.storageAccount}
+      - notExists: {path: parameters.resourceGroup}
+      - notExists: {path: parameters.shareName}

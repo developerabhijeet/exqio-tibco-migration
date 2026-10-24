@@ -170,6 +170,12 @@ data:
     skuName: Premium_LRS
     mountOptions: [uid=10001, gid=10001, dir_mode=0770, file_mode=0770, mfsymlinks, cache=strict,
                    nosharesock, actimeo=30]
+    # A share created beforehand (deploy/azure outputs these): the account, its resource group and
+    # the share. Empty: the driver creates an account in the node resource group. The cluster's
+    # identity needs "Storage Account Contributor" on a named account (it reads the account key).
+    storageAccount: ""
+    resourceGroup: ""
+    shareName: ""
   size: 200Gi
   accessMode: ReadWriteMany
   existingClaim: ""

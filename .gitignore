@@ -19,3 +19,8 @@ web/.next/
 
 # Helm subcharts: `helm dependency build` fetches them at the versions in Chart.lock.
 /deploy/helm/exiqo/charts/
+
+# Terraform working directories (deploy/azure); .terraform.lock.hcl is committed.
+.terraform/
+*.tfstate
+*.tfstate.backup

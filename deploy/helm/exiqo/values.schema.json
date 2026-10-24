@@ -558,6 +558,17 @@
                 "Standard_GRS"
               ]
             },
+            "storageAccount": {
+              "type": "string",
+              "pattern": "^([a-z0-9]{3,24})?$"
+            },
+            "resourceGroup": {
+              "type": "string"
+            },
+            "shareName": {
+              "type": "string",
+              "pattern": "^([a-z0-9][a-z0-9-]{1,61}[a-z0-9])?$"
+            },
             "mountOptions": {
               "type": "array",
               "items": {

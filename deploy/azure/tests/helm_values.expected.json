@@ -1,0 +1,24 @@
+{
+  "image": {"registry": "gmfacr.azurecr.io"},
+  "keyVault": {
+    "name": "kv-gmf-exiqo-prod",
+    "secrets": {"databaseUrl": "exiqo-database-url", "testDatabaseUrl": "exiqo-test-database-url"}
+  },
+  "identity": {
+    "platformClientId": "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
+    "deployIdentities": {
+      "dev": "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
+      "prod": "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f"
+    }
+  },
+  "postgres": {"host": "gmf-exiqo-pg.postgres.database.azure.com", "cidrs": ["10.20.30.0/28"]},
+  "data": {
+    "size": "200Gi",
+    "storageClass": {
+      "storageAccount": "stgmfexiqodata",
+      "resourceGroup": "rg-gmf-exiqo-prod",
+      "shareName": "exiqo-data"
+    }
+  },
+  "neo4jBackup": {"storageAccount": "stgmfexiqobackup", "container": "neo4j-backups"}
+}

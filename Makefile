@@ -21,7 +21,8 @@ PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); s
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
 .PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
-	images image-test image-lint image-scan pilot-up egress-audit chart-check
+	images image-test image-lint image-scan pilot-up egress-audit chart-check \
+	azure-validate pipeline-lint
 
 setup:
 	python3 -m venv .venv
@@ -171,9 +172,13 @@ HADOLINT_IMAGE ?= hadolint/hadolint:v2.12.0
 TRIVY_IMAGE ?= aquasec/trivy:0.58.1
 HADOLINT := $(if $(shell command -v hadolint 2>/dev/null),hadolint,\
 	docker run --rm -i -v "$(CURDIR)":/work -w /work $(HADOLINT_IMAGE) hadolint)
+# TRIVY_SCAN_FLAGS and TRIVY_DOCKER_ARGS: the release pipelines point the vulnerability databases
+# at GMF's mirror (--db-repository) and pass the registry credentials (deploy/pipelines/release.sh).
+TRIVY_SCAN_FLAGS ?=
+TRIVY_DOCKER_ARGS ?=
 TRIVY := $(if $(shell command -v trivy 2>/dev/null),trivy,\
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v exiqo-trivy-cache:/root/.cache \
-		-v "$(CURDIR)/.trivyignore":/work/.trivyignore:ro -w /work $(TRIVY_IMAGE))
+		$(TRIVY_DOCKER_ARGS) -v "$(CURDIR)/.trivyignore":/work/.trivyignore:ro -w /work $(TRIVY_IMAGE))
 PILOT_COMPOSE := docker compose -f deploy/docker/compose.pilot.yml
 
 images:
@@ -193,7 +198,7 @@ image-lint:
 image-scan:
 	@rc=0; for image in $(PLATFORM_IMAGE) $(WEB_IMAGE); do \
 		echo "image-scan: $$image"; \
-		$(TRIVY) image --severity CRITICAL --exit-code 1 --no-progress --ignorefile .trivyignore $$image || rc=1; \
+		$(TRIVY) image --severity CRITICAL --exit-code 1 --no-progress --ignorefile .trivyignore $(TRIVY_SCAN_FLAGS) $$image || rc=1; \
 	done; exit $$rc
 
 # The hardened single-VM pilot (deploy/docker/compose.pilot.yml; its header lists the secret files
@@ -223,7 +228,8 @@ egress-audit:
 # Dependencies (the pinned Neo4j subchart), lint, the helm-unittest suites in deploy/helm/tests, the
 # schema's refusals, the Neo4j subchart contract (deploy/helm/tests/subchart_contract.py: the pod
 # label, Service, data claim and service accounts this chart relies on), and kubeconform -strict on
-# what the GMF example (with and without the backup) and the CI overlay render.
+# what the GMF example (with and without the backup, and with deploy/azure's helm_values output)
+# and the CI overlay render.
 # helm, the unittest plugin and kubeconform run from pinned images when they are not on PATH (the
 # images need network for the Neo4j chart repository and the schemas). SecretProviderClass is a
 # CRD, validated against the datreeio CRDs catalog; nothing is skipped as an unknown kind.
@@ -264,3 +270,56 @@ chart-check:
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/helm/tests/values/backup-enabled.yaml \
 		| $(KUBECONFORM) $(KUBECONFORM_FLAGS)
 	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f $(CHART_CI) | $(KUBECONFORM) $(KUBECONFORM_FLAGS)
+	$(HELM) template exiqo $(CHART) -n exiqo -f $(CHART_GMF) -f deploy/azure/tests/helm_values.expected.json \
+		| $(KUBECONFORM) $(KUBECONFORM_FLAGS)
+
+# ---------------------------------------------------- Azure prerequisites and release pipelines
+# deploy/azure (optional Terraform for GMF's prerequisites): fmt, init without a backend, validate,
+# terraform test (mocked providers: the outputs -> chart values mapping), and tflint with the
+# azurerm ruleset (pinned in deploy/azure/.tflint.hcl) against gmf.example.tfvars. pipeline-lint:
+# actionlint on the GitHub Actions template, shellcheck on release.sh (from the actionlint image),
+# and a YAML parse of the Azure DevOps template (there is no offline schema check for it).
+# Terraform matches the platform image's version (deploy/docker/platform.Dockerfile). Each tool
+# runs from its pinned image when it is not on PATH; init and tflint --init need the Terraform
+# registry and GitHub (or TF_CLI_CONFIG_FILE pointing at a provider mirror).
+TERRAFORM_IMAGE ?= hashicorp/terraform:1.17.0
+TFLINT_IMAGE ?= ghcr.io/terraform-linters/tflint:v0.54.0
+ACTIONLINT_IMAGE ?= rhysd/actionlint:1.7.12
+AZURE_TF := deploy/azure
+TERRAFORM := $(if $(shell command -v terraform 2>/dev/null),terraform,\
+	docker run --rm -v "$(CURDIR)":/work -w /work -e TF_IN_AUTOMATION=1 -e CHECKPOINT_DISABLE=1 \
+		-e TF_PLUGIN_CACHE_DIR=/plugin-cache -v exiqo-terraform-plugins:/plugin-cache $(TERRAFORM_IMAGE))
+TFLINT := $(if $(shell command -v tflint 2>/dev/null),tflint,\
+	docker run --rm -v "$(CURDIR)":/work -w /work -e GITHUB_TOKEN \
+		-v exiqo-tflint-plugins:/root/.tflint.d $(TFLINT_IMAGE))
+ACTIONLINT := $(if $(shell command -v actionlint 2>/dev/null),actionlint,\
+	docker run --rm -v "$(CURDIR)":/work -w /work $(ACTIONLINT_IMAGE))
+SHELLCHECK := $(if $(shell command -v shellcheck 2>/dev/null),shellcheck,\
+	docker run --rm -v "$(CURDIR)":/work -w /work --entrypoint shellcheck $(ACTIONLINT_IMAGE))
+
+# The Azure DevOps template parses, has the four stages in order, and pins every task exactly.
+define ADO_CHECK
+import re, sys, yaml
+text = open(sys.argv[1]).read()
+stages = [s["stage"] for s in yaml.safe_load(text)["stages"]]
+assert stages == ["Build", "Scan", "Sign", "Deploy"], stages
+tasks = re.findall(r"task: (\S+)", text)
+assert tasks and all(re.search(r"@\d+\.\d+\.\d+$$", t) for t in tasks), tasks
+print("pipeline-lint: azure-pipelines.yml ok,", len(tasks), "tasks pinned")
+endef
+export ADO_CHECK
+
+azure-validate: pipeline-lint
+	$(TERRAFORM) -chdir=$(AZURE_TF) fmt -check -recursive -diff
+	$(TERRAFORM) -chdir=$(AZURE_TF) init -backend=false -input=false -lockfile=readonly
+	$(TERRAFORM) -chdir=$(AZURE_TF) validate
+	$(TERRAFORM) -chdir=$(AZURE_TF) test
+	$(TFLINT) --chdir=$(AZURE_TF) --init
+	$(TFLINT) --chdir=$(AZURE_TF) --var-file=gmf.example.tfvars --format compact
+
+pipeline-lint:
+	$(ACTIONLINT) deploy/pipelines/github-release.yml
+	$(SHELLCHECK) deploy/pipelines/release.sh
+	@if grep -nE '^\s*-?\s*uses:' deploy/pipelines/github-release.yml | grep -vE '@[0-9a-f]{40}( |$$)'; then \
+		echo "pipeline-lint: actions above are not pinned by commit"; exit 1; fi
+	$(PY) -I -c "$$ADO_CHECK" deploy/pipelines/azure-pipelines.yml
