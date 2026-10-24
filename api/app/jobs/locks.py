@@ -32,7 +32,13 @@ async def advisory_lock(sessionmaker: async_sessionmaker[AsyncSession], name: st
     # so the unlock runs on the connection that holds the lock.
     async with engine.connect() as conn:
         conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        await conn.execute(text("SELECT pg_advisory_lock(hashtext(:n))"), {"n": name})
+        try:
+            await conn.execute(text("SELECT pg_advisory_lock(hashtext(:n))"), {"n": name})
+        except BaseException:
+            # cancelled or failed mid-acquire: the server may already have granted the lock, and a
+            # pooled connection would keep it (pool reset is a rollback), so discard the connection
+            await asyncio.shield(conn.invalidate())
+            raise
         try:
             yield
         finally:

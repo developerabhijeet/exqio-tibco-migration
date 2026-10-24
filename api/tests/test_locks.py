@@ -58,3 +58,34 @@ async def test_no_advisory_lock_left_behind(app):
     async with sm() as s:
         held = await s.scalar(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"))
     assert held == 0
+
+
+async def test_cancelled_waiter_leaves_no_lock(app):
+    from sqlalchemy import text
+
+    sm = app.state.sessionmaker
+    release = asyncio.Event()
+
+    async def holder():
+        async with advisory_lock(sm, "scenario"):
+            await release.wait()
+
+    async def waiter():
+        async with advisory_lock(sm, "scenario"):
+            pass
+
+    h = asyncio.create_task(holder())
+    await asyncio.sleep(0.2)
+    w = asyncio.create_task(waiter())
+    await asyncio.sleep(0.2)  # blocked inside pg_advisory_lock
+    w.cancel()
+    await asyncio.gather(w, return_exceptions=True)
+    release.set()
+    await h
+    await asyncio.sleep(0.2)
+    async with sm() as s:
+        held = await s.scalar(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"))
+    assert held == 0
+    async with asyncio.timeout(2):
+        async with advisory_lock(sm, "scenario"):
+            pass
