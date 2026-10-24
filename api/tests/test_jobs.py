@@ -7,7 +7,7 @@ import json
 from fastapi import Depends
 from sqlalchemy import select
 
-from api.app.deps import require_user
+from api.app.deps import require_actor
 from api.app.jobs import registry
 from api.app.jobs.runner import JobContext
 from api.app.models import Job, JobEvent
@@ -126,7 +126,7 @@ async def test_recovery_fails_running_job_without_heartbeat(app):
 
 
 async def test_agent_header_forbidden(client, app):
-    async def whoami(user: str = Depends(require_user)) -> dict:
+    async def whoami(user: str = Depends(require_actor)) -> dict:
         return {"user": user}
 
     app.add_api_route("/_test/whoami", whoami, methods=["POST"])

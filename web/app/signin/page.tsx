@@ -9,6 +9,7 @@ import { MicrosoftIcon } from "@/components/ui/BrandIcons";
 import { useIdentity } from "@/lib/identity";
 import { ACCOUNTS, useSession, type Account } from "@/lib/signin";
 import { personaOf } from "@/lib/personas";
+import { loginUrl } from "@/lib/auth";
 import { useAppState } from "@/lib/state";
 import type { UserName } from "@/lib/types";
 
@@ -16,14 +17,17 @@ import type { UserName } from "@/lib/types";
  * The sign-in screen: the provider hand-off, the account chooser, the consent and the claims a
  * token would carry, drawn from whatever is configured under Settings → Authentication.
  *
- * No identity provider is called and no token is issued here: what the screen does is set who you
- * are acting as, which is what the step and gate permissions are read from, and then open the
- * application. Nothing redirects here either, so the application stays reachable without signing
- * in through the link below the card.
+ * AUTH_MODE=dev: no identity provider is called and no token is issued here: what the screen
+ * does is set who you are acting as, which is what the step and gate permissions are read from,
+ * and then open the application. Nothing redirects here either, so the application stays
+ * reachable without signing in through the link below the card.
+ *
+ * AUTH_MODE=oidc: the button goes to the API's sign-in (Entra ID, then back to step 1). Signing
+ * out lands here, and nothing sends a signed-out user onward until they press it.
  */
 export default function SignInPage() {
   const router = useRouter();
-  const { setUser } = useAppState();
+  const { setUser, auth } = useAppState();
   const { config } = useIdentity();
   const { brand_name } = useBrand();
   const { session, signIn } = useSession();
@@ -31,7 +35,7 @@ export default function SignInPage() {
   const [account, setAccount] = useState<Account | null>(null);
   // The name a caller knows the provider by. Settings keeps the configuration names
   // (Entra ID, Okta), which is where the tenant and client details are typed.
-  const provider = config.provider === "okta" ? "Okta" : "Microsoft";
+  const provider = config.provider === "okta" && auth.mode !== "oidc" ? "Okta" : "Microsoft";
 
   const choose = (a: Account) => {
     setAccount(a);
@@ -97,9 +101,11 @@ export default function SignInPage() {
             {stage === "provider" ? (
               <Provider
                 provider={provider}
-                microsoft={config.provider !== "okta"}
-                session={session}
-                onContinue={() => setStage("account")}
+                microsoft={auth.mode === "oidc" || config.provider !== "okta"}
+                session={auth.mode === "oidc" ? null : session}
+                onContinue={() =>
+                  auth.mode === "oidc" ? window.location.assign(loginUrl("/?step=upload")) : setStage("account")
+                }
               />
             ) : stage === "account" ? (
               <Chooser onChoose={choose} />

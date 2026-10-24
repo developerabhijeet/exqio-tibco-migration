@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, LogIn, LogOut, ShieldCheck } from "lucide-react";
-import { PERSONAS, personaOf, stepsOf, type Persona } from "@/lib/personas";
+import { signOutOidc, type Principal } from "@/lib/auth";
+import { PERSONAS, personaOf, stepsOf, useActingPersona, type Persona } from "@/lib/personas";
 import { useSession } from "@/lib/signin";
 import { useAppState } from "@/lib/state";
 import { STEP_LABELS } from "@/lib/steps";
@@ -13,18 +14,22 @@ import type { UserName } from "@/lib/types";
 /** "Design to Deploy", or just "Deploy" when the persona owns one step. */
 function range(persona: Persona): string {
   const steps = stepsOf(persona);
+  if (steps.length === 0) return "read only";
   const first = STEP_LABELS[steps[0]] ?? steps[0];
   const last = STEP_LABELS[steps[steps.length - 1]] ?? steps[steps.length - 1];
   return steps.length === 1 ? first : `${first} to ${last}`;
 }
 
 export function UserMenu() {
-  const { user, setUser } = useAppState();
+  const { user, setUser, auth } = useAppState();
   const { session, signOut } = useSession();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const me = personaOf(user);
+  const acting = useActingPersona();
+  const signedIn = auth.mode === "oidc" ? auth.me : null;
+  const me = signedIn ? acting : personaOf(user);
+  const shown = signedIn ? signedIn.name || signedIn.upn : user;
 
   useEffect(() => {
     if (!open) return;
@@ -53,15 +58,17 @@ export function UserMenu() {
         className="flex items-center gap-2.5 rounded-btn px-2 py-1.5 text-white transition-colors hover:bg-white/10"
       >
         <span className="flex h-8 w-8 items-center justify-center rounded-full bg-purple text-[13px] font-semibold uppercase shadow-inset">
-          {user.slice(0, 1)}
+          {shown.slice(0, 1)}
         </span>
         <span className="text-left leading-tight">
-          <span className="block text-[13.5px] font-semibold">{user}</span>
+          <span className="block text-[13.5px] font-semibold">{shown}</span>
           <span className="block text-[11.5px] text-lilac">{me.role}</span>
         </span>
         <ChevronDown size={16} aria-hidden className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open ? (
+      {open && signedIn ? (
+        <SignedInMenu me={signedIn} persona={me} />
+      ) : open ? (
         <div role="menu" className="card absolute right-0 top-14 z-50 w-[360px] overflow-hidden p-0 shadow-pop">
           <p className="label border-b border-line bg-warm px-4 py-2.5">Act as</p>
           {PERSONAS.map((p) => {
@@ -151,6 +158,57 @@ export function UserMenu() {
           </p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * AUTH_MODE=oidc: who signed in with Entra ID and the roles their groups grant. There is no
+ * switcher; a role is granted in Entra, not chosen here.
+ */
+function SignedInMenu({ me, persona }: { me: Principal; persona: Persona }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div role="menu" className="card absolute right-0 top-14 z-50 w-[360px] overflow-hidden p-0 shadow-pop">
+      <div className="border-b border-line px-4 py-3" data-testid="user-menu-identity">
+        <p className="text-[14px] font-semibold text-plum">{me.name || me.upn}</p>
+        <p className="break-all font-mono text-[11.5px] text-slate">{me.upn}</p>
+        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+          {me.roles.length === 0 ? (
+            <span className="rounded-full bg-warm px-2 py-0.5 font-medium text-plum">no role</span>
+          ) : (
+            me.roles.map((r) => (
+              <span key={r} className="rounded-full bg-warm px-2 py-0.5 font-medium text-plum" data-testid={`role-${r}`}>
+                {r}
+              </span>
+            ))
+          )}
+          {persona.gates.length ? (
+            <span className="flex items-center gap-1 rounded-full bg-gate-bg px-2 py-0.5 font-medium text-gate">
+              <ShieldCheck size={11} aria-hidden />
+              {persona.gates.join(", ")}
+            </span>
+          ) : null}
+        </p>
+        <p className="mt-1.5 text-[12px] leading-snug text-slate">
+          Acting as {persona.role}: {range(persona)}.
+        </p>
+      </div>
+      <div className="flex items-center justify-between gap-3 bg-warm px-4 py-2.5 text-[11.5px] text-slate">
+        <span>Recorded as the actor on every gate decision.</span>
+        <button
+          type="button"
+          data-testid="user-menu-signout"
+          disabled={busy}
+          className="flex shrink-0 items-center gap-1 font-medium text-purple hover:underline"
+          onClick={() => {
+            setBusy(true);
+            void signOutOidc();
+          }}
+        >
+          <LogOut size={12} aria-hidden /> Sign out
+        </button>
+      </div>
     </div>
   );
 }

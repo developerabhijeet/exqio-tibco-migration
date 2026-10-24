@@ -113,7 +113,8 @@ class Settings(BaseSettings):
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = ""
     session_secret: str = ""
-    role_groups: dict[str, list[str]] = Field(default_factory=dict)  # role -> Entra group ids (JSON)
+    # role key -> Entra group object ids and/or app role values (JSON); see api/app/auth/roles.py
+    role_groups: dict[str, list[str]] = Field(default_factory=dict)
     deploy_environments: list[DeployEnvironment] = Field(default_factory=list)  # JSON
     image_digests: dict[str, str] = Field(default_factory=dict)
     egress_allowlist: list[str] = Field(default_factory=list)

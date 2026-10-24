@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.app.config import Settings
+from api.app.deps import AdminDep
 from api.app.secrets import SECRET_FILE_FIELDS
 
 router = APIRouter(tags=["system"])
@@ -93,8 +94,8 @@ async def readyz(request: Request) -> JSONResponse:
 
 
 @router.get("/system/status")
-async def system_status(request: Request) -> dict:
-    """The About panel's data. No guard yet: the admin check arrives with the OIDC work."""
+async def system_status(request: Request, _admin: AdminDep) -> dict:
+    """The About panel's data, for the admin role only (dev: ``ops.sam``, per Ruling B)."""
     s: Settings = request.app.state.settings
     return {
         "version": package_version(), "role": s.exiqo_role, "auth_mode": s.auth_mode,

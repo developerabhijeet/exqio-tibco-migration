@@ -1,4 +1,6 @@
-// Typed client over the ExiQO Migrate API. Every request carries the chosen user as X-User.
+// Typed client over the ExiQO Migrate API. AUTH_MODE=dev: every request carries the chosen persona
+// as X-User. AUTH_MODE=oidc (lib/auth.ts found a signed-in user at /auth/me): requests carry the
+// session cookie instead, and a 401 sends the browser to the API's sign-in, which comes back here.
 import type {
   AnalysisView,
   AskAnswer,
@@ -63,6 +65,37 @@ export function setApiUser(user: string): void {
   currentUser = user;
 }
 
+export type AuthMode = "dev" | "oidc";
+let authMode: AuthMode = "dev";
+
+export function setAuthMode(mode: AuthMode): void {
+  authMode = mode;
+}
+
+export function isOidc(): boolean {
+  return authMode === "oidc";
+}
+
+/** The API's sign-in, returning to `returnTo` (a path on this origin) once Entra is done. */
+export function loginUrl(returnTo: string): string {
+  return `${requireApiUrl()}/auth/login?return=${encodeURIComponent(returnTo)}`;
+}
+
+let redirectedAt = 0;
+
+/**
+ * Off to the sign-in, back to this page afterwards. Not from the sign-in screen itself: that is
+ * where a signed-out user lands, and its button starts the sign-in when they choose to. A burst of
+ * 401s navigates once; one a second later tries again, in case that navigation was cancelled.
+ */
+export function redirectToLogin(): void {
+  if (typeof window === "undefined" || Date.now() - redirectedAt < 1000) return;
+  const { pathname, search } = window.location;
+  if (pathname.startsWith("/signin")) return;
+  redirectedAt = Date.now();
+  window.location.assign(loginUrl(`${pathname}${search}`));
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -74,17 +107,19 @@ export class ApiError extends Error {
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("X-User", currentUser);
+  const oidc = isOidc();
+  if (!oidc) headers.set("X-User", currentUser);
   if (init.body && typeof init.body === "string" && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
   const base = requireApiUrl();
   let res: Response;
   try {
-    res = await fetch(`${base}${path}`, { ...init, headers });
+    res = await fetch(`${base}${path}`, oidc ? { ...init, headers, credentials: "include" } : { ...init, headers });
   } catch {
     throw new ApiError(0, `The API at ${base} is not reachable`);
   }
+  if (res.status === 401 && isOidc()) redirectToLogin();
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -196,7 +231,7 @@ export const api = {
   /**
    * The build's whole folder as a zip: the solution, its tests, the infrastructure and the
    * local-run scripts. Read as a blob through the same authenticated request as every other call,
-   * rather than as a plain link, because a link carries no X-User header. The filename is the
+   * rather than as a plain link, because a link carries no X-User header (dev mode). The filename is the
    * server's own (Content-Disposition), so the file on disk names the process and the build.
    */
   downloadBuild: async (buildId: string): Promise<{ blob: Blob; filename: string }> => {

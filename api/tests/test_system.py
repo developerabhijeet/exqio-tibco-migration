@@ -61,9 +61,17 @@ async def test_readyz_reports_unreadable_secret_file(app, client, monkeypatch, t
     assert (await client.get("/readyz")).status_code == 200
 
 
+async def test_system_status_is_admin_only_in_dev(client):
+    # Ruling B: ops.sam holds admin; every other persona is refused, nobody at all is 401
+    assert (await client.get("/system/status")).status_code == 401
+    for user in ("sme.vicky", "architect.lee", "engineer.ravi", "qa.priya"):
+        assert (await client.get("/system/status", headers={"X-User": user})).status_code == 403
+    assert (await client.get("/system/status", headers={"X-User": "ops.sam"})).status_code == 200
+
+
 async def test_system_status_and_brand(app, client):
     app.state.settings.support_contact = "platform-team@example.com"
-    s = (await client.get("/system/status")).json()
+    s = (await client.get("/system/status", headers={"X-User": "ops.sam"})).json()
     assert s["role"] == "all" and s["auth_mode"] == "dev" and s["brand_name"] == "ExiQO"
     assert s["version"] and s["support_contact"] == "platform-team@example.com"
     assert set(s) >= {"deploy_credential_mode", "image_digests", "egress_allowlist", "checks"}

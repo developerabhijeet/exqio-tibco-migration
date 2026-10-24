@@ -1,10 +1,12 @@
 "use client";
 
-// Screen state shared by the top bar, the stepper and the tabs: the user (sent as X-User), the
-// project, the active step, the open process and domain, and the scan job's streamed log.
+// Screen state shared by the top bar, the stepper and the tabs: the sign-in mode and user (the
+// persona sent as X-User in dev, the Entra user in oidc), the project, the active step, the open
+// process and domain, and the scan job's streamed log.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setApiUser } from "./api";
+import { probeAuth, type AuthState } from "./auth";
 import { subscribeJob } from "./sse";
 import type { InspectorTab, JobEvent, UserName } from "./types";
 import { USERS } from "./types";
@@ -22,6 +24,8 @@ export interface ScanState {
 }
 
 interface AppState {
+  /** dev or oidc, and in oidc the signed-in user; "unknown" until /auth/me has answered. */
+  auth: AuthState;
   user: UserName;
   setUser: (u: UserName) => void;
   projectId: string | null;
@@ -67,6 +71,7 @@ function store(key: string, value: string | null): void {
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
+  const [auth, setAuth] = useState<AuthState>({ mode: "unknown", me: null });
   const [user, setUserState] = useState<UserName>("sme.vicky");
   const [projectId, setProjectIdState] = useState<string | null>(null);
   const [step, setStepState] = useState<StepKey>("upload");
@@ -90,7 +95,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setApiUser(u);
     }
     setProjectIdState(stored("exiqo.project"));
-  }, []);
+    let live = true;
+    probeAuth().then((a) => {
+      if (!live) return;
+      setAuth(a);
+      // oidc: what was fetched before the mode was known went out with X-User; ask again
+      if (a.mode === "oidc") qc.invalidateQueries();
+    });
+    return () => {
+      live = false;
+    };
+  }, [qc]);
 
   const setUser = useCallback(
     (u: UserName) => {
@@ -197,6 +212,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppState>(
     () => ({
+      auth,
       user,
       setUser,
       projectId,
@@ -219,6 +235,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setAskOpen,
     }),
     [
+      auth,
       user,
       setUser,
       projectId,

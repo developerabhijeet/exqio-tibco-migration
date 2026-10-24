@@ -7,6 +7,10 @@ Run with ``uvicorn api.app.main:app`` (``make api``). The schema is created by A
 (SSE); role ``all`` also runs an in-process job worker (``POD_NAME`` or ``<hostname>-<pid>``) and
 hosts the generated services that worker starts, reached in-process (no internal listener).
 Role ``worker`` is not this app: it runs ``python -m api.app.worker``.
+
+``AUTH_MODE=oidc`` adds the sign-in routes (``/auth/*``) and puts every router behind a signed-in
+user (:func:`~api.app.deps.require_signed_in`), except ``/health``, ``/system/brand`` and the
+probes; it refuses to start without ``SESSION_SECRET``, ``OIDC_TENANT_ID`` and ``OIDC_CLIENT_ID``.
 """
 from __future__ import annotations
 
@@ -14,11 +18,14 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.app.auth import router as auth_router
+from api.app.auth.oidc import Oidc
 from api.app.config import Settings
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
+from api.app.deps import require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
@@ -78,9 +85,19 @@ def _delegate(inner: FastAPI):
     return lifespan
 
 
+def check_auth_settings(settings: Settings) -> None:
+    if settings.auth_mode != "oidc":
+        return
+    missing = [name.upper() for name in ("session_secret", "oidc_tenant_id", "oidc_client_id")
+               if not getattr(settings, name).strip()]
+    if missing:
+        raise RuntimeError(f"AUTH_MODE=oidc needs {', '.join(missing)} (or the *_FILE variant)")
+
+
 def _create_api(settings: Settings) -> FastAPI:
     if settings.exiqo_role == "worker":
         raise RuntimeError("EXIQO_ROLE=worker runs python -m api.app.worker, not the HTTP app")
+    check_auth_settings(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -136,6 +153,8 @@ def _create_api(settings: Settings) -> FastAPI:
             except Exception:  # best effort on shutdown (the database may be gone)
                 log.exception("could not stop the generated services")
             await app.state.http.aclose()
+            if app.state.oidc is not None:
+                await app.state.oidc.aclose()
             await runner.stop()
             if listener is not None:
                 await listener.stop()
@@ -143,24 +162,19 @@ def _create_api(settings: Settings) -> FastAPI:
 
     app = FastAPI(title="ExiQO Migrate API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
+    app.state.oidc = Oidc(settings) if settings.auth_mode == "oidc" else None
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])
-    app.include_router(projects.router)
-    app.include_router(processes.router)
-    app.include_router(jobs.router)
-    app.include_router(domains.router)
-    app.include_router(analysis.router)
-    app.include_router(gates.router)
-    app.include_router(ask.router)
-    app.include_router(design.router)
-    app.include_router(build.router)
-    app.include_router(run_proxy.router)
-    app.include_router(verify.router)
-    app.include_router(infra.router)
-    app.include_router(settings_router.router)
-    app.include_router(history.router)
-    app.include_router(readiness.router)
-    app.include_router(system.router)
+    # oidc: a signed-in user with a role for everything but the public routes (dev: a no-op)
+    guarded = [Depends(require_signed_in)]
+    for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build):
+        app.include_router(module.router, dependencies=guarded)
+    app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
+    for module in (verify, infra, settings_router, history, readiness):
+        app.include_router(module.router, dependencies=guarded)
+    app.include_router(system.router)  # probes and brand public, /system/status admin only
+    if settings.auth_mode == "oidc":
+        app.include_router(auth_router.router)
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, str]:

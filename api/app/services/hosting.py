@@ -57,9 +57,12 @@ CONTROL_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
 # RFC 9110 section 7.6.1 connection-specific fields, plus what the proxy recomputes itself
 HOP_BY_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
                         "trailer", "trailers", "transfer-encoding", "upgrade", "proxy-connection"})
-_REQUEST_DROPPED = HOP_BY_HOP | {"host", "content-length", "cookie", "x-forwarded-host",
-                                 "x-forwarded-proto", "x-forwarded-prefix", "x-forwarded-for",
-                                 SERVICE_AUTH}
+# the platform's own: its session cookie and its user headers are not the generated service's
+_REQUEST_DROPPED = HOP_BY_HOP | {"host", "content-length", "cookie", "x-user", "x-agent",
+                                 "x-forwarded-host", "x-forwarded-proto", "x-forwarded-prefix",
+                                 "x-forwarded-for", SERVICE_AUTH}
+# the service answers on the API's origin: a cookie it set would be the API's (exiqo_session)
+_RESPONSE_DROPPED = HOP_BY_HOP | {"set-cookie"}
 
 
 PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -201,7 +204,8 @@ class Hosting:
 # ------------------------------------------------------------------ forwarding
 def request_headers(headers: Iterable[tuple[str, str]], *, host: str, proto: str,
                     prefix: str) -> list[tuple[str, str]]:
-    """The caller's headers minus hop-by-hop fields and the platform's session cookie, plus the
+    """The caller's headers minus hop-by-hop fields, the platform's session cookie and its
+    ``X-User``/``X-Agent``, plus the
     X-Forwarded-* the generated service builds its own URLs from."""
     out = [(k, v) for k, v in headers if k.lower() not in _REQUEST_DROPPED]
     return out + [("x-forwarded-host", host), ("x-forwarded-proto", proto), ("x-forwarded-prefix", prefix)]
@@ -217,7 +221,8 @@ def _target(base: str, path: str, query: str) -> str:
 
 async def forward(http: httpx.AsyncClient, method: str, url: str, headers: list[tuple[str, str]],
                   body: bytes) -> Response:
-    """Send the call and stream the answer back: status, headers (minus hop-by-hop) and the raw
+    """Send the call and stream the answer back: status, headers (minus hop-by-hop and
+    ``Set-Cookie``) and the raw
     body (still content-encoded, so ``Content-Length`` and ``Content-Encoding`` stay true).
     Raises ``httpx.TransportError`` when the far end does not answer."""
     upstream = await http.send(http.build_request(method, url, headers=headers, content=body), stream=True)
@@ -231,7 +236,7 @@ async def forward(http: httpx.AsyncClient, method: str, url: str, headers: list[
 
     response = StreamingResponse(body_of(), status_code=upstream.status_code)
     response.raw_headers = [(k.encode("latin-1"), v.encode("latin-1"))
-                            for k, v in upstream.headers.multi_items() if k.lower() not in HOP_BY_HOP]
+                            for k, v in upstream.headers.multi_items() if k.lower() not in _RESPONSE_DROPPED]
     return response
 
 

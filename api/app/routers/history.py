@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 
-from api.app.deps import SessionDep
+from api.app.deps import SessionDep, require_user
 from api.app.models import Project
 from api.app.services import history as svc
 
@@ -20,7 +20,7 @@ async def get_history(project_id: str, session: SessionDep) -> dict[str, Any]:
 
 
 @router.delete("/history/model-calls")
-async def reset_tokenomics(project_id: str, session: SessionDep,
+async def reset_tokenomics(project_id: str, request: Request, session: SessionDep,
                            x_user: str = Header(default="engineer")) -> dict[str, Any]:
     """Clear the project's model calls: the Tokenomics screen counts from zero after this.
 
@@ -29,4 +29,7 @@ async def reset_tokenomics(project_id: str, session: SessionDep,
     """
     if await session.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    return {"discarded": await svc.reset_tokenomics(session, project_id, x_user)}
+    actor = x_user  # dev: the persona, as before; oidc: the signed-in user, X-User ignored
+    if request.app.state.settings.auth_mode == "oidc":
+        actor = (await require_user(request, None, None)).actor
+    return {"discarded": await svc.reset_tokenomics(session, project_id, actor)}

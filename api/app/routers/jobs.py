@@ -11,7 +11,7 @@ Each event's ``data`` is JSON ``{seq, tag, text, data, ts}``. ``tag`` is ``code`
 ``log`` events and ``null`` on ``stage``, ``done`` and ``error`` events.
 
 ``POST /jobs/{id}/cancel`` fails a queued job at once and flags a running one; its worker cancels
-it at the next heartbeat.
+it at the next heartbeat. It needs a signed-in human (``X-User`` in dev, the session in oidc).
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
-from api.app.deps import SessionDep
+from api.app.deps import SessionDep, UserDep
 from api.app.jobs.listener import JobListener
 from api.app.jobs.runner import CANCELLED_REASON, EventOut, add_terminal_event
 from api.app.models import Job, JobEvent
@@ -108,7 +108,7 @@ async def job_events(job_id: str, request: Request,
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=202, response_model=JobOut)
-async def cancel_job(job_id: str, session: SessionDep) -> Job:
+async def cancel_job(job_id: str, session: SessionDep, user: UserDep) -> Job:
     """Queued: failed "cancelled" now. Running: flagged for its worker. Finished: 409."""
     status = await session.scalar(update(Job).where(
         Job.id == job_id, Job.status.in_(("queued", "running")),

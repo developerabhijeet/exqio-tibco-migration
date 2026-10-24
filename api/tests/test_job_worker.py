@@ -19,6 +19,7 @@ from api.app.main import create_app
 from api.app.models import Job, JobEvent
 
 SLOW_SECONDS = 60
+USER = {"X-User": "engineer.ravi"}
 BLOCK_STALE_SECONDS = 2
 BLOCK_SECONDS = BLOCK_STALE_SECONDS + 2  # the loop is stalled longer than a job may go silent
 
@@ -260,7 +261,7 @@ async def test_cancel_flag_stops_running_job(client, app_with_slow_handler):
     app = app_with_slow_handler
     job_id = await app.state.runner.submit("slow-test", {})
     await wait_status(app, job_id, ("running",))
-    r = await client.post(f"/jobs/{job_id}/cancel")
+    r = await client.post(f"/jobs/{job_id}/cancel", headers=USER)
     assert r.status_code == 202
     started = time.monotonic()
     job = await wait_status(app, job_id, ("done", "failed"),
@@ -273,13 +274,14 @@ async def test_cancel_flag_stops_running_job(client, app_with_slow_handler):
 
 async def test_cancel_queued_job_fails_it_without_running(client, app_no_worker):
     job_id = await app_no_worker.state.runner.submit("noop-test", {})
-    r = await client.post(f"/jobs/{job_id}/cancel")
+    r = await client.post(f"/jobs/{job_id}/cancel", headers=USER)
     assert r.status_code == 202 and r.json()["status"] == "failed"
     job = await get(app_no_worker, job_id)
     assert job.error == "cancelled" and job.started_at is None
-    r = await client.post(f"/jobs/{job_id}/cancel")  # already finished
+    r = await client.post(f"/jobs/{job_id}/cancel", headers=USER)  # already finished
     assert r.status_code == 409
-    assert (await client.post("/jobs/nope/cancel")).status_code == 404
+    assert (await client.post("/jobs/nope/cancel", headers=USER)).status_code == 404
+    assert (await client.post("/jobs/nope/cancel")).status_code == 401  # a signed-in human only
 
 
 async def test_drain_requeues_until_max_attempts(app_no_worker, make_worker):

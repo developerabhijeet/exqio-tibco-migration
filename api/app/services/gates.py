@@ -38,6 +38,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.app.auth.roles import Principal
 from api.app.db import utcnow
 from api.app.models import AnalysisRun, AuditLog, CoverageItem, Finding, Gate, Process, Rule
 from api.app.services import evidence as evidence_svc
@@ -274,9 +275,11 @@ async def gates_view(session: AsyncSession, process: Process) -> list[dict[str, 
 
 
 async def decide(session: AsyncSession, process: Process, gate: str, state: str, note: str | None,
-                 user: str) -> dict[str, Any]:
+                 principal: Principal) -> dict[str, Any]:
     """Approve or reject one gate. Approval needs the gate enabled (else ``GateBlocked``, 409);
-    the owner may always reject, and the note is recorded as the reason."""
+    the owner may always reject, and the note is recorded as the reason. The gate row names the
+    principal's UPN (dev: the persona); the audit line also carries its Entra ``oid``."""
+    user = principal.actor
     await reconcile(session, process)
     if state == "approved":
         reasons = (await gate_reasons(session, process))[gate]
@@ -317,7 +320,8 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
     audit(session, process, user, f"gate {state}", gate=gate,
           detail={"spec_hash": process.spec_hash, "note": note, "previous_state": previous,
                   **({"reason": note or "rejected by the gate owner"} if state == "rejected" else {}),
-                  **{k: v for k, v in hashes.items() if v}, **extra})
+                  **{k: v for k, v in hashes.items() if v}, **extra,
+                  "actor_oid": principal.oid, "actor_upn": principal.upn})
     if state == "rejected" and gate != GATES[-1]:
         await reset_gates(session, process, rows, GATES[GATES.index(gate) + 1], f"{gate} rejected",
                           user, "user", {"spec_hash": process.spec_hash})

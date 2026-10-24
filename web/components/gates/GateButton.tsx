@@ -6,8 +6,7 @@ import { Loader2, ShieldCheck, ShieldX } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Pill } from "@/components/ui/Pill";
 import { RoleLock } from "@/components/shell/RoleNotice";
-import { ownerOfGate, personaOf } from "@/lib/personas";
-import { useAppState } from "@/lib/state";
+import { ownerOfGate, useActingPersona } from "@/lib/personas";
 import type { Gate } from "@/lib/types";
 
 export const GATE_TITLES: Record<string, string> = {
@@ -83,8 +82,7 @@ export function GateButton({
   const label = LABEL[state] ?? LABEL.pending;
   // Only the gate's owner decides it, so a G4 approval in the audit trail is always an engineer's.
   // Everyone else reads the evidence and the decision; the buttons are not offered to them.
-  const { user } = useAppState();
-  const me = personaOf(user);
+  const me = useActingPersona();
   const owner = ownerOfGate(name);
   const mine = me.gates.includes(name);
   const notMine = mine

@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { StatusPill } from "@/components/ui/Pill";
-import { blockedReason, canActOn, personaOf } from "@/lib/personas";
+import { blockedReason, canActOn, useActingPersona } from "@/lib/personas";
 import { useAppState, type StepKey } from "@/lib/state";
 import type { StepState } from "@/lib/types";
 
@@ -70,8 +70,8 @@ export function Stepper({
   // Which steps the current persona may act in. A step that is not theirs stays open to read, so it
   // is never disabled; it carries an eye and a "view only" marker instead, and the reason is the
   // tooltip. That way the bar says what this user can do before they select anything.
-  const { user } = useAppState();
-  const persona = personaOf(user);
+  const { auth } = useAppState();
+  const persona = useActingPersona();
 
   return (
     <nav aria-label="Migration steps" className="card overflow-x-auto p-2 shadow-card">
@@ -79,7 +79,7 @@ export function Stepper({
         {steps.map((s, i) => {
           const isActive = i === active;
           const mine = canActOn(persona, s.key as StepKey);
-          const reason = blockedReason(persona, s.key as StepKey) ?? undefined;
+          const reason = blockedReason(persona, s.key as StepKey, auth.mode === "oidc") ?? undefined;
           return (
             <li key={s.key} className="flex flex-1 items-center">
               <div
