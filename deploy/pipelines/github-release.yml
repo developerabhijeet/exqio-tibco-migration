@@ -24,10 +24,22 @@
 #   release-sign   deployment branches and tags: selected, tag pattern v* only; so only a release
 #                  tag can obtain the signer's token.
 #   production     required reviewers (the approval), deployment tags v*; one environment and one
-#                  federated credential per further target environment (workflow_dispatch input).
+#                  federated credential per further target environment. The workflow_dispatch
+#                  input lists deploy environments only (add each to its options), so a run can
+#                  never deploy with the release-build or release-sign identity.
+#
+# Trust in the signing key does not rest on the repository: deploy verifies with the committed
+# COSIGN_PUBLIC_KEY_FILE only if its sha256 equals production's COSIGN_PUBLIC_KEY_SHA256 (an
+# environment variable, set by the platform team from deploy/azure's cosign_public_key_sha256),
+# and refuses when it is unset or differs. Also set up:
+#   - a tag ruleset on v*: only release managers may create, update or delete those tags (the
+#     tag is what reaches release-sign);
+#   - CODEOWNERS for deploy/gmf/cosign.pub and deploy/pipelines/ (release managers), with
+#     required code-owner review on the default branch.
 #
 # Variables (vars.*), no secrets. Per environment: AZURE_CLIENT_ID (that environment's identity),
-# plus for production AKS_RESOURCE_GROUP, AKS_NAME, NAMESPACE, HELM_VALUES_FILES. Repository-wide:
+# plus for production AKS_RESOURCE_GROUP, AKS_NAME, NAMESPACE, HELM_VALUES_FILES and
+# COSIGN_PUBLIC_KEY_SHA256. Repository-wide:
 #   AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
 #   ACR_NAME, REGISTRY                    GMF's registry and its login server (gmfacr.azurecr.io)
 #   PLATFORM_REPOSITORY, WEB_REPOSITORY   default exiqo/exiqo-platform, exiqo/exiqo-web
@@ -55,8 +67,9 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: GitHub environment to deploy to (required reviewers, its own deployer identity)
-        type: environment
+        description: Deploy environment (required reviewers, its own deployer identity)
+        type: choice
+        options: [production]
         required: true
 
 permissions:
@@ -179,6 +192,7 @@ jobs:
       PLATFORM_DIGEST: ${{ needs.build.outputs.platform_digest }}
       WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
       COSIGN_PUBLIC_KEY_FILE: ${{ vars.COSIGN_PUBLIC_KEY_FILE }}
+      COSIGN_PUBLIC_KEY_SHA256: ${{ vars.COSIGN_PUBLIC_KEY_SHA256 }}
       AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
       AKS_NAME: ${{ vars.AKS_NAME }}
       NAMESPACE: ${{ vars.NAMESPACE || 'exiqo' }}

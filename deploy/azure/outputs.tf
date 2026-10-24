@@ -77,6 +77,11 @@ output "cosign_public_key_pem" {
   value       = one(azurerm_key_vault_key.cosign[*].public_key_pem)
 }
 
+output "cosign_public_key_sha256" {
+  description = "sha256 of cosign_public_key_pem as written by terraform output -raw: the deploy environment's COSIGN_PUBLIC_KEY_SHA256, which pins the committed key."
+  value       = var.enable_key_vault && var.enable_signing_key ? sha256(azurerm_key_vault_key.cosign[0].public_key_pem) : null
+}
+
 output "egress_fqdns" {
   description = "Hosts created here that the platform pods reach: add them to egress.fqdns (a list, so Helm replaces it rather than merging) and to GMF's firewall."
   value = compact([

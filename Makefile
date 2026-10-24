@@ -278,6 +278,7 @@ chart-check:
 # terraform test (mocked providers: the outputs -> chart values mapping), and tflint with the
 # azurerm ruleset (pinned in deploy/azure/.tflint.hcl) against gmf.example.tfvars. pipeline-lint:
 # actionlint on the GitHub Actions template, shellcheck on release.sh (from the actionlint image),
+# the release.sh key-pin test (a missing or wrong COSIGN_PUBLIC_KEY_SHA256 stops deploy first),
 # action pins, every GitHub job in an environment, and a structure check of the Azure DevOps
 # template (there is no offline schema check for it).
 # Terraform matches the platform image's version (deploy/docker/platform.Dockerfile). Each tool
@@ -331,7 +332,8 @@ azure-validate: pipeline-lint
 
 pipeline-lint:
 	$(ACTIONLINT) deploy/pipelines/github-release.yml
-	$(SHELLCHECK) deploy/pipelines/release.sh
+	$(SHELLCHECK) deploy/pipelines/release.sh deploy/pipelines/tests/test_release_key_pin.sh
+	deploy/pipelines/tests/test_release_key_pin.sh
 	@if grep -nE '^\s*-?\s*uses:' deploy/pipelines/github-release.yml | grep -vE '@[0-9a-f]{40}( |$$)'; then \
 		echo "pipeline-lint: actions above are not pinned by commit"; exit 1; fi
 	$(PY) -I -c "$$GH_CHECK" deploy/pipelines/github-release.yml

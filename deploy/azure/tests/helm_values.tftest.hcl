@@ -84,6 +84,11 @@ run "everything_enabled_maps_onto_the_values_keys" {
   }
 
   assert {
+    condition     = output.cosign_public_key_sha256 == sha256(output.cosign_public_key_pem)
+    error_message = "cosign_public_key_sha256 pins cosign_public_key_pem."
+  }
+
+  assert {
     condition     = startswith(output.cosign_public_key_pem, "-----BEGIN PUBLIC KEY-----")
     error_message = "cosign_public_key_pem is the key's PEM."
   }
@@ -209,7 +214,7 @@ run "release_identities_are_split" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.deployer_aks) == 0
+    condition     = length(azurerm_role_assignment.deployer_aks) == 0 && length(azurerm_role_assignment.deployer_aks_cluster_user) == 0
     error_message = "No AKS role for the deployer unless deployer_aks_role opts in."
   }
 }
@@ -228,5 +233,30 @@ run "deployer_aks_role_is_opt_in" {
   assert {
     condition     = azurerm_role_assignment.deployer_aks[0].scope == "${var.aks_cluster_id}/namespaces/exiqo"
     error_message = "A namespace-scoped deployer role is scoped to the release namespace."
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.deployer_aks_cluster_user[0].role_definition_name == "Azure Kubernetes Service Cluster User Role" &&
+      azurerm_role_assignment.deployer_aks_cluster_user[0].scope == var.aks_cluster_id &&
+      azurerm_role_assignment.deployer_aks_cluster_user[0].principal_id == var.deployer_principal_id
+    )
+    error_message = "az aks get-credentials needs Cluster User Role at cluster scope, even with a namespace-scoped role."
+  }
+}
+
+run "deployer_cluster_scope_also_gets_cluster_user" {
+  state_key = "deployer_cluster_scope_also_gets_cluster_user"
+  command   = plan
+
+  variables {
+    deployer_principal_id = "6e7f8091-a2b3-4c4d-95e6-f7a8b9c0d1e2"
+    aks_cluster_id        = "/subscriptions/2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f/resourceGroups/rg-gmf-aks/providers/Microsoft.ContainerService/managedClusters/aks-gmf-prod"
+    deployer_aks_role     = "Azure Kubernetes Service RBAC Cluster Admin"
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.deployer_aks[0].scope == var.aks_cluster_id && azurerm_role_assignment.deployer_aks_cluster_user[0].scope == var.aks_cluster_id
+    error_message = "Cluster scope: the role and Cluster User Role both on the cluster."
   }
 }

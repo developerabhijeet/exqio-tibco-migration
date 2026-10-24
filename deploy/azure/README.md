@@ -35,6 +35,7 @@ Blob Data Contributor on the backup container. It also gets Cognitive Services O
 | `signer_principal_id` | Key Vault Crypto User | the signing key only |
 | `deployer_principal_id` | AcrPull | the registry (to verify signatures) |
 | `deployer_principal_id` + `deployer_aks_role` (opt-in) | that role | `aks_cluster_id`, or its release namespace with `deployer_aks_role_scope = "namespace"` |
+| `deployer_principal_id` + `deployer_aks_role` (opt-in) | Azure Kubernetes Service Cluster User Role | `aks_cluster_id` (always cluster scope: `az aks get-credentials` needs listClusterUserCredential on the cluster) |
 
 ## Release pipeline identities
 
@@ -55,6 +56,22 @@ branches and tags) and give `production` required reviewers. In Azure DevOps, ad
 control check (`refs/tags/v*`) to the sign and deploy service connections, and Approvals to the
 deploy connection and environment.
 
+**Pinning the verification key.** A committed key alone is only as trustworthy as whoever can
+tag a commit. Deploy therefore verifies with `COSIGN_PUBLIC_KEY_FILE` only if its sha256 equals
+`COSIGN_PUBLIC_KEY_SHA256`. That value lives outside the repository: on GitHub, a variable of the
+`production` environment; in Azure DevOps, the `exiqo-release-deploy` variable group, which is
+bound to the Deploy stage only and gated by an Approvals check. The platform team sets it from
+the `cosign_public_key_sha256` output. Deploy refuses when the value is unset or differs. Also
+set up:
+
+- Tag protection: on GitHub, a tag ruleset on `v*` so only release managers can create, update
+  or delete those tags. In Azure DevOps, the "Create tag" permission is limited to release
+  managers.
+- Code owners: CODEOWNERS on GitHub, or branch-policy required reviewers on Azure DevOps, for
+  `deploy/gmf/cosign.pub` and `deploy/pipelines/`.
+- Deploy targets only: the GitHub `workflow_dispatch` environment input is a fixed list of deploy
+  environments, so `release-build` and `release-sign` can never be chosen.
+
 The release tag is added with `crane tag`, a manifest push that AcrPush allows. `az acr import`
 would need `importImage`, which AcrPush lacks. The deployer verifies signatures with the public
 key committed in the repository (`terraform output -raw cosign_public_key_pem >
@@ -62,6 +79,8 @@ deploy/gmf/cosign.pub`, the pipelines' `COSIGN_PUBLIC_KEY_FILE`), so it has no K
 and cannot sign.
 
 **The deployer's AKS role is GMF's call.** Nothing is granted unless `deployer_aks_role` is set.
+When it is set, the deployer also gets Azure Kubernetes Service Cluster User Role on the cluster,
+at either scope. `az aks get-credentials` needs that role to read the API server address and CA.
 The chart creates a cluster-scoped StorageClass (`data.storageClass.create`, default true), so a
 namespace-scoped role is not enough as installed by default. The deployer needs either:
 
@@ -143,6 +162,7 @@ Other outputs:
   ids, for role assignments.
 - `cosign_key`: the sign stage's `COSIGN_KEY`.
 - `cosign_public_key_pem`: commit it as the deploy stage's `COSIGN_PUBLIC_KEY_FILE`.
+- `cosign_public_key_sha256`: its sha256, the deploy environment's `COSIGN_PUBLIC_KEY_SHA256`.
 - `egress_fqdns`: hosts to add to `egress.fqdns` and to GMF's firewall.
 
 ## Not created here

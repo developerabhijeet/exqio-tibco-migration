@@ -279,6 +279,16 @@ resource "azurerm_role_assignment" "deployer_aks" {
   }
 }
 
+# `az aks get-credentials` (the deploy stage) needs listClusterUserCredential on the cluster
+# itself, which a namespace-scoped role does not give; this role grants only that.
+resource "azurerm_role_assignment" "deployer_aks_cluster_user" {
+  count = var.deployer_principal_id != "" && var.deployer_aks_role != "" ? 1 : 0
+
+  scope                = var.aks_cluster_id
+  role_definition_name = "Azure Kubernetes Service Cluster User Role"
+  principal_id         = var.deployer_principal_id
+}
+
 # ------------------------------------------------------------------------------------- Postgres
 
 resource "azurerm_private_dns_zone" "postgres" {

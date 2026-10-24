@@ -23,6 +23,14 @@
 #   deployServiceConnection   Branch control refs/tags/v* and Approvals; the environment below
 #                             also carries an Approvals check.
 #
+# Trust in the signing key does not rest on the repository: Deploy verifies with the committed
+# COSIGN_PUBLIC_KEY_FILE only if its sha256 equals COSIGN_PUBLIC_KEY_SHA256 from the variable group
+# exiqo-release-deploy (bound to the Deploy stage only, with an Approvals check and pipeline
+# permission limited to this pipeline; value: deploy/azure's cosign_public_key_sha256), and
+# refuses when it is unset or differs. Also set up: the "Create tag" permission (repository
+# security) for release managers only, and required reviewers (branch policy) on
+# deploy/gmf/cosign.pub and deploy/pipelines/.
+#
 # Variable group exiqo-release (plain variables, no secrets; Azure Pipelines exposes each one to
 # the scripts as an environment variable of the same name):
 #   ACR_NAME, REGISTRY                    GMF's registry and its login server (gmfacr.azurecr.io)
@@ -155,8 +163,11 @@ stages:
   - stage: Deploy
     dependsOn: [Build, Sign]
     variables:
-      PLATFORM_DIGEST: $[ stageDependencies.Build.Build.outputs['build.platform_digest'] ]
-      WEB_DIGEST: $[ stageDependencies.Build.Build.outputs['build.web_digest'] ]
+      - group: exiqo-release-deploy  # COSIGN_PUBLIC_KEY_SHA256 (approval-gated)
+      - name: PLATFORM_DIGEST
+        value: $[ stageDependencies.Build.Build.outputs['build.platform_digest'] ]
+      - name: WEB_DIGEST
+        value: $[ stageDependencies.Build.Build.outputs['build.web_digest'] ]
     jobs:
       - deployment: Deploy
         pool: ${{ parameters.pool }}

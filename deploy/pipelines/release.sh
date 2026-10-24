@@ -6,7 +6,8 @@
 #                       candidate tag, print their digests (platform_digest=..., web_digest=...)
 #   release.sh scan     pull by digest; make egress-audit; Trivy, failing on CRITICAL (make image-scan)
 #   release.sh sign     syft SBOM attached with cosign attest; cosign sign; add the release tag
-#   release.sh deploy   cosign verify (committed public key); helm upgrade --install --atomic
+#   release.sh deploy   check the committed public key against COSIGN_PUBLIC_KEY_SHA256; cosign
+#                       verify; helm upgrade --install --atomic
 #   release.sh lint     hadolint only; release.sh verify: cosign verify only
 #
 # Images move between stages by digest only. An image that fails the scan stays an unsigned
@@ -117,7 +118,33 @@ cosign_signer() {
     -v "$WORK":/work "$COSIGN_IMAGE" "$@"
 }
 
-# cosign for verifying: the public key from the repository, no Azure credentials.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+
+# The committed public key is trusted only if its sha256 equals COSIGN_PUBLIC_KEY_SHA256, a
+# variable held outside the repository (the deploy environment / approval-gated variable group;
+# deploy/azure output cosign_public_key_sha256). A tag that swaps cosign.pub cannot change it.
+check_public_key() {
+  need COSIGN_PUBLIC_KEY_FILE COSIGN_PUBLIC_KEY_SHA256
+  local file="$ROOT/$COSIGN_PUBLIC_KEY_FILE" want actual
+  want="$(echo "$COSIGN_PUBLIC_KEY_SHA256" | tr '[:upper:]' '[:lower:]')"
+  if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "release.sh: COSIGN_PUBLIC_KEY_SHA256 is not a sha256: '$COSIGN_PUBLIC_KEY_SHA256'" >&2
+    exit 3
+  fi
+  if [ ! -f "$file" ]; then
+    echo "release.sh: $COSIGN_PUBLIC_KEY_FILE does not exist" >&2
+    exit 3
+  fi
+  actual="$(sha256_of "$file")"
+  if [ "$actual" != "$want" ]; then
+    echo "release.sh: $COSIGN_PUBLIC_KEY_FILE has sha256 $actual, not the pinned $want; refusing to deploy" >&2
+    exit 3
+  fi
+}
+
+# cosign for verifying: the pinned public key from the repository, no Azure credentials.
 cosign_verifier() {
   need COSIGN_PUBLIC_KEY_FILE
   as_me -v "$ROOT/$COSIGN_PUBLIC_KEY_FILE":/keys/cosign.pub:ro "$COSIGN_IMAGE" "$@"
@@ -197,6 +224,7 @@ cmd_sign() {
 
 cmd_verify() {
   need_digests
+  check_public_key
   local image
   for image in platform web; do
     cosign_verifier verify --key /keys/cosign.pub --insecure-ignore-tlog=true "$(ref_of "$image")" >/dev/null
@@ -219,6 +247,7 @@ cmd_deploy() {
   need_digests
   need AKS_RESOURCE_GROUP AKS_NAME NAMESPACE HELM_VALUES_FILES NEO4J_CHART_REPOSITORY \
     COSIGN_PUBLIC_KEY_FILE
+  check_public_key
   acr_login
   cmd_verify
 

@@ -177,7 +177,7 @@ variable "aks_cluster_id" {
 }
 
 variable "deployer_aks_role" {
-  description = "Opt-in: an AKS role for deployer_principal_id, e.g. \"Azure Kubernetes Service RBAC Cluster Admin\" (cluster scope: the chart creates a StorageClass) or \"Azure Kubernetes Service RBAC Admin\" with deployer_aks_role_scope = \"namespace\" and data.storageClass.create=false. Empty: no grant."
+  description = "Opt-in: an AKS role for deployer_principal_id, e.g. \"Azure Kubernetes Service RBAC Cluster Admin\" (cluster scope: the chart creates a StorageClass) or \"Azure Kubernetes Service RBAC Admin\" with deployer_aks_role_scope = \"namespace\" and data.storageClass.create=false. Setting it also grants Azure Kubernetes Service Cluster User Role at cluster scope (az aks get-credentials needs it, whatever the scope). Empty: no grant."
   type        = string
   default     = ""
 }
