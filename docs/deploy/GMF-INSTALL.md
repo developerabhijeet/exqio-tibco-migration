@@ -614,7 +614,7 @@ kubectl create namespace exiqo
 kubectl -n exiqo create secret tls exiqo-tls --cert=tls.crt --key=tls.key
 
 # The Neo4j subchart: pull the archive Chart.lock pins from GMF's mirror. Do not run
-# `helm dependency build`; Chart.yaml names the public repository by URL.
+# the dependency build command; Chart.yaml names the public repository by URL.
 mkdir -p deploy/helm/exiqo/charts
 helm pull neo4j --repo <GMF mirror of https://helm.neo4j.com/neo4j> --version 5.26.32 \
   --destination deploy/helm/exiqo/charts
