@@ -12,3 +12,7 @@ web/.next/
 .env
 .ruff_cache/
 /samples/synthetic-gmf.zip
+
+# Pilot secrets and certificates (deploy/docker/compose.pilot.yml); never committed.
+/deploy/docker/secrets/
+/deploy/docker/.env

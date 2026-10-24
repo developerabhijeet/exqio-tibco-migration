@@ -20,7 +20,8 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache
+.PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
+	images image-test image-lint image-scan pilot-up
 
 setup:
 	python3 -m venv .venv
@@ -152,3 +153,48 @@ nuget-cache:
 	cp -R $(NUGET_WORK)/packages/. $(NUGET_CACHE)/
 	rm -rf $(NUGET_WORK)
 	@echo "Offline NuGet feed ready in $(NUGET_CACHE) ($$(ls $(NUGET_CACHE) | wc -l) packages)."
+
+# ---------------------------------------------------------------- container images (deploy/docker)
+# `make images` builds both images for this machine's architecture; the pipelines (deploy/pipelines)
+# build linux/amd64 for AKS with GMF's mirrored base images (BASE_IMAGE_* build args) and push by
+# digest. IMAGE_BUILD_ARGS passes extra --build-arg flags, for example the mirrors:
+#   make images IMAGE_BUILD_ARGS="--build-arg PIP_INDEX_URL=https://<mirror>/simple"
+# hadolint and Trivy run from their pinned images when they are not on PATH.
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+PLATFORM_IMAGE ?= exiqo-platform:$(IMAGE_TAG)
+WEB_IMAGE ?= exiqo-web:$(IMAGE_TAG)
+IMAGE_BUILD_ARGS ?=
+IMAGE_LABEL_ARGS := --build-arg VERSION=$(IMAGE_TAG) \
+	--build-arg REVISION=$(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+DOCKERFILES := deploy/docker/platform.Dockerfile deploy/docker/web.Dockerfile
+HADOLINT_IMAGE ?= hadolint/hadolint:v2.12.0
+TRIVY_IMAGE ?= aquasec/trivy:0.58.1
+HADOLINT := $(if $(shell command -v hadolint 2>/dev/null),hadolint,\
+	docker run --rm -i -v "$(CURDIR)":/work -w /work $(HADOLINT_IMAGE) hadolint)
+TRIVY := $(if $(shell command -v trivy 2>/dev/null),trivy,\
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v exiqo-trivy-cache:/root/.cache $(TRIVY_IMAGE))
+PILOT_COMPOSE := docker compose -f deploy/docker/compose.pilot.yml
+
+images:
+	docker build -f deploy/docker/platform.Dockerfile $(IMAGE_LABEL_ARGS) $(IMAGE_BUILD_ARGS) -t $(PLATFORM_IMAGE) .
+	docker build -f deploy/docker/web.Dockerfile $(IMAGE_LABEL_ARGS) $(IMAGE_BUILD_ARGS) -t $(WEB_IMAGE) .
+
+# Builds both images as :test and runs the runtime checks (UID, read-only root, no apt, offline
+# embeddings, toolchains, same-origin bundle). SKIP_BUILD=1 checks images already built.
+image-test:
+	deploy/tests/test_images.sh
+
+image-lint:
+	$(HADOLINT) --failure-threshold error $(DOCKERFILES)
+
+# Fails on any CRITICAL vulnerability, fixed upstream or not: a finding is reported, not hidden.
+image-scan:
+	@for image in $(PLATFORM_IMAGE) $(WEB_IMAGE); do \
+		echo "image-scan: $$image"; \
+		$(TRIVY) image --severity CRITICAL --exit-code 1 --no-progress $$image || exit 1; \
+	done
+
+# The hardened single-VM pilot (deploy/docker/compose.pilot.yml; its header lists the secret files
+# to create under deploy/docker/secrets/). Defaults to the images `make images` built here.
+pilot-up:
+	PLATFORM_IMAGE=$(PLATFORM_IMAGE) WEB_IMAGE=$(WEB_IMAGE) $(PILOT_COMPOSE) up -d --wait
