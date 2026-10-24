@@ -345,3 +345,23 @@ async def test_listener_delivers_notifications(app_no_worker):
             assert await q.get() == 7
     finally:
         listener.unsubscribe("job-x", q)
+
+
+async def test_heartbeat_with_an_asyncpg_ssl_url(app_no_worker):
+    """The deployed ``DATABASE_URL`` carries asyncpg's ``?ssl=``: the heartbeat thread's psycopg
+    connection must still beat, or every job is reaped "worker lost" (local Postgres has no TLS)."""
+    app = app_no_worker
+    url = app.state.settings.database_url
+    engine = make_engine(url + ("&" if "?" in url else "?") + "ssl=disable")
+    w = JobWorker(make_sessionmaker(engine), None, name="w-ssl", slots=1, heartbeat_s=0.5,
+                  stale_s=BLOCK_STALE_SECONDS, max_attempts=2, reap_s=0.5, poll_s=0.1)
+    assert "sslmode=disable" in w.dsn and "ssl=" not in w.dsn.replace("sslmode=", "")
+    try:
+        with ThreadReaper(url, BLOCK_STALE_SECONDS):
+            job_id = await app.state.runner.submit("block-test", {})
+            await w.start()
+            job = await wait_status(app, job_id, ("done", "failed"), timeout=BLOCK_SECONDS + 10)
+        assert (job.status, job.error) == ("done", None)
+    finally:
+        await w.stop()
+        await engine.dispose()

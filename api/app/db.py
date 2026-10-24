@@ -55,21 +55,51 @@ class CreatedMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# TLS is spelled differently by the two drivers: asyncpg (through SQLAlchemy, which passes the URL's
+# query to ``asyncpg.connect`` as keyword arguments) takes ``ssl=<mode>``, libpq (psycopg) takes
+# ``sslmode=<mode>`` and rejects ``ssl`` as an invalid URI query parameter. Deployments store one
+# ``DATABASE_URL`` (``postgresql+asyncpg://...?ssl=require``) for both, so each conversion renames it.
+SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+_SSL_BOOL = {"true": "require", "1": "require", "on": "require", "yes": "require",
+             "false": "disable", "0": "disable", "off": "disable", "no": "disable"}
+
+
+def _rename_ssl(url: str, src: str, dst: str) -> str:
+    """Rename query parameter ``src`` to ``dst`` (values mapped to a libpq ssl mode); the rest of
+    the URL, other parameters included, is kept byte for byte."""
+    base, sep, query = url.partition("?")
+    if not sep:
+        return url
+    parts = []
+    for item in query.split("&"):
+        key, eq, value = item.partition("=")
+        if key == src and eq:
+            mode = value.lower()
+            mode = _SSL_BOOL.get(mode, mode)
+            if mode not in SSL_MODES:
+                raise ValueError(f"database URL: {src}={value!r} is not one of {', '.join(SSL_MODES)}")
+            item = f"{dst}={mode}"
+        parts.append(item)
+    return base + "?" + "&".join(parts)
+
+
 def asyncpg_url(url: str) -> str:
-    """``postgresql://`` (or ``postgres://``, ``postgresql+psycopg://``) as an asyncpg URL."""
+    """``postgresql://`` (or ``postgres://``, ``postgresql+psycopg://``) as an asyncpg URL; a libpq
+    ``sslmode`` becomes asyncpg's ``ssl``."""
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql+psycopg2://",
                    "postgresql://", "postgres://"):
         if url.startswith(prefix):
-            return "postgresql+asyncpg://" + url[len(prefix):]
+            return _rename_ssl("postgresql+asyncpg://" + url[len(prefix):], "sslmode", "ssl")
     return url
 
 
 def psycopg_url(url: str) -> str:
-    """The same database as a plain ``postgresql://`` URL (psycopg, the knowledge store)."""
+    """The same database as a plain ``postgresql://`` URL (psycopg, the knowledge store); asyncpg's
+    ``ssl`` becomes libpq's ``sslmode``."""
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql+psycopg2://",
-                   "postgres://"):
+                   "postgresql://", "postgres://"):
         if url.startswith(prefix):
-            return "postgresql://" + url[len(prefix):]
+            return _rename_ssl("postgresql://" + url[len(prefix):], "ssl", "sslmode")
     return url
 
 

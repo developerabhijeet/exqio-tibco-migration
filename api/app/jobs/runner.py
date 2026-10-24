@@ -75,6 +75,15 @@ UPDATE {_JOBS} SET heartbeat_at=now()
 WHERE id = ANY(%(ids)s) AND owner=%(me)s AND status='running'
 RETURNING id, cancel_requested
 """
+# The heartbeat connection must notice a dead peer (a failed-over server, a dropped NAT entry) well
+# inside JOB_STALE_SECONDS (default 90), or a healthy job is reaped while a beat hangs on a socket
+# nobody answers: TCP keepalives after 30 s idle, 3 probes 10 s apart, unacknowledged writes
+# abandoned after 30 s, and a 5 s cap on the UPDATE itself.
+HEARTBEAT_CONNECT = {
+    "autocommit": True, "connect_timeout": 10,
+    "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3,
+    "tcp_user_timeout": 30000, "options": "-c statement_timeout=5000",
+}
 
 
 def worker_name() -> str:
@@ -340,7 +349,7 @@ class JobWorker:
             while not self._hb_stop.wait(self.heartbeat_s):
                 try:
                     if conn is None or conn.closed:
-                        conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=10)
+                        conn = psycopg.connect(self.dsn, **HEARTBEAT_CONNECT)
                     self._beat(conn)
                 except Exception:
                     log.exception("worker %s: heartbeat failed", self.name)
