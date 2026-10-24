@@ -207,7 +207,9 @@ pilot-up:
 # the listed paths are copied out of each image into a temporary directory, removed afterwards;
 # third-party runtimes (/opt/venv, the .NET SDK) and the web server's node_modules are out of scope.
 # The Claude hosts live in the allowlist's `# optional: claude` section, which this does not enable:
-# our own code names none of them. Source-level check without Docker: scripts/tests (make test).
+# our own code names none of them. Next.js telemetry lives in node_modules/next/dist/telemetry and
+# is driven by the next CLI (build/dev), not `node server.js`; web.Dockerfile sets
+# NEXT_TELEMETRY_DISABLED=1 in both stages. Source-level check without Docker: scripts/tests (make test).
 WEB_AUDIT_PATHS := --image-path /app/server.js --image-path /app/.next/server \
 	--image-path /app/.next/static --image-path /app/public
 
