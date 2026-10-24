@@ -168,7 +168,6 @@ def is_local_source(url: str) -> bool:
     return "://" not in url and os.path.isdir(url)
 
 
-
 def nuget_available(timeout_s: float = 5.0, source: str = "") -> bool:
     """True when packages can be restored: the offline cache exists or the package source answers.
 

@@ -150,6 +150,14 @@ def test_templates_and_config_files_scanned(tmp_path):
         "dl.vendor.io", "env.vendor.io", "feed.vendor.io", "registry.vendor.io"]
 
 
+@pytest.mark.parametrize("name", ["a.js", "a.py"])
+def test_identifier_case_heuristic_is_narrow(tmp_path, name):
+    text = ('x = "Telemetry.Vendor.IO"\ny = "TELEMETRY.VENDOR.IO:443"\n'
+            'z = "Microsoft.AspNetCore.App"\nw = "System.Text.Json"\n')
+    out = audit(tmp_path, {name: text})
+    assert [(v.line, v.host) for v in out] == [(1, "telemetry.vendor.io"), (2, "telemetry.vendor.io")]
+
+
 def test_optional_section_needs_flag(tmp_path):
     files = {"a.py": 'URL = "https://api.anthropic.com/v1"'}
     assert [v.host for v in audit(tmp_path, files)] == ["api.anthropic.com"]

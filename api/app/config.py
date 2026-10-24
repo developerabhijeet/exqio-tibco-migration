@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["dev", "oidc"] = "dev"
     deploy_credential_mode: Literal["workload_identity", "local"] = "local"
     api_base_path: str = ""
-    nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = nuget.org
+    nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
     tf_cli_config_file: str = ""  # Terraform CLI config (provider network mirror) for the validators
     internal_token: str = ""  # bearer for the worker's cluster-internal listener
     internal_port: int = 9100

@@ -174,6 +174,14 @@ def _ignored(host: str, scheme: str, url_start: str) -> bool:
     return host.rsplit(".", 1)[-1] in RESERVED_TLDS
 
 
+def _is_identifier(name: str) -> bool:
+    """True for a PascalCase dotted name such as Microsoft.AspNetCore.App or System.Text.Json:
+    every label starts uppercase and mixes in lowercase. "Telemetry.Vendor.IO" (an all-caps label)
+    and "TELEMETRY.VENDOR.IO" are still hosts."""
+    labels = name.split(".")
+    return all(re.fullmatch(r"[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*", lab) for lab in labels)
+
+
 def _candidates(text: str, quoted_fqdn: bool):
     """Yield (offset, host) for every non-ignored host named in text."""
     for m in URL_RE.finditer(text):
@@ -196,8 +204,9 @@ def _candidates(text: str, quoted_fqdn: bool):
     if quoted_fqdn:
         for m in QUOTED_FQDN_RE.finditer(text):
             host = m.group("host")
-            if host != host.lower():
-                continue  # "Microsoft.AspNetCore.App": a dotted identifier, not a host
+            if _is_identifier(host):
+                continue
+            host = host.lower()
             if host.rsplit(".", 1)[-1] in TLDS and not _ignored(host, "", ""):
                 yield m.start(), host
 
@@ -241,8 +250,8 @@ def scan_python(path: Path, src: str) -> list[Violation]:
                 found.append((tok.start[0] + raw.count("\n", 0, off), host))
             if isinstance(value, str) and "\n" not in value:
                 m = BARE_FQDN_RE.fullmatch(value.strip())
-                if m and m.group("host") == m.group("host").lower():
-                    host = m.group("host")
+                if m and not _is_identifier(m.group("host")):
+                    host = m.group("host").lower()
                     if host.rsplit(".", 1)[-1] in TLDS and not _ignored(host, "", ""):
                         found.append((tok.start[0], host))
         elif fstring_mid is not None and tok.type == fstring_mid:

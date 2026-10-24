@@ -2728,8 +2728,8 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     Files from an earlier generation that are no longer produced are removed (``.exiqo`` manifest);
     the infrastructure paths in ``RESERVED_FOR_INFRA`` are never touched.
 
-    ``nuget_source`` (a package mirror URL) replaces nuget.org as the only source in ``nuget.config``;
-    empty keeps nuget.org. The offline cache is unaffected: ``Directory.Build.props`` adds it itself.
+    ``nuget_source`` (a package mirror URL) is the only source in ``nuget.config``;
+    empty names none, so NuGet's own configuration applies. The offline cache is unaffected: ``Directory.Build.props`` adds it itself.
     """
     if not process_ids:
         raise ValueError("process_ids is empty")
