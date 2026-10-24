@@ -73,6 +73,20 @@ shows each provider as configured or missing and never shows a value.
 | `EXIQO_NUGET_CACHE`                                                               | an offline NuGet feed for generated solutions (default `.tools/nuget-cache` when present)                                                                                       |
 | `API_PORT`, `WEB_PORT`                                                            | the dev ports (default 9000 and 3000). The Makefile and the web both read these, so the web always calls the API `make api` starts                                              |
 | `NEXT_PUBLIC_API_URL`                                                             | overrides the API URL the web calls; by default it is built from `API_PORT`                                                                                                     |
+| `<NAME>_FILE`                                                                      | for `DATABASE_URL`, `TEST_DATABASE_URL`, `APP_SECRET`, `NEO4J_PASSWORD`, `AZURE_OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OIDC_CLIENT_SECRET`, `SESSION_SECRET`, `INTERNAL_TOKEN`, `LANGFUSE_SECRET_KEY`: a file whose content is the value (one trailing newline removed); it wins over the plain variable, and a missing file stops startup |
+| `EXIQO_ROLE`                                                                       | `all` (default, one process), `api`, or `worker` |
+| `AUTH_MODE`                                                                        | `dev` (default, the dev personas) or `oidc` (Entra ID sign-in) |
+| `DEPLOY_CREDENTIAL_MODE`                                                           | `local` (default, development only) or `workload_identity` for the Deploy step |
+| `API_BASE_PATH`                                                                    | URL prefix the API is served under (default empty) |
+| `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener |
+| `JOB_STALE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS`                   | job heartbeat every 10 s (default), a job is stale after 90 s, at most 2 attempts |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`                                        | the Neo4j graph (user default `neo4j`) |
+| `BRAND_NAME`, `SUPPORT_CONTACT`                                                    | product name shown in the UI (default `ExiQO`) and the support contact line |
+| `AZURE_OPENAI_AUTH`                                                                | `key` (default) or `managed_identity` |
+| `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `SESSION_SECRET` | Entra ID sign-in and the session cookie key, used when `AUTH_MODE=oidc` |
+| `ROLE_GROUPS`                                                                      | role to Entra group ids (JSON), for example `{"engineer":["<group id>"]}` |
+| `DEPLOY_ENVIRONMENTS`                                                              | Azure targets for Deploy (JSON list of name, tenant, subscription, client_id, auth, key_vault_uri, secret_name) |
+| `IMAGE_DIGESTS`, `EGRESS_ALLOWLIST`                                                | image digests (JSON object) and allowed egress hosts (JSON list) the install reports |
 
 
 

@@ -5,8 +5,15 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from .secrets import FileSecretsSource
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -14,8 +21,38 @@ ProviderChoice = Literal["auto", "fake", "claude", "azure"]
 ResolvedProvider = Literal["fake", "claude", "azure", "none"]
 
 
+class DeployEnvironment(BaseModel):
+    """One Azure target the Deploy step may reach (no secret value: only where it lives)."""
+
+    name: str
+    tenant: str
+    subscription: str
+    client_id: str
+    auth: Literal["workload_identity", "keyvault_sp"]
+    key_vault_uri: str = ""
+    secret_name: str = ""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # ``<NAME>_FILE`` (a mounted secret) beats every other source for the secret fields.
+        return (
+            FileSecretsSource(settings_cls),
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # LLM provider: auto picks Claude when its token is present, else Azure, else none (NullProvider)
     provider: ProviderChoice = "auto"
@@ -51,6 +88,34 @@ class Settings(BaseSettings):
     langfuse_host: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
+
+    # Install: which process this is, how callers sign in, and where jobs and the graph live.
+    # The defaults are local development: one process, dev personas, local credentials.
+    exiqo_role: Literal["api", "worker", "all"] = "all"
+    auth_mode: Literal["dev", "oidc"] = "dev"
+    deploy_credential_mode: Literal["workload_identity", "local"] = "local"
+    api_base_path: str = ""
+    internal_token: str = ""  # bearer for the worker's cluster-internal listener
+    internal_port: int = 9100
+    worker_host: str = ""  # pod IP the worker advertises; empty means 127.0.0.1
+    job_stale_seconds: int = 90
+    job_heartbeat_seconds: int = 10
+    job_max_attempts: int = 2
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+    brand_name: str = "ExiQO"
+    support_contact: str = ""
+    azure_openai_auth: Literal["key", "managed_identity"] = "key"
+    oidc_tenant_id: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    session_secret: str = ""
+    role_groups: dict[str, list[str]] = Field(default_factory=dict)  # role -> Entra group ids (JSON)
+    deploy_environments: list[DeployEnvironment] = Field(default_factory=list)  # JSON
+    image_digests: dict[str, str] = Field(default_factory=dict)
+    egress_allowlist: list[str] = Field(default_factory=list)
 
     # Build toolchain. Off skips restore, build, format and test, and with them the compile repair
     # loop: the solution is still generated, filled, reviewed and stored, and the three toolchain
