@@ -4,6 +4,7 @@ import { Pill } from "@/components/ui/Pill";
 /** A titled card used by the Build, Verify and Deploy tabs. */
 export function Panel({
   title,
+  icon,
   eyebrow,
   actions,
   children,
@@ -12,6 +13,8 @@ export function Panel({
   className = "",
 }: {
   title: string;
+  /** A mark shown beside the title, e.g. the vendor a panel configures. */
+  icon?: React.ReactNode;
   eyebrow?: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -24,7 +27,10 @@ export function Panel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {eyebrow ? <p className="label">{eyebrow}</p> : null}
-          <h3 className="text-[18px] font-semibold text-plum">{title}</h3>
+          <h3 className="flex items-center gap-2 text-[18px] font-semibold text-plum">
+            {icon}
+            {title}
+          </h3>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>

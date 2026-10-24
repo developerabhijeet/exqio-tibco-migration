@@ -8,6 +8,7 @@ returns the whole file with those bodies written; plain code then checks the res
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -25,6 +26,10 @@ from .prompting import ask_json, memory_block, render_process, render_prompt, wr
 from .provider import MemoryItem, mask_sensitive
 
 log = logging.getLogger(__name__)
+
+# How many files the builder fills at once. Four keeps a build well under any provider's
+# concurrency limit while turning a line of calls into a handful of rounds.
+FILL_CONCURRENCY = 4
 
 BUILD_SCHEMA: dict = {
     "type": "object",
@@ -47,6 +52,7 @@ CONTRACT_TEXT_LIMIT = 6000
 
 PLACEHOLDER = re.compile(r'NotImplementedException\(\s*"agent fills:|AgentFill\.Required\(')
 _ACCESS = re.compile(r"^(?:public|private|protected|internal)\b")
+_ASYNC = re.compile(r"\basync\s+")
 _TIBCO_COMMENT = re.compile(r"^//\s*TIBCO\b")
 _ASSERT = re.compile(r"\bAssert\b")
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")
@@ -175,12 +181,19 @@ def _strip_block_comments(text: str) -> str:
 def declarations(text: str) -> list[str]:
     """Member and type declarations that end in a parameter list (methods, constructors, primary
     constructors), normalised, from the code with comments removed. Expression-bodied members and
-    statements are not declarations."""
+    statements are not declarations.
+
+    ``async`` is dropped. The scaffold cannot know whether the body written into a method will
+    await anything, so it declares ``public Task Branch_X()`` and a body that awaits has to become
+    ``public async Task Branch_X()``. That is the same method: ``async`` is how a body is written,
+    not part of what callers see, and C# does not let it appear in an interface. Comparing it
+    would make every such method unrepairable the moment it was filled, which is a deadlock the
+    loop cannot talk its way out of."""
     out: list[str] = []
     for line in strip_comments(text).splitlines():
         s = _norm(line)
         if _ACCESS.match(s) and "(" in s and s.endswith(")") and "=>" not in s and ";" not in s:
-            out.append(s)
+            out.append(_ASYNC.sub("", s))
     return out
 
 
@@ -198,22 +211,39 @@ def is_test_path(path: str) -> bool:
     return any(p.lower() == "tests" or p.lower().endswith(".tests") for p in parts)
 
 
+_CATCH = re.compile(r"\bcatch\s*[({]")
+
+
 def _introduced(pattern: re.Pattern[str], original: str, new: str) -> bool:
     return len(pattern.findall(new)) > len(pattern.findall(original))
 
 
 def check_filled_file(
-    path: str, original: str, new: str, require_filled: bool = True
+    path: str, original: str, new: str, require_filled: bool = True, allow_tests: bool = False,
+    scaffold: str | None = None,
 ) -> str | None:
     """Why ``new`` may not replace ``original`` at ``path``, or ``None`` when it may.
 
     The file must keep every declaration with a parameter list and every ``// TIBCO`` comment of
     the original, must not introduce ``Assert``, ``[Fact]``/``[Theory]``, ``#pragma warning
-    disable`` or a reference to a file outside the solution, and must not be a test file. With
-    ``require_filled`` no ``agent fills`` placeholder may remain."""
-    if is_test_path(path):
+    disable``, a further ``catch`` clause or a reference to a file outside the solution, and must
+    not be a test file. With ``require_filled`` no ``agent fills`` placeholder may remain.
+
+    ``allow_tests`` is set only by the compile repair loop, for a test file that will not build.
+    The checks below still apply to it, and the ones that matter most here are the two that keep a
+    broken test from being turned into a passing one: the declarations must all survive, so no test
+    method can be deleted, and no new ``Assert`` may appear.
+
+    ``scaffold`` is the file as code first wrote it. The signatures and ``// TIBCO`` comments to
+    protect are the ones in there, because those are what the design committed to; a declaration a
+    model added on an earlier pass is not. Without this, one bad fill is permanent: every later
+    repair that removes it is rejected for changing a signature, and the loop oscillates until it
+    runs out of attempts. ``None`` falls back to ``original``, which is right for the first fill
+    (they are the same file) and for callers that have no scaffold to hand."""
+    if is_test_path(path) and not allow_tests:
         return f"{path} is a test file; the builder never edits tests"
-    wanted = declarations(original)
+    protected = original if scaffold is None else scaffold
+    wanted = declarations(protected)
     if PLACEHOLDER.search(strip_comments(original)) and not wanted:
         return "no method signature found around the placeholder; the file cannot be checked"
     present = set(declarations(new))
@@ -221,7 +251,7 @@ def check_filled_file(
     if missing:
         return f"the method signature changed or is missing: {missing[0]}"
     kept = set(tibco_comments(new))
-    lost = [c for c in tibco_comments(original) if c not in kept]
+    lost = [c for c in tibco_comments(protected) if c not in kept]
     if lost:
         return f"the TIBCO expression comment is missing: {lost[0]}"
     if _introduced(_ASSERT, original, new):
@@ -230,6 +260,15 @@ def check_filled_file(
         return "the code contains a [Fact] or [Theory] test attribute"
     if _introduced(_PRAGMA, original, new):
         return "the code introduces #pragma warning disable"
+    if _introduced(_CATCH, strip_comments(original), strip_comments(new)):
+        # The catch clauses are the TIBCO fault handlers: code writes one per handler, already
+        # filtered on the fault name, and the generated typed exceptions derive from
+        # ProcessFaultException so those filters match them. A fill that adds another catch puts it
+        # above the generated one, where it swallows the fault without carrying it onto the state,
+        # and the reply mapping then returns an empty message with the wrong status. Fill the body
+        # of the handler that is there; never add one.
+        return ("the code adds a catch clause; the fault handlers are generated from the TIBCO "
+                "process, so fill the body of the one that is there")
     if _introduced(_OUTSIDE, original, new):
         return "the code references a file outside the solution"
     if require_filled and PLACEHOLDER.search(new):
@@ -245,6 +284,9 @@ class BuildRejection:
     path: str
     attempt: int
     reason: str
+    # What was rejected. Without it a rejection is a verdict nobody can check: the build screen
+    # says the body did not call the generated service, and no one can see what it called instead.
+    body: str = ""
 
 
 @dataclass
@@ -459,7 +501,8 @@ async def _fill_one(
             if new is None:
                 reason = f"the reply did not contain {t.file.path}"
             else:
-                reason = check_filled_file(t.file.path, t.file.content, new) or ""
+                reason = check_filled_file(t.file.path, t.file.content, new,
+                                           scaffold=t.file.scaffold) or ""
                 if not reason:
                     if not new.endswith("\n"):
                         new += "\n"
@@ -494,10 +537,26 @@ async def fill_method_bodies(
         log.warning("builder skipped %s: %s", c.path, c.reason)
     if rejections is not None:
         rejections.extend(conflicts)
+    # One call per file, and the files do not depend on each other: each reads its own content and
+    # returns its own body, and the solution is not written here. Filling them one after another
+    # made the builder the longest stage of a build, so they go out together, a few at a time -
+    # enough to cut the wall clock, not so many that the provider starts refusing. Each task keeps
+    # its own rejection list and they are merged in target order, so the result and the reported
+    # rejections read the same as when this ran sequentially.
+    targets = list(_targets(files, design, process))
+    limit = asyncio.Semaphore(FILL_CONCURRENCY)
+
+    async def fill(t: Any) -> tuple[GenFile | None, list[BuildRejection]]:
+        mine: list[BuildRejection] = []
+        async with limit:
+            filled = await _fill_one(t, solution, design, process, rules, memory_items, provider, mine)
+        return filled, mine
+
+    results = await asyncio.gather(*(fill(t) for t in targets))
     out: list[GenFile] = []
-    for t in _targets(files, design, process):
-        filled = await _fill_one(t, solution, design, process, rules, memory_items, provider,
-                                 rejections)
+    for filled, mine in results:
+        if rejections is not None:
+            rejections.extend(mine)
         if filled is not None:
             out.append(filled)
     return out

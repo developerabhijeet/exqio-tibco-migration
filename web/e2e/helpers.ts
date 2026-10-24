@@ -12,9 +12,15 @@ export async function actAs(page: Page, user: string): Promise<void> {
 
 /** A fresh project with the synthetic estate uploaded and scanned (the Task 20 flow). */
 export async function newProjectAndScan(page: Page): Promise<void> {
+  const name = `e2e ${Date.now()}`;
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByLabel("Project name").fill(`e2e ${Date.now()}`);
+  await page.getByLabel("Project name").fill(name);
   await page.getByRole("button", { name: "Create" }).click();
+  // Wait for the new project to be the open one. Uploading before that sends the estate to whichever
+  // project was open before, and the scan then runs against a project with no upload: a 404 that
+  // reads as a broken scan. With an empty database there is no earlier project to upload to, so this
+  // only ever bites on an estate that already has one.
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
   await page.getByTestId("zip-input").setInputFiles(SAMPLE_ZIP);
   await expect(page.getByTestId("file-tree")).toContainText(".bwp");
   await page.getByRole("button", { name: "Scan" }).click();

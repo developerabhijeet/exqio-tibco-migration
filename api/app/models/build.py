@@ -17,7 +17,8 @@ class Build(IdMixin, CreatedMixin, Base):
     process_id: Mapped[str] = mapped_column(fk("processes.id"), index=True)
     design_id: Mapped[str | None] = mapped_column(fk("design_records.id", ondelete="SET NULL"))
     job_id: Mapped[str | None]
-    runtime: Mapped[str] = mapped_column(default="container_apps")
+    # must be one of engine.infra_gen.generator's runtimes; "container_apps" (plural) is rejected
+    runtime: Mapped[str] = mapped_column(default="container_app")
     status: Mapped[str] = mapped_column(default="queued")  # queued|running|passed|failed
     spec_hash: Mapped[str | None]
     design_hash: Mapped[str | None]

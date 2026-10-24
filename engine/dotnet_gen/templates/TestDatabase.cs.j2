@@ -14,7 +14,7 @@ namespace {{ app }}.Tests;
 /// without Docker; otherwise a Testcontainers PostgreSQL container is started. Every scenario resets
 /// the schemas, so scenarios do not see each other's writes.
 /// </summary>
-public sealed class TestDatabase : IAsyncLifetime
+public sealed class TestDatabase : IAsyncLifetime, IAsyncDisposable, IDisposable
 {
     /// <summary>Schemas the estate's SQL creates; dropped and recreated on every reset.</summary>
     public static IReadOnlyList<string> Schemas { get; } = [{% for s in schemas %}"{{ s }}"{% if not loop.last %}, {% endif %}{% endfor %}];
@@ -38,7 +38,8 @@ public sealed class TestDatabase : IAsyncLifetime
         }
         else
         {
-            _container = new PostgreSqlBuilder().WithImage("postgres:16-alpine").Build();
+            // The image goes to the constructor: the parameterless one is obsolete and warns.
+            _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
             await _container.StartAsync();
             ConnectionString = _container.GetConnectionString();
         }
@@ -51,8 +52,20 @@ public sealed class TestDatabase : IAsyncLifetime
         if (_container is not null)
         {
             await _container.DisposeAsync();
+            _container = null;
         }
     }
+
+    /// <summary>
+    /// The same teardown for a test body written with <c>await using</c> or <c>using</c>.
+    /// xUnit's <c>IAsyncLifetime.DisposeAsync</c> returns a <c>Task</c>, which neither statement
+    /// binds to, so a body that disposed the database the ordinary way did not compile, and a test
+    /// project that does not compile runs no test at all, in any process of the solution.
+    /// </summary>
+    ValueTask IAsyncDisposable.DisposeAsync() => new(DisposeAsync());
+
+    /// <inheritdoc cref="DisposeAsync()"/>
+    public void Dispose() => Task.Run(DisposeAsync).GetAwaiter().GetResult();
 
     /// <summary>Recreates the schemas, runs the estate SQL, then inserts the scenario's seed rows.</summary>
     public async Task ResetAsync(ScenarioFixture? fixture = null)

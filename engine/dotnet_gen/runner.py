@@ -162,13 +162,18 @@ def _count_cs(root: Path) -> int:
 # ------------------------------------------------------------------- runner
 class DotnetRunner:
     def __init__(self, root: Path, dotnet: str | None = None, timeout_s: int = DEFAULT_TIMEOUT_S,
-                 env: dict[str, str] | None = None) -> None:
+                 env: dict[str, str] | None = None, coverage_scope: set[str] | None = None) -> None:
         """``env`` is passed to every step this runner starts (for example ``TEST_DATABASE_URL``
-        for the generated tests); a step's own ``env=`` is applied on top of it."""
+        for the generated tests); a step's own ``env=`` is applied on top of it.
+
+        ``coverage_scope`` are the source files generated for the process being built; line
+        coverage is then measured over those files rather than the whole solution. It belongs to
+        the runner rather than to one call so the repair loop reports the same number."""
         self.root = Path(root).resolve()
         self.dotnet = dotnet or find_dotnet() or "dotnet"
         self.timeout_s = timeout_s
         self.extra_env: dict[str, str] = dict(env or {})
+        self.coverage_scope: set[str] | None = set(coverage_scope) if coverage_scope else None
 
     # environment
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -222,14 +227,29 @@ class DotnetRunner:
         warnings, errors = parse_build_log(log)
         return BuildResult(ok=code == 0, warnings=warnings, errors=errors, log=log, files=_count_cs(self.root))
 
+    # Only the whitespace pass, never the analyzer pass. `dotnet format` with no subcommand also
+    # applies analyzer code fixes, and the xUnit analyzers carry one (xUnit1013, "public method in a
+    # test class should be a test") that writes a [Theory] attribute onto any public helper in a test
+    # class. The scenario tests have exactly such a helper, RunAsync; a [Theory] with no InlineData
+    # is error xUnit1003, so letting the formatter rewrite code turned a tidy-up into a build break.
+    # Layout is the formatter's job here; what the code says is the generator's and the agents'.
+    def _format_args(self, whitespace_only: bool, verify: bool) -> list[str]:
+        target = [str(self.root), "--folder"] if whitespace_only else [str(self.solution())]
+        return ["format", "whitespace", *target, *(["--verify-no-changes"] if verify else []), "-v", "q"]
+
+    def format_write(self, whitespace_only: bool = False, env: dict[str, str] | None = None) -> StepResult:
+        """``dotnet format whitespace`` in write mode: lay the generated code out properly.
+
+        The generator emits C# by template and the model fills method bodies, so neither arrives
+        laid out the way the formatter would lay it out. Formatting first makes the check that
+        follows a real check rather than a foregone failure."""
+        code, log = self._run(self._format_args(whitespace_only, verify=False), env=env)
+        return StepResult(ok=code == 0, log=log)
+
     def format_check(self, whitespace_only: bool = False, env: dict[str, str] | None = None) -> StepResult:
-        """``dotnet format --verify-no-changes``; ``whitespace_only`` runs the whitespace pass in
-        folder mode, which needs no restore (usable where NuGet is unreachable)."""
-        if whitespace_only:
-            args = ["format", "whitespace", str(self.root), "--folder", "--verify-no-changes", "-v", "q"]
-        else:
-            args = ["format", str(self.solution()), "--verify-no-changes", "-v", "q"]
-        code, log = self._run(args, env=env)
+        """``dotnet format whitespace --verify-no-changes``; ``whitespace_only`` uses folder mode,
+        which needs no restore (usable where NuGet is unreachable)."""
+        code, log = self._run(self._format_args(whitespace_only, verify=True), env=env)
         return StepResult(ok=code == 0, log=log)
 
     def test(self, project: str | None = None, env: dict[str, str] | None = None) -> TestRun:
@@ -243,7 +263,7 @@ class DotnetRunner:
         for f in trx_files:
             cases += parse_trx(f)
         cov = sorted(results.rglob("coverage.cobertura.xml")) if results.exists() else []
-        coverage_line = merge_cobertura(list(cov)) if cov else None
+        coverage_line = merge_cobertura(list(cov), self.coverage_scope) if cov else None
         ok = code == 0 and bool(cases) and all(c.outcome != "failed" for c in cases)
         return TestRun(ok=ok, cases=cases, coverage_line=coverage_line,
                        trx_path=str(trx_files[-1]) if trx_files else None, log=log)

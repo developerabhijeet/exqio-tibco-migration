@@ -28,6 +28,8 @@ export interface Metrics {
   compile_ok: boolean | null;
   warnings: number | null;
   infra_ok: boolean | null;
+  /** The five quality metrics as one weighted number; absent on builds made before it existed. */
+  conversion_accuracy?: number | null;
   formulas: Record<string, string>;
   details: Record<string, string>;
 }
@@ -57,14 +59,22 @@ export interface TestWarning {
   reason: string;
 }
 
+/** A reply the code checks refused: why, and the body it refused, so a person can judge the call. */
+export interface BuildRejection {
+  path: string;
+  attempt?: number;
+  reason: string;
+  body?: string;
+}
+
 export interface BuilderResult {
   filled: string[];
-  rejections: { path: string; attempt: number; reason: string }[];
+  rejections: BuildRejection[];
   provider?: string | null;
   ai_available?: boolean;
   test_engineer?: {
     filled?: string[];
-    rejections?: { path: string; attempt?: number; reason: string }[];
+    rejections?: BuildRejection[];
     warnings?: TestWarning[];
   } | null;
 }
@@ -161,6 +171,13 @@ export interface ReviewFinding {
   line: number | null;
   text: string;
   triage: "patch" | "defer" | "decision" | string;
+  /** The engineer's verdict. "keep" is applied by the next build; "reject" never is. */
+  decision?: "keep" | "reject" | null;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  note?: string | null;
+  /** The build that acted on a kept finding, once one has. */
+  applied_in?: string | null;
 }
 
 export interface InfraFile {
@@ -342,6 +359,14 @@ export interface SettingsView {
   routing: { bands: Record<string, [number, number]>; fallback: string; complexity: string };
   toolchains: Record<string, ToolInfo>;
   langfuse: { enabled: boolean; host: string | null; keys_configured: boolean };
+  /** Bring your own Azure OpenAI key. The key itself is never sent to the browser. */
+  azure_openai: {
+    endpoint: string;
+    key_set: boolean;
+    deployments: Record<string, string>;
+    source: "stored" | "environment" | "not configured" | string;
+    app_secret_configured: boolean;
+  };
   app_secret_configured: boolean;
   scenario_database: string;
 }
@@ -350,6 +375,12 @@ export interface SettingsPatch {
   models?: Record<string, string>;
   routing_bands?: Record<string, [number, number]>;
   langfuse_enabled?: boolean;
+  azure?: {
+    endpoint?: string;
+    api_key?: string;
+    deployments?: Record<string, string>;
+    clear?: boolean;
+  };
 }
 
 export interface EvalRow {
@@ -438,10 +469,44 @@ export type TimelineEntry =
       detail: Record<string, unknown>;
     };
 
+/** One agent identity's share of the spend: the `stage` recorded on every model call. */
+export interface AgentTotals {
+  agent: string;
+  model_calls: number;
+  failed_calls: number;
+  fallbacks: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cached: number;
+  cost_usd: number;
+  latency_ms: number;
+  latency_ms_avg: number;
+  models: string[];
+  providers: string[];
+  tiers: string[];
+}
+
+/** One run (a job, or the Ask calls made outside any job) with its own per-agent split. */
+export interface AgentSession {
+  job_id: string | null;
+  job_kind: string;
+  phase: string;
+  status: string | null;
+  process_id: string | null;
+  process_name: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  totals: Totals;
+  by_agent: AgentTotals[];
+}
+
 export interface HistoryView {
   project_id: string;
   timeline: TimelineEntry[];
   totals: { all: Totals; by_phase: Record<string, Totals>; by_band: Record<string, Totals>; cache_hit_rate: number };
+  by_agent: AgentTotals[];
+  sessions: AgentSession[];
   workflows: (Totals & {
     process_id: string;
     name: string;

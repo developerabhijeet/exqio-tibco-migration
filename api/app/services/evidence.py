@@ -113,6 +113,29 @@ def build_step(build: Build, name: str) -> dict[str, Any] | None:
     return next((s for s in build.steps or [] if s.get("name") == name), None)
 
 
+def reviews_all_decided(build: Build | None) -> bool:
+    """True when the engineer has kept or rejected every finding the review panel raised.
+
+    This is the condition that lets G4 be approved over a failing build: the engineer has read
+    what the reviewers found and said, for each one, whether it must be acted on. A build with no
+    findings at all does not count as reviewed, because nobody has looked at anything."""
+    findings = build.reviews if build else None
+    return bool(findings) and all(f.get("decision") in ("keep", "reject") for f in findings)
+
+
+async def g4_waivable(session: AsyncSession, process: Process, build: Build | None,
+                      g3: Gate | None) -> tuple[list[str], list[str]]:
+    """``(hard, waivable)`` G4 blockers.
+
+    Hard blockers stay blockers whatever anyone decides: without a build, or with a build made
+    from a different spec or design, an approval would bind the gate to something other than what
+    was reviewed. The waivable ones say the code does not work yet, which an engineer who has
+    read every review finding may knowingly accept; the gate then records exactly that."""
+    all_reasons = await g4_blockers(session, process, build, g3)
+    hard = [r for r in all_reasons if r.startswith("no build has finished") or "is stale" in r]
+    return hard, [r for r in all_reasons if r not in hard]
+
+
 async def g4_blockers(session: AsyncSession, process: Process, build: Build | None,
                       g3: Gate | None) -> list[str]:
     if build is None:
@@ -139,13 +162,21 @@ async def g4_blockers(session: AsyncSession, process: Process, build: Build | No
     if not tests:
         reasons.append("no tests")
     else:
-        failed = sum(1 for t in tests if t.outcome == "failed")
-        not_run = sum(1 for t in tests if t.outcome not in ("passed", "failed"))
+        from api.app.services.build import blocking_subprocess
+        blocked = {t.id: blocking_subprocess(t.message) for t in tests}
+        names = sorted({v for v in blocked.values() if v})
+        if names:
+            reasons.append(f"{sum(1 for v in blocked.values() if v)} test(s) blocked by sub-process(es) "
+                           f"with no approved design: {', '.join(names)}. Design and build them with "
+                           f"this process; nothing about this code is known to be wrong from these.")
+        live = [t for t in tests if not blocked[t.id]]
+        failed = sum(1 for t in live if t.outcome == "failed")
+        not_run = sum(1 for t in live if t.outcome not in ("passed", "failed"))
         if failed or not_run:
             test_step = build_step(build, "test")
             hint = (f"; {TESTDB_UNSET}" if test_step and not test_step.get("ok")
                     and TESTDB_UNSET in (test_step.get("log") or "") else "")
-            reasons.append(f"{failed + not_run} of {len(tests)} test(s) not passed "
+            reasons.append(f"{failed + not_run} of {len(live)} runnable test(s) not passed "
                            f"({failed} failed, {not_run} not run){hint}")
     return reasons
 
@@ -162,7 +193,11 @@ async def evidence_reasons(session: AsyncSession, process: Process,
     else:
         out["G3"] = []
     build = await latest_build(session, process.id)
-    out["G4"] = await g4_blockers(session, process, build, rows.get("G3"))
+    # G4: an engineer who has decided every review finding may approve over a build that does not
+    # work yet. The waived reasons are not dropped, they are recorded on the gate when it is
+    # approved, so Verify and Deploy still read the truth about what they inherited.
+    hard, waivable = await g4_waivable(session, process, build, rows.get("G3"))
+    out["G4"] = hard if reviews_all_decided(build) else hard + waivable
     if build is None:
         out["G5"] = ["no build has finished"]
         out["G6"] = ["no build has finished"]

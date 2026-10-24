@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FileArchive, FolderOpen, Server, UploadCloud } from "lucide-react";
 import { api } from "@/lib/api";
 import { walkEntries, zipFiles } from "@/lib/zip";
+import { RoleLock } from "@/components/shell/RoleNotice";
 
 export type UploadSource =
   | { kind: "zip"; blob: Blob; name: string }
@@ -17,7 +18,16 @@ function allowedRoots(settings: Record<string, unknown> | null | undefined): str
   return Array.isArray(v) ? v.map(String) : null;
 }
 
-export function DropZone({ busy, onSource }: { busy: boolean; onSource: (s: UploadSource) => void }) {
+/** `blocked` is the persona model's reason this user may not upload; it disables every control here. */
+export function DropZone({
+  busy,
+  blocked = null,
+  onSource,
+}: {
+  busy: boolean;
+  blocked?: string | null;
+  onSource: (s: UploadSource) => void;
+}) {
   const zipInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
@@ -28,7 +38,7 @@ export function DropZone({ busy, onSource }: { busy: boolean; onSource: (s: Uplo
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setOver(false);
-    if (busy) return;
+    if (busy || blocked) return;
     const items = Array.from(e.dataTransfer.items ?? []);
     const entries = items.map((i) => i.webkitGetAsEntry?.()).filter((x): x is FileSystemEntry => !!x);
     if (entries.some((x) => x.isDirectory)) {
@@ -57,12 +67,28 @@ export function DropZone({ busy, onSource }: { busy: boolean; onSource: (s: Uplo
         <p className="mt-3 font-medium text-plum">Drop a zip or a folder of TIBCO sources</p>
         <p className="text-[14px] text-slate">BW6 modules and applications, BW5 projects, schemas, resources, SQL</p>
         <div className="mt-4 flex gap-2">
-          <button type="button" className="btn-primary" disabled={busy} onClick={() => zipInput.current?.click()}>
-            <FileArchive size={16} aria-hidden /> Choose zip
-          </button>
-          <button type="button" className="btn-secondary" disabled={busy} onClick={() => folderInput.current?.click()}>
-            <FolderOpen size={16} aria-hidden /> Choose folder
-          </button>
+          <span title={blocked ?? undefined}>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy || !!blocked}
+              onClick={() => zipInput.current?.click()}
+            >
+              <RoleLock reason={blocked ?? undefined} />
+              <FileArchive size={16} aria-hidden /> Choose zip
+            </button>
+          </span>
+          <span title={blocked ?? undefined}>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy || !!blocked}
+              onClick={() => folderInput.current?.click()}
+            >
+              <RoleLock reason={blocked ?? undefined} />
+              <FolderOpen size={16} aria-hidden /> Choose folder
+            </button>
+          </span>
         </div>
         <input
           ref={zipInput}
@@ -125,8 +151,7 @@ export function DropZone({ busy, onSource }: { busy: boolean; onSource: (s: Uplo
             </>
           ) : (
             <>
-              A folder or zip the API server can read, under its allowed roots (UPLOAD_ALLOWED_ROOTS; by default
-              the API data folder and the repository samples folder).
+              A folder or zip the API server can read, under its allowed roots (UPLOAD_ALLOWED_ROOTS).
             </>
           )}
         </p>

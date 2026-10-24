@@ -1,0 +1,137 @@
+using System.Globalization;
+using System.Text;
+
+namespace {{ app }}.Core.Tibco;
+
+/// <summary>
+/// The XPath 1.0 string functions a TIBCO mapping uses, with XPath's semantics rather than .NET's.
+/// Generated code calls these so a <c>concat</c> or a <c>substring</c> in a mapping is translated by
+/// code instead of being handed to a model: <c>substring</c> counts from 1 and clips instead of
+/// throwing, and <c>normalize-space</c> collapses runs of whitespace the way an XSLT processor does.
+/// </summary>
+public static class TibText
+{
+    private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
+
+    /// <summary>XPath <c>round()</c>: halves go towards positive infinity, so round(-1.5) is -1.</summary>
+    public static double Round(double value) =>
+        double.IsNaN(value) || double.IsInfinity(value) ? value : Math.Floor(value + 0.5);
+
+    /// <summary>
+    /// XPath <c>substring(s, start)</c> and <c>substring(s, start, length)</c>: positions start at 1,
+    /// both arguments are rounded, and a range reaching past either end is clipped to the string.
+    /// </summary>
+    public static string Substring(string? value, double start, double? length = null)
+    {
+        var s = value ?? string.Empty;
+        if (double.IsNaN(start))
+        {
+            return string.Empty;
+        }
+
+        double from = Round(start);
+        double to;
+        if (length is null)
+        {
+            to = double.PositiveInfinity;
+        }
+        else
+        {
+            if (double.IsNaN(length.Value))
+            {
+                return string.Empty;
+            }
+
+            to = from + Round(length.Value);
+        }
+
+        int begin = (int)Math.Clamp(from, 1d, s.Length + 1d);
+        int end = double.IsPositiveInfinity(to) ? s.Length + 1 : (int)Math.Clamp(to, begin, s.Length + 1d);
+        return s.Substring(begin - 1, end - begin);
+    }
+
+    /// <summary>XPath <c>substring-before</c>: empty when the needle does not occur.</summary>
+    public static string SubstringBefore(string? value, string? needle)
+    {
+        var s = value ?? string.Empty;
+        var n = needle ?? string.Empty;
+        if (n.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        int at = s.IndexOf(n, StringComparison.Ordinal);
+        return at < 0 ? string.Empty : s[..at];
+    }
+
+    /// <summary>XPath <c>substring-after</c>: empty when the needle does not occur.</summary>
+    public static string SubstringAfter(string? value, string? needle)
+    {
+        var s = value ?? string.Empty;
+        var n = needle ?? string.Empty;
+        if (n.Length == 0)
+        {
+            return s;
+        }
+
+        int at = s.IndexOf(n, StringComparison.Ordinal);
+        return at < 0 ? string.Empty : s[(at + n.Length)..];
+    }
+
+    /// <summary>XPath <c>normalize-space</c>: trims, then collapses every run of whitespace to one space.</summary>
+    public static string NormalizeSpace(string? value)
+    {
+        var s = value ?? string.Empty;
+        var sb = new StringBuilder(s.Length);
+        bool pending = false;
+        foreach (char c in s)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                pending = sb.Length > 0;
+                continue;
+            }
+
+            if (pending)
+            {
+                sb.Append(' ');
+                pending = false;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// XPath <c>translate(s, from, to)</c>: each character of <paramref name="from"/> is replaced by the
+    /// character at the same position in <paramref name="to"/>, or removed when <paramref name="to"/> is
+    /// shorter. The first occurrence in <paramref name="from"/> wins.
+    /// </summary>
+    public static string Translate(string? value, string? from, string? to)
+    {
+        var s = value ?? string.Empty;
+        var f = from ?? string.Empty;
+        var t = to ?? string.Empty;
+        var sb = new StringBuilder(s.Length);
+        foreach (char c in s)
+        {
+            int at = f.IndexOf(c);
+            if (at < 0)
+            {
+                sb.Append(c);
+            }
+            else if (at < t.Length)
+            {
+                sb.Append(t[at]);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>The XPath string form of a number: no exponent, no trailing zeros, NaN for a non-number.</summary>
+    public static string Number(double value) =>
+        double.IsNaN(value) ? "NaN" : value.ToString("0.##########################", Invariant);
+}

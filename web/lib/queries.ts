@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 
 export const useProjects = () => useQuery({ queryKey: ["projects"], queryFn: api.listProjects });
@@ -55,6 +55,19 @@ export const useScenarios = (processId: string | null) =>
 
 export const useAudit = (processId: string | null) =>
   useQuery({ queryKey: ["audit", processId], queryFn: () => api.audit(processId!), enabled: !!processId });
+
+/** Answer or reject one open question on the design; the design hash does not move, so G3 holds. */
+export const useAnswerDesignQuestion = (processId: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ index, decision, answer }: {
+      index: number;
+      decision: "answered" | "rejected" | null;
+      answer?: string;
+    }) => api.answerDesignQuestion(processId!, index, { decision, answer }),
+    onSuccess: (view) => qc.setQueryData(["design", processId], view),
+  });
+};
 
 export const useDesign = (processId: string | null) =>
   useQuery({

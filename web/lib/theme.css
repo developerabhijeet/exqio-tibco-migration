@@ -7,9 +7,11 @@
   --purple-lt: #f1e9fc;
   --plum: #20063b;
   --coral: #ff495c;
+  --coral-dk: #d32238;
   --warm: #f4f3ee;
   --page: #faf9f7;
   --line: #e2dfd6;
+  --line-dk: #cfcabb;
   --ink: #212529;
   --slate: #425466;
   --footer: #140811;
@@ -26,6 +28,8 @@
   --error-bg: #f9e5e3;
   --highlight: #fff2b8;
   --highlight-strong: #ffe27a;
+  --shadow-card: 0 1px 2px rgba(32, 6, 59, 0.04), 0 1px 3px rgba(32, 6, 59, 0.05);
+  --shadow-pop: 0 4px 6px -2px rgba(32, 6, 59, 0.07), 0 12px 24px -6px rgba(32, 6, 59, 0.16);
   color-scheme: light;
 }
 
@@ -36,43 +40,106 @@ body {
 }
 
 body {
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.6;
+  /* Inter's own kerning and ligatures; off by default in some engines at small sizes. */
+  font-feature-settings: "kern" 1, "liga" 1;
+  text-rendering: optimizeLegibility;
+}
+
+/* Figures that sit in a column have to line up: a hash, a count, a duration, a percentage. Inter's
+   tabular set gives every digit the same advance width, so the columns do not shift as a job runs
+   and the numbers change. Proportional figures stay in running prose. */
+table,
+code,
+pre,
+kbd,
+.font-mono,
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One focus ring everywhere, visible on the warm background and only for the keyboard. */
+:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* A quieter scrollbar than the platform default, which is heavy on a dense screen. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-dk) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-dk);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--slate);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @layer components {
   .card {
-    @apply rounded-card border border-line bg-white;
+    @apply rounded-card border border-line bg-white shadow-card;
   }
   .eyebrow {
-    @apply text-eyebrow uppercase text-coral;
+    @apply text-eyebrow uppercase text-coral-dk;
   }
   .label {
     @apply text-eyebrow uppercase text-slate;
   }
   .screen-title {
-    @apply text-screen-title text-purple;
+    @apply font-display text-screen-title text-purple;
   }
   .panel-title {
-    @apply text-panel-title text-plum;
+    @apply font-display text-panel-title text-plum;
+  }
+  .card-title {
+    @apply text-card-title text-plum;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-btn px-4 py-2 text-[15px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-3.5 py-2 text-[14.5px] font-semibold tracking-[-0.005em] transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none;
   }
   .btn-primary {
-    @apply btn bg-purple text-white hover:bg-purple-dk;
+    @apply btn bg-purple text-white shadow-card hover:bg-purple-dk hover:shadow-pop active:translate-y-px active:shadow-card;
   }
   .btn-secondary {
-    @apply btn border border-line bg-white text-plum hover:bg-warm;
+    @apply btn border border-line bg-white text-plum hover:border-line-dk hover:bg-warm active:translate-y-px;
   }
   .btn-ghost {
-    @apply btn px-2 py-1 text-slate hover:bg-warm;
+    @apply btn px-2 py-1 font-medium text-slate hover:bg-warm hover:text-plum;
   }
   .input {
-    @apply w-full rounded-btn border border-line bg-white px-3 py-2 text-[15px] text-ink outline-none focus:border-purple focus:ring-2 focus:ring-purple-lt;
+    @apply w-full rounded-btn border border-line bg-white px-3 py-2 text-[14.5px] text-ink outline-none transition-colors placeholder:text-slate/60 focus:border-purple focus:ring-2 focus:ring-purple-lt;
   }
   .table-head {
     @apply bg-plum text-left text-eyebrow uppercase text-white;
+  }
+  /* A select keeps its native behavior and loses the native chrome, which the platform draws in
+     its own colors and which looks pasted on beside the buttons next to it. The caret is drawn as
+     a background image so no wrapper element is needed at each call site. */
+  .select {
+    @apply cursor-pointer appearance-none rounded-btn border border-line bg-white py-1.5 pl-3 pr-8 text-[14px] font-medium text-plum outline-none transition-colors hover:border-line-dk focus:border-purple focus:ring-2 focus:ring-purple-lt disabled:cursor-not-allowed disabled:opacity-50;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23425466' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.55rem center;
+    background-repeat: no-repeat;
+    background-size: 14px;
+  }
+  /* Rows a reader has to scan across: a hairline instead of a full border, and a hover that tracks
+     the row the cursor is on. */
+  .row-hover {
+    @apply transition-colors hover:bg-warm/70;
   }
 }
 

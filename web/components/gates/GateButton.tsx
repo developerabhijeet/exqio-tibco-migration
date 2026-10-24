@@ -5,6 +5,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, ShieldCheck, ShieldX } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Pill } from "@/components/ui/Pill";
+import { RoleLock } from "@/components/shell/RoleNotice";
+import { ownerOfGate, personaOf } from "@/lib/personas";
+import { useAppState } from "@/lib/state";
 import type { Gate } from "@/lib/types";
 
 export const GATE_TITLES: Record<string, string> = {
@@ -78,7 +81,18 @@ export function GateButton({
   const [note, setNote] = useState("");
   const state = gateDisplayState(gate, started);
   const label = LABEL[state] ?? LABEL.pending;
-  const enabled = !!gate?.enabled && state !== "approved";
+  // Only the gate's owner decides it, so a G4 approval in the audit trail is always an engineer's.
+  // Everyone else reads the evidence and the decision; the buttons are not offered to them.
+  const { user } = useAppState();
+  const me = personaOf(user);
+  const owner = ownerOfGate(name);
+  const mine = me.gates.includes(name);
+  const notMine = mine
+    ? null
+    : owner
+      ? `${name} is the ${owner.role}'s gate. You are acting as ${me.role}, so you can read the evidence here but not decide it.`
+      : `${name} has no owner in this screen's role model, so no persona may decide it.`;
+  const enabled = mine && !!gate?.enabled && state !== "approved";
   const blocked = !gate?.enabled && state !== "approved" ? (gate?.reason ?? "The API has not reported this gate.") : null;
 
   const decide = async (decision: "approved" | "rejected") => {
@@ -116,17 +130,20 @@ export function GateButton({
         </Pill>
         <span className="ml-auto flex items-center gap-2">
           {state !== "rejected" && !rejecting ? (
-            <button
-              type="button"
-              disabled={!!busy}
-              onClick={() => setRejecting(true)}
-              className="btn border border-line bg-white px-3 text-error hover:bg-error-bg"
-            >
-              Reject {name}
-            </button>
+            <span title={notMine ?? undefined}>
+              <button
+                type="button"
+                disabled={!!busy || !mine}
+                onClick={() => setRejecting(true)}
+                className="btn border border-line bg-white px-3 text-error hover:bg-error-bg"
+              >
+                <RoleLock reason={notMine ?? undefined} />
+                Reject {name}
+              </button>
+            </span>
           ) : null}
           {state === "approved" ? null : (
-            <span title={blocked ?? undefined}>
+            <span title={notMine ?? blocked ?? undefined}>
               <button
                 type="button"
                 disabled={!enabled || !!busy}
@@ -134,6 +151,7 @@ export function GateButton({
                 className="btn bg-gate text-white hover:bg-gate/90"
               >
                 {busy === "approve" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : null}
+                <RoleLock reason={notMine ?? undefined} />
                 Approve {name}
               </button>
             </span>
@@ -163,7 +181,12 @@ export function GateButton({
       {state !== "approved" && state !== "rejected" && gate?.reset_reason ? (
         <p className="mt-2 text-[13px] text-decision">Reopened: {gate.reset_reason}</p>
       ) : null}
-      {blocked && state !== "approved" ? (
+      {notMine && state !== "approved" && state !== "rejected" ? (
+        <p className="mt-1 text-[13px] text-slate" data-testid={`gate-${name}-not-mine`}>
+          <span className="font-medium text-plum">{owner ? `${owner.role}'s decision:` : "No owner:"}</span> {notMine}
+        </p>
+      ) : null}
+      {blocked && mine && state !== "approved" ? (
         <p className="mt-1 text-[13px] text-slate">
           <span className="font-medium text-plum">Not enabled:</span> {blocked}
         </p>

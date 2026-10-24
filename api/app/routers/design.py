@@ -1,11 +1,12 @@
 """Tab 4, Design: generate the design record (job) and read it. G3 is decided at ``/gates``."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
-from api.app.deps import RunnerDep, SessionDep, SettingsDep
+from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.models import Process
 from api.app.schemas.job import JobCreated
 from api.app.services import design as svc
@@ -43,3 +44,29 @@ async def get_design(process_id: str, session: SessionDep) -> dict[str, Any]:
     if view is None:
         raise HTTPException(status_code=404, detail="no design record yet")
     return view
+
+
+class QuestionAnswer(BaseModel):
+    """``answered`` records what the architect decided; ``rejected`` records that the question does
+    not apply. ``null`` reopens it."""
+
+    decision: Literal["answered", "rejected"] | None
+    answer: str | None = None
+
+
+@router.patch("/processes/{process_id}/design/questions/{index}")
+async def answer_question(process_id: str, index: int, body: QuestionAnswer, session: SessionDep,
+                          user: UserDep) -> dict[str, Any]:
+    """Answer or reject one open question. The design hash does not move, so an approved G3 stays
+    approved: the answer is a note on the design, not a change to it."""
+    proc = await session.get(Process, process_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail="process not found")
+    if body.decision == "answered" and not (body.answer or "").strip():
+        raise HTTPException(status_code=422, detail="an answered question needs an answer")
+    try:
+        return await svc.answer_open_question(session, proc, index, body.decision, body.answer, user)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="no open question at that index") from exc

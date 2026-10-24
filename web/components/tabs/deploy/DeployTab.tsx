@@ -12,7 +12,9 @@ import { GateButton } from "@/components/gates/GateButton";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
 import { FailedBuildStrip } from "@/components/tabs/build/BuildStatusStrip";
 import { OutcomePill, shortHash } from "@/components/tabs/build/Panel";
+import { AzureIcon } from "@/components/ui/BrandIcons";
 import { AzureConnectForm } from "./AzureConnectForm";
+import { SecurityPanel } from "./SecurityPanel";
 import { PlanView } from "./PlanView";
 
 export function DeployTab() {
@@ -41,10 +43,13 @@ export function DeployTab() {
 
   return (
     <div className="space-y-5" data-testid="deploy-tab">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 7</p>
-          <h2 className="panel-title">Deploy</h2>
+          <h2 className="panel-title flex items-center gap-2">
+            <AzureIcon size={19} />
+            Deploy
+          </h2>
           <p className="mt-1 max-w-[760px] text-[14px] text-slate">
             The generated Terraform modules and Terragrunt live configuration are planned against the connected subscription.
             Without a connection, the connect-later state is recorded with the last validation. Operations approves (G6). Apply
@@ -79,6 +84,7 @@ export function DeployTab() {
             hint="Operations approves the plan, or the acknowledged connect-later state."
           />
           {buildId ? <PlanView buildId={buildId} stream={stream} onPlanJob={watch} /> : null}
+          <SecurityPanel buildId={buildId} />
           <AzureConnectForm
             projectId={projectId}
             onConnectLater={connectLater}

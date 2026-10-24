@@ -242,14 +242,29 @@ def _header(usings: list[str]) -> list[str]:
     return [f"using {u};" for u in system + other] + [""]
 
 
+def _vocabulary(ctx: TestContext) -> list[str]:
+    """The usings every generated test file carries, filled body or not.
+
+    A test body is written against one vocabulary: ``new ApiFactory(database)``, then
+    ``Services.CreateScope()`` and ``GetRequiredService<TService>()`` to reach the service, and
+    ``JsonObject`` for a sub-process entry point. Leaving the namespaces out of the scaffold makes
+    the file compile only until a body uses one of them, and the compile repair loop then spends
+    attempts re-adding a using the scaffold could have written once. Unused usings cost nothing
+    here: the solution does not treat warnings as errors and format runs whitespace only.
+    """
+    return ["Xunit", "System.Text.Json.Nodes", "Microsoft.Extensions.DependencyInjection",
+            f"{ctx.app}.Core.Services", f"{ctx.app}.Tests.Support", *ctx.namespaces]
+
+
 def rules_tests(ctx: TestContext, process: Process, rules: list[Rule]) -> str:
     g = _g()
     approved = [r for r in rules if r.status in APPROVED]
-    lines = _header(["Xunit"])
+    lines = _header(_vocabulary(ctx))
     summary = f"One test per approved rule of {process.name}, named in the rule's own words; written before the code."
     lines += [f"namespace {ctx.app}.Tests;", "",
               f"/// <summary>{g.xml_doc(summary)}</summary>",
               f"/// <remarks>{g.xml_doc('A test fails with no test body until the Code Builder writes it; gate G4 refuses the build while any approved rule has no test body.')}</remarks>",
+              "[Collection(TestDatabaseCollection.Name)]",
               f"public sealed class {ctx.process}RulesTests", "{"]
     used: set[str] = set()
     for i, r in enumerate(approved):
@@ -286,12 +301,17 @@ def branch_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]) 
     branches = branch_transitions(process)
     covered = {t.id: _covering(scenarios, t.id) for t in branches}
     uses_db = any(covered.values())
-    lines = _header(["Xunit"])
+    lines = _header(_vocabulary(ctx))
     lines += [f"namespace {ctx.app}.Tests;", "",
               f"/// <summary>{g.xml_doc(f'One test per branch (conditional or otherwise link) of {process.name}.')}</summary>",
               f"/// <remarks>{g.xml_doc('A branch test runs the first scenario whose TIBCO trace takes the link; a branch no scenario reaches fails until the builder writes its test.')}</remarks>"]
-    if uses_db:
-        lines.append("[Collection(TestDatabaseCollection.Name)]")
+    # Every test class shares the one Postgres that TestDatabase drops and recreates, so they all
+    # belong in the same xUnit collection whether or not the scaffold itself takes the fixture.
+    # xUnit runs collections in parallel: a class left out of this one resets the schema underneath
+    # the others and the run dies on "23505 duplicate key ... pg_type_typname_nsp_index". The
+    # scaffold cannot tell in advance either, because the body a model writes drives the process
+    # through ApiFactory(database) whatever this file decided.
+    lines.append("[Collection(TestDatabaseCollection.Name)]")
     ctor = "(TestDatabase database)" if uses_db else ""
     lines += [f"public sealed class {ctx.process}BranchTests{ctor}", "{"]
     used: set[str] = set()
@@ -325,7 +345,7 @@ def scenario_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]
     """(content, the starter has a generated driver)."""
     g = _g()
     kind = ctx.starter_kind
-    usings = ["Xunit", f"{ctx.app}.Tests.Support"]
+    usings = _vocabulary(ctx)
     driver: list[str]
     supported = True
     pad = "        "
@@ -357,8 +377,7 @@ def scenario_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]
     lines = _header(usings)
     lines += [f"namespace {ctx.app}.Tests;", "",
               f"/// <summary>{g.xml_doc(f'One test per parity scenario of {process.name}: the scenario input goes to the generated service and the output, fault and side effects are compared field by field with the expected fixture ({MODEL_LABEL}).')}</summary>"]
-    if scenarios:
-        lines.append("[Collection(TestDatabaseCollection.Name)]")
+    lines.append("[Collection(TestDatabaseCollection.Name)]")
     ctor = "(TestDatabase database)" if scenarios else ""
     lines += [f"public sealed class {ctx.process}ScenarioTests{ctor}", "{"]
     used: set[str] = set()
@@ -378,16 +397,264 @@ def scenario_tests(ctx: TestContext, process: Process, scenarios: list[Scenario]
             "jms": f"Calls {ctx.process}Consumer.HandleAsync with the fixture input",
             "timer": f"Runs {ctx.process}Job once"}.get(kind, "No generated driver for this starter")
     lines += [f"    /// <summary>{g.xml_doc(f'{what} and compares the run with the fixture.')}</summary>",
-              "    public static async Task RunAsync(TestDatabase database, string scenario)",
+              # internal, not public: xUnit1013 warns about a public non-test method on a test
+              # class, and that warning counts against the build's standards score. The branch
+              # tests call it from the same assembly, so internal is all they need.
+              "    internal static async Task RunAsync(TestDatabase database, string scenario)",
               "    {"]
     lines += driver
     lines += ["    }", "}"]
     return "\n".join(lines) + "\n", supported
 
 
+# ------------------------------------------------------------------ record tests
+# Every generated record that carries a [Sensitive] property also carries a masking ToString(), so
+# an SSN or account number cannot reach a log in clear text. That is a control, and an untested
+# control is a claim. These tests exercise it from the code the generator wrote, which is also the
+# last part of a process's own code no behavioural test reaches: without them a build reports
+# around 93% line coverage of its own files and the missing 7% is entirely this.
+_RECORD_HEAD = re.compile(r"^public sealed record (\w+)(?:\(([^)]*)\))?\s*;?\s*$")
+_RECORD_PROP = re.compile(r"^    public (required )?([\w.<>?\[\]]+) (\w+) \{ get; init; \}$")
+_NAMESPACE = re.compile(r"^namespace ([\w.]+);")
+_PARAM = re.compile(r"^([\w.<>?\[\]]+)\s+(\w+)$")
+
+# A value per C# type the generated records use. A type that is not here is left unset (or, when
+# the property is required, costs the record its test): a test that does not compile is worse than
+# a line that is not covered.
+_VALUE: dict[str, str] = {
+    "string": '"sample"',
+    "int": "7", "long": "7L", "short": "(short)7", "byte": "(byte)7",
+    "decimal": "12.75m", "double": "12.75d", "float": "12.75f",
+    "bool": "true",
+    "DateTime": "new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc)",
+    "DateTimeOffset": "new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero)",
+    "DateOnly": "new DateOnly(2026, 1, 2)", "TimeOnly": "new TimeOnly(3, 4, 5)",
+    "Guid": "Guid.Empty",
+}
+# Obviously synthetic, and still long enough for the mask to keep a last four to assert on.
+SENSITIVE_VALUE = "XXXX-XX-1234"
+SENSITIVE_TAIL = "1234"
+
+
+@dataclass
+class _Prop:
+    type: str
+    name: str
+    required: bool
+    sensitive: bool
+
+
+@dataclass
+class _Record:
+    name: str
+    namespace: str
+    positional: list[tuple[str, str]]
+    props: list[_Prop]
+    masked: bool
+
+
+def _records(text: str) -> list[_Record]:
+    """The records declared in one generated file, with their properties and masking."""
+    namespace = ""
+    out: list[_Record] = []
+    current: _Record | None = None
+    sensitive_next = False
+    for line in text.split("\n"):
+        if m := _NAMESPACE.match(line):
+            namespace = m.group(1)
+            continue
+        if m := _RECORD_HEAD.match(line):
+            # A parameter this does not recognise is kept as an unknown type, which costs the
+            # record its test rather than producing one that does not compile.
+            params = [(_PARAM.match(part.strip()).group(1), _PARAM.match(part.strip()).group(2))
+                      if _PARAM.match(part.strip()) else ("?unknown", "?")
+                      for part in (m.group(2) or "").split(",") if part.strip()]
+            current = _Record(name=m.group(1), namespace=namespace, positional=params,
+                              props=[], masked=False)
+            out.append(current)
+            sensitive_next = False
+            continue
+        if current is None:
+            continue
+        if line.strip() == "[Sensitive]":
+            sensitive_next = True
+            continue
+        if m := _RECORD_PROP.match(line):
+            current.props.append(_Prop(type=m.group(2), name=m.group(3),
+                                       required=bool(m.group(1)), sensitive=sensitive_next))
+            sensitive_next = False
+            continue
+        if _g().TO_STRING in line:
+            current.masked = True
+        elif line == "}":
+            current = None
+    return out
+
+
+def _literal(prop: _Prop) -> str | None:
+    bare = prop.type.rstrip("?")
+    if prop.sensitive and bare == "string":
+        return _g().cs_string(SENSITIVE_VALUE)
+    return _VALUE.get(bare)
+
+
+def _construct(record: _Record, known: dict[str, _Record], depth: int = 0) -> str | None:
+    """``new Record { ... }`` (or ``new Record(...)`` for a positional one), or None when a value
+    this record needs cannot be written."""
+    if depth > 2:
+        return None
+    if record.positional:
+        args = []
+        for type_name, _ in record.positional:
+            bare = type_name.rstrip("?")
+            if bare in known:
+                nested = _construct(known[bare], known, depth + 1)
+                if nested is None:
+                    return None
+                args.append(nested)
+            elif (value := _VALUE.get(bare)) is not None:
+                args.append(value)
+            else:
+                return None
+        return f"new {record.name}({', '.join(args)})"
+    settings = []
+    for prop in record.props:
+        value = _literal(prop)
+        if value is None:
+            bare = prop.type.rstrip("?")
+            if bare in known:
+                value = _construct(known[bare], known, depth + 1)
+            if value is None:
+                if prop.required:
+                    return None  # the record cannot be built without it
+                continue
+        settings.append(f"{prop.name} = {value}")
+    if not settings:
+        return None
+    return f"new {record.name} {{ {', '.join(settings)} }}"
+
+
+def record_tests(ctx: TestContext, sources: list[Any]) -> str | None:
+    """A masking test per generated record of this process, or ``None`` when there is none to write.
+
+    ``sources`` are the generated source files of the process (``GenFile``)."""
+    g = _g()
+    by_name: dict[str, _Record] = {}
+    ordered: list[_Record] = []
+    for f in sources:
+        for record in _records(f.content):
+            by_name[record.name] = record
+            ordered.append(record)
+
+    cases: list[list[str]] = []
+    namespaces: set[str] = set()
+    used: set[str] = set()
+    for record in ordered:
+        if not record.masked:
+            continue
+        built = _construct(record, by_name)
+        if built is None:
+            continue
+        secrets = [p for p in record.props if p.sensitive and p.type.rstrip("?") == "string"]
+        method = _unique(f"{record.name}_masks_its_sensitive_fields", used)
+        body = [
+            f'    [Fact(DisplayName = "{record.name} prints with its sensitive fields masked")]',
+            f"    public void {method}()",
+            "    {",
+            f"        var record = {built};",
+            "",
+            "        var text = record.ToString();",
+            "",
+            f"        Assert.StartsWith({g.cs_string(record.name + ' {')}, text, StringComparison.Ordinal);",
+        ]
+        for secret in secrets:
+            body += [
+                f"        // {secret.name} is [Sensitive]: the value never prints, its last four do.",
+                f"        Assert.DoesNotContain({g.cs_string(SENSITIVE_VALUE)}, text, StringComparison.Ordinal);",
+                f"        Assert.Contains({g.cs_string(secret.name + ' = ')}, text, StringComparison.Ordinal);",
+            ]
+        if secrets:
+            body.append(f"        Assert.Contains({g.cs_string(SENSITIVE_TAIL)}, text, StringComparison.Ordinal);")
+        body.append("    }")
+        cases.append(body)
+        namespaces.add(record.namespace)
+
+    state = _state_case(ctx, by_name, sources, used)
+    if state is not None:
+        cases.append(state)
+        namespaces.add(f"{ctx.app}.Core.Services")
+    if not cases:
+        return None
+
+    lines = _header(["System", "Xunit", *sorted(namespaces)])
+    lines += [
+        f"namespace {ctx.app}.Tests;",
+        "",
+        f"/// <summary>The generated records of {ctx.process}: what they print, and what they refuse to print.</summary>",
+        ("/// <remarks>Masking is a control, not a convenience: a record with a [Sensitive] "
+         "property prints its last four characters and nothing else of it.</remarks>"),
+        # These tests touch no database, but every test class of the solution belongs to the one
+        # collection: xUnit parallelises across collections, and the scenario database is shared.
+        "[Collection(TestDatabaseCollection.Name)]",
+        f"public sealed class {ctx.process}RecordTests",
+        "{",
+    ]
+    for i, case in enumerate(cases):
+        lines += case
+        if i != len(cases) - 1:
+            lines.append("")
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
+def _state_case(ctx: TestContext, known: dict[str, _Record], sources: list[Any],
+                used: set[str]) -> list[str] | None:
+    """The run-state test: the starter variables are readable and an error transition is recorded.
+
+    Only the members the generated state actually declares are asserted, because which ones exist
+    depends on the process's starter."""
+    state_file = next((f for f in sources if f.path.endswith(f"/{ctx.process}State.cs")), None)
+    if state_file is None:
+        return None
+    text = state_file.content
+    if f"public sealed class {ctx.process}State(" not in text:
+        return None
+    input_record = known.get(f"{ctx.process}Input")
+    if input_record is None:
+        return None
+    built = _construct(input_record, known)
+    if built is None:
+        return None
+    has_error = "public Exception? LastError { get; set; }" in text
+    starters = re.findall(r"^    public JsonNode\? (\w+) =>", text, re.MULTILINE)
+    if not has_error and not starters:
+        return None
+    method = _unique(f"{ctx.process}State_carries_the_run_variables", used)
+    body = [
+        f'    [Fact(DisplayName = "{ctx.process}State carries the variables of one run")]',
+        f"    public void {method}()",
+        "    {",
+        f"        var state = new {ctx.process}State({built});",
+        "",
+    ]
+    for starter in starters:
+        body.append(f"        Assert.NotNull(state.{starter});")
+    if has_error:
+        body += [
+            "        // An activity that faults sends the run down its error transition, and the",
+            "        // state is where the fault is kept for the step that handles it.",
+            '        state.LastError = new InvalidOperationException("the step faulted");',
+            '        Assert.Equal("the step faulted", state.LastError!.Message);',
+        ]
+    body.append("    }")
+    return body
+
+
 def generate_tests(process: Process, rules: list[Rule], scenarios: list[Scenario], design: DesignRecord,
-                   ctx: TestContext | None = None) -> list[GenFile]:
-    """Rules, branch and scenario tests plus the scenario fixtures of one process (paths from the solution root)."""
+                   ctx: TestContext | None = None, sources: list[Any] | None = None) -> list[GenFile]:
+    """Rules, branch, record and scenario tests plus the scenario fixtures of one process (paths
+    from the solution root). ``sources`` are the process's generated source files, which the
+    record tests are written from."""
     g = _g()
     ctx = ctx or TestContext.minimal(process, design)
     base = f"tests/{ctx.app}.Tests"
@@ -401,6 +668,9 @@ def generate_tests(process: Process, rules: list[Rule], scenarios: list[Scenario
     text, supported = scenario_tests(ctx, process, scenarios)
     out.append(g.GenFile(path=f"{base}/{ctx.process}ScenarioTests.cs", content=text,
                          origin="code" if supported else "agent"))
+    records = record_tests(ctx, sources or [])
+    if records is not None:
+        out.append(g.GenFile(path=f"{base}/{ctx.process}RecordTests.cs", content=records))
     for s in scenarios:
         out.append(g.GenFile(path=f"{base}/{fixture_path(process, s)}", content=fixture_json(ctx, process, s)))
     return [f.model_copy(update={"process_id": process.id}) for f in out]

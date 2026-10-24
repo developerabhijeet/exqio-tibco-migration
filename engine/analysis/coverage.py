@@ -9,6 +9,9 @@ Items:
 ``covered_by`` lists the rule ids that reference the item; ``technical_reason`` comes
 from the analyst's ``technical`` declarations. An item counts as covered when it has
 either. Rules that are ``rejected`` or ``unverified`` never count as cover.
+
+A ``condition`` citation addresses a branch either by its source activity or by the transition's
+own id, matching the evidence index, so the same rule covers the branch whichever spelling it used.
 """
 from __future__ import annotations
 
@@ -32,6 +35,13 @@ def coverage_matrix(process: Process, rules: list[Rule], technical: dict[str, st
                 out.append(rid)
         return out
 
+    # Every id that legitimately addresses a condition on a given source activity: the activity
+    # itself and each of its outgoing transitions that carries an expression.
+    cond_ids: dict[str, set[str]] = {}
+    for tr in process.transitions:
+        if tr.expression:
+            cond_ids.setdefault(tr.from_id, {tr.from_id}).add(tr.id)
+
     items: list[CoverageItem] = []
     seen: set[tuple[str, str]] = set()
 
@@ -51,11 +61,14 @@ def coverage_matrix(process: Process, rules: list[Rule], technical: dict[str, st
             continue
         expr = normalize(tr.expression) if tr.expression else ""
         if expr:
-            by = rules_where(lambda aid, k, t, f=tr.from_id, e=expr: aid == f and k == "condition" and len(t) >= MIN_CITATION_LEN and t in e)
+            ids = {tr.from_id, tr.id}
+            by = rules_where(lambda aid, k, t, i=ids, e=expr: aid in i and k == "condition" and len(t) >= MIN_CITATION_LEN and t in e)
         else:
             # an otherwise (or bare error) edge is the complement of its source's conditions:
-            # a rule that cites any condition on the source activity explains it
-            by = rules_where(lambda aid, k, _t, f=tr.from_id: aid == f and k == "condition")
+            # a rule that cites any condition on the source activity explains it, whether it
+            # addressed that condition by the activity or by its sibling transition's id
+            ids = cond_ids.get(tr.from_id, {tr.from_id})
+            by = rules_where(lambda aid, k, _t, i=ids: aid in i and k == "condition")
         add("transition", tr.id, by)
 
     for act in process.activities:

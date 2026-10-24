@@ -15,10 +15,21 @@ from api.app.services import settings as svc
 router = APIRouter(tags=["settings"])
 
 
+class AzureKeys(BaseModel):
+    """Bring your own Azure OpenAI key. The key is encrypted with APP_SECRET before it is stored and
+    is never returned; ``clear`` takes the whole block back out."""
+
+    endpoint: str | None = None
+    api_key: str | None = None
+    deployments: dict[str, str] | None = None
+    clear: bool = False
+
+
 class SettingsPatch(BaseModel):
     models: dict[str, str] | None = None  # {strong, standard, efficient}: Claude model names per tier
     routing_bands: dict[str, list[int]] | None = None  # {strong: [8, 10], standard: [4, 7], efficient: [0, 3]}
     langfuse_enabled: bool | None = None
+    azure: AzureKeys | None = None
 
 
 class EvalRequest(BaseModel):
@@ -26,9 +37,11 @@ class EvalRequest(BaseModel):
 
 
 @router.get("/settings")
-async def get_settings(settings: SettingsDep) -> dict[str, Any]:
+async def get_settings(settings: SettingsDep, session: SessionDep) -> dict[str, Any]:
     """Providers as configured or missing (never values), models, routing, toolchains, Langfuse."""
-    return svc.settings_view(settings, await asyncio.to_thread(svc.detect_toolchains))
+    stored = await svc.load_stored(session)
+    return svc.settings_view(settings, await asyncio.to_thread(svc.detect_toolchains),
+                             stored.get(svc.AZURE_KEY))
 
 
 @router.put("/settings")
@@ -38,7 +51,9 @@ async def put_settings(body: SettingsPatch, session: SessionDep, settings: Setti
         await svc.update(session, settings, body.model_dump(exclude_none=True), user)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return svc.settings_view(settings, await asyncio.to_thread(svc.detect_toolchains))
+    stored = await svc.load_stored(session)
+    return svc.settings_view(settings, await asyncio.to_thread(svc.detect_toolchains),
+                             stored.get(svc.AZURE_KEY))
 
 
 @router.post("/providers/eval", status_code=202)

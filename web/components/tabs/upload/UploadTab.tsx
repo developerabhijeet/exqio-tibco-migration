@@ -6,6 +6,8 @@ import { Loader2, Play } from "lucide-react";
 import { api } from "@/lib/api";
 import { useFiles, useProcesses, useReport } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
+import { usePermission } from "@/lib/personas";
+import { RoleLock } from "@/components/shell/RoleNotice";
 import type { ProcessSummary } from "@/lib/types";
 import { ErrorNote } from "@/components/ui/Empty";
 import { DropZone, sourceToUpload, type UploadSource } from "./DropZone";
@@ -16,6 +18,7 @@ import { ParseReportTable, ReportCounters, UnknownsPanel } from "./ParseReport";
 
 export function UploadTab() {
   const { projectId, scan, watchScan, openProcess, setStep } = useAppState();
+  const may = usePermission("upload");
   const qc = useQueryClient();
   const files = useFiles(projectId);
   const report = useReport(projectId);
@@ -48,11 +51,11 @@ export function UploadTab() {
 
   return (
     <div className="space-y-5">
-      <div>
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0">
         <p className="eyebrow">Step 1</p>
         <h2 className="panel-title">Upload the estate</h2>
       </div>
-      <DropZone busy={upload.isPending || scanning} onSource={(s) => upload.mutate(s)} />
+      <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
       {upload.isPending ? (
         <p className="flex items-center gap-2 text-[14px] text-slate">
           <Loader2 size={16} className="animate-spin" aria-hidden /> Uploading
@@ -63,7 +66,7 @@ export function UploadTab() {
       {fileList.length > 0 ? (
         <>
           <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
-            <FileTree files={fileList} />
+            <FileTree files={fileList} collapsible />
             <div className="space-y-4">
               <ValidationPanel files={fileList} report={lastUpload && report.data?.upload_id !== lastUpload ? null : (report.data ?? null)} />
               <div className="card p-5">
@@ -74,10 +77,12 @@ export function UploadTab() {
                 <button
                   type="button"
                   className="btn-primary mt-3 w-full"
-                  disabled={scanning || startScan.isPending}
+                  disabled={scanning || startScan.isPending || !may.canAct}
+                  title={may.reason}
                   onClick={() => startScan.mutate()}
                 >
                   {scanning ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} aria-hidden />}
+                  <RoleLock reason={may.reason} />
                   Scan
                 </button>
                 {startScan.error ? (

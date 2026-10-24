@@ -21,7 +21,6 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   // Machine-derived steps read "complete"; green "approved" is kept for gate records.
   await expect(page.getByTestId("step-upload")).not.toContainText("approved");
   await expect(page.getByTestId("step-discover")).toContainText("complete");
-  await expect(page.getByTestId("synthetic-banner")).toBeVisible();
   await expect(page.getByTestId("parse-report").getByRole("row")).toHaveCount(12); // header + 11
 
   // Discover tab: domain, process, step.

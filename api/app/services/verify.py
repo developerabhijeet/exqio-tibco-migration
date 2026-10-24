@@ -10,7 +10,11 @@ branch predicates, seed rows) with the expected result filled by the parity eval
 (``fill_expected``, "derived from the TIBCO model"), and are cached in ``scenarios``. SME scenarios
 are evaluated the same way.
 
-Verify (job): for every scenario the database is reset to the seed plus the scenario's seed rows,
+Verify (job): every scenario's expected result is derived again, in the run, against the data this
+run seeds, and the cache is updated with it. Seed data is clock-relative (``current_date + 20``),
+so an expectation derived on an earlier day expects an earlier date; deriving it now keeps the
+field compared rather than excusing a date difference as noise. Then the database is reset to the
+seed plus the scenario's seed rows,
 the scenario goes to the running service (REST starters: an HTTP call with a development token;
 JMS starters: ``POST /_bus/publish`` with the selector's properties, then ``GET /_bus/messages``
 and the database rows), and ``compare`` classifies every field: match, intended (a finding decided
@@ -789,6 +793,42 @@ def applied_noise(report: ParityReport, rules: list[NoiseRule]) -> list[dict[str
     return [r.model_dump() for r in rules if any(r.matches(p) for p in noisy)]
 
 
+def _derive_expected(
+    settings: Settings, project_id: str, app: IRApplication, process_id: str,
+    scenarios: list[tuple[str, EngineScenario]],
+) -> dict[str, tuple[ExpectedResult | None, dict[str, StubResponse], str | None]]:
+    """Derive every scenario's expected result against a fresh seed: id -> (result, stubs, failure).
+
+    The expected result is derived here, in the run, and not read from the cache. Seed data is
+    clock-relative (``current_date + 20``), so an expectation derived on an earlier day expects an
+    earlier date and the comparison reports a difference the service does not have. Deriving it now
+    keeps the field compared instead of excusing it as noise.
+
+    All of it runs on one worker thread, as scenario generation does: the XSLT engine behind the
+    bindings is a native library and its processor does not survive being torn down from a thread
+    other than the one that used it.
+    """
+    out: dict[str, tuple[ExpectedResult | None, dict[str, StubResponse], str | None]] = {}
+    db = open_db(settings, project_id)
+    try:
+        reset_db(db, app)
+        evaluator = Evaluator(app, db, stubs_for(app))
+
+        async def fill() -> None:
+            for scenario_id, sc in scenarios:
+                try:
+                    result = await evaluator.run(process_id, sc)
+                except EvaluationError as exc:
+                    out[scenario_id] = (None, {}, str(exc))
+                    continue
+                out[scenario_id] = (result, dict(evaluator.last_stub_responses), None)
+
+        asyncio.run(fill())
+        return out
+    finally:
+        db.close()
+
+
 async def run_verify(ctx: JobContext, build_id: str, settings: Settings, services: dict[str, RunInfo],
                      lock: asyncio.Lock) -> dict[str, Any]:
     async with ctx.sessionmaker() as s:
@@ -804,7 +844,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
         rows, notes, fresh = await ensure_scenarios(s, settings, row, lock)
         scenarios = [(r.id, r.key, r.name, EngineScenario.model_validate(r.data)) for r in rows]
     await ctx.log(f"{len(scenarios)} scenario(s) " + ("generated" if fresh else "from the cache")
-                  + f", expected results {MODEL_LABEL}")
+                  + f", expected results {MODEL_LABEL}, derived again against this run's seed data")
     for n in notes:
         await ctx.log(n)
     info = services.get(build_id)
@@ -825,14 +865,23 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
         token = await dev_token(client)
         client.headers["Authorization"] = f"Bearer {token}"
         await ctx.log(f"development token issued by {info.url}/auth/dev-token")
+        derived = await asyncio.to_thread(_derive_expected, settings, project_id, app, proc.id,
+                                          [(sid, sc) for sid, _, _, sc in scenarios])
         db = await asyncio.to_thread(open_db, settings, project_id)
+        refreshed: dict[str, ExpectedResult] = {}
         try:
             for scenario_id, key, name, sc in scenarios:
                 expected = sc.expected
                 started = time.monotonic()
                 try:
-                    if expected is None:
-                        raise RuntimeError("no expected result (the evaluator could not run it)")
+                    derived_now, stubs, failure = derived.get(scenario_id, (None, {}, "it was not derived"))
+                    if derived_now is None:
+                        raise RuntimeError(f"the evaluator could not derive the expected result: {failure}")
+                    expected = derived_now
+                    for stub_key, response in stubs.items():
+                        sc.stub_responses.setdefault(stub_key, response)
+                    if sc.expected is None or expected.model_dump(mode="json") != sc.expected.model_dump(mode="json"):
+                        refreshed[scenario_id] = expected
                     expects_http = any(e.kind == "service_called" for e in expected.side_effects)
                     if expects_http and not sc.stub_responses:
                         raise RuntimeError("the scenario expects outbound HTTP calls but has no stub responses")
@@ -907,6 +956,13 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                         s.add(FieldDiff(run_id=run.id, kind=kind_name, field=d.path, expected=_jsonable(d.expected),
                                         actual=_jsonable(d.actual), classification=d.status,
                                         finding_key=d.finding_id or res["control_only"].get(d.path)))
+        # The cache keeps what the model last derived, so the scenario list, the parity report and
+        # the fixtures the next build writes all say the same thing.
+        for scenario_id, result in refreshed.items():
+            sc_row = await s.get(Scenario, scenario_id)
+            if sc_row is None:
+                continue
+            sc_row.data = {**(sc_row.data or {}), "expected": result.model_dump(mode="json")}
         process = await s.get(Process, row.id)
         rows_g = await gate_svc.gate_rows(s, row.id)
         reset = await gate_svc.reset_gates(s, process, rows_g, "G5", RESET_REASON, gate_svc.SYSTEM,

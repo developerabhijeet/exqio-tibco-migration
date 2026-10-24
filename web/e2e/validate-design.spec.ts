@@ -121,7 +121,7 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await expect(row.getByTestId("finding-badge")).toContainText("S2");
   await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/);
   // The e2e API runs the fake provider: the narrative says its prose is scripted.
-  await expect(page.getByTestId("design-narrative")).toContainText("Designer narrative, fake provider (scripted demo text, no model)");
+  await expect(page.getByTestId("design-narrative")).toContainText("Designer narrative, built-in provider (no model call)");
   await expect(page.getByTestId("sequence-diagram").locator("svg")).toBeVisible();
   await expect(page.getByTestId("sequence-alt").first()).toBeVisible();
   const g3 = await gate(page, "G3");

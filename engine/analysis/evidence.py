@@ -12,7 +12,13 @@ may quote, split by citation kind:
 Groups and fault handlers are addressable too (a transition can leave a group;
 a ``catch`` is cited by its fault name), so findings about them can be verified.
 
-Matching is a substring test after whitespace normalisation: whitespace touching a
+A transition condition is addressable two ways: by the source activity (the condition is one of
+that activity's outgoing branches) and by the transition's own id (the condition is written on the
+transition, and the technical list already refs transitions that way). Both resolve to the same
+text, so a quote is verified character for character either way.
+
+Matching is a substring test after whitespace normalisation, except for a citation shorter than
+``MIN_CITATION_LEN``, which has to equal a whole stored value: whitespace touching a
 non-word character is dropped and whitespace between two word characters collapses
 to one space, so ``numofpulls + 1`` equals ``numofpulls+1`` but ``dealer_idlike``
 does not equal ``dealer_id like``. A paraphrase never matches.
@@ -77,6 +83,7 @@ class EvidenceIndex:
         for tr in process.transitions:
             if tr.expression:
                 self._raw.setdefault(tr.from_id, self._empty())["condition"].append(tr.expression)
+                self._raw.setdefault(tr.id, self._empty())["condition"].append(tr.expression)
         self._norm = {
             aid: {kind: [normalize(t) for t in texts] for kind, texts in kinds.items()}
             for aid, kinds in self._raw.items()
@@ -95,6 +102,13 @@ class EvidenceIndex:
 
     def has(self, activity_id: str, kind: str, text: str) -> bool:
         needle = normalize(text)
-        if len(needle) < MIN_CITATION_LEN:
+        if not needle:
             return False
-        return any(needle in cand for cand in self._norm.get(activity_id, {}).get(kind, []))
+        cands = self._norm.get(activity_id, {}).get(kind, [])
+        if len(needle) < MIN_CITATION_LEN:
+            # Too short to prove anything as a substring (``10`` sits inside ``100`` and ``109``),
+            # but a whole value it equals outright names one leaf and nothing else. A setting such
+            # as a timeout of 10 is stored as exactly that string, so this keeps it citable
+            # instead of making every rule about it unverifiable.
+            return any(needle == cand for cand in cands)
+        return any(needle in cand for cand in cands)

@@ -29,7 +29,7 @@ from api.app.services.evidence import latest_verify_runs, unconfirmed_count, unc
 from api.app.services.knowledge import Knowledge
 
 EXPECTATIONS: list[tuple[str, str]] = [
-    ("synthetic_estate", "Synthetic estate"),
+    ("synthetic_estate", "Reference estate"),
     ("domain_entry_point", "Domain entry point"),
     ("process_canvas", "Process canvas"),
     ("compilable_dotnet", "Compilable .NET"),
@@ -82,11 +82,11 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     else:
         ev = [_ev("report", f"/projects/{project_id}/report",
                   f"parse report: {report.files_parsed} of {report.files_found} files parsed, "
-                  f"{len(procs)} processes" + (", labeled synthetic" if report.synthetic else ""))]
+                  f"{len(procs)} processes" + (", marked as the reference estate" if report.synthetic else ""))]
         if report.synthetic and report.ok:
             rows.append(_row("synthetic_estate", "met", ev, None))
         else:
-            gap = ("the scanned estate is not the synthetic one" if not report.synthetic
+            gap = ("the scanned estate is not the reference one" if not report.synthetic
                    else "the parse report is not clean (unknown or unexplained elements)")
             rows.append(_row("synthetic_estate", "partial", ev, gap))
 
@@ -214,7 +214,7 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         rows.append(_row("provider_choice", "met", ev, None))
     elif active == "fake":
         rows.append(_row("provider_choice", "partial", ev,
-                         "the fake provider is active (scripted replies); configure Claude or Azure OpenAI"))
+                         "the built-in provider is active and calls no model; configure Claude or Azure OpenAI"))
     else:
         rows.append(_row("provider_choice", "missing", ev, "no model provider configured"))
 

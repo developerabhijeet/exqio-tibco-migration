@@ -36,7 +36,7 @@ _XS_TYPES: dict[str, str] = {
     "negativeInteger": "int", "nonPositiveInteger": "int",
     "long": "long", "unsignedInt": "long", "unsignedLong": "ulong",
     "decimal": "decimal", "double": "double", "float": "float", "boolean": "bool",
-    "date": "DateOnly", "dateTime": "DateTime", "time": "TimeOnly",
+    "date": "DateOnly", "dateTime": "DateTimeOffset", "time": "TimeOnly",
     "base64Binary": "byte[]", "hexBinary": "byte[]", "anyType": "object", "anySimpleType": "string",
 }
 
@@ -568,7 +568,7 @@ class _JsonBuilder:
             return en, None, False
         if t == "string":
             fmt = ps.get("format")
-            return {"date": "DateOnly", "date-time": "DateTime", "byte": "byte[]",
+            return {"date": "DateOnly", "date-time": "DateTimeOffset", "byte": "byte[]",
                     "time": "TimeOnly"}.get(fmt, "string"), None, False
         if t == "integer":
             return ("long" if ps.get("format") == "int64" else "int"), None, False

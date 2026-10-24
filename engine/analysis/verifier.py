@@ -5,8 +5,8 @@ evidence the cited activity actually has for that kind. Rules with any failing
 citation are marked ``unverified`` in place, including ``approved`` and ``edited``
 ones: an analyst edit that breaks a quote is downgraded, so callers (the
 API's rule-edit endpoint) must re-run verification after an edit. A rule an analyst already ``rejected`` keeps
-that decision (its failures are still reported). Citations under three
-characters fail.
+that decision (its failures are still reported). A citation under three characters must equal a whole stored value
+rather than appear inside one.
 """
 from __future__ import annotations
 
@@ -30,12 +30,17 @@ def verify_citations(process: Process, rules: list[Rule]) -> VerificationResult:
             ))
         for cit in rule.citations:
             total += 1
-            if len(normalize(cit.text)) < MIN_CITATION_LEN:
-                reason = f"citation text too short (minimum {MIN_CITATION_LEN} characters)"
+            if not normalize(cit.text):
+                reason = "citation text is empty"
             elif not index.known(cit.activity_id):
                 reason = f"unknown activity: {cit.activity_id!r}"
             elif not index.has(cit.activity_id, cit.kind, cit.text):
-                reason = f"text not found in {cit.kind} of {cit.activity_id!r}"
+                reason = (
+                    f"citation text too short to match as a quote (under {MIN_CITATION_LEN} "
+                    f"characters it has to equal a whole value of {cit.activity_id!r})"
+                    if len(normalize(cit.text)) < MIN_CITATION_LEN
+                    else f"text not found in {cit.kind} of {cit.activity_id!r}"
+                )
             else:
                 verified += 1
                 continue

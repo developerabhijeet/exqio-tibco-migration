@@ -5,7 +5,28 @@ import { useEffect, useRef, useState } from "react";
 import Editor, { loader, type OnMount } from "@monaco-editor/react";
 import type { XmlHighlight } from "@/lib/xmlspan";
 
-loader.config({ paths: { vs: "/monaco/vs" } });
+// Monaco loads its language services into web workers it creates from a blob. A blob worker has no
+// origin of its own, so a root-relative path like "/monaco/vs" cannot be resolved inside it — that
+// is the console error "Failed to parse URL from /monaco/vs/language/json/jsonWorker.js". The loader
+// and the worker bootstrap both get absolute URLs instead. Guarded because this module is also
+// evaluated while the page is rendered on the server, where there is no window.
+if (typeof window !== "undefined") {
+  const base = `${window.location.origin}/monaco`;
+  loader.config({ paths: { vs: `${base}/vs` } });
+  const w = window as Window & { MonacoEnvironment?: { getWorkerUrl: () => string } };
+  w.MonacoEnvironment = {
+    getWorkerUrl: () =>
+      URL.createObjectURL(
+        new Blob(
+          [
+            `self.MonacoEnvironment = { baseUrl: ${JSON.stringify(`${base}/`)} };\n`,
+            `importScripts(${JSON.stringify(`${base}/vs/base/worker/workerMain.js`)});\n`,
+          ],
+          { type: "text/javascript" },
+        ),
+      ),
+  };
+}
 
 type MonacoEditor = Parameters<OnMount>[0];
 type Monaco = Parameters<OnMount>[1];

@@ -10,6 +10,7 @@ triage.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Iterable
 from pathlib import PurePosixPath
@@ -172,9 +173,14 @@ async def review_panel(
     else:
         source = "TIBCO source not supplied; compare against the citations of the rules."
     spec = skeleton_text(design)
-    out: list[ReviewFinding] = []
+    tests = reviewed_test_files(solution, process) if TEST_REVIEWER in chosen else {}
+
+    # Each reviewer reads the same code and answers on its own; nothing one finds changes what
+    # another is asked. Run them together: four sequential calls made the panel the third longest
+    # stage of a build, and asking at once costs the slowest reply instead of their sum.
+    jobs: list[tuple[str, dict[str, str], tuple[str, str]]] = []
     for reviewer in (r for r in REVIEWERS if r in chosen):
-        system, user = render_prompt(
+        jobs.append((reviewer, files, render_prompt(
             f"reviewer_{reviewer}",
             process_name=process.name if process is not None else design.process_id,
             source=source,
@@ -182,27 +188,27 @@ async def review_panel(
             rules=rules_block(rules),
             findings=findings_block(findings),
             code=code,
-        )
-        data, _ = await ask_json(
-            provider, REVIEW_TASK_KIND, process, system, user, REVIEW_SCHEMA,
-            tags={"stage": "review", "reviewer": reviewer, "process": design.process_id},
-            tier=None if process is not None else "standard",
-        )
-        out += _coerce(reviewer, data, files)
-
-    tests = reviewed_test_files(solution, process) if TEST_REVIEWER in chosen else {}
+        )))
     if tests:
-        system, user = render_prompt(
+        jobs.append((TEST_REVIEWER, tests, render_prompt(
             "reviewer_test",
             process_name=process.name if process is not None else design.process_id,
             rules=rules_block(rules),
             targets=_branches(process),
             code=numbered(tests),
-        )
+        )))
+
+    async def run(reviewer: str, prompt: tuple[str, str]) -> Any:
+        system, user = prompt
         data, _ = await ask_json(
             provider, REVIEW_TASK_KIND, process, system, user, REVIEW_SCHEMA,
-            tags={"stage": "review", "reviewer": TEST_REVIEWER, "process": design.process_id},
+            tags={"stage": "review", "reviewer": reviewer, "process": design.process_id},
             tier=None if process is not None else "standard",
         )
-        out += _coerce(TEST_REVIEWER, data, tests)
+        return data
+
+    replies = await asyncio.gather(*(run(r, prompt) for r, _, prompt in jobs))
+    out: list[ReviewFinding] = []
+    for (reviewer, scope, _), data in zip(jobs, replies, strict=True):
+        out += _coerce(reviewer, data, scope)  # gather keeps order, so findings stay deterministic
     return out

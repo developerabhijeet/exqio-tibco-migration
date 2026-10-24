@@ -9,6 +9,7 @@ import type { AzureConnectBody } from "@/lib/buildTypes";
 import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { errorText, Panel } from "@/components/tabs/build/Panel";
+import { AzureIcon } from "@/components/ui/BrandIcons";
 
 const FIELDS: { key: keyof AzureConnectBody; label: string; required?: boolean; placeholder: string }[] = [
   { key: "tenant", label: "Tenant ID", required: true, placeholder: "00000000-0000-0000-0000-000000000000" },
@@ -90,6 +91,7 @@ export function AzureConnectForm({
   return (
     <Panel
       title="Azure connection"
+      icon={<AzureIcon size={18} />}
       eyebrow="Subscription and service principal"
       testId="azure-form"
       actions={
@@ -155,7 +157,7 @@ export function AzureConnectForm({
         ))}
         <label className="text-[13px] text-slate">
           Runtime
-          <select className="input mt-1" value={form.runtime} onChange={(e) => set("runtime", e.target.value)}>
+          <select className="input select mt-1" value={form.runtime} onChange={(e) => set("runtime", e.target.value)}>
             <option value="container_app">Azure Container Apps</option>
             <option value="aks">AKS</option>
           </select>

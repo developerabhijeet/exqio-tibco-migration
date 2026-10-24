@@ -125,7 +125,7 @@ export default function Page() {
               actions={
                 <select
                   aria-label="Measure"
-                  className="rounded-btn border border-line bg-white px-2 py-1 text-[13px]"
+                  className="select py-1 text-[13px]"
                   value={measure}
                   onChange={(e) => setMeasure(e.target.value as Measure)}
                 >
@@ -250,7 +250,7 @@ export default function Page() {
                     {KIND_LABEL[k]}
                   </button>
                 ))}
-                <select aria-label="Phase" className="rounded-btn border border-line bg-white px-2 py-1 text-[13px]" value={phase} onChange={(e) => setPhase(e.target.value)}>
+                <select aria-label="Phase" className="select py-1 text-[13px]" value={phase} onChange={(e) => setPhase(e.target.value)}>
                   <option value="all">all phases</option>
                   {h.phases.map((p) => (
                     <option key={p} value={p}>

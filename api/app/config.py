@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
+    # Build toolchain. Off skips restore, build, format and test, and with them the compile repair
+    # loop: the solution is still generated, filled, reviewed and stored, and the three toolchain
+    # steps are reported as not run with that reason. For iterating on the generator or on the
+    # screens without paying for a repair loop on every run. G4 still refuses a build whose compile
+    # was never verified, because it was never verified.
+    build_toolchain: bool = True
+
     # Runtime
     job_workers: int = 2
     cors_origins: str = "http://localhost:3000"  # comma separated

@@ -197,6 +197,24 @@ public static class ScenarioAssert
         Assert.True(mismatches.Count == 0, $"{scenarioId}: {mismatches.Count} field(s) differ:\n" + string.Join("\n", mismatches));
     }
 
+    /// <summary>
+    /// The response body as a JSON object. Read a field of it with <see cref="Text"/> or
+    /// <see cref="Number"/>: those read the value whatever JSON type carries it, where
+    /// <c>GetValue&lt;string&gt;()</c> on a JSON number throws at run time.
+    /// </summary>
+    public static async Task<JsonObject> BodyAsync(HttpResponseMessage response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        var text = await response.Content.ReadAsStringAsync();
+        return (string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text)?.AsObject()) ?? new JsonObject();
+    }
+
+    /// <summary>A JSON value as a number, whether the JSON carries it as a number or as a string.</summary>
+    public static decimal Number(object? value) =>
+        decimal.TryParse(Text(value), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+            ? number
+            : throw new InvalidOperationException($"'{Text(value)}' is not a number");
+
     public static string Text(object? value) => value switch
     {
         null => string.Empty,

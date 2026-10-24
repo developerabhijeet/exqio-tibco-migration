@@ -379,7 +379,42 @@ export interface DesignRecord {
   resilience: { resource_id: string; timeout_ms?: number | null; retry?: unknown; breaker?: unknown }[];
   sequence: { from_?: string; from?: string; to: string; label: string }[];
   decisions: { title: string; choice: string; alternatives: string[]; reason: string }[];
-  open_questions: { question: string; recommendation: string }[];
+  /** Diagrams derived by code from the record and the process; never drawn by a model. */
+  views?: {
+    classes: {
+      name: string;
+      project: string;
+      file: string;
+      stereotype: string;
+      methods: string[];
+      activity_ids: string[];
+      rule_ids: string[];
+    }[];
+    tables: {
+      name: string;
+      verbs: string[];
+      columns: { name: string; type: string; role: string }[];
+      activity_ids: string[];
+    }[];
+    sql: {
+      activity_id: string;
+      activity_name: string;
+      verb: string;
+      tables: string[];
+      parameters: string[];
+      statement: string;
+    }[];
+    components: { source: string; target: string; kind: string; label: string }[];
+  };
+  open_questions: {
+    question: string;
+    recommendation: string;
+    /** The architect's verdict. Answering never moves the design hash, so G3 stays approved. */
+    decision?: "answered" | "rejected" | null;
+    answer?: string;
+    decided_by?: string;
+    decided_at?: string;
+  }[];
   expected_differences: { finding_id: string; description: string }[];
   narrative: string | null;
   design_hash: string;

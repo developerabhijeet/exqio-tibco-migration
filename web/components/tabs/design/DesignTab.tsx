@@ -7,6 +7,9 @@ import { api, ApiError } from "@/lib/api";
 import { useJob } from "@/lib/jobs";
 import { useAnalysis, useDesign, useGates, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
+import { usePermission } from "@/lib/personas";
+import { StandardsPanel } from "./StandardsPanel";
+import { RoleLock } from "@/components/shell/RoleNotice";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { JobLog } from "@/components/jobs/JobLog";
@@ -17,6 +20,7 @@ import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { ConfigTable } from "./ConfigTable";
 import { DecisionList, OpenQuestions } from "./DecisionList";
 import { MappingTable } from "./MappingTable";
+import { ArchitectureViews } from "./ArchitectureViews";
 import { SequenceDiagram } from "./SequenceDiagram";
 import { SolutionTree } from "./SolutionTree";
 
@@ -58,6 +62,7 @@ function Json({ value }: { value: unknown }) {
 
 export function DesignTab() {
   const { projectId, processId } = useAppState();
+  const may = usePermission("design");
   const processes = useProcesses(projectId);
   const analysis = useAnalysis(processId);
   const gates = useGates(processId);
@@ -70,12 +75,15 @@ export function DesignTab() {
   const running = stream?.status === "running";
   const rec = design.data?.record ?? null;
   const g3 = (gates.data ?? []).find((g) => g.gate === "G3");
-  // The active provider, as AskPanel reads it: the fake provider's narrative is canned prose.
+  // The active provider, as AskPanel reads it. The built-in provider writes the narrative without
+  // calling a model, and the eyebrow says so: the design record must not imply a model read it.
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 60_000 });
   const provider = health.data?.provider;
-  const narrativeEyebrow = provider
-    ? `Designer narrative, ${provider} provider${provider === "fake" ? " (scripted demo text, no model)" : ""}`
-    : "Designer narrative";
+  const narrativeEyebrow = !provider
+    ? "Designer narrative"
+    : provider === "fake"
+      ? "Designer narrative, built-in provider (no model call)"
+      : `Designer narrative, ${provider} provider`;
 
   const generate = async () => {
     if (!processId) return;
@@ -90,7 +98,7 @@ export function DesignTab() {
 
   return (
     <div className="space-y-5" data-testid="design-tab">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 4</p>
           <h2 className="panel-title">Design</h2>
@@ -107,12 +115,24 @@ export function DesignTab() {
           <button type="button" className="btn-secondary" disabled={!rec} onClick={() => window.print()}>
             <FileDown size={16} aria-hidden /> Export PDF
           </button>
-          <button type="button" className="btn-primary" disabled={!processId || running} onClick={generate}>
-            {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Wand2 size={16} aria-hidden />}
-            Generate design
-          </button>
+          <span title={may.reason}>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!processId || running || !may.canAct}
+              onClick={generate}
+            >
+              {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Wand2 size={16} aria-hidden />}
+              <RoleLock reason={may.reason} />
+              Generate design
+            </button>
+          </span>
         </div>
       </div>
+
+      {/* Project-level, so it is here whether or not a process is open: the standards constrain the
+          whole migration, and an architect attaches them before reviewing any one design record. */}
+      <StandardsPanel />
 
       {!processId ? (
         <Empty title="No process open">Pick a process above, or open one from Discover.</Empty>
@@ -190,6 +210,13 @@ export function DesignTab() {
                 <MappingTable mapping={rec.mapping} analysis={analysis.data} />
               </Panel>
 
+              <Panel
+                title="Target architecture"
+                eyebrow="Classes, data model, SQL and components, all derived by code from this record"
+                testId="architecture-views"
+              >
+                <ArchitectureViews views={rec.views} />
+              </Panel>
               <Panel title="Sequence" eyebrow="Calls in order">
                 <SequenceDiagram sequence={rec.sequence} />
               </Panel>
@@ -281,7 +308,13 @@ export function DesignTab() {
                 </Panel>
                 <div className="space-y-4">
                   <Panel title="Open questions" eyebrow="For the architect">
-                    <OpenQuestions questions={rec.open_questions} />
+                    {rec.open_questions.length > 0 ? (
+                      <p className="mb-2 text-[13px] text-slate" data-testid="open-question-summary">
+                        {rec.open_questions.filter((q) => !q.decision).length} of {rec.open_questions.length} still
+                        open. Answering one never moves the design hash, so an approved G3 stays approved.
+                      </p>
+                    ) : null}
+                    <OpenQuestions questions={rec.open_questions} processId={processId} />
                   </Panel>
                   <Panel title="Expected differences" eyebrow="Findings decided Fix at G2" testId="expected-differences">
                     {rec.expected_differences.length === 0 ? (

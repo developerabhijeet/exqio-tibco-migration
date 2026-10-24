@@ -56,6 +56,10 @@ public readonly struct TibValue : IEquatable<TibValue>
 
     public DateTime? AsDateTime() => DateTime.TryParse(AsString(), Invariant, DateTimeStyles.RoundtripKind, out var v) ? v : null;
 
+    /// <summary>xs:dateTime keeps the offset it was written with; DateTime would throw it away.</summary>
+    public DateTimeOffset? AsDateTimeOffset() =>
+        DateTimeOffset.TryParse(AsString(), Invariant, DateTimeStyles.RoundtripKind, out var v) ? v : null;
+
     public DateOnly? AsDateOnly()
     {
         var text = AsString();

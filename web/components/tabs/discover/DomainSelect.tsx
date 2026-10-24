@@ -229,7 +229,7 @@ export function DomainSelect({
             <label htmlFor="merge-target" className="label mt-4 block">
               Merge into
             </label>
-            <select id="merge-target" className="input mt-1" value={target} onChange={(e) => setTarget(e.target.value)}>
+            <select id="merge-target" className="input select mt-1" value={target} onChange={(e) => setTarget(e.target.value)}>
               {domains
                 .filter((d) => d.id !== current.id)
                 .map((d) => (

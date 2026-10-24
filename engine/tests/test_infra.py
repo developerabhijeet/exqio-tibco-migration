@@ -510,3 +510,94 @@ def test_bare_forbidden_is_not_registry_unreachable():
     assert not rx.search("Error: Forbidden: 403 from the module source")
     assert rx.search("could not connect to registry.opentofu.org: Forbidden")
     assert rx.search("Failed to query available provider packages")
+
+
+# ------------------------------------------------------- the exported bundle runs on its own
+# A reviewer who downloads a build gets a folder, not this platform. What tells them how to start it
+# has to travel with the folder, name the real project paths, and set the configuration the API
+# needs, or the bundle is a pile of C# and the Swagger UI is unreachable.
+LOCAL_RUN_FILES = ("run-local.sh", "run-local.ps1", "RUN_LOCALLY.md")
+
+
+def test_the_bundle_carries_the_scripts_that_start_it(generated):
+    root, files = generated
+    paths = {f.path for f in files}
+    for rel in LOCAL_RUN_FILES:
+        assert rel in paths, rel
+        assert (root / rel).is_file(), rel
+
+
+def test_run_local_sh_is_valid_bash(generated):
+    """A script nobody can run is worse than no script: it is checked here, not on a reviewer's laptop."""
+    import subprocess
+    root, _ = generated
+    done = subprocess.run(["bash", "-n", str(root / "run-local.sh")], check=False,
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize("script", ["run-local.sh", "run-local.ps1"])
+def test_the_scripts_start_the_api_with_the_configuration_it_needs(generated, script):
+    root, _ = generated
+    text = _read(root, script)
+    # Without each of these the API either refuses to start or answers 401 to every call.
+    for token in ("ASPNETCORE_ENVIRONMENT", "Development", "Auth__Mode", "Messaging__Mode", "InMemory",
+                  "KeyVault__Uri"):
+        assert token in text, f"{script} does not set {token}"
+    # The paths are the generated solution's own, not a guess.
+    layout = dotnet_generator.solution_layout(SOLUTION)
+    assert layout["solution"] in text and layout["api_project"] in text
+    # Both routes a reviewer needs, and the wait that makes the printed URL true.
+    assert "/health" in text and "/auth/dev-token" in text
+    assert f"localhost:{generator.TARGET_PORT}" in text
+    # The compose file it drives is the one the generator wrote beside it.
+    assert "docker-compose.override.yml" in text
+
+
+@pytest.mark.parametrize("script", ["run-local.sh", "run-local.ps1"])
+def test_the_scripts_carry_every_connection_string_the_solution_reads(generated, script):
+    """A missing connection string surfaces as a start-up failure in the container log, which is the
+    hardest place for a reviewer to read it."""
+    root, _ = generated
+    text = _read(root, script)
+    compose = _read(root, "docker-compose.override.yml")
+    names = set(re.findall(r"ConnectionStrings__(\w+)", compose))
+    assert names, "the compose file names no connection string, so this test proves nothing"
+    for name in names:
+        assert f"ConnectionStrings__{name}" in text, f"{script} does not set ConnectionStrings__{name}"
+
+
+def test_run_locally_names_the_swagger_url_and_both_ways_to_start(generated):
+    root, _ = generated
+    text = _read(root, "RUN_LOCALLY.md")
+    port = generator.TARGET_PORT
+    assert f"http://localhost:{port}/swagger" in text
+    assert "bash run-local.sh" in text and "run-local.ps1" in text
+    assert "bash run-local.sh --dotnet" in text
+    assert f"dotnet test {dotnet_generator.solution_layout(SOLUTION)['solution']}" in text
+    # The local credentials are explained as local, so nobody reads them as a leaked secret.
+    assert "local-only" in text and "Key Vault" in text
+
+
+def test_the_dotnet_generator_leaves_the_local_run_files_to_the_infrastructure_generator(generated):
+    """Both generators write into one folder. The dotnet one prunes what it no longer writes, so a
+    path it does not reserve would be deleted on the next regeneration."""
+    for rel in (*LOCAL_RUN_FILES, "docker-compose.override.yml"):
+        assert rel in dotnet_generator.RESERVED_FOR_INFRA, rel
+
+
+@pytest.mark.parametrize("flag, missing", [([], "docker"), (["--dotnet"], "dotnet")])
+def test_run_local_sh_says_what_is_missing_instead_of_hanging(generated, tmp_path, flag, missing):
+    """Run with neither tool on PATH. A reviewer without Docker has to be told that in one line,
+    not left watching a script wait for a health check that can never answer."""
+    import subprocess
+    root, _ = generated
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    done = subprocess.run(
+        ["bash", str(root / "run-local.sh"), *flag],
+        check=False, capture_output=True, text=True, timeout=60,
+        env={"PATH": f"{empty}:/usr/bin:/bin", "HOME": str(tmp_path)},
+    )
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert f"{missing} is not on PATH" in done.stderr

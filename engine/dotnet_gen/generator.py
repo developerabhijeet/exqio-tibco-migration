@@ -39,6 +39,7 @@ import json
 import re
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -50,11 +51,16 @@ from pydantic import BaseModel
 from engine.analysis.models import Finding, Rule
 from engine.dotnet_gen import csharp_contracts, tests_gen
 from engine.dotnet_gen.models import DesignRecord, MappingRow
+from engine.dotnet_gen.xpath import call as _call
 from engine.ir.models import Activity, Application, Contract, Process, Transition
 from engine.parity.models import Scenario
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
-RESERVED_FOR_INFRA: tuple[str, ...] = ("Dockerfile", ".dockerignore", "infra/")
+RESERVED_FOR_INFRA: tuple[str, ...] = (
+    "Dockerfile", ".dockerignore", "infra/", "docker-compose.override.yml",
+    # How to run the exported bundle, written beside the compose file it starts.
+    "run-local.sh", "run-local.ps1", "RUN_LOCALLY.md",
+)
 DOCKERFILE_PATH = "Dockerfile"  # written by the infrastructure generator (Task 16)
 MANIFEST = ".exiqo/generated-files.txt"
 
@@ -71,7 +77,9 @@ PACKAGES: tuple[tuple[str, str], ...] = (
     ("Microsoft.NET.Test.Sdk", "17.12.0"),
     ("Npgsql", "9.0.3"),
     ("Swashbuckle.AspNetCore", "7.2.0"),
-    ("Testcontainers.PostgreSql", "4.3.0"),
+    # 4.3.0 pins SSH.NET 2024.2.0, which carries two advisories the restore reports as NU1903
+    # on every build. 4.16.0 pins the patched SSH.NET, so the generated solution ships clean.
+    ("Testcontainers.PostgreSql", "4.16.0"),
     ("coverlet.collector", "6.0.4"),
     ("xunit", "2.9.3"),
     ("xunit.runner.visualstudio", "3.0.2"),
@@ -86,6 +94,12 @@ class GenFile(BaseModel):
     origin: Origin = "code"
     activity_id: str | None = None
     process_id: str | None = None  # the process a per-process file belongs to; None for shared files
+    # The file as code first wrote it, before any body was filled. The signature guard protects the
+    # declarations in here, not the ones in ``content``: a declaration a model added on an earlier
+    # pass is not a contract anybody agreed to, and treating it as one is what let a constructor
+    # that cannot compile become permanent, because every repair that removed it was rejected for
+    # "the method signature changed or is missing".
+    scaffold: str | None = None
 
 
 class GeneratedSolution(BaseModel):
@@ -93,6 +107,11 @@ class GeneratedSolution(BaseModel):
     name: str
     files: list[GenFile]
     build_hash: str
+    # The design each generated process was built from, keyed by engine process id: the one that
+    # was approved for the process under review, and a code-built skeleton for every process it
+    # calls. The Code Builder needs these to fill the bodies of the called processes too, which is
+    # the difference between a solution that compiles and one that also runs.
+    designs: dict[str, Any] = {}
 
 
 # =============================================================== C# text helpers
@@ -284,7 +303,7 @@ def tibco_comment(target: str, expression: str, pad: str) -> list[str]:
 
 # ================================================================== type tables
 SCALARS = frozenset({"string", "int", "long", "ulong", "decimal", "double", "float", "bool", "DateOnly",
-                     "DateTime", "TimeOnly"})
+                     "DateTime", "DateTimeOffset", "TimeOnly"})
 VALUE_TYPES = SCALARS - {"string"}
 
 _SQL_PARAM = {"VARCHAR": "string", "CHAR": "string", "LONGVARCHAR": "string", "NVARCHAR": "string",
@@ -406,6 +425,9 @@ class ContractIndex:
 
 # =============================================================== process context
 _PATH = re.compile(r"^\$([\w.\-]+)((?:/@?(?:[\w.\-]+:)?[\w.\-]+(?:\[\d+\])?)*)$")
+_PATH_ROOT = re.compile(r"\$([A-Za-z_][\w.\-]*)")
+# the same shape as _PATH, unanchored: a path sitting inside concat(), substring() or arithmetic
+_PATH_IN_EXPR = re.compile(r"\$[\w.\-]+(?:/@?(?:[\w.\-]+:)?[\w.\-]+(?:\[\d+\])?)*")
 _STEP = re.compile(r"^(@?)(?:[\w.\-]+:)?([\w.\-]+)(?:\[(\d+)\])?$")
 _STRING_LIT = re.compile(r"""^("([^"]*)"|'([^']*)')$""")
 _NUMBER_LIT = re.compile(r"^-?\d+(\.\d+)?$")
@@ -414,12 +436,14 @@ _API_KINDS = ("rest", "http", "soap")
 _NUM_SUFFIX = {"int": "", "long": "L", "ulong": "UL", "decimal": "m", "double": "d", "float": "f"}
 _AS = {"int": "AsInt", "long": "AsLong", "ulong": "AsULong", "decimal": "AsDecimal", "double": "AsDouble",
        "float": "AsFloat", "bool": "AsBool", "DateTime": "AsDateTime", "DateOnly": "AsDateOnly",
-       "TimeOnly": "AsTimeOnly"}
+       "DateTimeOffset": "AsDateTimeOffset", "TimeOnly": "AsTimeOnly"}
 _NUMERIC = frozenset({"int", "long", "ulong", "decimal", "double", "float"})
 
 
 def _element(index: int) -> str:
     return "FirstOrDefault()" if index == 0 else f"ElementAtOrDefault({index})"
+
+
 
 
 def _steps(path: str) -> list[tuple[str, int | None]] | None:
@@ -509,6 +533,40 @@ class ProcGen:
         for a in process.activities:
             if a.type.startswith("jdbc."):
                 self.connections[a.id] = sol.connection_name(a)
+        self.start_vars = self._start_vars()
+
+    def _start_vars(self) -> list[tuple[str, str]]:
+        """``(C# property, TIBCO name)`` for every way the mappings name the starter message.
+
+        A BPEL receive binds the incoming message to a variable named for the activity, and the
+        mappings then read its parts: the starter ``post`` is read as ``$post.item``. Nothing in
+        the state carried that name, so a mapping body had to go looking for it, and the way a
+        model goes looking (reflection over the state, then a search of the input) finds nothing
+        and quietly yields the empty string: every field of the request arrives blank and the
+        process rejects its own happy path. Naming the variable in the state is what makes
+        ``$post.item`` resolvable by the same lookup that already resolves ``$NormalizeApplicant``.
+        """
+        if self.starter_act is None:
+            return []
+        stem = self.starter_act.name or self.starter_act.id
+        # The starter has a state_props entry like every activity, but no slot is ever emitted for
+        # it (a receive produces no step output), so its own name is free to use here. A
+        # sub-process reads its input as $Start, and Start is exactly that name.
+        taken = {v for k, v in self.state_props.items() if k != self.starter_act.id}
+        out: dict[str, str] = {}
+        for act in self.p.activities:
+            for binding in act.input_bindings:
+                for root in _PATH_ROOT.findall(binding.expression or ""):
+                    if root != stem and not root.startswith(f"{stem}."):
+                        continue
+                    prop = ident(root)
+                    if prop not in taken:
+                        out.setdefault(prop, root)
+        for tr in self.p.transitions:
+            for root in _PATH_ROOT.findall(tr.expression or ""):
+                if (root == stem or root.startswith(f"{stem}.")) and ident(root) not in taken:
+                    out.setdefault(ident(root), root)
+        return sorted(out.items())
 
     # ------------------------------------------------------------ naming
     def ns(self, suffix: str) -> str:
@@ -644,6 +702,27 @@ class ProcGen:
             return None
         return None
 
+    def legend(self, expressions: Iterable[str]) -> list[tuple[str, str]]:
+        """``(TIBCO path, C# expression)`` for every path inside these expressions that code can resolve.
+
+        A mapping goes to the Code Builder when one binding uses a function code cannot translate, and
+        the model is then left reading TIBCO paths out of the comments. ``$QueryAccount/Record[1]/ssn``
+        is a row list in the state, not a ``Record`` property, so a literal reading does not compile.
+        The paths inside the expression still resolve one by one here, so the scaffold hands the model
+        the expressions it would otherwise have to guess.
+        """
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for expr in expressions:
+            for path in _PATH_IN_EXPR.findall(one_line(expr or "")):
+                if path in seen:
+                    continue
+                seen.add(path)
+                r = self.resolve(path)
+                if r is not None:
+                    out.append((path, r.expr))
+        return out
+
     def _walk(self, base: str, nullable: bool, shape: RecShape, steps: list[tuple[str, int | None]]) -> Resolved | None:
         expr, current = base, shape
         kind: Literal["scalar", "list", "record"] = "record"
@@ -692,7 +771,7 @@ class ProcGen:
         else:
             r = self.resolve(e)
             if r is None or r.kind != "scalar":
-                return None
+                return self._assign_function(e, target_type, target_nullable, field_name)
             src, src_type, src_nullable = r.expr, r.cs_type, r.nullable
         missing = f"TibValue.Missing({cs_string(field_name)})"
         if src_type == target_type:
@@ -706,6 +785,117 @@ class ProcGen:
             return None
         out = f"TibValue.Of({src}).{conv}()"
         return out if target_nullable else f"{out} ?? throw {missing}"
+
+    # ---------------------------------------------------- XPath functions in a mapping
+    def _assign_function(self, e: str, target_type: str, target_nullable: bool,
+                         field_name: str) -> str | None:
+        """``target = f(...)`` for the XPath functions code can translate; ``None`` for the rest.
+
+        Without this a single ``concat`` sends the whole mapping to the Code Builder, which then has
+        to re-derive every path in it from the comments. Each function here has one meaning, so code
+        can write it and the model is left only with what genuinely needs judgement.
+        """
+        missing = f"TibValue.Missing({cs_string(field_name)})"
+        fn = _call(e)
+        if fn is not None and fn[0] in ("current-dateTime", "current-date") and not fn[1]:
+            # the offset is part of xs:dateTime; DateTime.Now would throw it away
+            if target_type == "DateTimeOffset":
+                return "DateTimeOffset.Now"
+            if target_type == "DateTime":
+                return "DateTime.Now"
+            if target_type == "DateOnly":
+                return "DateOnly.FromDateTime(DateTime.Now)"
+        if fn is not None and fn[0] == "number" and len(fn[1]) == 1 and target_type in _AS:
+            inner = self.string_expr(fn[1][0])
+            if inner is not None:
+                out = f"TibValue.Of({inner}).{_AS[target_type]}()"
+                return out if target_nullable else f"{out} ?? throw {missing}"
+        text = self.string_expr(e)
+        if text is None:
+            return None
+        if target_type == "string":
+            return text
+        conv = _AS.get(target_type)
+        if conv is None:
+            return None
+        out = f"TibValue.Of({text}).{conv}()"
+        return out if target_nullable else f"{out} ?? throw {missing}"
+
+    def string_expr(self, expr: str) -> str | None:
+        """C# for an XPath expression read as a string, or ``None`` when code cannot translate it.
+
+        Always a non-null ``string``: XPath has no null, an absent node is the empty string, and the
+        ``TibText`` helpers keep that contract so the parts of a ``concat`` can simply be added up.
+        """
+        e = one_line(expr or "").strip()
+        if not e:
+            return None
+        m = _STRING_LIT.match(e)
+        if m:
+            return cs_string(m.group(2) if m.group(2) is not None else m.group(3))
+        if _NUMBER_LIT.match(e):
+            return cs_string(e)
+        fn = _call(e)
+        if fn is not None:
+            return self._string_call(*fn)
+        r = self.resolve(e)
+        if r is None or r.kind != "scalar":
+            return None
+        if r.cs_type == "string":
+            return r.expr if not r.nullable else f"({r.expr} ?? string.Empty)"
+        return f"TibValue.Of({r.expr}).AsString()"
+
+    def _string_call(self, name: str, args: list[str]) -> str | None:
+        parts = [self.string_expr(a) for a in args]
+        # substring's own arguments after the first are numbers, handled below; the rest need every one
+        if any(p is None for p in parts) and (name != "substring" or parts[0] is None):
+            return None
+        if name == "concat" and len(args) >= 2:
+            return f"string.Concat({', '.join(parts)})"
+        if name == "string" and len(args) == 1:
+            return parts[0]
+        if name == "upper-case" and len(args) == 1:
+            return f"{parts[0]}.ToUpperInvariant()"
+        if name == "lower-case" and len(args) == 1:
+            return f"{parts[0]}.ToLowerInvariant()"
+        if name == "normalize-space" and len(args) == 1:
+            return f"TibText.NormalizeSpace({parts[0]})"
+        if name == "substring-before" and len(args) == 2:
+            return f"TibText.SubstringBefore({parts[0]}, {parts[1]})"
+        if name == "substring-after" and len(args) == 2:
+            return f"TibText.SubstringAfter({parts[0]}, {parts[1]})"
+        if name == "translate" and len(args) == 3:
+            return f"TibText.Translate({parts[0]}, {parts[1]}, {parts[2]})"
+        if name == "substring" and len(args) in (2, 3):
+            nums = [self.number_expr(a) for a in args[1:]]
+            if any(n is None for n in nums):
+                return None
+            return f"TibText.Substring({parts[0]}, {', '.join(nums)})"
+        if name in ("current-dateTime", "current-date") and not args:
+            return "TibValue.Of(DateTimeOffset.Now).AsString()"
+        return None
+
+    def number_expr(self, expr: str) -> str | None:
+        """C# ``double`` for an XPath expression read as a number, or ``None``."""
+        e = one_line(expr or "").strip()
+        if _NUMBER_LIT.match(e):
+            return e + "d"
+        fn = _call(e)
+        if fn is not None:
+            name, args = fn
+            if name == "string-length" and len(args) == 1:
+                inner = self.string_expr(args[0])
+                return None if inner is None else f"(double){inner}.Length"
+            if name in ("number", "round", "floor", "ceiling") and len(args) == 1:
+                inner = self.number_expr(args[0]) or (
+                    f"(TibValue.Of({s}).AsDouble() ?? double.NaN)" if (s := self.string_expr(args[0])) else None)
+                if inner is None:
+                    return None
+                return {"number": "{0}", "round": "TibText.Round({0})", "floor": "Math.Floor({0})",
+                        "ceiling": "Math.Ceiling({0})"}[name].format(inner)
+            return None
+        text = self.string_expr(e)
+        return None if text is None else f"(TibValue.Of({text}).AsDouble() ?? double.NaN)"
 
     # ------------------------------------------------------------ jdbc
     def columns(self, act: Activity) -> list[tuple[str, str, str]]:
@@ -800,12 +990,18 @@ class ProcGen:
         return MapTarget("json", "JsonObject", None, 0, "target element not found in the process contracts")
 
     def map_origin(self, act: Activity) -> Origin:
-        """Origin of the mapping method actually generated (the design's, or agent when code cannot)."""
-        row = self.map_row.get(act.id)
-        if row is None:
+        """Origin of the mapping method actually generated: whether code can really write it.
+
+        The design's ``origin`` is a prediction, made at design time from the shape of the
+        expressions and before any C# existed. What code can actually write is settled here, by
+        trying, and code wins in both directions: a mapping the design left to the Code Builder is
+        generated when code can write it, and one the design marked ``code`` goes to the Code
+        Builder when a path inside it does not resolve. Reading the design's ``agent`` as final
+        meant a design approved before the generator learned a function kept sending that mapping
+        to a model for the life of the project, however well code could write it.
+        """
+        if self.map_row.get(act.id) is None:
             return "code"
-        if row.origin == "agent":
-            return "agent"
         return "code" if self.initializer(act, "") is not None else "agent"
 
     def initializer(self, act: Activity, pad: str) -> list[str] | None:
@@ -880,6 +1076,23 @@ class SolutionGen:
                 counts[ident(a.name or a.id)] += 1
         self.shared_step_names = {k for k, v in counts.items() if v > 1}
         self.resources = {r.id: r for r in app.resources}
+        self.procs = procs
+        self.selected_names = {procs[pid].name for pid in process_ids}
+
+    def subprocess_class(self, pg: ProcGen, act: Activity) -> str | None:
+        """The generated service a ``call.process`` step calls, or None when this build has none.
+
+        Both cases answer to the same document signature: a target outside this build gets the
+        generated stub, and one inside it gets the overload ``gen_service`` adds to every
+        sub-process. The name is derived exactly as the emission site derives it, so the two
+        cannot drift apart."""
+        if act.id not in pg.primary:  # no mapping row, so no stub is emitted for it either
+            return None
+        target = next((c.target_process for c in pg.p.calls if c.activity_id == act.id), "")
+        tname = self.procs[target].name if target in self.procs else (target.rsplit(".", 1)[-1] or act.name)
+        # Either way there is a class with the document signature: a target outside the build has
+        # the generated stub, one inside it has the overload gen_service adds to a sub-process.
+        return f"{ident(tname, 'Process')}Service"
 
     def connection_name(self, act: Activity) -> str:
         ref = str(act.config.get("resource_ref") or "")
@@ -908,8 +1121,19 @@ def _masked(text: str, app: str) -> str:
     rest = lines[len(usings):] if usings else lines
     if not usings:
         rest = ["", *rest]
-    merged = sorted({*usings, using}, key=lambda u: (not u.startswith("using System"), u))
+    merged = sorted({*usings, using}, key=_using_key)
     return "\n".join(merged + rest)
+
+
+def _using_key(line: str) -> tuple[bool, str]:
+    """Sort key for a ``using`` line: System first, then by namespace.
+
+    The namespace is taken without its semicolon. Sorting the whole line puts ``System.Text.Json;``
+    after ``System.Text.Json.Nodes;`` (``.`` sorts before ``;``), which is the one order
+    ``dotnet format`` rejects with IMPORTS, failing the format step on a solution that compiles.
+    """
+    ns = line.removeprefix("using ").removesuffix(";")
+    return not ns.startswith("System"), ns
 
 
 def mask_records(text: str) -> str:
@@ -948,6 +1172,24 @@ def _contract_usings(pg: ProcGen, *shapes: RecShape | None) -> list[str]:
     return [s.namespace for s in shapes if s is not None and s.namespace]
 
 
+def _start_document(pg: ProcGen, tibco: str) -> str:
+    """The C# that materialises one starter variable as a JsonNode.
+
+    A BPEL message has parts; ``$post.item`` is the body part and ``$post.parameters`` the path,
+    query and header part. Anything else names the message itself, which is the body here.
+    """
+    part = tibco.split(".")[-1].lower() if "." in tibco else ""
+    if part == "parameters" and pg.kind == "rest":
+        return "JsonSerializer.SerializeToNode(Input.Parameters)"
+    if pg.kind == "jms":
+        return "JsonSerializer.SerializeToNode(Input.Message)"
+    if pg.kind == "timer":
+        return "JsonSerializer.SerializeToNode(Input.FiredAt)"
+    if pg.kind == "subprocess":
+        return "Input.Start"
+    return "JsonSerializer.SerializeToNode(Input.Body)"
+
+
 def gen_state(pg: ProcGen) -> str:
     lines: list[str] = []
     usings = ["System.Text.Json.Serialization"] if pg.kind == "rest" else []
@@ -972,6 +1214,8 @@ def gen_state(pg: ProcGen) -> str:
         input_doc = "the subprocess Start input (shape decided by the builder)."
         sig = "JsonObject? Start = null"
         usings.append("System.Text.Json.Nodes")
+    if pg.start_vars:
+        usings += ["System.Text.Json", "System.Text.Json.Nodes"]
     has_jdbc = any(a.type.startswith("jdbc.") for a in pg.p.activities)
     if has_jdbc:
         usings.append(pg.ns("Core.Data"))
@@ -988,6 +1232,22 @@ def gen_state(pg: ProcGen) -> str:
                 usings.append("System.Text.Json.Nodes")
             usings += _contract_usings(pg, t.shape)
             props.append((f"Output of {a.name} ({a.type}).", f"{t.type_name}?", name, ""))
+        elif a.type in _INVOKE:
+            # The reply of an outbound call is a step output like any other: the transitions read it
+            # by the activity name ("$PullEquifax/tns3:score"), so the state needs somewhere to put
+            # it. Without the slot the service references a member the state does not have, exactly
+            # as a call.process did before it got one.
+            usings.append("System.Text.Json.Nodes")
+            props.append((f"Reply of {a.name} ({a.type}): the response document.",
+                          "JsonObject?", name, ""))
+        elif a.type == "call.process":
+            # A sub-process reply is a step output like any other: TIBCO transitions read it by the
+            # activity name ("$CallValidateVIN/tns2:valid = 'true'"), so the state needs somewhere to
+            # put it. Without this slot the conditions and the service reference a member the state
+            # does not have, and the solution cannot compile however the bodies are written.
+            usings.append("System.Text.Json.Nodes")
+            props.append((f"Reply of {a.name} (call.process): the sub-process output.",
+                          "JsonObject?", name, ""))
     lines.append(_usings(*usings).rstrip("\n"))
     lines.append("")
     lines.append(f"namespace {pg.ns('Core.Services')};")
@@ -1014,6 +1274,10 @@ def gen_state(pg: ProcGen) -> str:
     lines.append(f"public sealed class {pg.name}State({pg.name}Input input)")
     lines.append("{")
     lines.append(f"    public {pg.name}Input Input {{ get; }} = input;")
+    for prop, tibco in pg.start_vars:
+        lines.append("")
+        lines.append(f"    /// <summary>{xml_doc(f'The TIBCO starter variable ${tibco}: what this run was started with.')}</summary>")
+        lines.append(f"    public JsonNode? {prop} => _{camel(prop)} ??= {_start_document(pg, tibco)};")
     for doc, typ, name, init in props:
         lines.append("")
         lines.append(f"    /// <summary>{xml_doc(doc)}</summary>")
@@ -1021,6 +1285,9 @@ def gen_state(pg: ProcGen) -> str:
     lines.append("")
     lines.append("    /// <summary>The exception that sent the run down an error transition, if any.</summary>")
     lines.append("    public Exception? LastError { get; set; }")
+    for prop, _ in pg.start_vars:
+        lines.append("")
+        lines.append(f"    private JsonNode? _{camel(prop)};")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -1164,14 +1431,21 @@ def gen_mappings(pg: ProcGen) -> tuple[str, Origin]:
              f"    /// <remarks>{xml_doc(pg.remarks(a.id, row))}</remarks>",
              f"    public static {t.type_name} {row.method}({pg.name}State state)",
              "    {"]
-        body = pg.initializer(a, "        ") if row.origin == "code" else None
+        body = pg.initializer(a, "        ")
         if body is None:
             origin = "agent"
             for b in a.input_bindings:
                 m += tibco_comment(b.target, b.expression, "        ")
-            if row.origin == "code":
-                why = t.reason or "a path the generator cannot resolve"
-                m.append(f"        // Not generated by code: {why}.")
+            legend = pg.legend(b.expression for b in a.input_bindings)
+            if legend:
+                m.append("        // Each TIBCO path above, as code already resolves it against the state."
+                         " Use these, not a literal")
+                m.append("        // reading of the path: a Record[n] step is an element of a row list, never a"
+                         " Record property.")
+                for path, expr in legend:
+                    m.append(f"        //   {path} -> {expr}")
+            why = t.reason or "a path the generator cannot resolve"
+            m.append(f"        // Not generated by code: {why}.")
             m.append(f'        throw new NotImplementedException("agent fills: {a.name}");')
         else:
             m.append(f"        return {body[0]}")
@@ -1348,11 +1622,22 @@ _GENERIC = {"java.invoke", "xslt.transform", "json.parse", "json.render", "xml.p
 _INVOKE = {"http.invoke", "rest.invoke", "soap.invoke"}
 
 
+def _client_param(iface: str) -> str:
+    """``IEquifaxClient`` -> ``equifaxClient``: the parameter is named for the thing, not the
+    interface, as the repository parameter is."""
+    return camel(iface[1:] if len(iface) > 1 and iface[0] == "I" and iface[1].isupper() else iface)
+
+
 @dataclass
 class ServiceDeps:
     repository: bool = False
     bus: bool = False
     log: bool = False
+    # Generated sub-process services this one calls. A set, not a list: two activities may call the
+    # same target and one constructor parameter serves both.
+    subprocesses: set[str] = field(default_factory=set)
+    # Outbound HTTP clients, by their Core interface name, for the same reason.
+    clients: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -1436,10 +1721,28 @@ def _step(pg: ProcGen, node_id: str, deps: ServiceDeps, final: bool) -> Step:
     if t in ("noop", "catch", "confirm"):
         return Step([f"// TIBCO {t}: no code; kept for lineage."])
     if t == "call.process":
+        cls = pg.sol.subprocess_class(pg, act)
+        if cls is not None:
+            # The caller's own input mapping is the document the sub-process takes, so the call is
+            # derivable: nothing here is left for a model to invent, and the reply lands in the
+            # state slot the transitions read ("$CallValidateVIN/tns2:valid").
+            deps.subprocesses.add(cls)
+            return Step([f"state.{prop} = await {camel(cls)}.ExecuteAsync({mcall or 'null'}, cancellationToken);"],
+                        awaits=True)
         target = next((c.target_process for c in pg.p.calls if c.activity_id == act.id), "")
         what = f"{act.name} (call {target or 'subprocess'})"
         return Step([f"AgentFill.Required({cs_string(what)});"], origin="agent")
     row = pg.primary.get(act.id)
+    if t in _INVOKE and row and row.class_name and row.method:
+        # The mapping row already chose the client and the method, and the activity's own input
+        # mapping is the request document. Everything the call needs is therefore decided before a
+        # model sees it; what a model cannot decide is how a Core service reaches an Infrastructure
+        # client, and left to invent it, it writes a constructor that does not compile.
+        iface = f"I{row.class_name}"
+        deps.clients.add(iface)
+        method = row.method.split("(")[0]
+        call = f"{_client_param(iface)}.{method}({mcall or 'new JsonObject()'}, cancellationToken)"
+        return Step([f"state.{prop} = await {call};"], awaits=True)
     where = f": {row.class_name}.{row.method}" if row else ""
     return Step([f"AgentFill.Required({cs_string(f'{act.name} ({t}){where}')});"], origin="agent")
 
@@ -1703,7 +2006,14 @@ def gen_service(pg: ProcGen) -> tuple[str, Origin]:
     text_all = "\n".join(out_body)
     usings = [pg.ns("Core.Rules") if conds and "Conditions." in text_all else "",
               pg.ns("Core.Mappings") if "Mappings." in text_all else "",
-              pg.ns("Core.Tibco") if ("AgentFill." in text_all or queue or pg.p.fault_handlers) else ""]
+              pg.ns("Core.Tibco") if ("AgentFill." in text_all or queue or pg.p.fault_handlers) else "",
+              # the document entry point below takes and returns a JsonObject
+              "System.Text.Json.Nodes" if pg.kind == "subprocess" else ""]
+    for cls in sorted(deps.subprocesses):
+        ctor.append(f"{cls} {camel(cls)}")
+    for iface in sorted(deps.clients):
+        ctor.append(f"{iface} {_client_param(iface)}")
+        usings.append(pg.ns("Core.Clients"))
     if deps.repository:
         ctor.append(f"I{pg.name}Repository repository")
         usings.append(pg.ns("Core.Data"))
@@ -1755,7 +2065,23 @@ def gen_service(pg: ProcGen) -> tuple[str, Origin]:
     if lines[-1].strip() != "{":
         lines.append("")
     lines += _indent(out_body, 8)
-    lines += ["    }", "}"]
+    lines.append("    }")
+    if pg.kind == "subprocess":
+        # A sub-process is also called by other processes, which hold its input as the document
+        # their own mapping produced ("JsonObject? in, JsonObject? out" - the TIBCO shape). Its
+        # typed entry point cannot take that, so give it the document one too. Both run the same
+        # steps; this is the overload a caller's generated call binds to, which is what lets a
+        # call.process be written by code instead of invented by a model.
+        lines += ["",
+                  ("    /// <summary>Entry point for a caller: the document its mapping produced "
+                   "in, the reply document out.</summary>"),
+                  ("    public async Task<JsonObject?> ExecuteAsync(JsonObject? start, "
+                   "CancellationToken cancellationToken = default)"),
+                  "    {",
+                  f"        var outcome = await ExecuteAsync(new {pg.name}Input(start), cancellationToken);",
+                  "        return outcome.Body as JsonObject;",
+                  "    }"]
+    lines.append("}")
     return "\n".join(lines) + "\n", origin
 
 
@@ -2102,10 +2428,33 @@ def gen_agent_class(app: str, project_ns: str, folder: str, class_name: str,
     return "\n".join(lines) + "\n"
 
 
+def gen_client_interface(app: str, class_name: str, members: list[tuple[str, str, str]]) -> str:
+    """The abstraction a service calls an outbound HTTP step through.
+
+    The client itself belongs in Infrastructure, with its HttpClient, its base address and its
+    resilience policy; the service that invokes it is in Core, and Core does not reference
+    Infrastructure. Without something in Core to depend on there is nothing a generated service can
+    call, so the step was left to the Code Builder, which reached for the concrete client and wrote
+    a constructor Core cannot compile. One interface per client, beside the repository interfaces,
+    is what makes the call derivable by code instead."""
+    lines = [_usings("System.Text.Json.Nodes").rstrip("\n"), "", f"namespace {app}.Core.Clients;", "",
+             f"/// <summary>{xml_doc(f'Outbound HTTP calls of {class_name}, one per TIBCO invoke step.')}</summary>",
+             f"public interface I{class_name}", "{"]
+    for i, (method, act_name, remarks) in enumerate(members):
+        if i:
+            lines.append("")
+        lines += [f"    /// <summary>{xml_doc(f'TIBCO step {act_name}.')}</summary>",
+                  f"    /// <remarks>{xml_doc(remarks)}</remarks>",
+                  f"    Task<JsonObject?> {method}(JsonObject request, CancellationToken cancellationToken);"]
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 def gen_client(app: str, class_name: str, members: list[tuple[str, str, str]]) -> str:
-    lines = [_usings("System.Text.Json.Nodes").rstrip("\n"), "", f"namespace {app}.Infrastructure.Clients;", "",
+    lines = [_usings("System.Text.Json.Nodes", f"{app}.Core.Clients").rstrip("\n"), "",
+             f"namespace {app}.Infrastructure.Clients;", "",
              f"/// <summary>{xml_doc(f'Typed HTTP client {class_name}: timeout, retry and circuit breaker from the TIBCO HTTP client resource (registered in DI).')}</summary>",
-             f"public sealed class {class_name}(HttpClient http)", "{",
+             f"public sealed class {class_name}(HttpClient http) : I{class_name}", "{",
              "    /// <summary>The configured HttpClient (base address and resilience from DI).</summary>",
              "    public HttpClient Http { get; } = http;"]
     for method, act_name, remarks in members:
@@ -2129,13 +2478,41 @@ def gen_soap_stub(pg: ProcGen) -> str:
     return "\n".join(lines) + "\n"
 
 
+SUBPROCESS_EXCEPTION = "SubprocessNotMigratedException"
+
+
+def gen_subprocess_not_migrated(app: str) -> str:
+    """The one exception every un-migrated sub-process throws, so a reader of a test failure can
+    tell "this dependency was never migrated" from "this code is wrong"."""
+    return "\n".join([
+        f"namespace {app}.Core.Exceptions;", "",
+        "/// <summary>A sub-process the caller invokes that was not part of this migration. Its TIBCO",
+        "/// source exists in the estate but no design record was approved for it, so no code could be",
+        "/// derived from it. Design that process and build it with its caller.</summary>",
+        f"public sealed class {SUBPROCESS_EXCEPTION}(string target)",
+        ('    : InvalidOperationException($"subprocess {target} was not migrated: it has no '
+         'approved design record, so no code was derived from its TIBCO source")'),
+        "{",
+        "    /// <summary>The TIBCO process that is missing, as the caller names it.</summary>",
+        "    public string Target { get; } = target;",
+        "}"]) + "\n"
+
+
 def gen_subprocess_stub(app: str, name: str, target: str) -> str:
-    lines = [_usings("System.Text.Json.Nodes").rstrip("\n"), "", f"namespace {app}.Core.Services;", "",
-             f"/// <summary>{xml_doc(f'Subprocess {target}: outside the generated selection; generate it with the caller or fill it here.')}</summary>",
+    """A caller's view of a sub-process nobody migrated.
+
+    This is generated code, never an agent fill. Asking a model to write the body would ask it to
+    invent the process: for a decision engine that means inventing an APR, a tier and an approved
+    amount out of nothing. It throws one recognisable exception instead, which the test report
+    reads to mark the cases it blocks rather than failing them."""
+    lines = [_usings("System.Text.Json.Nodes", f"{app}.Core.Exceptions").rstrip("\n"), "",
+             f"namespace {app}.Core.Services;", "",
+             f"/// <summary>{xml_doc(f'Subprocess {target}: not migrated. Design that process and build it with this caller; nothing here is invented.')}</summary>",
              f"public sealed class {name}Service", "{",
-             "    public Task<JsonObject?> ExecuteAsync(JsonObject? start, CancellationToken cancellationToken)", "    {",
+             ("    public Task<JsonObject?> ExecuteAsync(JsonObject? start, "
+              "CancellationToken cancellationToken = default)"), "    {",
              "        cancellationToken.ThrowIfCancellationRequested();",
-             f'        throw new NotImplementedException("agent fills: subprocess {target}");', "    }", "}"]
+             f'        throw new {SUBPROCESS_EXCEPTION}({cs_string(target)});', "    }", "}"]
     return "\n".join(lines) + "\n"
 
 
@@ -2386,7 +2763,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
                 files[path] = files[path].model_copy(update=update)
             return
         files[path] = GenFile(path=path, content=content, origin=origin, activity_id=activity_id,
-                              process_id=process_id)
+                              process_id=process_id, scaffold=content)
 
     layout = solution_layout(a)
     folders = {k: v["folder"] for k, v in layout["projects"].items()}
@@ -2406,6 +2783,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     add(f"{core}/{a}.Core.csproj", render("Core.csproj.j2", app=a))
     add(f"{core}/Contracts/TibcoPathAttribute.cs", render("TibcoPathAttribute.cs.j2", app=a))
     add(f"{core}/Tibco/TibValue.cs", render("TibValue.cs.j2", app=a))
+    add(f"{core}/Tibco/TibText.cs", render("TibText.cs.j2", app=a))
     add(f"{core}/Tibco/AgentFill.cs", render("AgentFill.cs.j2", app=a))
     add(f"{core}/Tibco/ProcessFlow.cs", render("ProcessFlow.cs.j2", app=a))
     add(f"{core}/Contracts/Masking.cs", render("Masking.cs.j2", app=a, names=sorted(SENSITIVE_NAMES)))
@@ -2457,8 +2835,13 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
                 target = next((c.target_process for c in pg.p.calls if c.activity_id == act.id), "")
                 tname = procs[target].name if target in procs else (target.rsplit(".", 1)[-1] or act.name)
                 if tname not in selected_names:
+                    # code, not agent: the body cannot be written from anything this build has
                     add(f"{core}/{row.file}", gen_subprocess_stub(a, ident(tname, "Process"), target or act.name),
-                        "agent", act.id, process_id=pg.p.id)
+                        "code", act.id, process_id=pg.p.id)
+                    add(f"{core}/Exceptions/{SUBPROCESS_EXCEPTION}.cs", gen_subprocess_not_migrated(a), "code")
+                    stub = f"{ident(tname, 'Process')}Service"
+                    if stub not in services:  # two callers of one sub-process must not register it twice
+                        services.append(stub)
             elif act.type in _INVOKE and row:
                 client_members[row.class_name].append((row.method, act.name, pg.remarks(act.id, row)))
                 owners[f"client:{row.class_name}"].add(pg.p.id)
@@ -2510,6 +2893,8 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
         add(f"{base}/{file}", gen_agent_class(a, root_ns, folder, cls, uniq), "agent",
             process_id=owner(f"generic:{proj}:{file}"))
     for cls, members in sorted(client_members.items()):
+        add(f"{core}/Clients/I{cls}.cs", gen_client_interface(a, cls, members), "code",
+            process_id=owner(f"client:{cls}"))
         add(f"{infra}/Clients/{cls}.cs", gen_client(a, cls, members), "agent", process_id=owner(f"client:{cls}"))
 
     # ---- Infrastructure
@@ -2529,7 +2914,7 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
     if jobs:
         di_usings.append(f"{a}.Infrastructure.Jobs")
     if clients:
-        di_usings.append(f"{a}.Infrastructure.Clients")
+        di_usings += [f"{a}.Core.Clients", f"{a}.Infrastructure.Clients"]
     system = sorted(u for u in set(di_usings) if u.startswith("System"))
     other = sorted(u for u in set(di_usings) if not u.startswith("System"))
     add(f"{infra}/InfrastructureServiceCollectionExtensions.cs",
@@ -2564,14 +2949,17 @@ def generate_solution(app: Application, process_ids: list[str], design: DesignRe
         add(f.path, f.content, f.origin)
     for pg in pgs:
         ctx = tests_gen.TestContext.from_proc(pg, sql_texts, schemas)
-        for f in tests_gen.generate_tests(pg.p, pg.rules, pg.scenarios, pg.design, ctx):
+        # The record tests are written from the source files already added for this process.
+        owned = [f for f in files.values() if f.process_id == pg.p.id and f.path.startswith("src/")]
+        for f in tests_gen.generate_tests(pg.p, pg.rules, pg.scenarios, pg.design, ctx, owned):
             add(f.path, f.content, f.origin, f.activity_id, process_id=pg.p.id)
 
     ordered = [files[k] for k in sorted(files)]
     digest = hashlib.sha256()
     for f in ordered:
         digest.update(f.path.encode("utf-8") + b"\0" + f.content.encode("utf-8") + b"\0")
-    solution = GeneratedSolution(root=Path(out_dir).resolve(), name=a, files=ordered, build_hash=digest.hexdigest())
+    solution = GeneratedSolution(root=Path(out_dir).resolve(), name=a, files=ordered,
+                                 build_hash=digest.hexdigest(), designs=dict(designs))
     write_solution(solution)
     return solution
 

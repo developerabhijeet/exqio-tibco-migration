@@ -21,12 +21,16 @@ Two modes, because two parts of the run need the internet:
 Without ``--mode`` the probes decide. The script starts nothing: ``make demo-check`` starts an API
 when none answers. It never prints key values.
 
-    python scripts/demo_check.py --api http://localhost:8000 [--mode full|offline] [--zip PATH]
+    python scripts/demo_check.py [--api URL] [--mode full|offline] [--zip PATH]
+
+Without ``--api`` the API URL comes from API_URL, else from API_PORT in the environment or .env
+(the same key the Makefile and the web read), so this never probes a port the API has moved off.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -39,6 +43,21 @@ from typing import Any
 import httpx
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def default_api_url() -> str:
+    """API_URL, else API_PORT from the environment or .env, else the port the Makefile defaults to."""
+    if os.environ.get("API_URL"):
+        return os.environ["API_URL"]
+    port = os.environ.get("API_PORT")
+    if not port:
+        env_file = REPO / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                key, _, value = line.partition("=")
+                if key.strip() == "API_PORT" and value.strip():
+                    port = value.strip()
+    return f"http://localhost:{port or '9000'}"
 TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
 NUGET_INDEX = "https://api.nuget.org/v3/index.json"
@@ -451,7 +470,7 @@ def print_table(run: Run, header: list[str]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--api", default="http://localhost:8000", help="API base URL (default %(default)s)")
+    ap.add_argument("--api", default=default_api_url(), help="API base URL (default %(default)s)")
     ap.add_argument("--mode", choices=("full", "offline"), help="force a mode (default: decided by the probes)")
     ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
                     help="the synthetic estate zip (make samples-zip)")

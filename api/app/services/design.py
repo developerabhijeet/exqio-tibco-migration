@@ -13,6 +13,7 @@ changed``).
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -142,6 +143,35 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
             "decisions": len(design.decisions), "open_questions": len(design.open_questions),
             "ai_available": provider is not None and ai_error is None,
             "ai_reason": choice.reason or ai_error, "provider": choice.name, "gates_reset": reset}
+
+
+async def answer_open_question(session: AsyncSession, process: Process, index: int,
+                               decision: str | None, answer: str | None, user: str) -> dict[str, Any]:
+    """Answer or reject one open question on the latest design record, and return the design view.
+
+    The verdict is written into the record's ``open_questions``, which ``HASH_EXCLUDED`` keeps out
+    of the design hash: settling a question is a note on the design, not a change to it, so an
+    approved G3 stays approved. A later design job writes its own questions and starts clean."""
+    row = await evidence.latest_design(session, process.id)
+    if row is None:
+        raise LookupError("no design record yet")
+    record = dict(row.record)
+    questions = [dict(q) for q in record.get("open_questions") or []]
+    if index < 0 or index >= len(questions):
+        raise IndexError(index)
+    q = questions[index]
+    if decision is None:
+        for key in ("decision", "answer", "decided_by", "decided_at"):
+            q.pop(key, None)
+    else:
+        q["decision"] = decision
+        q["answer"] = (answer or "").strip()
+        q["decided_by"] = user
+        q["decided_at"] = datetime.now(UTC).isoformat()
+    record["open_questions"] = questions
+    row.record = record  # a new dict, so SQLAlchemy sees the JSONB change
+    await session.commit()
+    return await design_view(session, process)
 
 
 async def design_view(session: AsyncSession, process: Process) -> dict[str, Any] | None:

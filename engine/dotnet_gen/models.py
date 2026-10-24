@@ -87,8 +87,18 @@ class Decision(BaseModel):
 
 
 class OpenQuestion(BaseModel):
+    """A point the architect or the business must settle.
+
+    The verdict lives on the question itself. ``open_questions`` is in ``HASH_EXCLUDED``, so
+    answering one never moves the design hash and never unseats an approved G3: an answer is a
+    record of a conversation, not a change to the design."""
+
     question: str
     recommendation: str
+    decision: Literal["answered", "rejected"] | None = None
+    answer: str = ""  # what the architect decided, or why the question does not apply
+    decided_by: str = ""
+    decided_at: str = ""
 
 
 class ExpectedDifference(BaseModel):
@@ -111,11 +121,16 @@ class DesignRecord(BaseModel):
     open_questions: list[OpenQuestion] = Field(default_factory=list)
     expected_differences: list[ExpectedDifference] = Field(default_factory=list)
     narrative: str | None = None
+    # Diagrams for the architect, derived by code from the fields above and the process IR. They
+    # restate what is already hashed rather than adding to it, so they stay out of the hash: a
+    # better extractor must not reset an approved G3.
+    views: dict[str, Any] = Field(default_factory=dict)
     design_hash: str = ""
 
 
 # Fields the designer agent may write after the skeleton; they never move the hash.
-HASH_EXCLUDED: frozenset[str] = frozenset({"narrative", "decisions", "open_questions", "design_hash"})
+HASH_EXCLUDED: frozenset[str] = frozenset({"narrative", "decisions", "open_questions", "views",
+                                           "design_hash"})
 
 
 def compute_design_hash(record: DesignRecord) -> str:

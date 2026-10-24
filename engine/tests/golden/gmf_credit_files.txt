@@ -35,6 +35,7 @@ src/GmfCredit.Core/Services/FundingStatusLookupState.cs
 src/GmfCredit.Core/Services/ProcessResult.cs
 src/GmfCredit.Core/Tibco/AgentFill.cs
 src/GmfCredit.Core/Tibco/ProcessFlow.cs
+src/GmfCredit.Core/Tibco/TibText.cs
 src/GmfCredit.Core/Tibco/TibValue.cs
 src/GmfCredit.Infrastructure/Diagnostics/LoggerStepLogger.cs
 src/GmfCredit.Infrastructure/GmfCredit.Infrastructure.csproj
@@ -57,6 +58,7 @@ tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/branch-QueryFundingStatusToRe
 tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/branch-QueryFundingStatusTogetOut.json
 tests/GmfCredit.Tests/Fixtures/FundingStatusLookup/happy.json
 tests/GmfCredit.Tests/FundingStatusLookupBranchTests.cs
+tests/GmfCredit.Tests/FundingStatusLookupRecordTests.cs
 tests/GmfCredit.Tests/FundingStatusLookupRulesTests.cs
 tests/GmfCredit.Tests/FundingStatusLookupScenarioTests.cs
 tests/GmfCredit.Tests/GmfCredit.Tests.csproj

@@ -41,7 +41,19 @@ import type {
   TestReport,
 } from "./buildTypes";
 
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// next.config.ts bakes this in from the environment or the repo-root .env (scripts/root-env.ts),
+// so there is no port literal here to drift out of step with the API the Makefile starts. Empty
+// means the build was made without it: every call then fails with that name rather than quietly
+// going to the web origin or to whatever else is listening on a guessed port.
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+
+/** Throws when the build carries no API URL; callers surface the message as an ApiError. */
+export function requireApiUrl(): string {
+  if (!API_URL) {
+    throw new ApiError(0, "NEXT_PUBLIC_API_URL is not set in this build: start the web with `make web`");
+  }
+  return API_URL;
+}
 
 let currentUser = "sme.vicky";
 
@@ -64,11 +76,12 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   if (init.body && typeof init.body === "string" && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
+  const base = requireApiUrl();
   let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, { ...init, headers });
+    res = await fetch(`${base}${path}`, { ...init, headers });
   } catch {
-    throw new ApiError(0, `The API at ${API_URL} is not reachable`);
+    throw new ApiError(0, `The API at ${base} is not reachable`);
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -137,6 +150,13 @@ export const api = {
     json<AnalysisView>(`/rules/${ruleId}`, { method: "PATCH", body: JSON.stringify(body) }),
   patchFinding: (findingId: string, body: { decision: string; note?: string | null }) =>
     json<AnalysisView>(`/findings/${findingId}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  answerDesignQuestion: (processId: string, index: number,
+                         body: { decision: "answered" | "rejected" | null; answer?: string }) =>
+    json<Record<string, unknown>>(`/processes/${processId}/design/questions/${index}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }).then(toDesignView),
   decideGate: (processId: string, gate: string, state: "approved" | "rejected", note?: string) =>
     json<Gate>(`/gates/${processId}/${gate}`, post({ state, note: note ?? null })),
   audit: (processId: string) => json<AuditEntry[]>(`/processes/${processId}/audit`),
@@ -161,7 +181,30 @@ export const api = {
     json<BuildFileContent>(`/builds/${buildId}/files/${path.split("/").map(encodeURIComponent).join("/")}`),
   buildTests: (buildId: string) => json<TestReport>(`/builds/${buildId}/tests`),
   buildReviews: (buildId: string) => json<ReviewFinding[]>(`/builds/${buildId}/reviews`),
+  decideAllReviews: (buildId: string, body: { decision: "keep" | "reject" | null; only_undecided?: boolean }) =>
+    json<ReviewFinding[]>(`/builds/${buildId}/reviews`, { method: "PATCH", body: JSON.stringify(body) }),
+  decideReview: (buildId: string, index: number, body: { decision: "keep" | "reject" | null; note?: string }) =>
+    json<ReviewFinding[]>(`/builds/${buildId}/reviews/${index}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   infra: (buildId: string) => json<InfraView>(`/builds/${buildId}/infra`),
+
+  /**
+   * The build's whole folder as a zip: the solution, its tests, the infrastructure and the
+   * local-run scripts. Read as a blob through the same authenticated request as every other call,
+   * rather than as a plain link, because a link carries no X-User header. The filename is the
+   * server's own (Content-Disposition), so the file on disk names the process and the build.
+   */
+  downloadBuild: async (buildId: string): Promise<{ blob: Blob; filename: string }> => {
+    const res = await request(`/builds/${buildId}/download`);
+    const disposition = res.headers.get("content-disposition") ?? "";
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    return {
+      blob: await res.blob(),
+      filename: match ? decodeURIComponent(match[1]) : `build-${buildId.slice(0, 12)}.zip`,
+    };
+  },
 
   runState: (buildId: string) => json<RunState>(`/builds/${buildId}/run`),
   startService: (buildId: string) => json<RunState>(`/builds/${buildId}/run`, post()),
@@ -200,6 +243,11 @@ export const api = {
     json<{ job_id: string; eval_id: string }>("/providers/eval", post({ process_ids: processIds })),
   evalView: (evalId: string) => json<EvalView>(`/providers/eval/${evalId}`),
   history: (projectId: string) => json<HistoryView>(`/history?project_id=${encodeURIComponent(projectId)}`),
+  resetTokenomics: (projectId: string) =>
+    json<{ discarded: { model_calls: number; tokens_in: number; tokens_out: number; cost_usd: number } }>(
+      `/history/model-calls?project_id=${encodeURIComponent(projectId)}`,
+      { method: "DELETE" },
+    ),
   readiness: (projectId: string) => json<ReadinessView>(`/projects/${projectId}/readiness`),
 };
 

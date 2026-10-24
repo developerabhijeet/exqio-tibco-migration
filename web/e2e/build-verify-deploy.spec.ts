@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { actAs, newProjectAndScan, openDealerProcess } from "./helpers";
+import { apiUrl } from "../scripts/root-env";
 
 // The API runs with PROVIDER=fake. Whether `dotnet restore` can reach NuGet depends on the machine,
 // so the flow probes the finished build once (GET /builds/{id}) and branches on the restore step:
@@ -13,7 +14,8 @@ import { actAs, newProjectAndScan, openDealerProcess } from "./helpers";
 // asserted against a committed fixture in a separate test with its own project, so it is covered on
 // every machine even when the flow fails.
 
-const API = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// The API this run started; resolved exactly as the web resolves it (scripts/root-env.ts).
+const API = apiUrl;
 const PARITY = readFileSync(join(__dirname, "fixtures", "parity.json"), "utf8");
 
 /** The routed build the fixture test shows; no request for it reaches the API. */
@@ -186,6 +188,21 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await page.getByTestId("metric-drawer").getByRole("button", { name: "Close" }).click();
   await expect(radar.getByTestId("compile-pill")).toContainText(restoreOk ? "compile passed" : "compile failed");
 
+  // The five axes as one number, and the breakdown that keeps it honest: a metric with no
+  // denominator is named "not measured" rather than counted as zero. A build that did not compile
+  // scores 0 and says why, so the number can never look better than the build it describes.
+  const accuracy = page.getByTestId("accuracy-score");
+  await expect(accuracy).toBeVisible();
+  for (const axis of ["rule_carry_forward", "test_pass_rate", "branch_coverage", "code_coverage",
+                      "standards_adherence"]) {
+    await expect(accuracy.getByTestId(`accuracy-row-${axis}`)).toHaveCount(restoreOk ? 1 : 0);
+  }
+  if (!restoreOk) await expect(accuracy).toContainText("does not compile");
+
+  // Download the bundle, and the control that compiles and runs it on the API host.
+  await expect(page.getByTestId("export-panel")).toContainText("run-local.sh");
+  await expect(page.getByTestId("run-here-start")).toBeVisible();
+
   // Infra: the generated live config is listed.
   const infra = page.getByTestId("infra-panel");
   await expect(infra).toContainText("infra/live/dev");
@@ -300,7 +317,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   const rows = page.getByTestId("readiness-row");
   await expect(rows).toHaveCount(13);
   await expect(rows.filter({ hasText: "Compilable .NET" })).toHaveAttribute("data-status", restoreOk ? /^(met|partial)$/ : "partial");
-  await expect(rows.filter({ hasText: "Synthetic estate" })).toHaveAttribute("data-status", "met");
+  await expect(rows.filter({ hasText: "Reference estate" })).toHaveAttribute("data-status", "met");
   await expect(rows.first().getByTestId("evidence-link").first()).toBeVisible();
 
   await page.getByRole("link", { name: "History" }).click();

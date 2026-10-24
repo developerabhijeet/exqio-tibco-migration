@@ -2,7 +2,7 @@
 // a resumed stream for a finished job answers 204, which closes the EventSource, so the job row
 // is read to report the outcome. The browser reconnects on its own (resuming with Last-Event-ID);
 // after `maxRetries` failed attempts in a row the stream gives up and reports `onLost`.
-import { API_URL, api } from "./api";
+import { api, requireApiUrl } from "./api";
 import type { JobEvent, JobEventKind } from "./types";
 
 export interface SubscribeOptions {
@@ -15,7 +15,7 @@ export function subscribeJob(
   onEvent: (e: JobEvent) => void,
   { onLost, maxRetries = 5 }: SubscribeOptions = {},
 ): () => void {
-  const source = new EventSource(`${API_URL}/jobs/${jobId}/events`);
+  const source = new EventSource(`${requireApiUrl()}/jobs/${jobId}/events`);
   let finished = false;
   let failures = 0;
   source.addEventListener("open", () => {

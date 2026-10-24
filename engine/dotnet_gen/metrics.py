@@ -23,13 +23,36 @@ FORMULAS: dict[str, str] = {
     "branch_coverage": "IR branches with a passing test / IR branches (a branch is a conditional or "
                        "otherwise transition; its test is the BranchTests case named with the "
                        "transition id)",
-    "code_coverage": "coverlet line coverage of the generated service projects (Api, Core, "
-                     "Infrastructure): lines covered / lines valid from the Cobertura report",
+    "code_coverage": "coverlet line coverage of the files generated for this process (its service, "
+                     "controller, repository, mappings, conditions, state and contracts): lines "
+                     "covered / lines valid from the Cobertura report. The shared runtime the "
+                     "solution also carries - the Service Bus adapter the test host replaces with "
+                     "an in-memory bus, the TIBCO value helpers, masking - is not counted: a test "
+                     "of this workflow cannot reach it",
     "standards_adherence": "1 minus (compiler and analyzer warnings / C# files), floored at 0; 0 when "
                            "dotnet format --verify-no-changes does not pass",
     "compile": "dotnet build of the solution passes (exit code 0), with the warning count",
     "infra_validity": "terraform validate and terragrunt hclfmt --check pass (n/a until the "
                       "infrastructure is generated)",
+    "conversion_accuracy": (
+        "one number over the five quality metrics, weighted rule carry-forward 30%, test pass rate "
+        "25%, branch coverage 20%, code coverage 15%, standards adherence 10%. A metric with no "
+        "denominator is left out and the remaining weights are renormalised, so the score is always "
+        "an average of what was actually measured. 0 when the solution does not compile, because "
+        "nothing in it runs"
+    ),
+}
+
+#: What each quality metric contributes to :data:`conversion_accuracy`. Rule carry-forward weighs
+#: most because it is the only one that asks whether the converted code does what the approved
+#: business rules say; the rest measure how thoroughly that was exercised and how cleanly it was
+#: written. Infrastructure validity is not in here: it says nothing about the converted code.
+ACCURACY_WEIGHTS: dict[str, float] = {
+    "rule_carry_forward": 0.30,
+    "test_pass_rate": 0.25,
+    "branch_coverage": 0.20,
+    "code_coverage": 0.15,
+    "standards_adherence": 0.10,
 }
 
 
@@ -42,12 +65,42 @@ class Metrics(BaseModel):
     compile_ok: bool
     warnings: int
     infra_ok: bool | None
+    #: The five above as one number (see :data:`ACCURACY_WEIGHTS`); ``None`` when none of them has a
+    #: denominator, so an empty build reads "not measured" rather than 0%.
+    conversion_accuracy: float | None = None
     formulas: dict[str, str] = Field(default_factory=lambda: dict(FORMULAS))
     details: dict[str, str] = Field(default_factory=dict)
 
 
 def _ratio(num: int, den: int) -> float | None:
     return num / den if den else None
+
+
+def accuracy(values: dict[str, float | None], compile_ok: bool) -> tuple[float | None, str]:
+    """The weighted mean of the measured quality metrics, and the sentence explaining it.
+
+    Two things keep this honest. A metric with no denominator (no approved rules, no branches, no
+    coverage report) is left out rather than counted as zero, and the weights of the ones that are
+    left are renormalised; the detail then names what was left out, so a high score over two
+    metrics never reads like a high score over five. And a solution that does not compile scores 0
+    whatever the other numbers say, because none of the code in it runs.
+    """
+    measured = {k: v for k, v in values.items() if v is not None}
+    left_out = [k for k in ACCURACY_WEIGHTS if k not in measured]
+    if not measured:
+        return None, "no metric of this build has a denominator, so there is nothing to average"
+    if not compile_ok:
+        return 0.0, ("the solution does not compile, so the score is 0 whatever the other metrics "
+                     "say: none of this code runs")
+    total = sum(ACCURACY_WEIGHTS[k] for k in measured)
+    score = sum(ACCURACY_WEIGHTS[k] * v for k, v in measured.items()) / total
+    detail = f"{score:.1%} over {len(measured)} of {len(ACCURACY_WEIGHTS)} metrics ("
+    detail += ", ".join(f"{k} {measured[k]:.0%} at weight {ACCURACY_WEIGHTS[k] / total:.0%}"
+                        for k in ACCURACY_WEIGHTS if k in measured)
+    detail += ")"
+    if left_out:
+        detail += f"; not measured, and left out of the average: {', '.join(left_out)}"
+    return score, detail
 
 
 def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: BuildResult,
@@ -97,14 +150,20 @@ def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: 
         "compile": f"{'pass' if build.ok else 'fail'}, {build.warnings} warnings, {len(build.errors)} errors",
         "infra_validity": "not run" if infra_ok is None else ("pass" if infra_ok else "fail"),
     }
+    quality: dict[str, float | None] = {
+        "rule_carry_forward": _ratio(carried, len(approved)),
+        "test_pass_rate": _ratio(passed, total),
+        "branch_coverage": _ratio(covered_branches, branches),
+        "code_coverage": test_run.coverage_line,
+        "standards_adherence": standards,
+    }
+    score, accuracy_detail = accuracy(quality, build.ok)
+    details["conversion_accuracy"] = accuracy_detail
     return Metrics(
-        rule_carry_forward=_ratio(carried, len(approved)),
-        test_pass_rate=_ratio(passed, total),
-        branch_coverage=_ratio(covered_branches, branches),
-        code_coverage=test_run.coverage_line,
-        standards_adherence=standards,
+        **quality,  # type: ignore[arg-type]
         compile_ok=build.ok,
         warnings=build.warnings,
         infra_ok=infra_ok,
+        conversion_accuracy=score,
         details=details,
     )

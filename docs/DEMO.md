@@ -118,8 +118,9 @@ Run through this on the demo machine the day before and again an hour before.
    variables, in the environment or `.env`. Settings shows each provider as configured or
    missing; it never shows values. Without keys the demo runs with `PROVIDER=fake` (scripted
    replies) and says so on screen.
-7. **Ports.** The API on 8000 and the web on 3000 by default (`make api`, `make web`; change with
-   `API_PORT` and `WEB_PORT`). The generated service's Development CORS allows the
+7. **Ports.** The API on 9000 and the web on 3000 by default (`make api`, `make web`). Change them
+   in `.env` (`API_PORT`, `WEB_PORT`) or on the command line; the web reads the same two keys, so it
+   follows the API rather than having to be repointed by hand. The generated service's Development CORS allows the
    API's `CORS_ORIGINS` (default `http://localhost:3000`), which the Verify tab's Get dev token
    call needs: keep the web on 3000, or start the API with `WEB_PORT` set (the Makefile then sets
    `CORS_ORIGINS` to the web origin and the API passes it to the service). Verify starts the service on a free port the API allocates.

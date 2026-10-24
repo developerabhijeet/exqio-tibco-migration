@@ -12,6 +12,8 @@ import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { errorText, shortHash } from "@/components/tabs/build/Panel";
 import { ValidationRows } from "@/components/tabs/build/InfraPanel";
+import { usePermission } from "@/lib/personas";
+import { RoleLock } from "@/components/shell/RoleNotice";
 
 const CodeView = dynamic(() => import("@/components/canvas/CodeView"), { ssr: false });
 
@@ -38,6 +40,7 @@ export function PlanView({
   onPlanJob: (jobId: string) => void;
 }) {
   const qc = useQueryClient();
+  const may = usePermission("deploy");
   const plan = usePlan(buildId);
   const infra = useInfra(buildId);
   const [busy, setBusy] = useState(false);
@@ -74,10 +77,18 @@ export function PlanView({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {st ? <Pill tone={st.tone}>{st.text}</Pill> : null}
-          <button type="button" className="btn-primary" onClick={run} disabled={busy || stream?.status === "running"}>
-            {busy || stream?.status === "running" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <ScrollText size={15} aria-hidden />}
-            Run plan
-          </button>
+          <span title={may.reason}>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={run}
+              disabled={busy || stream?.status === "running" || !may.canAct}
+            >
+              {busy || stream?.status === "running" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <ScrollText size={15} aria-hidden />}
+              <RoleLock reason={may.reason} />
+              Run plan
+            </button>
+          </span>
           <span title={p?.apply?.reason ?? APPLY_REASON}>
             <button type="button" className="btn-secondary" disabled>
               <Rocket size={15} aria-hidden /> Apply

@@ -1,8 +1,9 @@
 "use client";
 
 // Queries for the Build, Verify and Deploy tabs and the secondary screens. Every read here is a
-// GET that never writes; an empty or missing cache reads as null.
-import { useQuery } from "@tanstack/react-query";
+// GET that never writes; an empty or missing cache reads as null. The one mutation is the review
+// verdict, which the next build acts on.
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 
 export const useBuilds = (processId: string | null) =>
@@ -33,6 +34,26 @@ export const useBuildTests = (buildId: string | null) =>
 
 export const useBuildReviews = (buildId: string | null) =>
   useQuery({ queryKey: ["build-reviews", buildId], queryFn: () => api.buildReviews(buildId!), enabled: !!buildId });
+
+/** Keep or reject one review finding; the next build applies what was kept. */
+export const useDecideReview = (buildId: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ index, decision, note }: { index: number; decision: "keep" | "reject" | null; note?: string }) =>
+      api.decideReview(buildId!, index, { decision, note }),
+    onSuccess: (rows) => qc.setQueryData(["build-reviews", buildId], rows),
+  });
+};
+
+/** One verdict across the whole review panel; undecided ones only, unless told otherwise. */
+export const useDecideAllReviews = (buildId: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { decision: "keep" | "reject" | null; only_undecided?: boolean }) =>
+      api.decideAllReviews(buildId!, body),
+    onSuccess: (rows) => qc.setQueryData(["build-reviews", buildId], rows),
+  });
+};
 
 export const useInfra = (buildId: string | null) =>
   useQuery({ queryKey: ["infra", buildId], queryFn: () => api.infra(buildId!), enabled: !!buildId });
@@ -74,6 +95,14 @@ export const useSettingsView = () => useQuery({ queryKey: ["settings-view"], que
 
 export const useHistory = (projectId: string | null) =>
   useQuery({ queryKey: ["history", projectId], queryFn: () => api.history(projectId!), enabled: !!projectId });
+
+export const useResetTokenomics = (projectId: string | null) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.resetTokenomics(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["history", projectId] }),
+  });
+};
 
 export const useReadiness = (projectId: string | null) =>
   useQuery({ queryKey: ["readiness", projectId], queryFn: () => api.readiness(projectId!), enabled: !!projectId });

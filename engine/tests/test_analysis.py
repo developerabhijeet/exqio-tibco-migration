@@ -396,3 +396,70 @@ def test_coverage_ignores_citations_under_minimum_length(procs):
 def test_finding_model_roundtrip():
     f = Finding(id="S1-x-1", severity="high", text="t", citations=[], source="static")
     assert Finding.model_validate_json(f.model_dump_json()) == f
+
+
+# ------------------------------- a condition addressed by its transition id
+# The analyst reads "[transition id=X from=A ...]: <expr>" and may cite either X or A for the
+# condition; the prompt allows both, so the evidence index and the coverage matrix accept both.
+def test_verifier_accepts_a_condition_cited_by_transition_id(procs):
+    proc = procs["DealerFundingRequest"]
+    tr = next(t for t in proc.transitions if t.expression and t.kind == "conditional")
+    by_transition = Rule(id="R-TR", text="t", confidence=1, citations=[
+        Citation(activity_id=tr.id, kind="condition", text=tr.expression)])
+    by_activity = Rule(id="R-ACT", text="t", confidence=1, citations=[
+        Citation(activity_id=tr.from_id, kind="condition", text=tr.expression)])
+    result = verify_citations(proc, [by_transition, by_activity])
+    assert result.failures == [] and result.verified == 2
+    assert by_transition.status == "draft" and by_activity.status == "draft"
+
+
+def test_transition_id_is_not_an_address_for_other_kinds(procs):
+    """Only a condition sits on a transition; a transition id elsewhere is still unknown."""
+    proc = procs["DealerFundingRequest"]
+    tr = next(t for t in proc.transitions if t.expression)
+    rule = Rule(id="R-BAD", text="t", confidence=1, citations=[
+        Citation(activity_id=tr.id, kind="sql", text="select 1 from gmf.deal")])
+    result = verify_citations(proc, [rule])
+    assert len(result.failures) == 1
+    assert "not found in sql" in result.failures[0].reason
+
+
+def test_coverage_credits_a_transition_cited_by_its_own_id(procs):
+    proc = procs["DealerFundingRequest"]
+    tr = next(t for t in proc.transitions if t.expression and t.kind == "conditional")
+    rule = Rule(id="R-TR", text="t", confidence=1, citations=[
+        Citation(activity_id=tr.id, kind="condition", text=tr.expression)])
+    items = {(i.kind, i.ref): i for i in coverage_matrix(proc, [rule], {}).items}
+    assert items[("transition", tr.id)].covered_by == ["R-TR"]
+    # the complementary edge out of the same activity is explained by that same condition
+    other = [t for t in proc.transitions
+             if t.from_id == tr.from_id and t.id != tr.id and t.kind != "success"]
+    for o in other:
+        assert items[("transition", o.id)].covered_by == ["R-TR"], o.id
+
+
+def test_coverage_technical_ref_marks_a_mapping(procs):
+    """Mappings are most of the matrix, so the analyst must be able to declare one technical;
+    the ref is ``<activity id>:<binding target>``."""
+    proc = procs["DealerFundingRequest"]
+    mapping = next(i for i in coverage_matrix(proc, [], {}).items if i.kind == "mapping")
+    covered = coverage_matrix(proc, [], {mapping.ref: "id passed straight through"})
+    assert {(i.kind, i.ref): i for i in covered.items}[("mapping", mapping.ref)].technical_reason
+    assert covered.covered == 1
+
+
+def test_short_citation_verifies_when_it_equals_a_whole_value(procs):
+    """A setting such as a timeout is stored as a short string of its own; requiring three
+    characters as a substring would make every rule about it unverifiable, so a short citation
+    is accepted when it equals a whole value and refused when it merely sits inside one."""
+    proc = procs["CreditApplicationIntake"]
+    act = next(a for a in proc.activities if a.id == "CheckDuplicateApplication")
+    assert act.config["timeout"] == "10"  # the only evidence there is for the timeout
+    exact = Rule(id="R-T", text="times out after 10 seconds", confidence=1, citations=[
+        Citation(activity_id="CheckDuplicateApplication", kind="config", text="10")])
+    assert verify_citations(proc, [exact]).failures == []
+    assert exact.status == "draft"
+    inside = Rule(id="R-I", text="t", confidence=1, citations=[
+        Citation(activity_id="CheckDuplicateApplication", kind="config", text="s9")])
+    result = verify_citations(proc, [inside])
+    assert len(result.failures) == 1 and "too short" in result.failures[0].reason

@@ -1,9 +1,15 @@
+using System.Text.Json.Nodes;
+using GmfCredit.Core.Contracts.DealerFunding;
+using GmfCredit.Core.Services;
+using GmfCredit.Tests.Support;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace GmfCredit.Tests;
 
 /// <summary>One test per approved rule of DealerFundingRequest, named in the rule's own words; written before the code.</summary>
 /// <remarks>A test fails with no test body until the Code Builder writes it; gate G4 refuses the build while any approved rule has no test body.</remarks>
+[Collection(TestDatabaseCollection.Name)]
 public sealed class DealerFundingRequestRulesTests
 {
     /// <summary>R1: A dealer must be ACTIVE to receive funding.</summary>

@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { existsSync } from "node:fs";
+import { apiPort as devApiPort, apiUrl as devApiUrl, webPort as devWebPort } from "./scripts/root-env";
 
 // Chromium is preinstalled under PLAYWRIGHT_BROWSERS_PATH; use its binary when the pinned
 // @playwright/test expects a different build.
@@ -7,12 +8,13 @@ const preinstalled = "/opt/pw-browsers/chromium";
 const executablePath = process.env.PW_CHROMIUM ?? (existsSync(preinstalled) ? preinstalled : undefined);
 
 // Ports: `make e2e` picks two free ports (E2E_API_PORT, E2E_WEB_PORT) so a server left running on
-// 8000 or 3000 by something else is never mistaken for this run's. Playwright starts both servers
+// the dev ports by something else is never mistaken for this run's. Playwright starts both servers
 // and refuses a busy port instead of reusing whatever answers there; E2E_REUSE_SERVERS=1 reuses
 // servers you started yourself (they must run this checkout, the fake provider and a migrated DB).
-const apiPort = Number(process.env.E2E_API_PORT ?? 8000);
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${apiPort}`;
-const webPort = Number(process.env.E2E_WEB_PORT ?? 3000);
+// Without those variables the dev ports come from scripts/root-env.ts (the repo-root .env).
+const apiPort = Number(devApiPort);
+const apiUrl = devApiUrl;
+const webPort = Number(devWebPort);
 const reuse = process.env.E2E_REUSE_SERVERS === "1";
 
 export default defineConfig({

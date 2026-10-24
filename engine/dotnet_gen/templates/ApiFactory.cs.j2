@@ -4,16 +4,29 @@ using System.Text.Json.Serialization;
 using {{ app }}.Infrastructure.Messaging;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace {{ app }}.Tests.Support;
 
 /// <summary>
 /// Hosts the generated API in memory (Development auth, in-memory bus, timers off) against the
-/// test database, and sends scenario requests with a development token.
+/// test database.
 /// </summary>
+/// <remarks>
+/// Every client this factory creates already carries a development bearer token, so a test writes
+/// the request it means and never the authentication around it: a request sent without one is
+/// answered 401 by the generated API, which looks like a defect in the process under test and is
+/// not one. <see cref="CreateAnonymousClient"/> is the deliberate exception, for a test that
+/// asserts the API does reject an unauthenticated caller.
+/// </remarks>
 public sealed class ApiFactory(TestDatabase database) : WebApplicationFactory<Program>
 {
+    private const string TokenPath = "/auth/dev-token";
+
+    private readonly Lock _tokenLock = new();
+    private volatile string? _token;
+
     /// <summary>The in-memory bus, to read what the process published.</summary>
     public InMemoryMessageBus Bus => Services.GetRequiredService<InMemoryMessageBus>();
 
@@ -30,18 +43,57 @@ public sealed class ApiFactory(TestDatabase database) : WebApplicationFactory<Pr
         }
     }
 
-    /// <summary>Sends the fixture's request with a token from POST /auth/dev-token.</summary>
+    /// <summary>Puts a development token on every client this factory creates.</summary>
+    protected override void ConfigureClient(HttpClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        base.ConfigureClient(client);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token());
+    }
+
+    /// <summary>A client with no token, for a test that asserts an unauthenticated call is rejected.</summary>
+    public HttpClient CreateAnonymousClient() => Server.CreateClient();
+
+    /// <summary>Sends the fixture's request, authenticated.</summary>
     public async Task<HttpResponseMessage> SendAsync(ScenarioFixture fixture)
     {
         ArgumentNullException.ThrowIfNull(fixture);
-        var client = CreateClient();
-        using var tokenResponse = await client.PostAsJsonAsync("/auth/dev-token", new { subject = "scenario-tests" });
-        tokenResponse.EnsureSuccessStatusCode();
-        var token = await tokenResponse.Content.ReadFromJsonAsync<TokenAnswer>()
-            ?? throw new InvalidOperationException("empty answer from /auth/dev-token");
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        using var client = CreateClient();
         using var request = fixture.ToHttpRequest();
         return await client.SendAsync(request);
+    }
+
+    /// <summary>The development token, fetched once and reused.</summary>
+    private string Token()
+    {
+        if (_token is not null)
+        {
+            return _token;
+        }
+
+        lock (_tokenLock)
+        {
+            // Task.Run keeps the await chain off the test's synchronization context, and
+            // Server.CreateClient() does not run through ConfigureClient, so asking for the token
+            // here cannot ask for it again.
+            return _token ??= Task.Run(FetchTokenAsync).GetAwaiter().GetResult();
+        }
+    }
+
+    private async Task<string> FetchTokenAsync()
+    {
+        using var anonymous = Server.CreateClient();
+        using var response = await anonymous.PostAsJsonAsync(TokenPath, new { subject = "scenario-tests" });
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"{TokenPath} answered {(int)response.StatusCode}: the API under test does not issue "
+                + "development tokens, so no test can authenticate against it.");
+        }
+
+        var answer = await response.Content.ReadFromJsonAsync<TokenAnswer>()
+            ?? throw new InvalidOperationException($"empty answer from {TokenPath}");
+        return answer.AccessToken;
     }
 
     private sealed record TokenAnswer([property: JsonPropertyName("access_token")] string AccessToken);

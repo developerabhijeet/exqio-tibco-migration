@@ -150,10 +150,10 @@ export function IOCard({ processId }: { processId: string }) {
           </div>
         </div>
       </div>
-      <div className="mt-6 border-t border-line pt-4" data-testid="sample-outputs">
-        <p className="label">Sample outputs</p>
+      <div className="mt-6 border-t border-line pt-4" data-testid="scenario-outputs">
+        <p className="label">Scenario outputs</p>
         <p className="mt-0.5 text-[13px] font-medium text-decision">Expected output derived from the TIBCO model</p>
-        <SampleOutputs set={scenarios.data} loading={scenarios.isLoading} error={scenarios.error} />
+        <ScenarioOutputs set={scenarios.data} loading={scenarios.isLoading} error={scenarios.error} />
       </div>
     </section>
   );
@@ -167,7 +167,7 @@ const KIND_TONE: Record<string, "gate" | "decision" | "error" | "purple" | "det"
   sme: "purple",
 };
 
-function SampleOutputs({ set, loading, error }: { set: ScenarioSet | null | undefined; loading: boolean; error: unknown }) {
+function ScenarioOutputs({ set, loading, error }: { set: ScenarioSet | null | undefined; loading: boolean; error: unknown }) {
   if (loading) {
     return <p className="mt-2 text-[14px] text-slate">Deriving scenarios from the TIBCO model</p>;
   }
@@ -192,7 +192,7 @@ function SampleOutputs({ set, loading, error }: { set: ScenarioSet | null | unde
           const exp = s.expected;
           const effects = exp?.side_effects ?? [];
           return (
-            <li key={s.id} className="rounded-btn border border-line p-3" data-testid="sample-output">
+            <li key={s.id} className="rounded-btn border border-line p-3" data-testid="scenario-output">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-[13.5px] font-medium text-plum">{s.name}</p>
                 {s.kind ? <Pill tone={KIND_TONE[s.kind] ?? "det"}>{s.kind.replace("_", " ")}</Pill> : null}

@@ -9,12 +9,16 @@ import { buildStepRows } from "@/lib/buildSteps";
 import { useJob } from "@/lib/jobs";
 import { useDesign, useGates, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
+import { usePermission } from "@/lib/personas";
+import { RoleLock } from "@/components/shell/RoleNotice";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { GateButton, gateDisplayState } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
 import { BuildJobLog, BuildSteps, failedBuildOutcome } from "./BuildLog";
+import { AccuracyScore } from "./AccuracyScore";
+import { ExportPanel } from "./ExportPanel";
 import { Remedy, restoreFailure } from "./BuildStatusStrip";
 import { InfraPanel } from "./InfraPanel";
 import { MetricsRadar } from "./MetricsRadar";
@@ -29,6 +33,7 @@ export const BUILD_QUERIES = ["build", "build-files", "build-tests", "build-revi
 export function BuildTab() {
   const qc = useQueryClient();
   const { projectId, processId } = useAppState();
+  const may = usePermission("build");
   useScrollToHash();
   const processes = useProcesses(projectId);
   const gates = useGates(processId);
@@ -97,7 +102,7 @@ export function BuildTab() {
 
   return (
     <div className="space-y-5" data-testid="build-tab">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 5</p>
           <h2 className="panel-title">Build</h2>
@@ -112,7 +117,7 @@ export function BuildTab() {
           <label className="flex items-center gap-2 text-[13.5px] text-slate">
             Runtime
             <select
-              className="rounded-btn border border-line bg-white px-2.5 py-1.5 text-[14px] font-medium text-plum"
+              className="select"
               value={runtime}
               onChange={(e) => setRuntime(e.target.value as "container_app" | "aks")}
               disabled={running}
@@ -127,11 +132,12 @@ export function BuildTab() {
           <button
             type="button"
             className="btn-primary"
-            disabled={!processId || running || g3?.state !== "approved"}
-            title={g3?.state !== "approved" ? "G3 must be approved first" : undefined}
+            disabled={!processId || running || g3?.state !== "approved" || !may.canAct}
+            title={may.reason ?? (g3?.state !== "approved" ? "G3 must be approved first" : undefined)}
             onClick={start}
           >
             {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Hammer size={16} aria-hidden />}
+            <RoleLock reason={may.reason} />
             Generate and build
           </button>
         </div>
@@ -220,6 +226,7 @@ export function BuildTab() {
             finished ? (
               <>
                 {proc ? <SourceTargetExplorer buildId={buildId} process={proc} /> : null}
+                <AccuracyScore metrics={build.data.metrics} />
                 <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
                   <MetricsRadar metrics={build.data.metrics} />
                   <ReviewPanel buildId={buildId} builder={build.data.builder} />
@@ -230,6 +237,7 @@ export function BuildTab() {
                   warnings={build.data.builder?.test_engineer?.warnings ?? []}
                 />
                 <InfraPanel buildId={buildId} />
+                <ExportPanel buildId={buildId} compiled={build.data.metrics?.compile_ok ?? null} />
               </>
             ) : (
               <Empty title="Build in progress">The files, tests, metrics and infrastructure appear when the job finishes.</Empty>

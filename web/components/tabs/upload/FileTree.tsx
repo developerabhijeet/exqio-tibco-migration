@@ -72,16 +72,18 @@ function FileRow({ f, open }: { f: FileEntry; open: OpenProps }) {
   return <div className="flex items-center gap-1.5 px-1 py-0.5 text-[13px]">{body}</div>;
 }
 
-export function FileTree({ files, onOpen, canOpen, selected }: { files: FileEntry[] } & OpenProps) {
+export function FileTree({
+  files,
+  onOpen,
+  canOpen,
+  selected,
+  collapsible = false,
+}: { files: FileEntry[]; collapsible?: boolean } & OpenProps) {
   const tree = buildTree(files);
   const counts = countsByKind(files);
   const open: OpenProps = { onOpen, canOpen, selected };
-  return (
-    <section className="card p-5" data-testid="file-tree">
-      <div className="flex items-center justify-between">
-        <h3 className="panel-title">Files</h3>
-        <span className="text-[14px] text-slate">{files.length} files</span>
-      </div>
+  const body = (
+    <>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {counts.map((c) => (
           <span
@@ -103,6 +105,37 @@ export function FileTree({ files, onOpen, canOpen, selected }: { files: FileEntr
           <FileRow key={f.path} f={f} open={open} />
         ))}
       </div>
+    </>
+  );
+  // Collapsed: the inventory is there to open when it is asked about, not to fill the screen
+  // the moment an estate lands.
+  if (collapsible) {
+    return (
+      <section className="card p-5" data-testid="file-tree">
+        <details className="group/files">
+          <summary className="cursor-pointer list-none">
+            <h3 className="panel-title flex items-center gap-1.5">
+              <ChevronRight
+                size={16}
+                className="text-slate transition-transform group-open/files:rotate-90"
+                aria-hidden
+              />
+              Files
+              <span className="ml-auto text-[14px] font-normal text-slate">{files.length} files</span>
+            </h3>
+          </summary>
+          {body}
+        </details>
+      </section>
+    );
+  }
+  return (
+    <section className="card p-5" data-testid="file-tree">
+      <div className="flex items-center justify-between">
+        <h3 className="panel-title">Files</h3>
+        <span className="text-[14px] text-slate">{files.length} files</span>
+      </div>
+      {body}
     </section>
   );
 }

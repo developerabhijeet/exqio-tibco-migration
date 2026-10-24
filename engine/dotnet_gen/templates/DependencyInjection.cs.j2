@@ -50,7 +50,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<{{ j }}>());
 {% endfor %}
 {% for c in clients %}
-        services.AddHttpClient<{{ c.name }}>(client => client.BaseAddress = new Uri(configuration["{{ c.base_key }}"] ?? "http://localhost/"))
+        services.AddHttpClient<I{{ c.name }}, {{ c.name }}>(client => client.BaseAddress = new Uri(configuration["{{ c.base_key }}"] ?? "http://localhost/"))
 {% if c.resilience %}
             .AddStandardResilienceHandler(options =>
             {

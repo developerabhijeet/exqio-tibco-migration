@@ -90,7 +90,7 @@ export function DiscoverTab() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 2</p>
           <h2 className="panel-title">Discover</h2>
@@ -132,7 +132,7 @@ export function DiscoverTab() {
             <label className="ml-auto flex items-center gap-1.5 text-[13px] text-slate">
               Complexity
               <select
-                className="rounded-btn border border-line bg-white px-2 py-1 text-[13px]"
+                className="select py-1 text-[13px]"
                 value={filters.band}
                 onChange={(e) => setFilters((f) => ({ ...f, band: e.target.value }))}
               >
@@ -144,7 +144,7 @@ export function DiscoverTab() {
             <label className="flex items-center gap-1.5 text-[13px] text-slate">
               Status
               <select
-                className="rounded-btn border border-line bg-white px-2 py-1 text-[13px]"
+                className="select py-1 text-[13px]"
                 value={filters.status}
                 onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
               >

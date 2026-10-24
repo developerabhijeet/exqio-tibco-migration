@@ -54,9 +54,11 @@ restore-verified on a developer machine or with an offline package cache.
   verify refused, no parity claimed and the registry reported unreachable. Full mode (every test
   green, infrastructure validated, parity 100% except intended fields) needs a machine that
   reaches both; see `docs/DEMO.md`, "What this container could not verify".
-- Other sessions may leave servers on 8000 and 3000. `make demo-check API_PORT=<port>` starts its
-  own API on that port when nothing answers there, and `make e2e` picks two free ports and never
-  reuses a server it did not start.
+- Other sessions may leave servers on 9000 and 3000. `make api` and `make web` refuse a busy port
+  and name the process holding it, rather than failing with `[Errno 48]` or `EADDRINUSE`; a web dev
+  server left from an earlier session is worth stopping, because it keeps calling the API URL it was
+  started with. `make demo-check API_PORT=<port>` starts its own API on that port when nothing
+  answers there, and `make e2e` picks two free ports and never reuses a server it did not start.
 - A production `next start` from `web/.next` and a `next dev` in the same checkout share the
   build folder. To run `make e2e` beside such a server, set `NEXT_DIST_DIR=.next-e2e`; Next then
   rewrites `web/next-env.d.ts` and adds the folder to `web/tsconfig.json`, so restore those two

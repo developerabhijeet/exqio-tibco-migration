@@ -135,7 +135,7 @@ export function useStepStates(): StepState[] {
             detail: `${r.files_parsed} of ${r.files_found} files parsed; ${r.unknown_activity_types.length} unknown activity types; ${r.unknown_elements.length} unknown elements; ${r.explained.length} elements explained`,
           },
           { label: "Scan job", detail: r.job_id ?? "not recorded" },
-          ...(r.synthetic ? [{ label: "Estate", detail: "synthetic (SYNTHETIC.txt at the scan root)" }] : []),
+          ...(r.synthetic ? [{ label: "Estate", detail: "reference estate (SYNTHETIC.txt at the scan root)" }] : []),
         ]
       : [];
 

@@ -10,6 +10,7 @@ import { JobLog } from "@/components/jobs/JobLog";
 import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { errorText, Panel } from "@/components/tabs/build/Panel";
+import { usePermission } from "@/lib/personas";
 
 const KIND: Record<string, "gate" | "purple" | "error" | "decision" | "ai"> = {
   happy: "gate",
@@ -105,7 +106,16 @@ export function ScenarioRunner({
   };
 
   const verifying = stream?.status === "running";
-  const runBlocked = !buildId ? "No build yet." : !running ? "Start the service first: verify calls the running service." : null;
+  const may = usePermission("verify");
+  // The persona model and the state of the service both block the run; the persona comes first,
+  // because starting a service this user may not verify with would be busywork.
+  const runBlocked = may.reason
+    ? may.reason
+    : !buildId
+      ? "No build yet."
+      : !running
+        ? "Start the service first: verify calls the running service."
+        : null;
 
   return (
     <Panel

@@ -13,7 +13,7 @@ export function ProcessPicker() {
       Process
       <select
         data-testid="process-picker"
-        className="rounded-btn border border-line bg-white px-2.5 py-1.5 text-[14px] font-medium text-plum"
+        className="select"
         value={processId ?? ""}
         onChange={(e) => openProcess(e.target.value || null)}
       >

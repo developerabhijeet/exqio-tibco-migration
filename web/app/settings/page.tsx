@@ -2,16 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Play, Save } from "lucide-react";
+import { KeyRound, Loader2, Play, Save, Trash2 } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
+import { IdentityPanel } from "@/components/settings/IdentityPanel";
 import { Panel, errorText } from "@/components/tabs/build/Panel";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
+import { AzureIcon } from "@/components/ui/BrandIcons";
 import { api } from "@/lib/api";
 import { useSettingsView } from "@/lib/buildQueries";
 import { useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
-import type { SettingsView } from "@/lib/buildTypes";
+import type { SettingsPatch, SettingsView } from "@/lib/buildTypes";
 
 const TIERS = ["strong", "standard", "efficient"] as const;
 const CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"];
@@ -110,7 +112,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
                 <td className="px-3 py-2">
                   <select
                     aria-label={`Claude model for the ${t} tier`}
-                    className="rounded-btn border border-line bg-white px-2 py-1 font-mono text-[12.5px]"
+                    className="select py-1 font-mono text-[12.5px]"
                     value={models[t]}
                     onChange={(e) => setModels((m) => ({ ...m, [t]: e.target.value }))}
                   >
@@ -183,7 +185,6 @@ function Routing({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =
       setBusy(false);
     }
   };
-  const auto = s.provider.choice === "auto";
   return (
     <Panel
       title="Routing"
@@ -232,15 +233,6 @@ function Routing({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =
       </div>
       <p className="mt-1.5 text-[12px] text-slate">The three bands must cover 0 to 10 once each; the API refuses anything else.</p>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-btn border border-line p-3 text-[13px]">
-          <label className="flex items-center gap-2 font-semibold text-plum">
-            <input type="checkbox" checked={auto} disabled aria-describedby="fallback-note" /> Auto fallback
-          </label>
-          <p id="fallback-note" className="mt-1 text-slate">
-            {s.routing.fallback} Chosen with PROVIDER at API startup (now {s.provider.choice}); there is no setting for it in the
-            API.
-          </p>
-        </div>
         <div className="rounded-btn border border-line p-3 text-[13px]" data-testid="langfuse">
           <label className="flex items-center gap-2 font-semibold text-plum">
             <input
@@ -413,6 +405,114 @@ function Toolchains({ s }: { s: SettingsView }) {
   );
 }
 
+
+/** Bring your own Azure OpenAI key: endpoint, key and the deployment per tier.
+ *
+ * The key is encrypted with APP_SECRET on the server and never comes back to the browser; the form
+ * only ever learns whether one is stored. Without APP_SECRET the API refuses to store a key at all,
+ * because anything encrypted with the throwaway key it would otherwise invent could not be read
+ * back after a restart. */
+function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) => void }) {
+  const az = s.azure_openai;
+  const [endpoint, setEndpoint] = useState(az.endpoint);
+  const [apiKey, setApiKey] = useState("");
+  const [deployments, setDeployments] = useState<Record<string, string>>(() => ({ ...az.deployments }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async (body: SettingsPatch["azure"]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const view = await api.putSettings({ azure: body });
+      onSaved(view);
+      setApiKey("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel
+      title="Azure OpenAI"
+      icon={<AzureIcon size={18} />}
+      eyebrow="Bring your own key"
+      testId="azure-byok"
+      actions={
+        <span className="flex items-center gap-2 text-[13px]">
+          <span className="label">Key</span>
+          <Pill tone={az.key_set ? "gate" : "det"}>{az.key_set ? az.source : "not configured"}</Pill>
+        </span>
+      }
+    >
+      {error ? <ErrorNote error={error} /> : null}
+      {!az.app_secret_configured ? (
+        <p className="mb-3 flex items-start gap-2 rounded-btn border border-decision/30 bg-decision-bg/40 p-3 text-[13px] text-ink">
+          <KeyRound size={15} className="mt-0.5 shrink-0 text-decision" aria-hidden />
+          Set APP_SECRET on the API before storing a key here. Without it a stored key could not be read
+          back after a restart, so the API refuses to keep one; the endpoint and deployments can still be saved.
+        </p>
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="text-[13px]">
+          <span className="label">Endpoint</span>
+          <input
+            type="url"
+            className="mt-1 w-full rounded-btn border border-line px-2 py-1.5 text-ink"
+            placeholder="https://your-resource.openai.azure.com"
+            value={endpoint}
+            data-testid="azure-endpoint"
+            onChange={(e) => setEndpoint(e.target.value)}
+          />
+        </label>
+        <label className="text-[13px]">
+          <span className="label">API key</span>
+          <input
+            type="password"
+            autoComplete="off"
+            className="mt-1 w-full rounded-btn border border-line px-2 py-1.5 text-ink"
+            placeholder={az.key_set ? "a key is stored; type to replace it" : "paste your key"}
+            value={apiKey}
+            data-testid="azure-key"
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3">
+        {TIERS.map((t) => (
+          <label key={t} className="text-[13px]">
+            <span className="label">{t} deployment</span>
+            <input
+              className="mt-1 w-44 rounded-btn border border-line px-2 py-1.5 text-ink"
+              value={deployments[t] ?? ""}
+              aria-label={`${t} deployment`}
+              onChange={(e) => setDeployments((d) => ({ ...d, [t]: e.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={busy}
+          data-testid="azure-save"
+          onClick={() => send({ endpoint, deployments, ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}) })}
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Save size={15} aria-hidden />} Save
+        </button>
+        {az.key_set || az.endpoint ? (
+          <button type="button" className="btn-secondary" disabled={busy} onClick={() => send({ clear: true })}>
+            <Trash2 size={15} aria-hidden /> Remove
+          </button>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
 export default function Page() {
   const qc = useQueryClient();
   const settings = useSettingsView();
@@ -428,19 +528,26 @@ export default function Page() {
   };
   const s = settings.data;
   return (
-    <SecondaryScreen title="Settings" description="Providers, models per tier and stage, routing bands, evaluations and toolchains.">
+    <SecondaryScreen
+      title="Settings"
+      description="Authentication, providers, models per tier and stage, routing bands, evaluations and toolchains."
+    >
       {settings.error ? <ErrorNote error={settings.error} /> : null}
       {saved ? (
         <p role="status" className="rounded-card border border-gate/30 bg-gate-bg px-4 py-2 text-[14px] text-gate">
           {saved}
         </p>
       ) : null}
+      {/* Kept outside the settings-loaded branch: it is configured in the browser, so it stays usable
+          when the API has not answered GET /settings. */}
+      <IdentityPanel />
       {!s ? (
         settings.isLoading ? null : <Empty title="Settings unavailable">The API did not answer GET /settings.</Empty>
       ) : (
         <div className="space-y-4">
           <Providers s={s} />
           <Models key={JSON.stringify(s.models.tiers)} s={s} onSaved={onSaved} />
+          <AzureKeys key={s.azure_openai.source + s.azure_openai.endpoint} s={s} onSaved={onSaved} />
           <Routing key={JSON.stringify(s.routing.bands) + s.langfuse.enabled} s={s} onSaved={onSaved} />
           <Evaluation />
           <Toolchains s={s} />

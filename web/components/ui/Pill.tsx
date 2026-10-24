@@ -3,14 +3,14 @@ import type { StepStatus } from "@/lib/types";
 type Tone = "det" | "ai" | "gate" | "decision" | "error" | "purple" | "plum" | "coral";
 
 const TONES: Record<Tone, string> = {
-  det: "bg-det-bg text-det",
-  ai: "bg-ai-bg text-ai",
-  gate: "bg-gate-bg text-gate",
-  decision: "bg-decision-bg text-decision",
-  error: "bg-error-bg text-error",
-  purple: "bg-purple-lt text-purple-dk",
+  det: "bg-det-bg text-det ring-1 ring-inset ring-det/15",
+  ai: "bg-ai-bg text-ai ring-1 ring-inset ring-ai/20",
+  gate: "bg-gate-bg text-gate ring-1 ring-inset ring-gate/20",
+  decision: "bg-decision-bg text-decision ring-1 ring-inset ring-decision/20",
+  error: "bg-error-bg text-error ring-1 ring-inset ring-error/20",
+  purple: "bg-purple-lt text-purple-dk ring-1 ring-inset ring-purple/20",
   plum: "bg-plum text-white",
-  coral: "bg-coral text-white",
+  coral: "bg-coral-dk text-white",
 };
 
 export function Pill({
@@ -30,7 +30,7 @@ export function Pill({
     <span
       title={title}
       data-testid={testId}
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[12px] font-medium leading-5 ${TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold leading-5 tracking-[0.01em] ${TONES[tone]} ${className}`}
     >
       {children}
     </span>

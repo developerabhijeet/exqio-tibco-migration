@@ -291,6 +291,18 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
     previous = row.state
     hashes = await evidence_svc.decision_hashes(session, process, gate)
     extra: dict[str, Any] = {}
+    if gate == "G4" and state == "approved":
+        # What the engineer knowingly accepted, written onto the gate: a later reader of this
+        # record must be able to see that the build did not pass, and what was decided anyway.
+        build = await evidence_svc.latest_build(session, process.id)
+        _, waived = await evidence_svc.g4_waivable(session, process, build, rows.get("G3"))
+        if waived:
+            kept = sum(1 for f in (build.reviews or []) if f.get("decision") == "keep")
+            rejected = sum(1 for f in (build.reviews or []) if f.get("decision") == "reject")
+            extra["accepted_over"] = waived
+            summary = (f"approved over: {'; '.join(waived)}. Review findings: "
+                       f"{kept} kept, {rejected} rejected.")
+            note = f"{note} ({summary})" if note else summary
     if gate == "G5" and state == "approved":
         extra["unconfirmed_intended"] = await evidence_svc.unconfirmed_intended(session, process)
     row.state = state

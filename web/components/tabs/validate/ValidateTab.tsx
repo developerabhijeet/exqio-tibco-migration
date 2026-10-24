@@ -7,6 +7,8 @@ import { api, ApiError } from "@/lib/api";
 import { useJob } from "@/lib/jobs";
 import { useAnalysis, useGates, useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
+import { usePermission } from "@/lib/personas";
+import { RoleLock } from "@/components/shell/RoleNotice";
 import type { AnalysisView } from "@/lib/types";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
@@ -28,6 +30,7 @@ export function ValidateTab() {
   const qc = useQueryClient();
   const { processId, setAskOpen } = useAppState();
   const { projectId } = useAppState();
+  const may = usePermission("validate");
   const processes = useProcesses(projectId);
   const analysis = useAnalysis(processId);
   const gates = useGates(processId);
@@ -66,7 +69,7 @@ export function ValidateTab() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 3</p>
           <h2 className="panel-title">Validate</h2>
@@ -83,10 +86,18 @@ export function ValidateTab() {
           <button type="button" className="btn-secondary" disabled={!processId} onClick={() => setAuditOpen(true)}>
             <History size={16} aria-hidden /> Audit trail
           </button>
-          <button type="button" className="btn-primary" disabled={!processId || running} onClick={run}>
-            {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} aria-hidden />}
-            Run analysis
-          </button>
+          <span title={may.reason}>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!processId || running || !may.canAct}
+              onClick={run}
+            >
+              {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} aria-hidden />}
+              <RoleLock reason={may.reason} />
+              Run analysis
+            </button>
+          </span>
         </div>
       </div>
 

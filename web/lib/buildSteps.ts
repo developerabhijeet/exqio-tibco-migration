@@ -162,9 +162,34 @@ export function buildStepRows(
       } else if (name === "infra") {
         status = infraFiles > 0 ? "passed" : reached.has("infra") ? fromLines(lines) : "skipped";
       } else if (name === "validate") {
+        // Terraform and Terragrunt are optional local tools. Without them nothing was checked, so
+        // the step did not run — reporting that as a failure blames the build for a machine that
+        // has no Terraform on it. A check that did run and came back bad is still a failure.
         const v = build.infra_validation;
-        status = v ? (v.ok ? "passed" : "failed") : "skipped";
-        if (v?.notes?.length) summary = v.notes[0];
+        if (!v) status = "skipped";
+        else {
+          const missing = Object.entries(v.tools_present ?? {})
+            .filter(([, present]) => !present)
+            .map(([tool]) => tool);
+          const modules = v.modules ?? [];
+          const ran = v.fmt_ok !== null || v.hclfmt_ok !== null || modules.length > 0;
+          const ranChecksPassed =
+            v.fmt_ok !== false &&
+            v.hclfmt_ok !== false &&
+            modules.every((m) => m.init_ok !== false && m.validate_ok !== false);
+          if (!ran) {
+            status = "skipped";
+            summary = `not run: ${missing.join(" and ") || "the validation tools"} not installed`;
+          } else if (v.ok) {
+            status = "passed";
+          } else if (missing.length > 0 && ranChecksPassed) {
+            status = "warning";
+            summary = `${missing.join(" and ")} not installed: every check that could run passed`;
+          } else {
+            status = "failed";
+          }
+        }
+        if (v?.notes?.length && status === "failed") summary = v.notes[0];
       } else if (name === "metrics") {
         status = build.metrics ? "passed" : "failed";
       } else if (status === "pending") {

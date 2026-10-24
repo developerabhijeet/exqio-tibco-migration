@@ -11,6 +11,7 @@ Layout (relative to the solution root)::
     infra/bootstrap/tfstate.sh                             creates the state storage root.hcl points at
     infra/live/<env>/<app>/<module>/terragrunt.hcl         one unit per module and environment
     Dockerfile, .dockerignore, docker-compose.override.yml
+    run-local.sh, run-local.ps1, RUN_LOCALLY.md                 start the stack and print the Swagger token
     .github/workflows/<app>.yml, azure-pipelines.yml
 
 Design record to infrastructure:
@@ -52,6 +53,7 @@ DEFAULT_ENVS = ("dev", "test", "prod")
 DEFAULT_LOCATION = "eastus2"
 TERRAGRUNT_VERSION = "v1.1.6"
 TERRAFORM_VERSION = "1.13.0"
+DOTNET_VERSION = "10.0"  # the SDK run-local.sh asks for; the TFM is in Directory.Build.props
 TARGET_PORT = 8080
 _API_STARTERS = ("rest", "http", "soap")
 
@@ -558,6 +560,18 @@ def generate_infra(
     files[".dockerignore"] = (TEMPLATES / "dockerignore").read_text(encoding="utf-8")
     files["docker-compose.override.yml"] = jenv.get_template("compose.override.yml.j2").render(
         solution=solution_name, databases=facts.databases, connection_strings=facts.connection_strings)
+    # Exported and run on someone else's machine, the folder has to say how: the two scripts start the
+    # same stack the compose file describes, wait for /health and print the token Swagger asks for, so
+    # the reviewer who downloads the bundle reaches a working Swagger UI without reading the solution.
+    local = {
+        "solution": solution_name, "app_id": app.id, "sln": layout["solution"],
+        "api_project": layout["api_project"], "api_dll": layout["api_dll"], "port": TARGET_PORT,
+        "dotnet_version": DOTNET_VERSION, "databases": facts.databases,
+        "connection_strings": facts.connection_strings,
+    }
+    files["run-local.sh"] = jenv.get_template("run-local.sh.j2").render(**local)
+    files["run-local.ps1"] = jenv.get_template("run-local.ps1.j2").render(**local)
+    files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.md.j2").render(**local)
     if len(facts.databases) > 1:
         files["infra/local/initdb/01-databases.sql"] = "".join(
             f"CREATE DATABASE {db};\n" for db in facts.databases[1:])

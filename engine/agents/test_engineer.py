@@ -60,7 +60,7 @@ TEST_SCHEMA: dict = {
 }
 
 TEST_FILE_KINDS = ("RulesTests", "BranchTests")
-DRIVEN_SUFFIXES = ("Service", "Controller", "Consumer")
+DRIVEN_SUFFIXES = ("Service", "Controller", "Consumer", "Job")
 FIXTURE_TEXT_LIMIT = 3000
 REASON_LIMIT = 160
 
@@ -164,23 +164,71 @@ def _test_files(solution: GeneratedSolution, process: Process) -> list[GenFile]:
 # ------------------------------------------------------------ validation
 
 
+# A statement can open with block syntax: a closing brace, "try {", "finally {", or a header such
+# as "using (var database = new TestDatabase())" followed by "{". Splitting on ";" alone leaves
+# that syntax glued to the front of the first statement in the block, where the binding and call
+# patterns no longer match it. A body that wrapped its work in try/finally or a using block was
+# therefore read as calling nothing at all and rejected with "the body does not call the generated
+# <service>", which is how a correct test ended up as an Assert.Fail placeholder that blocks G4.
+_BLOCK_LEAD = re.compile(
+    r"^\s*(?:[{}]\s*"
+    r"|(?:try|finally|else|do|unsafe|checked|unchecked)\s*"
+    r"|(?:if|for|foreach|while|lock|using|switch|fixed)\s*"
+    r"\((?P<head>[^()]*(?:\([^()]*\)[^()]*)*)\)\s*)")
+
+
+def _unblock(statement: str) -> list[str]:
+    """``statement`` with its leading block syntax removed, and any binding that syntax held.
+
+    ``using (var database = new TestDatabase()) { var factory = new ApiFactory(database);``
+    becomes the two statements it stands for, so both bindings are seen."""
+    out: list[str] = []
+    rest = statement
+    while True:
+        m = _BLOCK_LEAD.match(rest)
+        if m is None:
+            break
+        head = (m.groupdict().get("head") or "").strip()
+        if head and "=" in head:
+            out.append(f"{head};")
+        rest = rest[m.end():]
+    out.append(rest)
+    return out
+
+
 def _statements(body: str) -> list[str]:
-    """Statements of ``body`` (comments removed; split on ``;`` outside literals)."""
+    """Statements of ``body`` (comments removed; split on ``;`` outside literals, then on the
+    block syntax that can precede a statement)."""
     stripped = strip_comments(body)
     code = code_only(body)
     out: list[str] = []
     start = 0
     for k, ch in enumerate(code):
         if ch == ";":
-            out.append(stripped[start:k + 1])
+            out.extend(_unblock(stripped[start:k + 1]))
             start = k + 1
     if stripped[start:].strip():
-        out.append(stripped[start:])
-    return out
+        out.extend(_unblock(stripped[start:]))
+    return [st for st in out if st.strip()]
 
 
-def _driven_types(stem: str) -> list[str]:
-    return [f"{stem}{s}" for s in DRIVEN_SUFFIXES]
+# ApiFactory hosts the generated API in memory (WebApplicationFactory<Program>), so a body that
+# drives the process through it exercises the generated controller, service and repository for
+# real. The prompt tells the model to use ApiFactory, so a check that insisted on a direct call to
+# the service rejected every body written that way: the prompt and the gate have to agree.
+SCAFFOLD_DRIVERS = ("ApiFactory",)
+# A branch test may also call the process's generated condition class. A branch is a condition, and
+# that class is where code put it, so calling it tests exactly the thing the test is named after.
+# Demanding that every branch be reached end to end is a demand the solution cannot always meet: a
+# link no scenario takes, a defensive "otherwise", a fault path. Those bodies were rejected, stayed
+# Assert.Fail placeholders, and blocked G4 with no way for any model to unblock it. Rule tests stay
+# strict: a rule is about the behavior of the process, so its test drives the process.
+BRANCH_DRIVERS = ("Conditions",)
+
+
+def _driven_types(stem: str, kind: str = "rule") -> list[str]:
+    extra = [f"{stem}{s}" for s in BRANCH_DRIVERS] if kind == "branch" else []
+    return [f"{stem}{s}" for s in DRIVEN_SUFFIXES] + extra + list(SCAFFOLD_DRIVERS)
 
 
 def _tight(code: str) -> str:
@@ -326,7 +374,7 @@ class _BodyCheck:
     expected: list[str]  # the expected-value arguments of the accepted Assert calls
 
 
-def _analyse(body: str, stem: str) -> _BodyCheck:
+def _analyse(body: str, stem: str, kind: str = "rule") -> _BodyCheck:
     """The checks behind :func:`check_test_body`, keeping the expected values it found."""
     code = code_only(body)
     if not code.strip():
@@ -357,7 +405,7 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
                 "the body returns Task.CompletedTask inside an expression "
                 f"({one_line(stripped[start:end])}), which does not compile in an async test "
                 "method; use a plain return", [])
-    types = _driven_types(stem)
+    types = _driven_types(stem, kind)
     type_alt = "|".join(re.escape(t) for t in types)
     statements = [(st, code_only(st)) for st in _statements(body)]
 
@@ -528,7 +576,8 @@ def _analyse(body: str, stem: str) -> _BodyCheck:
                       [])
 
 
-def check_test_body(body: str, stem: str) -> str | None:
+def check_test_body(body: str, stem: str, json_kinds: dict[str, str] | None = None,
+                    kind: str = "rule") -> str | None:
     """Why ``body`` may not become a test body, or ``None`` when it may.
 
     The body must call a method of ``<stem>Service``, ``<stem>Controller`` or ``<stem>Consumer``
@@ -545,8 +594,39 @@ def check_test_body(body: str, stem: str) -> str | None:
     count. The body must contain no ``Assert.Fail(``, ``Assert.True(true)``, ``[Fact]``/
     ``[Theory]``, ``#pragma warning disable``, file reference outside the solution, unbalanced
     braces (whitespace around ``.`` and ``(`` does not matter) or a ``return`` of
-    ``Task.CompletedTask`` inside an expression (it cannot become ``return;``)."""
-    return _analyse(body, stem).reason
+    ``Task.CompletedTask`` inside an expression (it cannot become ``return;``).
+
+    ``json_kinds`` maps a field of the process's JSON contracts to the JSON type it carries
+    (:func:`_contracts_block`). A body that reads one of those fields as a C# type the JSON cannot
+    produce is rejected: it compiles and throws when the test runs, which looks like a failure of
+    the process and is a defect in the test."""
+    reason = _analyse(body, stem, kind).reason
+    if reason is not None:
+        return reason
+    return json_read_problem(body, json_kinds or {})
+
+
+# ``node["field"].GetValue<T>()`` and ``(T)node["field"]``: both throw when T is not the JSON type.
+_JSON_GET = re.compile(r'\[\s*"([^"]+)"\s*\]\s*[!?]*\s*(?:\.\s*AsValue\(\)\s*[!?]*\s*)?'
+                       r'\.\s*GetValue\s*<\s*([\w.]+\??)\s*>')
+_JSON_CAST = re.compile(r'\(\s*(string|bool|int|long|short|decimal|double|float)\s*\?*\s*\)\s*'
+                        r'[\w.]*\s*[!?]*\s*\[\s*"([^"]+)"\s*\]')
+
+
+def json_read_problem(body: str, json_kinds: dict[str, str]) -> str | None:
+    """Why a body reads a contract field as a type its JSON cannot produce, or ``None``."""
+    code = strip_comments(body)  # not code_only: the field name is inside a string literal
+    reads = [(f, t) for f, t in _JSON_GET.findall(code)] + [(f, t) for t, f in _JSON_CAST.findall(code)]
+    for field, cs in reads:
+        carried = json_kinds.get(field)
+        asked = json_kind(cs)
+        if carried is None or asked is None or asked == carried:
+            continue
+        helper = "ScenarioAssert.Number" if carried == "number" else "ScenarioAssert.Text"
+        return (f'the response field "{field}" is a JSON {carried}, so reading it as {cs} throws '
+                f"when the test runs; read it with {helper}(...) or with the C# type the contract "
+                f"declares")
+    return None
 
 
 def _literal_found(arg: str, context: str) -> bool | None:
@@ -568,7 +648,7 @@ def _literal_found(arg: str, context: str) -> bool | None:
     return None
 
 
-def expected_value_warning(body: str, stem: str, context: str) -> str | None:
+def expected_value_warning(body: str, stem: str, context: str, kind: str = "rule") -> str | None:
     """A warning when the expected literals of an accepted ``body`` appear nowhere in
     ``context`` (the rule text and citation, or the branch expression, and the fixtures).
 
@@ -576,7 +656,7 @@ def expected_value_warning(body: str, stem: str, context: str) -> str | None:
     rejects a body; it flags it for a person. ``None`` when the body is rejected anyway, when an
     expected value is not a literal (a fixture value or a named constant) or when a literal is
     found."""
-    check = _analyse(body, stem)
+    check = _analyse(body, stem, kind)
     if check.reason is not None or not check.expected:
         return None
     literals: list[str] = []
@@ -721,11 +801,87 @@ def _expectation_text(m: TestMethod, process: Process, rules: list[Rule]) -> str
                      for t in process.transitions if t.id == m.ref)
 
 
+# ------------------------------------------------- the JSON the response actually carries
+# A test body reads the response as JSON, so it has to know which JSON type each field carries.
+# Nothing told it: a body read principalBalance, a decimal, with GetValue<string>(), which compiles
+# and throws "An element of type 'Number' cannot be converted to a 'System.String'" at run time.
+# That failure says nothing about the process under test, and no repair loop may touch a test, so
+# the whole build failed on a defect in the probe. The contracts already state every type, so the
+# shape is given to the writer and the same shape is checked against what it wrote.
+_JSON_FIELD = re.compile(
+    r'\[JsonPropertyName\("([^"]+)"\)\](?:\s*\[[^\]]*\])*\s*public\s+(\S+)\s+\w+\s*\{')
+_RECORD_DECL = re.compile(r"^\s*public\s+(?:sealed\s+)?(?:record|class)\s+(\w+)", re.MULTILINE)
+_CS_NUMERIC = frozenset({"int", "long", "short", "byte", "sbyte", "uint", "ulong", "ushort",
+                         "decimal", "double", "float"})
+_CS_TEXT = frozenset({"string", "DateOnly", "TimeOnly", "DateTime", "DateTimeOffset", "Guid",
+                      "TimeSpan", "char"})
+
+
+def json_kind(cs_type: str) -> str | None:
+    """The JSON type a C# member is serialized as, or ``None`` when it is not one of the scalars."""
+    t = cs_type.strip().rstrip("?").strip()
+    if t in _CS_NUMERIC:
+        return "number"
+    if t == "bool":
+        return "boolean"
+    if t in _CS_TEXT:
+        return "string"
+    return None
+
+
+def _contracts_block(solution: GeneratedSolution, process: Process) -> tuple[str, dict[str, str]]:
+    """The contract records this process uses as JSON, and ``{json field: json type}``.
+
+    A field whose name is used with two different JSON types is left out of the map: the writer
+    still sees both records, but the check cannot say which one a body means."""
+    used: set[str] = set()
+    for f in solution.files:
+        if not is_test_path(f.path) and f.path.endswith(".cs") and f.process_id == process.id:
+            used.update(re.findall(r"\b[A-Z]\w*\b", code_only(f.content)))
+    out: list[str] = []
+    kinds: dict[str, str] = {}
+    clash: set[str] = set()
+    for f in sorted(solution.files, key=lambda x: x.path):
+        if "/Contracts/" not in f.path or not f.path.endswith(".cs"):
+            continue
+        shown = False
+        for record, body in _records(f.content):
+            if record not in used:
+                continue
+            fields = [(name, cs, json_kind(cs)) for name, cs in _JSON_FIELD.findall(body)]
+            if not fields:
+                continue
+            if not shown:
+                out.append(f"=== {f.path}")
+                shown = True
+            out.append(f"record {record}, as it appears in the JSON body:")
+            for name, cs, kind in fields:
+                out.append(f'  "{name}": {kind or "object"} (C# {cs})')
+                if kind is None:
+                    continue
+                if kinds.setdefault(name, kind) != kind:
+                    clash.add(name)
+    for name in clash:
+        kinds.pop(name, None)
+    return "\n".join(out) or "(none)", kinds
+
+
+def _records(text: str) -> list[tuple[str, str]]:
+    """``(name, text)`` of each top-level record or class declaration in a generated file."""
+    starts = [(m.group(1), m.start()) for m in _RECORD_DECL.finditer(text)]
+    return [(name, text[at:(starts[i + 1][1] if i + 1 < len(starts) else len(text))])
+            for i, (name, at) in enumerate(starts)]
+
+
 def _signatures(solution: GeneratedSolution, process: Process) -> str:
     """Public declarations of the process's service, controller and consumer, and of the test
     helpers (TestDatabase, Support)."""
     stem = ident(process.name, "Process")
-    wanted = {f"{stem}{s}.cs" for s in (*DRIVEN_SUFFIXES, "State", "Job")}
+    # ProcessResult is what every ExecuteAsync returns, so every test body asserts on it; it was
+    # not in this list, and a test that guesses at a member of it ("result.Result") does not
+    # compile, which stops the whole suite rather than failing one case. ErrorReply is the body of
+    # a 4xx reply, read just as often.
+    wanted = {f"{stem}{s}.cs" for s in (*DRIVEN_SUFFIXES, "State", "Job")} | {"ProcessResult.cs"}
     out: list[str] = []
     for f in solution.files:
         name = PurePosixPath(f.path).name
@@ -779,6 +935,25 @@ def _parse(data: dict) -> dict[str, str]:
     return out
 
 
+BODY_KEPT = 1600
+"""Characters of a rejected body kept in the build record and sent back on the retry."""
+
+
+def _rejected_body(body: str) -> str:
+    """A rejected body, masked and bounded, for the record and for the retry prompt."""
+    text = mask_sensitive(body.strip())
+    if len(text) <= BODY_KEPT:
+        return text
+    return f"{text[:BODY_KEPT]}\n... ({len(text) - BODY_KEPT} more characters)"
+
+
+def _retry_note(name: str, reason: str, body: str) -> str:
+    kept = _rejected_body(body)
+    if not kept:
+        return f"- {name}: {reason}\n  (no body was returned)"
+    return f"- {name}: {reason}\n  the body that was rejected:\n{textwrap.indent(kept, '    ')}"
+
+
 async def _fill_file(
     f: GenFile,
     solution: GeneratedSolution,
@@ -794,6 +969,7 @@ async def _fill_file(
     methods = placeholder_methods(f.content)
     targeted = _rule_targets(rules, methods)
     fixtures = _scenarios_block(solution, process, scenarios)
+    contracts, json_kinds = _contracts_block(solution, process)
     system, user = render_prompt(
         "test_engineer",
         process_name=process.name,
@@ -803,22 +979,34 @@ async def _fill_file(
         targets=_targets_block(f, methods, process, rules),
         files=fixtures,
         design=_signatures(solution, process),
+        contracts=contracts,
         memory=memory_block(memory_items),
     )
     accepted: dict[str, str] = {}
     reasons: dict[str, str] = {}
+    last: dict[str, str] = {}  # the body each pending method was last rejected for
+    by_name = {m.name: m for m in methods}
     pending = [m.name for m in methods]
     for attempt in (1, 2):
         prompt = user
         if attempt == 2:
+            # The reason alone leaves the model guessing at what it did: a model told only "the
+            # body does not call the generated service" writes the same body again, which is how
+            # five rules arrive with no body at all. It gets back what it wrote, beside the reason.
             prompt = (f"{user}\n\nYour previous bodies for these methods were rejected by the "
-                      "checks. The reasons, as data:\n"
-                      + wrap_source("\n".join(f"- {n}: {reasons[n]}" for n in pending))
+                      "checks. Each one below is the reason and the body it was given for. Fix "
+                      "what the reason names; do not start from something unrelated.\n"
+                      + wrap_source("\n\n".join(_retry_note(n, reasons[n], last.get(n, ""))
+                                                for n in pending))
                       + "\nReturn bodies for these methods only.")
         try:
             data, _ = await ask_json(
                 provider, "test", process, system, prompt, TEST_SCHEMA,
                 tags={"stage": "test", "process": process.id, "file": f.path},
+                # The retry goes to the standard tier. The efficient model is right for a first
+                # pass, and a second pass on the same model reproduces the same misunderstanding;
+                # the cost of one stronger call is far below a build that fails G4 on empty bodies.
+                tier="standard" if attempt == 2 else None,
             )
             bodies = _parse(data)
         except JsonOutputError as exc:
@@ -827,8 +1015,9 @@ async def _fill_file(
                 reasons[n] = f"the reply was not valid JSON ({exc})"
         else:
             for n in pending:
-                problem = (check_test_body(bodies[n], stem) if n in bodies
-                           else "no body was returned for this method")
+                problem = (check_test_body(bodies[n], stem, json_kinds, by_name[n].kind)
+                           if n in bodies else "no body was returned for this method")
+                last[n] = bodies.get(n, "")
                 if problem:
                     reasons[n] = problem
                 else:
@@ -840,7 +1029,8 @@ async def _fill_file(
                             mask_sensitive(reasons[n]))
                 if rejections is not None:
                     rejections.append(BuildRejection(path=f"{f.path}::{n}", attempt=attempt,
-                                                     reason=reasons[n]))
+                                                     reason=reasons[n],
+                                                     body=_rejected_body(last.get(n, ""))))
         pending = [n for n in pending if n not in accepted]
         if not pending:
             break
@@ -850,7 +1040,8 @@ async def _fill_file(
             if m.name not in accepted:
                 continue
             why = expected_value_warning(accepted[m.name], stem,
-                                         f"{_expectation_text(m, process, rules)}\n{fixtures}")
+                                         f"{_expectation_text(m, process, rules)}\n{fixtures}",
+                                         m.kind)
             if why:
                 log.warning("test engineer warning %s::%s: %s", f.path, m.name, mask_sensitive(why))
                 warnings.append({"path": f.path, "method": m.name, "reason": why})

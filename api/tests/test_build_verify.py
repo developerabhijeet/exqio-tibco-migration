@@ -548,12 +548,18 @@ async def test_plan_connect_later(client, app, monkeypatch):
     assert (await client.get(f"/builds/{build_id}/plan")).json()["status"] == "acknowledged"
     assert (await _gates(client, proc_id))["G6"]["reason"] == "G5 not approved"
 
-    # the solution downloads as a zip without build output
+    # the solution downloads as a zip without build output, and the bundle can be run as it is
     r = await client.get(f"/builds/{build_id}/download")
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    # the file a reviewer saves names the process and the build, not just an opaque id
+    assert "FundingStatusLookup" in r.headers["content-disposition"]
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
     assert "GmfCredit.sln" in names and "Dockerfile" in names and any(n.startswith("infra/") for n in names)
     assert not any(part in ("bin", "obj", "TestResults", ".exiqo") for n in names for part in n.split("/"))
+    # how to start it, and which build it is, travel inside the folder
+    for rel in ("run-local.sh", "run-local.ps1", "RUN_LOCALLY.md", "docker-compose.override.yml",
+                "EXPORTED_FROM.md"):
+        assert rel in names, rel
 
 
 async def test_readiness_rows(client, app, monkeypatch):
@@ -651,7 +657,7 @@ async def test_history_totals_by_phase(client, app):
     assert r.status_code == 200, r.text
     h = r.json()
     phases = h["totals"]["by_phase"]
-    assert list(phases) == ["demo", "discovery", "design", "build", "verify"]
+    assert list(phases) == ["platform", "discovery", "design", "build", "verify"]
     assert phases["discovery"]["jobs"] >= 2  # scan, analyse
     assert phases["discovery"]["model_calls"] >= 3  # analyst, risk reviewer, challenger
     assert phases["design"]["jobs"] == 1 and phases["design"]["model_calls"] >= 1
@@ -1127,3 +1133,146 @@ def test_service_env_carries_the_web_origins_for_cors(monkeypatch):
     assert env["Cors__Origins__1"] == "http://localhost:3000"
     assert verify_svc.service_env("postgresql://u:p@localhost:5432/x_test", [], [], None, []) \
         .get("Cors__Origins__0") is None
+
+
+def test_build_toolchain_off_skips_the_dotnet_steps_and_the_repair_loop():
+    """The switch that stops a build paying for a compile repair loop on every run.
+
+    What it must not do is claim anything. The three toolchain steps come back ``skipped`` with the
+    reason, never ``ok``, and the gate still refuses a build whose compile was never verified.
+    """
+    from api.app.config import Settings
+    from api.app.services import build as svc
+
+    assert Settings().build_toolchain is True                      # on unless asked otherwise
+    assert Settings(build_toolchain=False).build_toolchain is False
+    assert "BUILD_TOOLCHAIN=false" in svc.TOOLCHAIN_OFF
+    assert "did not run" in svc.TOOLCHAIN_OFF
+
+    # a skipped step is not a passing one
+    step = svc._step("build", False, svc.TOOLCHAIN_OFF, 0.0, skipped=True)
+    assert step["ok"] is False and step["skipped"] is True
+
+
+def test_no_local_in_a_build_stage_shadows_a_module_function_it_calls():
+    """A local named after a module function turns a later call into a run-time TypeError.
+
+    ``toolchain = settings.build_toolchain`` did exactly that: ``run_build`` wrote the solution, ran
+    the agents, then died at the infrastructure stage with ``'bool' object is not callable`` because
+    ``await asyncio.to_thread(toolchain)`` now reached the flag instead of the detector. Nothing
+    before that stage can catch it, so the check is structural.
+    """
+    from api.app.services import build as svc
+
+    for fn in (svc.run_build, svc.build_view, svc.approved_design):
+        shadowed = sorted(n for n in fn.__code__.co_varnames if callable(getattr(svc, n, None)))
+        assert shadowed == [], f"{fn.__name__} binds a local over module function(s) {shadowed}"
+
+
+# ------------------------------------------------- the exported bundle: what the zip has to carry
+def test_the_exported_zip_makes_the_run_script_executable(tmp_path):
+    """A generator writes every file 0644. Unless the zip says otherwise, the folder a reviewer
+    unzips answers "permission denied" to ./run-local.sh, which reads as a broken bundle."""
+    from api.app.routers.build import _zip_solution
+
+    (tmp_path / "GmfCredit.sln").write_text("", encoding="utf-8")
+    (tmp_path / "run-local.sh").write_text("#!/usr/bin/env bash\necho hi\n", encoding="utf-8")
+    (tmp_path / "infra").mkdir()
+    (tmp_path / "infra" / "bootstrap.sh").write_text("echo state\n", encoding="utf-8")
+    (tmp_path / "obj").mkdir()
+    (tmp_path / "obj" / "junk.dll").write_bytes(b"\0")
+
+    with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path))) as zf:
+        names = zf.namelist()
+        modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in zf.infolist()}
+        assert zf.read("run-local.sh").decode().startswith("#!/usr/bin/env bash")
+
+    assert "run-local.sh" in names and "GmfCredit.sln" in names
+    assert "obj/junk.dll" not in names
+    for shell in ("run-local.sh", "infra/bootstrap.sh"):
+        assert modes[shell] & 0o111, f"{shell} is not executable in the zip (mode {modes[shell]:o})"
+
+
+def test_the_exported_zip_says_which_build_it_came_from(tmp_path):
+    """A folder on someone's laptop still has to be traceable to the TIBCO source and the hashes the
+    gate record binds to, so the provenance is written into the bundle rather than only shown on
+    screen."""
+    from api.app.routers.build import _export_note, _zip_solution
+
+    build = Build(id="b-export", process_id="p1", status="passed", runtime="aks",
+                  build_hash="b" * 64, design_hash="d" * 64, spec_hash="s" * 64,
+                  steps=[{"name": "restore", "ok": True}, {"name": "build", "ok": True},
+                         {"name": "test", "ok": False}, {"name": "format", "ok": True, "skipped": True}])
+    proc = ProcessRow(id="p1", project_id="proj", name="AccountLookup", ir_id="ir",
+                      source_path="loanservicing/AccountLookup.bwp", spec_hash="s" * 64)
+    note = _export_note(build, proc)
+
+    for token in ("b-export", "passed", "b" * 64, "d" * 64, "s" * 64, "AccountLookup",
+                  "loanservicing/AccountLookup.bwp", "AKS", "run-local.sh", "RUN_LOCALLY.md"):
+        assert token in note, token
+    # Each recorded step keeps its own outcome; a skipped step is not reported as passed.
+    assert "| restore | passed |" in note and "| test | failed |" in note
+    assert "| format | skipped |" in note
+    # The bundle does not claim approval: that is the G4 record, not a build status.
+    assert "G4 gate" in note
+
+    (tmp_path / "GmfCredit.sln").write_text("", encoding="utf-8")
+    with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path, note))) as zf:
+        assert zf.read("EXPORTED_FROM.md").decode() == note
+
+
+def test_the_export_note_holds_up_when_the_build_recorded_nothing(tmp_path):
+    from api.app.routers.build import _export_note
+
+    note = _export_note(Build(id="b-bare", process_id="p-gone", status="failed"), None)
+    assert "p-gone" in note and "not recorded" in note and "did not finish" in note
+
+
+async def test_expected_is_derived_again_against_the_run_s_own_seed(client, app, monkeypatch, tmp_path):
+    """A cached expectation that no longer matches the seed data must not become a defect.
+
+    Seed data is clock-relative (``current_date + 20``), so an expectation derived yesterday
+    expects yesterday's date. The run derives it again, against the data it seeds, so the field
+    stays compared and the SME is not asked to approve around a difference nobody introduced.
+    """
+    _, proc_id, build_id, _ = await _built(client, monkeypatch, decision="keep")
+    scenarios = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
+    answers = {s["input"]["parameters"]["dealId"]: s["expected"]["output"] for s in scenarios}
+    stand_in = StandIn(json.loads(json.dumps(answers)), tmp_path / "service.log")
+    app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
+                                                      port=int(stand_in.url.rsplit(":", 1)[1]))
+
+    # the cache goes stale, exactly the way a day's roll-over makes it stale
+    poisoned: set[str] = set()
+    async with app.state.sessionmaker() as s:
+        rows = (await s.execute(select(ScenarioRow).where(ScenarioRow.process_id == proc_id))).scalars().all()
+        assert rows
+        for row in rows:
+            data = json.loads(json.dumps(row.data))
+            body = ((data.get("expected") or {}).get("output") or {}).get("body")
+            if not isinstance(body, dict) or "status" not in body:
+                continue  # a fault scenario has no status in its body; there is nothing to go stale
+            body["status"] = "STALE"
+            row.data = data
+            poisoned.add(row.key)
+        await s.commit()
+    assert poisoned
+    stale = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
+    assert all(sc["expected"]["output"]["body"]["status"] == "STALE"
+               for sc in stale if sc["key"] in poisoned)
+
+    try:
+        job = await _wait_job(client, (await client.post(f"/builds/{build_id}/verify")).json()["job_id"])
+        assert job["status"] == "done", job
+        assert job["result"]["unexplained"] == 0 and job["result"]["parity"] == 1.0
+        parity = (await client.get(f"/builds/{build_id}/parity")).json()
+        statuses = [f for rep in parity["reports"] for f in rep["fields"] if f["path"] == "output.body.status"]
+        assert statuses and all(f["status"] == "match" and f["expected"] != "STALE" for f in statuses)
+        # and the cache now says what the run compared
+        fresh = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
+        assert all(sc["expected"]["output"]["body"].get("status") != "STALE"
+                   for sc in fresh if sc["key"] in poisoned)
+        g5 = (await _gates(client, proc_id))["G5"]
+        assert "unexplained difference" not in (g5["reason"] or "")
+    finally:
+        await client.delete(f"/builds/{build_id}/run")

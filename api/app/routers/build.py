@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import zipfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -12,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from api.app.deps import RunnerDep, SessionDep, SettingsDep
+from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.models import Build, BuildFile, Process, TestResult
 from api.app.services import build as svc
 from api.app.services import verify as verify_svc
@@ -124,27 +125,75 @@ async def get_file(build_id: str, path: str, session: SessionDep) -> dict[str, A
 
 DOWNLOAD_EXCLUDED = frozenset({"bin", "obj", "TestResults", ".exiqo"})
 
+#: Zip entries that have to arrive executable. A zip stores the mode in the external attributes, and
+#: a generator writes every file 0644, so without this ``bash run-local.sh`` is the only way to start
+#: the exported bundle and ``./run-local.sh`` answers "permission denied".
+_EXECUTABLE = (".sh",)
 
-def _zip_solution(root: Path) -> bytes:
+
+def _zip_solution(root: Path, note: str | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(root.rglob("*")):
             rel = path.relative_to(root)
             if DOWNLOAD_EXCLUDED & set(rel.parts) or path.is_symlink() or not path.is_file():
                 continue
-            zf.write(path, rel.as_posix())
+            name = rel.as_posix()
+            if path.suffix in _EXECUTABLE:
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = (0o100755 << 16)
+                zf.writestr(info, path.read_bytes())
+            else:
+                zf.write(path, name)
+        if note is not None:
+            zf.writestr("EXPORTED_FROM.md", note)
     return buf.getvalue()
+
+
+def _export_note(build: Build, process: Process | None) -> str:
+    """Which build this bundle is, written into it, so a folder on someone's laptop can still be
+    traced back to the TIBCO process and the gate record it came from."""
+    rows = [
+        ("Build", build.id),
+        ("Status", build.status),
+        ("Build hash", build.build_hash or "not recorded"),
+        ("Design hash", build.design_hash or "not recorded"),
+        ("TIBCO spec hash", build.spec_hash or "not recorded"),
+        ("TIBCO process", f"{process.name} ({process.id})" if process else build.process_id),
+        ("Source file", process.source_path if process else "not recorded"),
+        ("Target runtime", "AKS" if build.runtime == "aks" else "Azure Container Apps"),
+        ("Finished", build.finished_at.isoformat() if build.finished_at else "did not finish"),
+    ]
+    steps = "\n".join(
+        f"| {s.get('name')} | {'skipped' if s.get('skipped') else 'passed' if s.get('ok') else 'failed'} |"
+        for s in (build.steps or []) if s.get("name"))
+    return (
+        "# Exported from ExiQO Migrate\n\n"
+        "This folder is one build of one migrated TIBCO BusinessWorks process. Start it with\n"
+        "`bash run-local.sh` and read `RUN_LOCALLY.md`.\n\n"
+        + "| Field | Value |\n| --- | --- |\n"
+        + "".join(f"| {k} | {v} |\n" for k, v in rows)
+        + ("\n## Pipeline steps as recorded\n\n| Step | Outcome |\n| --- | --- |\n" + steps + "\n" if steps else "")
+        + "\nThe status above is what the pipeline recorded for this build. It is the build's own\n"
+        "result, not a statement that the migration was approved: the approval is the G4 gate\n"
+        "record in ExiQO Migrate, against the build hash above.\n"
+    )
 
 
 @router.get("/builds/{build_id}/download")
 async def download(build_id: str, session: SessionDep) -> Response:
-    """The solution and its infrastructure as a zip (without bin, obj, TestResults and .exiqo)."""
+    """The solution, its infrastructure and its local-run scripts as a zip, ready to run on another
+    machine (without bin, obj, TestResults and .exiqo)."""
     build = await _build(session, build_id)
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise HTTPException(status_code=404, detail="the build has no solution on disk")
-    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir))
+    proc = await session.get(Process, build.process_id)
+    note = _export_note(build, proc)
+    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", proc.name) if proc and proc.name else "build"
     return Response(content=data, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="build-{build_id[:12]}.zip"'})
+                    headers={"Content-Disposition": f'attachment; filename="{stem}-{build_id[:12]}.zip"'})
 
 
 @router.get("/builds/{build_id}/tests")
@@ -155,16 +204,65 @@ async def get_tests(build_id: str, session: SessionDep) -> dict[str, Any]:
     cases = [{"name": t.name, "display_name": t.display_name, "kind": t.kind, "rule_key": t.rule_key,
               "ref": t.ref, "file": t.file, "outcome": t.outcome, "has_body": t.has_body, "message": t.message,
               "duration_ms": t.duration_ms} for t in rows]
+    # Three things get counted apart from a failure, because none of them says the code is wrong.
+    # A test with no body was never written. A test blocked by an un-migrated sub-process could not
+    # run: the dependency has no approved design, so no code was derived from its TIBCO source and
+    # the caller throws before reaching anything this build produced.
+    written = [c for c in cases if c["has_body"]]
+    for c in cases:
+        c["blocked_by"] = svc.blocking_subprocess(c.get("message"))
+    runnable = [c for c in written if not c["blocked_by"]]
+    blocked = [c for c in written if c["blocked_by"]]
     summary = {"total": len(cases), "passed": sum(1 for c in cases if c["outcome"] == "passed"),
-               "failed": sum(1 for c in cases if c["outcome"] == "failed"),
-               "not_run": sum(1 for c in cases if c["outcome"] not in ("passed", "failed")),
-               "no_body": sum(1 for c in cases if not c["has_body"])}
+               "failed": sum(1 for c in runnable if c["outcome"] == "failed"),
+               "not_run": sum(1 for c in runnable if c["outcome"] not in ("passed", "failed")),
+               "no_body": sum(1 for c in cases if not c["has_body"]),
+               "blocked": len(blocked),
+               "blocked_by": sorted({c["blocked_by"] for c in blocked}),
+               "written": len(written)}
     return {"build_id": build_id, "cases": cases, "summary": summary}
 
 
 @router.get("/builds/{build_id}/reviews")
 async def get_reviews(build_id: str, session: SessionDep) -> list[dict[str, Any]]:
     return list((await _build(session, build_id)).reviews or [])
+
+
+class ReviewDecision(BaseModel):
+    """``keep`` means the next build applies this finding; ``reject`` means it never will.
+    ``null`` puts the finding back to undecided."""
+
+    decision: Literal["keep", "reject"] | None
+    note: str | None = None
+
+
+class ReviewDecisionAll(BaseModel):
+    """One verdict for the whole panel. ``only_undecided`` keeps verdicts already given."""
+
+    decision: Literal["keep", "reject"] | None
+    only_undecided: bool = True
+
+
+@router.patch("/builds/{build_id}/reviews")
+async def decide_all_reviews(build_id: str, body: ReviewDecisionAll, session: SessionDep,
+                             user: UserDep) -> list[dict[str, Any]]:
+    """Keep or reject every review finding at once; a finding a later build already applied is
+    left as it is."""
+    build = await _build(session, build_id)
+    return await svc.decide_all_review_findings(session, build, body.decision, body.only_undecided, user)
+
+
+@router.patch("/builds/{build_id}/reviews/{index}")
+async def decide_review(build_id: str, index: int, body: ReviewDecision, session: SessionDep,
+                        user: UserDep) -> list[dict[str, Any]]:
+    """Keep or reject one review finding. The index is its position in the build's review list,
+    which is written once when the build runs and never reordered."""
+    build = await _build(session, build_id)
+    try:
+        findings = await svc.decide_review_finding(session, build, index, body.decision, body.note, user)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="no review finding at that index") from exc
+    return findings
 
 
 # ------------------------------------------------------------------ the running service
