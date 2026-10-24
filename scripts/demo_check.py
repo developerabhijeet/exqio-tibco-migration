@@ -21,10 +21,19 @@ Two modes, because two parts of the run need the internet:
 Without ``--mode`` the probes decide. The script starts nothing: ``make demo-check`` starts an API
 when none answers. It never prints key values.
 
-    python scripts/demo_check.py [--api URL] [--mode full|offline] [--zip PATH]
+    python scripts/demo_check.py [--api URL | --base-url URL] [--token TOKEN] [--mode full|offline]
+                                 [--zip PATH]
 
 Without ``--api`` the API URL comes from API_URL, else from API_PORT in the environment or .env
 (the same key the Makefile and the web read), so this never probes a port the API has moved off.
+
+Against an installed platform (the GMF smoke test, docs/deploy/GMF-INSTALL.md) pass the public
+address instead: ``--base-url https://<host>`` talks to the API the ingress serves under ``/api``.
+An ``AUTH_MODE=oidc`` install ignores the ``X-User`` persona header, so the run signs in with
+``--token`` (or EXIQO_TOKEN), an Entra access token that holds the sme, architect, engineer and ops
+roles; the gate and audit checks then expect that one user's name. The token is sent as a bearer
+and never printed. The local probes (NuGet, the provider registry) say nothing about the cluster's
+mirrors, so a remote run is ``full`` unless ``--mode offline`` is given.
 """
 from __future__ import annotations
 
@@ -58,6 +67,13 @@ def default_api_url() -> str:
                 if key.strip() == "API_PORT" and value.strip():
                     port = value.strip()
     return f"http://localhost:{port or '9000'}"
+
+
+def api_url_from_base(base_url: str) -> str:
+    """The API of an installed platform: the ingress serves it under ``/api`` of the public host."""
+    return base_url.rstrip("/") + "/api"
+
+
 TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
 NUGET_INDEX = "https://api.nuget.org/v3/index.json"
@@ -124,8 +140,11 @@ def registry_probe(terraform_version: str | None) -> tuple[bool, str]:
 
 # ------------------------------------------------------------------ the flow
 class Flow:
-    def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path) -> None:
+    def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path,
+                 token: bool = False) -> None:
         self.run, self.c, self.mode, self.zip = run, client, mode, zip_path
+        self.token = token  # a bearer token signs in (oidc install): X-User is ignored
+        self.actor = ""  # the token's user, as the audit trail names them
         self.full = mode == "full"
         self.project_id = ""
         self.process_ids: dict[str, str] = {}
@@ -161,6 +180,15 @@ class Flow:
         for name in ("dotnet", "terraform", "terragrunt"):
             t = tools.get(name) or {}
             self.run.check(s, f"{name} present", t.get("present") is True, t.get("version") or "missing")
+        if self.token:
+            me = self.get("/auth/me")
+            who = me.json() if me.status_code == 200 else {}
+            self.actor = who.get("upn") or who.get("oid") or ""
+            self.run.check(s, "token accepted", bool(self.actor), f"HTTP {me.status_code}", fatal=True)
+            missing = sorted({"sme", "architect", "engineer", "ops"} - set(who.get("roles") or []))
+            self.run.check(s, "token holds the gate roles", not missing,
+                           f"roles {', '.join(who.get('roles') or [])}" + (f"; missing {missing}" if missing else ""),
+                           fatal=True)
         self.run.check(s, "synthetic zip on disk", self.zip.is_file(), str(self.zip), fatal=True)
 
     def upload(self) -> None:
@@ -255,8 +283,9 @@ class Flow:
         r = self.post(f"/gates/{pid}/{gate}", json={"state": "approved", "note": "acceptance run"},
                       headers={"X-User": user})
         body = r.json()
-        ok = r.status_code == 200 and body.get("state") == "approved" and body.get("decided_by") == user
-        self.run.check(step, f"{gate} approved by {user}", ok,
+        who = self.actor or user  # a bearer token signs in as one user, whatever persona is asked for
+        ok = r.status_code == 200 and body.get("state") == "approved" and body.get("decided_by") == who
+        self.run.check(step, f"{gate} approved by {who}", ok,
                        f"decided_by {body.get('decided_by')}" if r.status_code == 200 else body.get("detail"),
                        fatal=True)
 
@@ -348,7 +377,8 @@ class Flow:
                            fatal=True)
             try:
                 swagger = run.json().get("swagger_url")
-                if swagger:
+                # The proxied Swagger UI is for browsers: it reads the session cookie, never a bearer.
+                if swagger and not self.token:
                     sw = httpx.get(swagger, timeout=30)
                     self.run.check(s, "Swagger answers", sw.status_code == 200, f"HTTP {sw.status_code}")
                 job_id = self.post(f"/builds/{build_id}/verify").json()["job_id"]
@@ -398,8 +428,9 @@ class Flow:
         ack = self.post(f"/builds/{build_id}/plan/acknowledge", headers={"X-User": OPS},
                         json={"note": "Subscription access is pending with the platform team."})
         a = ack.json()
-        self.run.check(s, f"acknowledged by {OPS}", ack.status_code == 200 and a.get("status") == "acknowledged"
-                       and a.get("decided_by") == OPS, f"status {a.get('status')}, decided_by {a.get('decided_by')}")
+        who = self.actor or OPS
+        self.run.check(s, f"acknowledged by {who}", ack.status_code == 200 and a.get("status") == "acknowledged"
+                       and a.get("decided_by") == who, f"status {a.get('status')}, decided_by {a.get('decided_by')}")
 
     def evidence(self) -> None:
         s = "evidence"
@@ -422,7 +453,8 @@ class Flow:
                        rows.get("synthetic_estate", {}).get("status"))
         audit = self.get(f"/projects/{self.project_id}/audit").json()
         actors = sorted({a["actor"] for a in audit if a.get("gate")})
-        self.run.check(s, "gate decisions audited by named users", {SME, ARCHITECT} <= set(actors),
+        named = {self.actor} if self.actor else {SME, ARCHITECT}
+        self.run.check(s, "gate decisions audited by named users", named <= set(actors),
                        f"{len(audit)} audit lines; gate actors {actors}")
 
 
@@ -471,24 +503,42 @@ def print_table(run: Run, header: list[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--api", default=default_api_url(), help="API base URL (default %(default)s)")
+    ap.add_argument("--base-url", help="an installed platform's public address, https://<host>: the API "
+                    "is at <host>/api (overrides --api; the run is full unless --mode offline)")
+    ap.add_argument("--token", default=os.environ.get("EXIQO_TOKEN", ""),
+                    help="Entra access token for an AUTH_MODE=oidc install (default: EXIQO_TOKEN)")
     ap.add_argument("--mode", choices=("full", "offline"), help="force a mode (default: decided by the probes)")
     ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
                     help="the synthetic estate zip (make samples-zip)")
     args = ap.parse_args(argv)
 
-    client = httpx.Client(base_url=args.api.rstrip("/"), timeout=httpx.Timeout(180.0, connect=10.0))
+    if args.base_url:
+        args.api = api_url_from_base(args.base_url)
+    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    client = httpx.Client(base_url=args.api.rstrip("/"), headers=headers,
+                          timeout=httpx.Timeout(180.0, connect=10.0))
     run = Run(args.api)
     started = time.monotonic()
     try:
-        tools = client.get("/settings").json().get("toolchains") or {}
-    except httpx.HTTPError as exc:
-        print(f"API not reachable at {args.api}: {exc}. Start it (make api, or make demo-check starts one).")
+        response = client.get("/settings")
+        tools = (response.json().get("toolchains") or {}) if response.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError) as exc:
+        hint = ("Check --base-url." if args.base_url
+                else "Start it (make api, or make demo-check starts one).")
+        print(f"API not reachable at {args.api}: {exc}. {hint}")
+        return 2
+    if response.status_code in (401, 403):
+        print(f"{args.api} refused the call (HTTP {response.status_code}): this install signs in with "
+              "Entra ID, so pass an access token with --token (or EXIQO_TOKEN) for a user holding the "
+              "sme, architect, engineer and ops roles.")
         return 2
     nuget_ok, nuget_why = nuget_probe()
     registry_ok, registry_why = registry_probe((tools.get("terraform") or {}).get("version"))
     probes_pass = nuget_ok and registry_ok
     if args.mode:
         mode, why = args.mode, "selected with --mode"
+    elif args.base_url:
+        mode, why = "full", "an installed platform: its workers use GMF's mirrors, not this machine's network"
     else:
         mode = "full" if probes_pass else "offline"
         why = "both probes passed" if probes_pass else "a probe failed"
@@ -497,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
               f"  NuGet probe:    {'pass' if nuget_ok else 'fail'}: {nuget_why}",
               f"  registry probe: {'pass' if registry_ok else 'fail'}: {registry_why}"]
 
-    flow = Flow(run, client, mode, args.zip)
+    flow = Flow(run, client, mode, args.zip, token=bool(args.token))
     # (name, function, later steps depend on it): a failure in a step others depend on stops the
     # run; infra, verify, plan and evidence only end their own step.
     steps: list[tuple[str, Callable[[], None], bool]] = [

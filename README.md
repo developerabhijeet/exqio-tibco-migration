@@ -169,10 +169,29 @@ enabled, the service not running and verify refused, the registry reported unrea
 
 Force a mode with `make demo-check DEMO_ARGS="--mode full"` (or `--mode offline`).
 
+Against an installed platform (the smoke test in the install guide) run the script directly:
+`scripts/demo_check.py --base-url https://<host>` talks to the API under `<host>/api`, and `--token`
+(or `EXIQO_TOKEN`) sends an Entra access token for an `AUTH_MODE=oidc` install. Without those flags
+it behaves as described above.
+
+## Install on AKS
+
+The guides for installing and running the platform in GM Financial's Azure tenant are in
+`docs/deploy/`:
+
+- `docs/deploy/GMF-INSTALL.md`: prerequisites, mirrors, Entra app registration, Key Vault secrets,
+  values, `helm upgrade --install`, smoke test, backup and restore, rotation, troubleshooting.
+- `docs/deploy/DEPLOY-STEP-SECRETS.md`: the identities the Deploy step uses to plan infrastructure.
+- `docs/deploy/RUNBOOK.md`: scaling, draining, stuck jobs, restore drills, upgrades and rollback.
+
+The chart is `deploy/helm/exiqo`, the optional Azure prerequisites are `deploy/azure`, and the
+release pipelines are `deploy/pipelines`.
+
 ## Further reading
 
 - `docs/DEMO.md`: the five-minute demo flow, drill-downs and the pre-flight checklist.
 - `docs/TOOLCHAIN.md`: local tools and what the build container could not reach.
+- `docs/deploy/`: the GM Financial install guide, Deploy-step secrets guide and runbook.
 - `docs/superpowers/specs/2026-10-10-exiqo-migrate-design.md`: the design spec.
 - `docs/superpowers/plans/2026-10-10-exiqo-migrate.md`: the implementation plan.
 
