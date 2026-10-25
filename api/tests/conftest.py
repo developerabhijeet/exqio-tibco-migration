@@ -105,8 +105,10 @@ async def memory_app(memory_settings: Settings, monkeypatch: pytest.MonkeyPatch)
 
 @pytest.fixture
 async def memory_client(memory_app) -> AsyncIterator[httpx.AsyncClient]:
+    """A client of ``memory_app``; ``memory_client.app`` is that app (its state, for assertions)."""
     transport = httpx.ASGITransport(app=memory_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
+        c.app = memory_app  # type: ignore[attr-defined]
         yield c
 
 
@@ -127,6 +129,7 @@ class Neo4jDown:
     def _set(self, memory) -> None:
         self.app.state.memory = memory
         self.app.state.worker_services.memory = memory  # the worker copies it into each job
+        self.app.state.knowledge.memory = memory  # agents, Ask and readiness read through it
 
     def restore(self) -> None:
         self._set(self.real)

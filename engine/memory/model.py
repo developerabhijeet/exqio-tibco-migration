@@ -382,3 +382,4 @@ class MemoryHit(BaseModel):
     keyword_score: float
     vector_score: float
     citation: Citation
+    props: dict[str, Any] = {}  # the version's public properties (public_node_props)

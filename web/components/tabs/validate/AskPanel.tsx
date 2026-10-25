@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Send, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useProcesses } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
 import { Pill } from "@/components/ui/Pill";
@@ -14,6 +14,16 @@ export const SUGGESTED = [
   "Where is the late fee applied?",
   "Which workflows handle SSN?",
 ];
+
+/** The 503 texts of POST /ask (detail starting "memory not configured" / "memory unavailable"). */
+export function askErrorText(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  if (e instanceof ApiError && e.status === 503) {
+    if (message.startsWith("memory unavailable")) return "Memory is unavailable right now; try again shortly.";
+    if (message.startsWith("memory not configured")) return "Memory is not configured for this install.";
+  }
+  return message;
+}
 
 interface Turn {
   question: string;
@@ -58,7 +68,7 @@ export function AskPanel() {
     try {
       turn = { question: text, answer: await api.ask(projectId, text), error: null };
     } catch (e) {
-      turn = { question: text, answer: null, error: e instanceof Error ? e.message : String(e) };
+      turn = { question: text, answer: null, error: askErrorText(e) };
     }
     setTurns((t) => [...t.slice(0, -1), turn]);
     setBusy(false);

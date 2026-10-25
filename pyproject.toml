@@ -47,7 +47,7 @@ override-dependencies = ["pillow>=13.0.0"]
 include = ["engine*", "api*"]
 
 [tool.setuptools.package-data]
-"engine.knowledge" = ["schema.sql", "seed_patterns.yaml", "prompts/*.md"]
+"engine.knowledge" = ["seed_patterns.yaml", "prompts/*.md"]
 "engine.agents" = ["prompts/*.md"]
 "engine.infra_gen" = ["templates/**/*", "templates/*"]
 

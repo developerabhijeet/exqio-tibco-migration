@@ -1,38 +1,48 @@
-"""The engine's knowledge store (schema ``knowledge``) as the API uses it.
+"""Migration memory as the API uses it: agents, Ask and the readiness screen read the Neo4j memory
+graph (``MemoryGraph``); SME decisions are stored in Postgres (``memory_events``) and reach the
+graph through a ``memory.ingest`` job of phase ``decision``.
 
-``KnowledgeStore`` holds one synchronous psycopg connection, which must not be shared between
-threads. Every operation here therefore opens its own store in a worker thread
-(``asyncio.to_thread``) and closes it afterwards; on a laptop database that costs a few
-milliseconds. ``ensure_schema`` runs once per API process.
-
-Text written here (memory items, chunks) passes through ``mask_sensitive`` first, so SSNs and
-sensitive field values are not stored in the knowledge base. Failures are reported to the
-caller as ``KnowledgeUnavailable`` so a decision or an analysis never fails because the
-knowledge base is down; callers log the reason.
+Decision text and context pass through ``mask_sensitive`` before Postgres (``apply_revision``
+masks again on the way into Neo4j). Reads report a missing or unreachable memory as
+``KnowledgeUnavailable`` (``memory not configured`` when ``NEO4J_URI`` is empty, ``memory
+unavailable: <class>`` when Neo4j fails), so a decision or an analysis never fails because
+memory is down; callers log the reason and Ask answers 503.
 """
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
-import threading
-from collections.abc import Callable
-from typing import Any, TypeVar
+import uuid
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from engine.agents.jsonout import JsonOutputError
-from engine.agents.provider import ProviderError, mask_sensitive
-from engine.domains.models import Graph
+from neo4j.exceptions import DriverError, Neo4jError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from api.app.models import MemoryEvent, Process
+from engine.agents.provider import mask_sensitive
 from engine.knowledge.ask import Answer
 from engine.knowledge.ask import ask as engine_ask
-from engine.knowledge.memory import MigrationMemory
-from engine.knowledge.store import KnowledgeStore
+from engine.knowledge.memory import MEMORY_KINDS, MemoryItem
+from engine.memory.graph import MemoryGraph, MemoryUnavailable
+from engine.memory.model import KnowledgeError, MemoryHit
+
+if TYPE_CHECKING:
+    from api.app.config import Settings
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 MEMORY_SOURCE = "sme"
+NOT_CONFIGURED = "memory not configured"
+# What a read of the memory graph raises when Neo4j is down, refuses the request or holds
+# vectors of another embedding backend.
+MEMORY_ERRORS = (Neo4jError, DriverError, MemoryUnavailable, KnowledgeError, OSError)
 
 
 class KnowledgeUnavailable(Exception):
-    """The knowledge store could not be reached or refused the write."""
+    """Memory is not configured, or Neo4j could not be reached or refused the request."""
 
 
 def _mask_value(value: Any) -> Any:
@@ -45,76 +55,123 @@ def _mask_value(value: Any) -> Any:
     return value
 
 
+def _context(raw: Any) -> dict[str, Any]:
+    """A Memory's ``context`` property (JSON text); absent on seed patterns (rulings R28)."""
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _created_at(raw: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(raw) if isinstance(raw, str) and raw else None
+    except ValueError:
+        return None
+
+
+def memory_item(project_id: str, h: MemoryHit) -> MemoryItem | None:
+    """A ``Memory`` hit as the agents' ``MemoryItem`` (``None`` for a kind they do not know)."""
+    if h.kind not in MEMORY_KINDS:
+        return None
+    p = h.props
+    return MemoryItem(id=h.uid, project_id=project_id, kind=h.kind, text=h.text,  # type: ignore[arg-type]
+                      context=_context(p.get("context")), source=str(p.get("source") or ""),
+                      created_by=str(p.get("created_by") or ""),
+                      created_at=_created_at(p.get("created_at")), score=h.score)
+
+
 class Knowledge:
-    def __init__(self, dsn: str) -> None:
-        self.dsn = dsn
-        self._ready = False
-        self._ready_lock = threading.Lock()
+    def __init__(self, memory: MemoryGraph | None, sessionmaker: async_sessionmaker[AsyncSession],
+                 settings: Settings) -> None:
+        self.memory = memory
+        self.sessionmaker = sessionmaker
+        self.settings = settings
 
-    # ------------------------------------------------------------ plumbing
-    def _call(self, fn: Callable[[KnowledgeStore], T]) -> T:
-        store = KnowledgeStore(self.dsn)
+    @property
+    def enabled(self) -> bool:
+        return self.memory is not None
+
+    async def _read(self, work: Callable[[MemoryGraph], Awaitable[T]]) -> T:
+        if self.memory is None:
+            raise KnowledgeUnavailable(NOT_CONFIGURED)
         try:
-            if not self._ready:
-                with self._ready_lock:
-                    if not self._ready:
-                        store.ensure_schema()
-                        self._ready = True
-            return fn(store)
-        finally:
-            store.close()
+            return await work(self.memory)
+        except MEMORY_ERRORS as exc:
+            cls = str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__
+            raise KnowledgeUnavailable(f"memory unavailable: {cls}") from exc
 
-    async def run(self, fn: Callable[[KnowledgeStore], T]) -> T:
-        try:
-            return await asyncio.to_thread(self._call, fn)
-        except Exception as exc:
-            raise KnowledgeUnavailable(f"{type(exc).__name__}: {exc}") from exc
-
-    def query(self, sql: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
-        """Read rows (tests and diagnostics). Synchronous: call it through ``to_thread``."""
-        return self._call(lambda s: s.connection().execute(sql, params or []).fetchall())
-
-    # ------------------------------------------------------------ operations
-    async def record_decision(self, project_id: str, text: str, context: dict[str, Any],
-                              user: str) -> str:
-        """One SME decision as migration memory (``kind=decision``); returns the memory id."""
-        masked_text, masked_ctx = mask_sensitive(text), _mask_value(context)
-        return await self.run(lambda s: MigrationMemory(s).record(
-            project_id, "decision", masked_text, masked_ctx, MEMORY_SOURCE, user))
-
-    async def seed_patterns(self, project_id: str) -> int:
-        """Load the seed patterns (``source: seed``) into a project. Idempotent."""
-        return len(await self.run(lambda s: MigrationMemory(s).seed_patterns(project_id)))
-
-    async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[Any]:
-        return await self.run(lambda s: MigrationMemory(s).retrieve(project_id, query, k=k))
-
-    async def index_process(self, project_id: str, process_id: str,
-                            items: list[tuple[str, str]]) -> int:
-        """Replace the analysis chunks (summary, rules, findings) of one process."""
-        masked = [(kind, mask_sensitive(text)) for kind, text in items if text and text.strip()]
-
-        def write(s: KnowledgeStore) -> int:
-            s.connection().execute(
-                "DELETE FROM knowledge.chunks WHERE project_id = %s AND process_id = %s",
-                [project_id, process_id])
-            return len(s.upsert_chunks(project_id, process_id, masked))
-
-        return await self.run(write)
-
-    async def load_graph(self, project_id: str, graph: Graph) -> None:
-        await self.run(lambda s: s.load_graph(project_id, graph))
+    # ------------------------------------------------------------ reads
+    async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[MemoryItem]:
+        """The ``k`` best current ``Memory`` nodes for ``query`` (obsolete ones left out)."""
+        hits = await self._read(lambda m: m.retrieve(project_id, query, labels=("Memory",), k=k))
+        return [item for h in hits if (item := memory_item(project_id, h)) is not None]
 
     async def ask(self, project_id: str, question: str, provider: Any = None) -> Answer:
-        """``engine.knowledge.ask.ask`` over a store of its own (it calls the store from worker
-        threads one after another, never at the same time)."""
-        await self.run(lambda s: None)  # schema ready, store reachable
-        store = KnowledgeStore(self.dsn)
+        """``engine.knowledge.ask.ask`` over the memory graph. Provider and JSON errors pass
+        through (the caller retries without a model)."""
+        return await self._read(lambda m: engine_ask(m, project_id, question, provider))
+
+    async def counts(self, project_id: str) -> dict[str, int]:
+        """Current ``Chunk`` and ``Memory`` nodes of the project."""
+        counts = await self._read(lambda m: m.counts(project_id))
+        return {"Chunk": counts.get("Chunk", 0), "Memory": counts.get("Memory", 0)}
+
+    # ------------------------------------------------------------ writes (Postgres, then an ingest)
+    async def _about_uid(self, s: AsyncSession, context: dict[str, Any]) -> str | None:
+        """The node a decision is about: its process, else its domain."""
+        process_id = context.get("process_id")
+        if isinstance(process_id, str) and process_id:
+            process = await s.get(Process, process_id)
+            if process is not None:
+                return f"process:{process.ir_id}"
+        key = context.get("domain_key")
+        return f"domain:{key}" if isinstance(key, str) and key else None
+
+    async def record_decision(self, project_id: str, text: str, context: dict[str, Any],
+                              user: str) -> str:
+        """One SME decision as a ``memory_events`` row (``kind=decision``) and a queued ingest of
+        phase ``decision``; returns the event id. The row is stored even when memory is not
+        configured (nothing is queued then)."""
+        from api.app.services.memory_ingest import (
+            enqueue_ingest,  # imports analysis, which imports us
+        )
+
+        masked = _mask_value(dict(context))
         try:
-            return await engine_ask(store, MigrationMemory(store), project_id, question, provider)
-        except (ProviderError, JsonOutputError):
-            raise  # the caller retries without a model
-        except Exception as exc:  # any store-side failure is "knowledge base unavailable" (503)
-            raise KnowledgeUnavailable(f"{type(exc).__name__}: {exc}") from exc
-        finally:
-            await asyncio.to_thread(store.close)
+            async with self.sessionmaker() as s:
+                about = await self._about_uid(s, context)
+                if about:
+                    masked["about_uid"] = about
+                row = MemoryEvent(project_id=project_id, kind="decision", text=mask_sensitive(text),
+                                  context=masked, actor=user)
+                s.add(row)
+                await s.commit()
+                event_id = row.id
+            source = {"event_id": event_id}
+            if isinstance(context.get("process_id"), str) and context["process_id"]:
+                source["process_id"] = context["process_id"]
+            await enqueue_ingest(self.sessionmaker, self.settings, project_id=project_id,
+                                 phase="decision", scope=f"decision:{event_id}", source=source,
+                                 actor=user, ingest_key=f"decision:{event_id}")
+        except SQLAlchemyError as exc:
+            raise KnowledgeUnavailable(f"decision not stored: {type(exc).__name__}") from exc
+        return event_id
+
+    async def reindex_process(self, project_id: str, process_id: str) -> None:
+        """Queue a re-ingest of the process's analysis scope (its chunks read the stored rows
+        when the ingest runs); a queued one of the scope already covers it."""
+        from api.app.services.memory_ingest import SYSTEM_ACTOR, enqueue_ingest
+
+        try:
+            await enqueue_ingest(self.sessionmaker, self.settings, project_id=project_id,
+                                 phase="analysis", scope=f"analysis:{process_id}",
+                                 source={"process_id": process_id}, actor=SYSTEM_ACTOR,
+                                 ingest_key=f"analysis:reindex:{uuid.uuid4().hex}")
+        except SQLAlchemyError as exc:
+            raise KnowledgeUnavailable(f"re-ingest not queued: {type(exc).__name__}") from exc

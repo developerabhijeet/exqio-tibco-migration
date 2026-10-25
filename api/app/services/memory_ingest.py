@@ -218,7 +218,7 @@ async def load_estate(s: AsyncSession, project_id: str) -> tuple[list[IrApplicat
 
 
 async def load_analysis(s: AsyncSession, process: Process) -> list[ChunkInput]:
-    """Today's ``analysis.chunk_items`` texts with their keys and cited activity ids."""
+    """The ``analysis.chunk_entries`` texts with their keys and cited activity ids."""
     analysis = await gate_svc.latest_analysis(s, process.id)
     summary = (analysis.summary or {}).get("text") if analysis else None
     rules = await gate_svc.load_rules(s, process.id)

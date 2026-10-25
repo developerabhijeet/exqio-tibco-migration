@@ -41,9 +41,8 @@ make web                  # web on http://localhost:3000
 ```
 
 Without a Docker daemon, `make db` uses the Postgres at `DATABASE_URL`: create the `exiqo` role
-and the `exiqo` and `exiqo_test` databases first, on a server with the pgvector package installed
-(the knowledge store creates the `vector` extension when it can, otherwise create it as a
-superuser).
+and the `exiqo` and `exiqo_test` databases first (migration memory lives in Neo4j, so Postgres
+needs no extension).
 
 ## Environment variables
 

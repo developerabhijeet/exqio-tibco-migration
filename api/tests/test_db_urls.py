@@ -1,8 +1,8 @@
 """One ``DATABASE_URL`` for both drivers: asyncpg's ``ssl`` and libpq's ``sslmode`` are translated.
 
 Deployments store ``postgresql+asyncpg://...?ssl=require``; libpq rejects ``ssl`` ("invalid URI
-query parameter"), which once broke the heartbeat thread, the knowledge store and the scenario
-database. The local Postgres has no TLS, so the end-to-end checks use ``ssl=disable``.
+query parameter"), which once broke the heartbeat thread, the (since removed) Postgres knowledge store and
+the scenario database. The local Postgres has no TLS, so the end-to-end checks use ``ssl=disable``.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from psycopg.conninfo import conninfo_to_dict
 
 from api.app.db import asyncpg_url, make_engine, psycopg_url
 from api.app.jobs.runner import HEARTBEAT_CONNECT
-from api.app.services.knowledge import Knowledge
 from api.tests.conftest import TEST_DSN
 
 AZ = "postgresql+asyncpg://exiqoadmin:p%40ss@gmf-exiqo-pg.postgres.database.azure.com:5432/exiqo"
@@ -76,12 +75,6 @@ def test_psycopg_connects_with_an_asyncpg_ssl_url():
     with psycopg.connect(url, **HEARTBEAT_CONNECT) as conn:
         assert conn.execute("SHOW statement_timeout").fetchone() == ("5s",)
         assert conn.execute("SELECT 1").fetchone() == (1,)
-
-
-def test_knowledge_store_connects_with_an_asyncpg_ssl_url():
-    _require_db()
-    knowledge = Knowledge(psycopg_url(_with(asyncpg_url(TEST_DSN), "ssl=prefer")))
-    knowledge._call(lambda store: store.connection().execute("SELECT 1").fetchone())
 
 
 async def test_asyncpg_engine_connects_with_a_libpq_sslmode_url():

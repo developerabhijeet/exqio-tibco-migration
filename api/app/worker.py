@@ -30,7 +30,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 
 from api.app.config import Settings
-from api.app.db import make_engine, make_sessionmaker, psycopg_url
+from api.app.db import make_engine, make_sessionmaker
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.registry import WorkerServices
 from api.app.jobs.runner import JobWorker, worker_name
@@ -110,7 +110,7 @@ async def run(settings: Settings) -> None:
     name = worker_name()
     hosting = Hosting(settings, sessionmaker, owner=name)
     memory = await open_memory(settings)
-    services = WorkerServices(settings=settings, knowledge=Knowledge(psycopg_url(settings.database_url)),
+    services = WorkerServices(settings=settings, knowledge=Knowledge(memory, sessionmaker, settings),
                               sessionmaker=sessionmaker, hosting=hosting, fernet=fernet, memory=memory)
     async with sessionmaker() as s:  # provider keys and models saved in the Settings screen
         apply_stored(settings, await load_stored(s))

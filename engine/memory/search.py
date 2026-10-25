@@ -32,6 +32,7 @@ from engine.memory.model import (
     Citation,
     MemoryHit,
     backend_mismatch,
+    public_node_props,
 )
 
 if TYPE_CHECKING:
@@ -171,7 +172,8 @@ def _combine(keyword: dict[str, dict[str, Any]], vector: dict[str, dict[str, Any
         out.append(MemoryHit(
             uid=uid, label=node["label"], kind=stored.get("kind"), text=stored.get("text") or "",
             score=KEYWORD_WEIGHT * kw_norm + VECTOR_WEIGHT * vc_norm, keyword_score=kw_norm,
-            vector_score=vc_norm, citation=Citation.of(node["label"], stored)))
+            vector_score=vc_norm, citation=Citation.of(node["label"], stored),
+            props=public_node_props(stored)))
     out.sort(key=lambda h: (-h.score, h.uid))
     return out[:k]
 

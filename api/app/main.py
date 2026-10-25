@@ -105,12 +105,12 @@ def _create_api(settings: Settings) -> FastAPI:
     async def lifespan(app: FastAPI):
         engine = make_engine(settings.database_url)
         sessionmaker = make_sessionmaker(engine)
-        knowledge = Knowledge(psycopg_url(settings.database_url))
         fernet, fernet_generated = make_fernet(settings)
         name = worker_name()
         # only role all's worker starts services here; in role api nothing ever registers one
         hosting = Hosting(settings, sessionmaker, owner=name)
         memory = await open_memory(settings)
+        knowledge = Knowledge(memory, sessionmaker, settings)
         worker_services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
                                          hosting=hosting, fernet=fernet, memory=memory)
         worker = None

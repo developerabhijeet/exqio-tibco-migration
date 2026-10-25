@@ -30,7 +30,6 @@ from api.app.schemas.project import (
     UploadPathIn,
 )
 from api.app.services import uploads
-from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.memory_ingest import enqueue_ingest, seed_ingest_key
 
 router = APIRouter(tags=["projects"])
@@ -48,30 +47,16 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
 async def create_project(body: ProjectCreate, request: Request, session: SessionDep,
                          settings: SettingsDep) -> Project:
     """Create a project and seed its migration memory with the TIBCO-to-.NET seed patterns
-    (``source: seed``): with ``NEO4J_URI`` a ``memory.ingest`` of phase ``seed`` is queued, else (no
-    Neo4j) the Postgres knowledge store is seeded in the background. Seeding failures are logged,
-    never fatal."""
+    (``source: seed``): a ``memory.ingest`` of phase ``seed`` is queued (nothing without
+    ``NEO4J_URI``)."""
     project = Project(name=body.name.strip())
     session.add(project)
     await session.commit()
     await session.refresh(project)
-    if settings.neo4j_uri:
-        await enqueue_ingest(request.app.state.sessionmaker, settings, project_id=project.id,
-                             phase="seed", scope="seed", source={}, actor="system",
-                             ingest_key=seed_ingest_key())
-        return project
-    task = asyncio.create_task(_seed(request.app.state.knowledge, project.id))
-    request.app.state.background.add(task)
-    task.add_done_callback(request.app.state.background.discard)
+    await enqueue_ingest(request.app.state.sessionmaker, settings, project_id=project.id,
+                         phase="seed", scope="seed", source={}, actor="system",
+                         ingest_key=seed_ingest_key())
     return project
-
-
-async def _seed(knowledge: Knowledge, project_id: str) -> None:
-    try:
-        n = await knowledge.seed_patterns(project_id)
-        log.info("project %s: %d seed patterns loaded into migration memory", project_id, n)
-    except KnowledgeUnavailable as exc:
-        log.warning("project %s: seed patterns not loaded: %s", project_id, exc)
 
 
 @router.get("/projects", response_model=list[ProjectOut])

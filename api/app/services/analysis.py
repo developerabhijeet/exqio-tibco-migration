@@ -15,8 +15,9 @@ text is unchanged (matched on normalised text, against the analyst's original wo
 SME edited it); SME decisions on matched rules survive. Static findings keep the engine ids
 (``S<n>-<process>-<k>``); AI findings are ``F1..Fn``, matched the same way.
 
-After persisting, the process's summary, rules and findings are written to the knowledge store
-as chunks for Ask, and SME decisions are recorded in migration memory.
+After the job, its ``memory.ingest`` follow-up writes the process's summary, rules and findings
+into the memory graph as chunks for Ask; SME decisions are recorded as migration memory
+(``memory_events``) and re-ingest the analysis chunks.
 """
 from __future__ import annotations
 
@@ -63,7 +64,6 @@ from engine.analysis.static_rules import run_static_rules
 from engine.analysis.verifier import verify_citations
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
-from engine.memory.model import KnowledgeError, guard_text
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ def assign_finding_keys(findings: list[EngineFinding], existing: list[dict[str, 
         used.add(f.id)
 
 
-# ------------------------------------------------------------------ knowledge chunks
+# ------------------------------------------------------------------ memory chunks
 def chunk_entries(process_name: str, summary: str | None, rules: list[Any],
                   findings: list[Any]) -> list[tuple[str, str, str, list[str]]]:
     """``(kind, key, text, cited activity ids)`` of every prose chunk, unguarded (the memory
@@ -157,34 +157,17 @@ def chunk_entries(process_name: str, summary: str | None, rules: list[Any],
     return items
 
 
-def chunk_items(process_name: str, summary: str | None, rules: list[Any],
-                findings: list[Any]) -> list[tuple[str, str]]:
-    """Prose chunks for Ask. Rows or engine models both work (duck typed)."""
-    out = []
-    for kind, _key, text, _cited in chunk_entries(process_name, summary, rules, findings):
-        try:
-            guard_text(text)
-        except KnowledgeError:
-            continue  # raw TIBCO markup is never embedded
-        out.append((kind, text))
-    return out
-
-
 def _cit(c: Any) -> dict[str, Any]:
     return c if isinstance(c, dict) else c.model_dump()
 
 
-async def reindex(knowledge: Knowledge, session: AsyncSession, process: Process) -> str | None:
-    """Rewrite the process's chunks from the stored rows; returns an error text or None."""
-    analysis = await gate_svc.latest_analysis(session, process.id)
-    summary = (analysis.summary or {}).get("text") if analysis else None
-    rules = await gate_svc.load_rules(session, process.id)
-    findings = await gate_svc.load_findings(session, process.id)
+async def reindex(knowledge: Knowledge, process: Process) -> str | None:
+    """Queue a re-ingest of the process's analysis chunks into memory; returns an error text or
+    None."""
     try:
-        await knowledge.index_process(process.project_id, process.id,
-                                      chunk_items(process.name, summary, rules, findings))
+        await knowledge.reindex_process(process.project_id, process.id)
     except KnowledgeUnavailable as exc:
-        log.warning("knowledge chunks not written for %s: %s", process.id, exc)
+        log.warning("analysis re-ingest not queued for %s: %s", process.id, exc)
         return str(exc)
     return None
 
@@ -411,11 +394,6 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
                   + f"; spec hash {result['spec_hash'][:12]}"
                   + (f"; gates reset: {', '.join(result['gates_reset'])}" if result["gates_reset"] else ""))
 
-    async with ctx.sessionmaker() as s:
-        process = await s.get(Process, process_id)
-        error = await reindex(knowledge, s, process)
-    await ctx.log(f"knowledge store not updated: {error}" if error else
-                  "summary, rules and findings indexed for Ask")
     return {**result, "ai_available": ai_available, "ai_reason": ai_reason, "provider": choice.name,
             "full_run": full_run}
 
@@ -617,7 +595,7 @@ async def update_rule(session: AsyncSession, knowledge: Knowledge, rule_id: str,
     await session.commit()
     await _remember(knowledge, process.project_id, memory, user)
     if reindex_needed:
-        await reindex(knowledge, session, process)
+        await reindex(knowledge, process)
     return process
 
 
@@ -645,7 +623,7 @@ async def decide_finding(session: AsyncSession, knowledge: Knowledge, finding_id
               {"process_id": process.id, "process_name": process.name, "finding_id": row.id,
                "finding_key": row.finding_key, "decision": decision, "note": note, "user": user})
     await _remember(knowledge, process.project_id, memory, user)
-    await reindex(knowledge, session, process)
+    await reindex(knowledge, process)
     return process
 
 

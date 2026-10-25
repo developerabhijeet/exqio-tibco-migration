@@ -1,5 +1,6 @@
-"""Ask: questions answered from the project's knowledge base (analysis chunks and migration
-memory) with citations. Without a model provider the closest knowledge items are the answer."""
+"""Ask: questions answered from the project's memory graph (analysis chunks and migration
+memory) with citations. Without a model provider the closest knowledge items are the answer.
+Memory not configured or unreachable is a 503 whose detail starts with ``memory``."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -31,5 +32,5 @@ async def ask(body: AskIn, request: Request, session: SessionDep, settings: Sett
         except (ProviderError, JsonOutputError):
             answer = await knowledge.ask(body.project_id, body.question.strip(), None)
     except KnowledgeUnavailable as exc:
-        raise HTTPException(status_code=503, detail=f"knowledge base unavailable: {exc}") from exc
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return AnswerOut.model_validate(answer.model_dump())

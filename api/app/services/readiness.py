@@ -6,7 +6,6 @@ exists but falls short, the gap says how) or ``missing`` (no evidence yet).
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from sqlalchemy import false, func, select
@@ -27,7 +26,7 @@ from api.app.models import (
     TestResult,
 )
 from api.app.services.evidence import latest_verify_runs, unconfirmed_count, unconfirmed_text
-from api.app.services.knowledge import Knowledge
+from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 
 EXPECTATIONS: list[tuple[str, str]] = [
     ("synthetic_estate", "Reference estate"),
@@ -57,16 +56,13 @@ def _row(key: str, status: str, evidence: list[dict[str, str]], gap: str | None)
 
 
 async def _knowledge_counts(knowledge: Knowledge, project_id: str) -> tuple[int, int] | str:
-    def count() -> tuple[int, int]:
-        chunks = knowledge.query("SELECT count(*) AS n FROM knowledge.chunks WHERE project_id = %s", [project_id])
-        memory = knowledge.query("SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s",
-                                 [project_id])
-        return int(chunks[0]["n"]), int(memory[0]["n"])
-
+    """Current Chunk and Memory nodes of the project, or the reason memory cannot be read
+    (``memory not configured``, ``memory unavailable: <class>``)."""
     try:
-        return await asyncio.to_thread(count)
-    except Exception as exc:  # noqa: BLE001  report it as the gap, never fail the page
-        return f"{type(exc).__name__}: {exc}"
+        counts = await knowledge.counts(project_id)
+    except KnowledgeUnavailable as exc:  # the gap, never a failed page
+        return str(exc)
+    return counts["Chunk"], counts["Memory"]
 
 
 async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowledge,
@@ -235,7 +231,7 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     # knowledge layer
     counts = await _knowledge_counts(knowledge, project_id)
     if isinstance(counts, str):
-        rows.append(_row("knowledge_layer", "missing", [], f"knowledge store unavailable: {counts}"))
+        rows.append(_row("knowledge_layer", "missing", [], counts))
     else:
         chunks, memory = counts
         ev = [_ev("ask", "/ask", f"{chunks} indexed chunk(s), {memory} migration memory item(s)")]

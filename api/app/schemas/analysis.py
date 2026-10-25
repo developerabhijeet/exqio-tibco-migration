@@ -190,12 +190,25 @@ class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
+class MemoryCitationOut(BaseModel):
+    """The memory node version a hit came from (``engine.memory.model.Citation``)."""
+    uid: str
+    label: str
+    phase: str
+    revision: int
+    artifact_type: str
+    artifact_id: str | None = None
+    process_id: str | None = None
+    path: str | None = None
+
+
 class HitOut(BaseModel):
-    id: str
+    id: str  # the memory node uid (= citation.uid)
     kind: str  # summary|rule|finding|decision|pattern|seed|...
     process_id: str | None  # API process id for analysis chunks
     text: str
     score: float
+    citation: MemoryCitationOut | None = None
 
 
 class AnswerOut(BaseModel):

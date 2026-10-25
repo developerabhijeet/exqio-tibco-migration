@@ -30,7 +30,7 @@ from api.app.services import verify as verify_svc
 @job("scan")
 async def scan(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     p = ctx.payload
-    return await scan_svc.scan_job(p["project_id"], p["upload_id"], w.knowledge)(ctx)
+    return await scan_svc.scan_job(p["project_id"], p["upload_id"])(ctx)
 
 
 @job("discover")

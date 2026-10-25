@@ -107,7 +107,8 @@ async def merge(session: AsyncSession, knowledge: Knowledge, source: Domain, tar
     await _remember(knowledge, target.project_id,
                     f"SME {user} merged the domain \"{source.name}\" into \"{target.name}\".",
                     {"source_id": source.id, "source_name": source.name, "target_id": target.id,
-                     "target_name": target.name, "user": user, "decision": "merged"}, user)
+                     "target_name": target.name, "domain_key": target.key, "user": user,
+                     "decision": "merged"}, user)
     return target
 
 

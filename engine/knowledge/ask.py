@@ -1,26 +1,23 @@
-"""Ask: hybrid search over the analysis chunks and the migration memory, then an optional model
-call that answers from the hits and cites them.
+"""Ask: hybrid search of the memory graph's analysis chunks and migration memory, then an
+optional model call that answers from the hits and cites them.
 
 Without a provider the hits themselves are the answer, so the feature works offline and shows
-exactly what the knowledge base holds. With a provider, the model sees only the retrieved hits
-(wrapped as data) and every citation it returns is checked against them: ids it invents are
-dropped.
+exactly what the memory holds. With a provider, the model sees only the retrieved hits (wrapped
+as data) and every citation it returns is checked against them: ids it invents are dropped.
+Each hit carries the memory ``Citation`` of the node version it came from; its ``id`` is the
+node uid.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from . import search
-from .search import Hit
+from engine.memory.model import KNOWLEDGE_LABELS, Citation, MemoryHit
 
 if TYPE_CHECKING:
     from engine.agents.routing import RoutedProvider
-
-    from .memory import MigrationMemory
-    from .store import KnowledgeStore
+    from engine.memory.search import MemoryRetriever
 
 PROMPT_FILE = "ask.md"
 ASK_SCHEMA: dict = {
@@ -34,30 +31,34 @@ ASK_SCHEMA: dict = {
 NO_ANSWER = "The knowledge base has nothing on this question."
 
 
+class Hit(BaseModel):
+    id: str  # the node uid
+    kind: str
+    process_id: str | None = None  # API process id
+    text: str
+    score: float
+    citation: Citation | None = None
+
+    @classmethod
+    def of(cls, h: MemoryHit) -> Hit:
+        return cls(id=h.uid, kind=h.kind or h.label.lower(), process_id=h.citation.process_id,
+                   text=h.text, score=h.score, citation=h.citation)
+
+
 class Answer(BaseModel):
     text: str
     citations: list[Hit] = Field(default_factory=list)
     used_model: bool = False
 
 
-def gather_hits(
-    store: KnowledgeStore, memory: MigrationMemory, project_id: str, question: str, k: int = 8,
-) -> list[Hit]:
-    """Chunk hits and memory hits merged, best first. Each half is already normalised to its
-    own best score, so the merge interleaves by that score."""
-    hits = search.hybrid_search(store, project_id, question, k=k)
-    for m in memory.retrieve(project_id, question, k=k):
-        hits.append(Hit(id=m.id, kind=m.kind, process_id=None, text=m.text, score=m.score or 0.0))
-    hits.sort(key=lambda h: (-h.score, h.id))
-    return hits[:k]
+def origin(h: Hit) -> str:
+    """``<label> <artifact type> <phase> r<revision>`` of the version a hit cites."""
+    c = h.citation
+    return f"{c.label} {c.artifact_type} {c.phase} r{c.revision}" if c else ""
 
 
-def _render(hits: list[Hit], memory_sources: dict[str, str]) -> str:
-    lines = []
-    for h in hits:
-        origin = memory_sources.get(h.id) or (f"process {h.process_id}" if h.process_id else "")
-        lines.append(f"[id={h.id} kind={h.kind} origin={origin}] {h.text}")
-    return "\n".join(lines)
+def _render(hits: list[Hit]) -> str:
+    return "\n".join(f"[id={h.id} kind={h.kind} origin={origin(h)}] {h.text}" for h in hits)
 
 
 def _render_prompt(question: str, source: str) -> tuple[str, str]:
@@ -83,15 +84,16 @@ def fallback_text(hits: list[Hit]) -> str:
 
 
 async def ask(
-    store: KnowledgeStore,
-    memory: MigrationMemory,
+    retriever: MemoryRetriever,
     project_id: str,
     question: str,
     provider: RoutedProvider | None = None,
     *,
     k: int = 8,
 ) -> Answer:
-    hits = await asyncio.to_thread(gather_hits, store, memory, project_id, question, k)
+    """Chunk and Memory hits (one hybrid search, best first; obsolete memory left out)."""
+    found = await retriever.retrieve(project_id, question, labels=KNOWLEDGE_LABELS, k=k)
+    hits = [Hit.of(h) for h in found]
     if not hits:
         return Answer(text=NO_ANSWER, citations=[])
     if provider is None:
@@ -99,8 +101,7 @@ async def ask(
 
     from engine.agents.prompting import ask_json
 
-    sources = await asyncio.to_thread(_memory_sources, store, [h.id for h in hits])
-    system, user = _render_prompt(question, _render(hits, sources))
+    system, user = _render_prompt(question, _render(hits))
     data, _ = await ask_json(
         provider, "analyse", None, system, user, ASK_SCHEMA,
         tags={"feature": "ask", "project": project_id}, max_tokens=1024,
@@ -109,10 +110,3 @@ async def ask(
     cited = [by_id[i] for i in dict.fromkeys(data.get("citation_ids") or []) if i in by_id]
     return Answer(text=str(data.get("answer", "")).strip() or NO_ANSWER, citations=cited,
                   used_model=True)
-
-
-def _memory_sources(store: KnowledgeStore, ids: list[str]) -> dict[str, str]:
-    rows = store.connection().execute(
-        "SELECT id, source FROM knowledge.memory_items WHERE id = ANY(%s)", [ids]
-    ).fetchall()
-    return {r["id"]: r["source"] for r in rows}
