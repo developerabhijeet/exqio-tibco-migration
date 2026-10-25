@@ -112,6 +112,18 @@ async def test_retry_gives_up_after_max_attempts(app):
     assert (last.event, last.text) == ("error", "neo4j down after 2 attempts")
 
 
+async def test_retry_give_up_text_is_formatted(app):
+    async def custom(ctx, w):
+        raise RetryLater(0.05, "neo4j down", give_up="memory unavailable after {attempts} attempts: "
+                                                     "ServiceUnavailable")
+
+    register("retry-fail", custom, max_attempts=2)
+    job = await wait_terminal(app, await app.state.runner.submit("retry-fail", {}))
+    assert job.error == "memory unavailable after 2 attempts: ServiceUnavailable"
+    assert RetryLater(1, "x").give_up_text(4) == "x after 4 attempts"
+    assert RetryLater(1, "x", give_up="{reason}/{attempts}").give_up_text(4) == "x/4"
+
+
 async def test_uncounted_retry_does_not_use_an_attempt(app):
     register("retry-lock", busy_then_ok(2), max_attempts=1)
     job = await wait_terminal(app, await app.state.runner.submit("retry-lock", {}))
@@ -190,12 +202,41 @@ async def test_reaper_requeues_a_lost_job_of_a_retrying_kind(app_no_worker, work
     assert (p.status, p.error) == ("failed", "worker lost")  # kinds without their own max keep failing
 
 
+async def test_reaper_reads_max_attempts_from_the_stored_settings(app_no_worker, workers, monkeypatch):
+    """The reaper uses the settings a job would run with (stored edits applied), not the copy the
+    worker started with."""
+    from api.app.services import settings as settings_svc
+
+    real = settings_svc.with_stored
+    monkeypatch.setattr(settings_svc, "with_stored", lambda base, stored: real(base, stored).model_copy(
+        update={"memory_ingest_max_attempts": 1}))
+    register("retry-setting", always_retry, max_attempts="memory_ingest_max_attempts")
+    assert app_no_worker.state.worker_services.settings.memory_ingest_max_attempts > 1
+    async with app_no_worker.state.sessionmaker() as s:
+        lost = Job(kind="retry-setting", status="running", payload={}, owner="dead", attempts=1,
+                   heartbeat_at=utcnow() - timedelta(seconds=200))
+        s.add(lost)
+        await s.commit()
+    await make_worker(app_no_worker, workers, "w3").reap()
+    job = await get(app_no_worker, lost.id)
+    assert (job.status, job.error) == ("failed", "worker lost")
+
+
 # ----------------------------------------------------------------- enqueue
 async def test_enqueue_dedupes_on_queued_dedupe_key(app_no_worker):
     sm = app_no_worker.state.sessionmaker
     a = await enqueue(sm, "noop-test", {"dedupe_key": "p|estate"})
     b = await enqueue(sm, "noop-test", {"dedupe_key": "p|estate"})
     assert a is not None and b is None
+
+
+async def test_concurrent_enqueues_of_one_key_store_one_job(app_no_worker):
+    sm = app_no_worker.state.sessionmaker
+    ids = await asyncio.gather(*(enqueue(sm, "noop-test", {}, dedupe_key="p|race") for _ in range(8)))
+    assert sum(i is not None for i in ids) == 1
+    async with sm() as s:
+        rows = (await s.execute(select(Job).where(Job.kind == "noop-test"))).scalars().all()
+    assert len(rows) == 1
 
 
 async def test_enqueue_dedupe_key_argument_and_scope(app_no_worker):
@@ -225,7 +266,8 @@ async def test_enqueue_wakes_the_local_worker(app):
 
 
 # ----------------------------------------------------------------- internal kinds
-async def test_internal_jobs_hidden_from_history(app, client, project_id):
+async def test_internal_jobs_hidden_from_history(app_no_worker, client, project_id):
+    app = app_no_worker  # no worker claims the queued ingest
     await enqueue(app.state.sessionmaker, "memory.ingest", {"project_id": project_id},
                   project_id=project_id)
 
@@ -238,3 +280,11 @@ async def test_internal_jobs_hidden_from_history(app, client, project_id):
     assert "memory.ingest" in kinds(shown)
     assert shown["totals"]["all"]["jobs"] == hidden["totals"]["all"]["jobs"] + 1
     assert all(s["job_kind"] != "memory.ingest" for s in hidden["sessions"])
+
+
+async def test_internal_jobs_not_counted_by_readiness(app_no_worker, client, project_id):
+    await enqueue(app_no_worker.state.sessionmaker, "memory.ingest", {"project_id": project_id},
+                  project_id=project_id)
+    body = (await client.get(f"/projects/{project_id}/readiness")).json()
+    row = next(r for r in body["rows"] if r["key"] == "tokenomics")
+    assert row["status"] == "missing"  # the one queued job is internal: nothing has run yet

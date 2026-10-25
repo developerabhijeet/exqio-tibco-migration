@@ -103,6 +103,8 @@ RETURNING id
 """).bindparams(bindparam("payload", type_=JSONB),
                *(bindparam(name, type_=String) for name in ("id", "kind", "project_id", "process_id",
                                                              "affinity", "dedupe_key")))
+# Held until the enqueue commits, so the NOT EXISTS of a second enqueue of the key sees the first.
+DEDUPE_LOCK_SQL = text("SELECT pg_advisory_xact_lock(hashtext(:kind || '|' || :dedupe_key))")
 NOTIFY_SQL = text("SELECT pg_notify('job_events', :job_id || ':' || :seq)")
 HEARTBEAT_SQL = f"""
 UPDATE {_JOBS} SET heartbeat_at=now()
@@ -193,6 +195,8 @@ async def enqueue(sessionmaker: async_sessionmaker[AsyncSession], kind: str, pay
         payload = {**payload, "dedupe_key": dedupe_key}
     key = payload.get("dedupe_key")
     async with sessionmaker() as s:
+        if key is not None:  # two concurrent enqueues of one key: the second waits, then sees the first
+            await s.execute(DEDUPE_LOCK_SQL, {"kind": kind, "dedupe_key": str(key)})
         job_id = await s.scalar(ENQUEUE_SQL, {
             "id": new_id(), "kind": kind, "payload": payload, "project_id": project_id,
             "process_id": process_id, "affinity": affinity,
@@ -373,7 +377,8 @@ class JobWorker:
                 services = await self._job_services()
                 result = await handler_for(kind)(ctx, services)
             except asyncio.CancelledError:
-                await self._after_cancel(ctx, kind, self._reasons.pop(job_id, "drain"))
+                await self._after_cancel(ctx, kind, self._reasons.pop(job_id, "drain"),
+                                         services.settings if services else None)
                 return
             except RetryLater as retry:
                 self._finishing.add(job_id)
@@ -431,7 +436,7 @@ class JobWorker:
         """Back to the queue for ``retry.delay_s`` while attempts are left, else failed."""
         attempts = await self._attempts(ctx.job_id)
         if retry.count_attempt and attempts >= self.max_attempts_of(kind, settings):
-            message = f"{retry.reason} after {attempts} attempts"
+            message = retry.give_up_text(attempts)
             await ctx.finish(_failed(message), "error", message)
             return
         values: dict[str, Any] = {"status": "queued", "owner": None, "heartbeat_at": None,
@@ -440,7 +445,14 @@ class JobWorker:
             values["attempts"] = Job.attempts - 1
         await ctx.finish(values, "log", f"retry in {retry.delay_s:g} s: {retry.reason}", tag="code")
 
-    async def _after_cancel(self, ctx: JobContext, kind: str, reason: str) -> None:
+    async def _stored_settings(self) -> Settings | None:
+        """This worker's settings with the Settings-screen edits stored now (what a job starting
+        now would get); ``None`` without services."""
+        services = await self._job_services()
+        return services.settings if services else None
+
+    async def _after_cancel(self, ctx: JobContext, kind: str, reason: str,
+                            settings: Settings | None = None) -> None:
         if reason == "lost":  # another worker already gave the job its outcome
             log.warning("job %s: no longer owned by %s; abandoned", ctx.job_id, self.name)
             return
@@ -449,7 +461,7 @@ class JobWorker:
                             "error", CANCELLED_REASON)
             return
         attempts = await self._attempts(ctx.job_id)  # drain: requeue unless out of attempts
-        allowed = self.max_attempts_of(kind)
+        allowed = self.max_attempts_of(kind, settings or await self._stored_settings())
         if attempts < allowed:
             if await ctx.finish({"status": "queued", "owner": None, "heartbeat_at": None}):
                 log.warning("job %s: requeued by %s (attempt %d of %d)", ctx.job_id, self.name,
@@ -519,7 +531,9 @@ class JobWorker:
         lost = _failed(LOST_REASON)
         live = aliased(Job)
         is_stale = and_(Job.status == "running", or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < stale))
-        allowed = {kind: self.max_attempts_of(kind) for kind in kinds_with_own_max_attempts()}
+        kinds = kinds_with_own_max_attempts()
+        settings = await self._stored_settings() if kinds else None
+        allowed = {kind: self.max_attempts_of(kind, settings) for kind in kinds}
         async with self.sessionmaker() as s:
             requeued = []
             if allowed:  # kinds that opted in to retries go back to the queue while attempts are left

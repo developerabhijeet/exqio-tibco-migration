@@ -13,6 +13,7 @@ from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
+from api.app.jobs.registry import INTERNAL_PREFIX
 from api.app.models import (
     Build,
     Domain,
@@ -256,7 +257,8 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         rows.append(_row("test_data", "missing", [], "no scenarios generated yet"))
 
     # tokenomics
-    jobs = await session.scalar(select(func.count(Job.id)).where(Job.project_id == project_id)) or 0
+    jobs = await session.scalar(select(func.count(Job.id)).where(
+        Job.project_id == project_id, ~Job.kind.startswith(INTERNAL_PREFIX, autoescape=True))) or 0
     priced = [c for c in calls if (c.tokens_in or c.tokens_out)]
     ev = [_ev("history", f"/history?project_id={project_id}", f"{jobs} job(s), {len(calls)} model call(s)")]
     if priced:

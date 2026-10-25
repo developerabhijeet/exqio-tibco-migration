@@ -51,14 +51,23 @@ class RetryLater(Exception):
     """Raised by a handler: requeue the job, claimable again in ``delay_s`` seconds.
 
     A counted retry uses one of the kind's attempts; once they are spent the job fails with
-    ``<reason> after <attempts> attempts``. ``count_attempt=False`` (a busy lock, not a failure)
-    hands the attempt back."""
+    ``<reason> after <attempts> attempts``, or ``give_up`` formatted with ``{attempts}`` and
+    ``{reason}`` when given. ``count_attempt=False`` (a busy lock, not a failure) hands the attempt
+    back."""
 
-    def __init__(self, delay_s: float, reason: str, *, count_attempt: bool = True) -> None:
+    DEFAULT_GIVE_UP = "{reason} after {attempts} attempts"
+
+    def __init__(self, delay_s: float, reason: str, *, count_attempt: bool = True,
+                 give_up: str | None = None) -> None:
         super().__init__(reason)
         self.delay_s = delay_s
         self.reason = reason
         self.count_attempt = count_attempt
+        self.give_up = give_up
+
+    def give_up_text(self, attempts: int) -> str:
+        """The job's final error once its attempts are spent."""
+        return (self.give_up or self.DEFAULT_GIVE_UP).format(attempts=attempts, reason=self.reason)
 
 
 def register(kind: str, handler: Handler, *, max_attempts: MaxAttempts = None) -> None:
