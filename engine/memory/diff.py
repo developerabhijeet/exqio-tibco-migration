@@ -12,6 +12,7 @@ class VersionRef(BaseModel):
     name: str
     content_hash: str
     props: dict[str, Any]
+    text_hash: str | None = None  # nodes only; text is in the content hash (rulings R26)
 
 
 class ChangedRef(VersionRef):
@@ -25,10 +26,13 @@ class DiffSet(BaseModel):
 
 
 def changed_keys(old: VersionRef, new: VersionRef) -> list[str]:
-    """The property keys (and ``name``) whose values differ between two versions."""
+    """The property keys, ``name`` and ``text`` (by text hash, rulings R26) whose values
+    differ between two versions."""
     keys = {k for k in old.props.keys() | new.props.keys() if old.props.get(k) != new.props.get(k)}
     if old.name != new.name:
         keys.add("name")
+    if old.text_hash != new.text_hash:
+        keys.add("text")
     return sorted(keys)
 
 

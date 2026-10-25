@@ -32,7 +32,21 @@ async def test_node_detail_lists_versions_with_changed_keys(memory_graph):
     await apply(memory_graph, "k2", estate(1, changed={"p0"}))
     d = await memory_graph.node_detail(P, "process:p0")
     assert [v.valid_from for v in d.versions] == [2, 1]
-    assert d.versions[0].changed_keys == ["complexity_band"]
+    assert d.versions[0].changed_keys == ["complexity_band", "text"]  # rulings R26
+
+
+async def test_text_only_change_reports_text(memory_graph):  # rulings R26
+    from engine.memory.model import MemNode, ScopedDelta
+
+    def table(text):
+        return ScopedDelta(scope="estate", nodes=[
+            MemNode(label="Table", uid="table:orders", name="orders", text=text)])
+
+    await apply(memory_graph, "k1", table("orders table"))
+    await apply(memory_graph, "k2", table("orders table, keyed by order id"))
+    d = await memory_graph.node_detail(P, "table:orders")
+    assert [v.changed_keys for v in d.versions] == [["text"], []]
+    assert [x.changed_keys for x in (await memory_graph.diff(P, 2)).nodes.changed] == [["text"]]
 
 
 async def test_diff_reports_added_changed_removed_without_reattachments(memory_graph):
@@ -123,6 +137,29 @@ async def test_lineage_chain_follows_mappings_tests_and_contains_down_from_a_pro
     # back over MIGRATED_TO to the activity, never up CONTAINS to its process
     assert names(from_method) == {"dotnet:p0/Api/Flow.A0", "p0/a0", "dotnet:p0/A0_maps"}
     assert (await memory_graph.lineage_chain(P, "process:p0", as_of=1)).total == 4
+
+
+async def test_lineage_walks_a_shared_method_once_and_truncates_nearest_first(memory_graph):
+    from engine.memory.model import MemNode, MemRel, ScopedDelta
+    n = 40
+    await apply(memory_graph, "k1", estate(1, activities=n))
+    shared = "method:dotnet:p0/Api/Flow.Map"
+    await apply(memory_graph, "k2", ScopedDelta(scope="build:p0", nodes=[
+        MemNode(label="Method", uid=shared, name="Flow.Map", props={"stack": "dotnet"})],
+        rels=[MemRel(type="MIGRATED_TO", src=f"activity:p0/a{j}", dst=shared,
+                     props={"status": "generated"}) for j in range(n)]))
+    g = await memory_graph.lineage_chain(P, "process:p0")
+    assert g.total == 1 + n + 1 and len(g.edges) == n + n  # CONTAINS + MIGRATED_TO, once each
+    from_method = await memory_graph.lineage_chain(P, shared)
+    assert from_method.total == 1 + n  # never climbs CONTAINS to the process
+    cut = await memory_graph.lineage_chain(P, shared, limit=4)
+    assert [x.uid for x in cut.nodes] == [shared, "activity:p0/a0", "activity:p0/a1",
+                                          "activity:p0/a10"]
+    assert cut.truncated is True and cut.total == 1 + n
+    assert {(e.src, e.dst) for e in cut.edges} == {
+        (f"activity:p0/a{j}", shared) for j in ("0", "1", "10")}
+    near = await memory_graph.lineage_chain(P, "process:p0", limit=n + 1)
+    assert shared not in {x.uid for x in near.nodes}  # hop 2 is cut before hop 1
 
 
 async def test_node_detail_about_lineage_and_curations(memory_graph):

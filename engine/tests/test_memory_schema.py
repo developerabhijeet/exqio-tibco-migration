@@ -92,3 +92,20 @@ def test_the_violation_scan_catches_each_formatting_form():
     assert len(_violations(bad)) == 3
     ok = ast.parse('def _render_a(x):\n    return f"MATCH {x}"\n')
     assert _violations(ok) == []
+
+
+async def test_ensure_schema_backfills_closed_in(memory_graph, hash_embeddings):
+    from engine.tests.memory_helpers import P, apply, estate, query
+    await apply(memory_graph, "k1", estate(1))
+    await apply(memory_graph, "k2", estate(1, vanished={"p0"}))  # closes 4 nodes, 3 rels
+    await query(memory_graph, "MATCH (n:Mem {project_id: $project_id}) REMOVE n.closed_in",
+                project_id=P)
+    await query(memory_graph, "MATCH ()-[r {project_id: $project_id}]->() REMOVE r.closed_in",
+                project_id=P)
+    assert (await memory_graph.diff(P, 2)).nodes.removed == []
+    await memory_graph.ensure_schema()
+    d = await memory_graph.diff(P, 2)
+    assert (len(d.nodes.removed), len(d.relationships.removed)) == (4, 3)
+    rows = await query(memory_graph, "MATCH (n:Mem {project_id: $project_id}) "
+                       "RETURN n.valid_to AS to, n.closed_in AS closed", project_id=P)
+    assert sorted((r["to"], r["closed"]) for r in rows) == [(2, 2)] * 4

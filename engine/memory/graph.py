@@ -89,6 +89,8 @@ class MemoryGraph:
         async with self._driver.session(database=self.database) as session:
             for statement in cypher.SCHEMA:
                 await (await session.run(statement)).consume()
+            for statement in cypher.BACKFILL_CLOSED_IN:
+                await (await session.run(statement, open=OPEN_VALID_TO)).consume()
 
     async def reset(self) -> None:
         if not self.uri or self.uri != os.environ.get("NEO4J_TEST_URI"):
@@ -147,12 +149,15 @@ class MemoryGraph:
         statement = cypher.TOP_LEVEL if uid is None else cypher.NEIGHBOURHOOD[depth]
         return await self._read(_subgraph, statement, p)
 
-    async def lineage_chain(self, project_id: str, uid: str,
-                            as_of: int | None = None) -> Subgraph:
+    async def lineage_chain(self, project_id: str, uid: str, as_of: int | None = None, *,
+                            limit: int = GRAPH_LIMIT) -> Subgraph:
         """``uid`` and what MIGRATED_TO, TESTS and FAILED_AT (either direction) and CONTAINS
-        (down from a Process) reach from it in at most 4 hops."""
+        (down from a Process) reach from it in at most 4 hops, nearest first (then by uid);
+        ``total`` counts before ``limit``."""
+        if not 1 <= limit <= GRAPH_LIMIT:
+            raise ValueError(f"limit must be 1..{GRAPH_LIMIT}, got {limit}")
         return await self._read(_lineage_chain, {"project_id": project_id, "uid": uid,
-                                                 "k": _moment(as_of)})
+                                                 "k": _moment(as_of), "limit": limit})
 
     async def node_detail(self, project_id: str, uid: str,
                           as_of: int | None = None) -> NodeDetail | None:
@@ -166,11 +171,9 @@ class MemoryGraph:
     async def revisions(self, project_id: str, *, before: int | None = None,
                         limit: int = 50) -> list[RevisionOut]:
         """Revisions below ``before`` (all when None), newest first."""
-        async with self._driver.session(database=self.database) as session:
-            result = await session.run(
-                cypher.REVISIONS_BEFORE, project_id=project_id, limit=limit,
-                before=OPEN_VALID_TO if before is None else before)
-            return [RevisionOut(**r["revision"]) async for r in result]
+        return await self._read(_revisions, {
+            "project_id": project_id, "limit": limit,
+            "before": OPEN_VALID_TO if before is None else before})
 
     async def latest_revision(self, project_id: str) -> RevisionOut | None:
         found = await self.revisions(project_id, limit=1)
@@ -238,14 +241,20 @@ async def _lineage_chain(tx: AsyncManagedTransaction, p: dict[str, Any]) -> Subg
     row = await (await tx.run(cypher.LINEAGE, p)).single()
     if row is None:
         return _EMPTY
-    found = [row["center"], *sorted(row["nodes"], key=lambda n: n["p"]["uid"])]
-    kept = found[:GRAPH_LIMIT]
+    found = [row["center"]]
+    for hop in row["hops"]:
+        found += sorted(hop, key=lambda n: n["p"]["uid"])
+    kept = found[:p["limit"]]
     uids = {n["p"]["uid"] for n in kept}
-    edges = sorted((e for e in row["edges"] if e["src"] in uids and e["dst"] in uids),
-                   key=lambda e: (e["type"], e["p"]["uid"]))
-    nodes, edge_out = await _annotate(tx, p, kept, edges)
-    return Subgraph(nodes=nodes, edges=edge_out, truncated=len(found) > GRAPH_LIMIT,
+    edges = {e["p"]["uid"]: e for e in row["edges"] if e["src"] in uids and e["dst"] in uids}
+    nodes, edge_out = await _annotate(tx, p, kept, sorted(
+        edges.values(), key=lambda e: (e["type"], e["p"]["uid"])))
+    return Subgraph(nodes=nodes, edges=edge_out, truncated=len(found) > p["limit"],
                     total=len(found))
+
+
+async def _revisions(tx: AsyncManagedTransaction, p: dict[str, Any]) -> list[RevisionOut]:
+    return [RevisionOut(**r["revision"]) for r in await _rows(tx, cypher.REVISIONS_BEFORE, p)]
 
 
 async def _current_node(tx: AsyncManagedTransaction, p: dict[str, Any]) -> NodeOut | None:
@@ -258,7 +267,8 @@ async def _current_node(tx: AsyncManagedTransaction, p: dict[str, Any]) -> NodeO
 
 def _version_ref(kind: str, stored: dict[str, Any], props: dict[str, Any]) -> VersionRef:
     return VersionRef(uid=stored["uid"], kind=kind, name=stored.get("name") or "",
-                      content_hash=stored["content_hash"], props=props)
+                      content_hash=stored["content_hash"], props=props,
+                      text_hash=stored.get("text_hash"))
 
 
 def _versions(rows: list[dict[str, Any]]) -> list[VersionOut]:

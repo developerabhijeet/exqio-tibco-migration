@@ -68,6 +68,17 @@ SCHEMA: tuple[str, ...] = (
     *(_render_drop_rel_to_index(t) for t in REL_TYPES),
 )
 
+# Install-wide maintenance run by ensure_schema (exempt from the project_id rule like SCHEMA,
+# rulings R22): versions closed before the write path recorded `closed_in` get it, so the
+# revision diff sees them. Idempotent; a no-op once every closed version has it.
+BACKFILL_CLOSED_IN: tuple[str, ...] = (
+    ("MATCH (n:Mem) WHERE n.valid_to < $open AND n.closed_in IS NULL "
+    "CALL (n) { SET n.closed_in = n.valid_to } IN TRANSACTIONS OF 10000 ROWS"),
+    ("MATCH ()-[r]->() WHERE r.project_id IS NOT NULL AND r.valid_to < $open "
+    "AND r.closed_in IS NULL CALL (r) { SET r.closed_in = r.valid_to } "
+    "IN TRANSACTIONS OF 10000 ROWS"),
+)
+
 SHOW_INDEX_NAMES = "SHOW INDEXES YIELD name RETURN name"
 SHOW_CONSTRAINT_NAMES = "SHOW CONSTRAINTS YIELD name RETURN name"
 PING = "RETURN 1 AS ok"
@@ -304,22 +315,31 @@ def _render_edges_among() -> str:
     )
 
 
+LINEAGE_HOPS = 4
+
+
 def _render_lineage() -> str:
-    """Paths of at most 4 valid MIGRATED_TO, TESTS and FAILED_AT relationships in either
-    direction, and CONTAINS only from a Process down to its children."""
+    """What valid MIGRATED_TO, TESTS and FAILED_AT relationships (either direction) and
+    CONTAINS (only from a Process down to its children) reach from `$uid` in at most
+    LINEAGE_HOPS hops. A breadth-first walk: each hop expands the distinct nodes first reached
+    by the previous one, so the work is bounded by the relationships reached, not the paths
+    (a Method shared by N activities would otherwise make O(N^2) paths). `hops[i]` holds the
+    nodes first reached at hop i + 1; `edges` may repeat a relationship met from both ends."""
     lineage_types = "MIGRATED_TO|TESTS|FAILED_AT|CONTAINS"
+    hop = (
+        "CALL (frontier) { UNWIND frontier AS f "
+        f"OPTIONAL MATCH (f)-[r:{lineage_types}]-(m:Mem) WHERE {_render_valid('r')} "
+        "AND (type(r) <> 'CONTAINS' OR (startNode(r) = f AND f:Process)) "
+        "RETURN collect(DISTINCT r) AS hop_rs, collect(DISTINCT m) AS hop_ms } "
+        "WITH c, seen, hops, rs + hop_rs AS rs, [m IN hop_ms WHERE NOT m IN seen] AS frontier "
+        "WITH c, seen + frontier AS seen, hops + [frontier] AS hops, rs, frontier "
+    )
     return (
         _render_at_uid("c")
-        + f"OPTIONAL MATCH path = (c)-[rels:{lineage_types}*1..4]-(:Mem) "
-        "WHERE all(i IN range(0, size(rels) - 1) WHERE "
-        "rels[i].valid_from <= $k AND $k < rels[i].valid_to AND (type(rels[i]) <> 'CONTAINS' "
-        "OR (startNode(rels[i]) = nodes(path)[i] AND nodes(path)[i]:Process))) "
-        "WITH c, collect(path) AS paths "
-        "CALL (paths) { UNWIND paths AS p UNWIND nodes(p) AS x RETURN collect(DISTINCT x) AS ns } "
-        "CALL (paths) { UNWIND paths AS p UNWIND relationships(p) AS x "
-        "RETURN collect(DISTINCT x) AS rs } "
-        f"RETURN {_render_node_out('c')} AS center, "
-        f"[x IN ns WHERE x <> c | {_render_node_out('x')}] AS nodes, "
+        + "WITH c, [c] AS seen, [c] AS frontier, [] AS hops, [] AS rs "
+        + hop * LINEAGE_HOPS
+        + f"RETURN {_render_node_out('c')} AS center, "
+        f"[h IN hops | [x IN h | {_render_node_out('x')}]] AS hops, "
         f"[x IN rs | {_render_edge_out('x')}] AS edges"
     )
 
