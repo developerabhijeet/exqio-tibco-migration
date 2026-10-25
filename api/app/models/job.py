@@ -15,11 +15,13 @@ class Job(IdMixin, CreatedMixin, Base):
     """No foreign keys on project/process: job history outlives rescans.
 
     ``owner`` is the worker that claimed the job and ``heartbeat_at`` its last sign of life;
-    ``affinity`` pins a queued job to one worker by name (see ``api.app.jobs.runner``).
+    ``affinity`` pins a queued job to one worker by name; a queued job is not claimed before
+    ``not_before`` (a delayed retry; see ``api.app.jobs.runner``).
     """
 
     __tablename__ = "jobs"
-    __table_args__ = (Index("ix_jobs_status_created_at", "status", "created_at"),)
+    __table_args__ = (Index("ix_jobs_status_created_at", "status", "created_at"),
+                      Index("ix_jobs_status_not_before_created_at", "status", "not_before", "created_at"))
 
     kind: Mapped[str]  # scan|discover|analyse|eval|design|generate|build|test|infra|verify|plan
     status: Mapped[str] = mapped_column(default="queued", index=True)  # queued|running|done|failed
@@ -36,6 +38,7 @@ class Job(IdMixin, CreatedMixin, Base):
     cancel_requested: Mapped[bool] = mapped_column(default=False, server_default=false())
     attempts: Mapped[int] = mapped_column(default=0, server_default="0")
     affinity: Mapped[str | None] = mapped_column(Text)
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class JobEvent(Base):

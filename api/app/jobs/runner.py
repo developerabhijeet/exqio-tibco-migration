@@ -1,11 +1,18 @@
-"""Jobs as Postgres rows claimed by workers: ``submit`` queues, any :class:`JobWorker` runs.
+"""Jobs as Postgres rows claimed by workers: ``enqueue`` queues, any :class:`JobWorker` runs.
 
-``JobRunner.submit`` stores a queued job (``kind`` + ``payload``, optionally an ``affinity``
-naming the one worker allowed to run it). Workers claim queued jobs with one
+:func:`enqueue` (and ``JobRunner.submit``, which calls it) stores a queued job (``kind`` +
+``payload``, optionally an ``affinity`` naming the one worker allowed to run it). With a
+``dedupe_key`` (kept in the payload) nothing is stored while a queued job of the same kind has the
+same key. Workers claim queued jobs whose ``not_before`` has passed with one
 ``UPDATE ... FOR UPDATE SKIP LOCKED`` statement, so two workers never run the same job, and run
 ``handler_for(kind)`` in one of their ``slots``. In role ``all`` the runner owns an in-process
 worker (named by :func:`worker_name`); in role ``api`` it only queues, and worker processes
 (``python -m api.app.worker``) run the jobs.
+
+A handler that raises :class:`~api.app.jobs.registry.RetryLater` goes back to the queue with
+``not_before = now() + delay`` and a ``log`` event ``retry in <delay> s: <reason>`` while it has
+attempts left (``max_attempts_for(kind)``; an uncounted retry hands its attempt back), else fails
+with ``<reason> after <attempts> attempts``.
 
 A worker proves it is alive by refreshing ``heartbeat_at`` on its running jobs every
 ``heartbeat_s``; the same statement reads ``cancel_requested`` and cancels the job's task when it is
@@ -17,8 +24,11 @@ must not let a healthy job look lost. The thread hands cancellations to the loop
 ``call_soon_threadsafe``.
 ``reap`` (at start and every 30 s) fails running jobs whose heartbeat is older than ``stale_s``,
 and queued jobs pinned to a worker that has shown no running heartbeat for ``stale_s``, with
-"worker lost". ``drain`` stops claiming, lets running jobs finish within its timeout, and requeues
-the rest (``attempts < max_attempts``) or fails them with "worker stopped".
+"worker lost"; a lost running job of a kind that registered its own ``max_attempts`` is requeued
+instead while ``attempts < max_attempts_for(kind)``. ``drain`` stops claiming, lets running jobs
+finish within its timeout, and requeues the rest (``attempts < max_attempts_for(kind)``) or fails
+them with "worker stopped". Kinds without their own ``max_attempts`` use the worker's
+``max_attempts`` (``JOB_MAX_ATTEMPTS``).
 
 Each job gets its own copy of the worker's ``Settings`` with the Settings-screen edits stored when
 it starts (``services.settings.with_stored``): the PATCH lands on one API pod, the table reaches all.
@@ -40,19 +50,29 @@ import logging
 import os
 import socket
 import threading
+import weakref
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import psycopg
-from sqlalchemy import String, func, or_, select, text, update
+from sqlalchemy import String, and_, bindparam, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from api.app.db import psycopg_url
-from api.app.jobs.registry import WorkerServices, handler_for
+from api.app.db import new_id, psycopg_url
+from api.app.jobs.registry import (
+    RetryLater,
+    WorkerServices,
+    handler_for,
+    kinds_with_own_max_attempts,
+    max_attempts_for,
+)
 from api.app.models import Job, JobEvent
+
+if TYPE_CHECKING:
+    from api.app.config import Settings
 
 log = logging.getLogger(__name__)
 
@@ -69,9 +89,20 @@ CLAIM_SQL = text(f"""
 UPDATE {_JOBS} SET status='running', owner=:me, heartbeat_at=now(), started_at=coalesce(started_at, now()),
        attempts=attempts+1
 WHERE id = (SELECT id FROM {_JOBS} WHERE status='queued' AND (affinity IS NULL OR affinity=:me)
+              AND (not_before IS NULL OR not_before <= now())
             ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
 RETURNING id, kind, payload
 """).columns(id=String, kind=String, payload=JSONB)
+# One statement, so a dedupe check and its insert see the same snapshot; a NULL key never matches.
+ENQUEUE_SQL = text(f"""
+INSERT INTO {_JOBS} (id, kind, status, payload, project_id, process_id, affinity)
+SELECT :id, :kind, 'queued', :payload, :project_id, :process_id, :affinity
+WHERE NOT EXISTS (SELECT 1 FROM {_JOBS} WHERE status='queued' AND kind=:kind
+                  AND payload->>'dedupe_key' = :dedupe_key)
+RETURNING id
+""").bindparams(bindparam("payload", type_=JSONB),
+               *(bindparam(name, type_=String) for name in ("id", "kind", "project_id", "process_id",
+                                                             "affinity", "dedupe_key")))
 NOTIFY_SQL = text("SELECT pg_notify('job_events', :job_id || ':' || :seq)")
 HEARTBEAT_SQL = f"""
 UPDATE {_JOBS} SET heartbeat_at=now()
@@ -133,10 +164,45 @@ async def add_event(s: AsyncSession, job_id: str, seq: int, event: str, text_: s
     return row
 
 
+async def add_next_event(s: AsyncSession, job_id: str, event: str, text_: str,
+                         tag: str | None = None) -> None:
+    """Append an event after the job's last one (for jobs no context is writing)."""
+    last = await s.scalar(select(func.max(JobEvent.seq)).where(JobEvent.job_id == job_id))
+    await add_event(s, job_id, (last or 0) + 1, event, text_, tag)
+
+
 async def add_terminal_event(s: AsyncSession, job_id: str, text_: str) -> None:
     """Append an ``error`` event after the job's last one (for jobs no context is writing)."""
-    last = await s.scalar(select(func.max(JobEvent.seq)).where(JobEvent.job_id == job_id))
-    await add_event(s, job_id, (last or 0) + 1, "error", text_)
+    await add_next_event(s, job_id, "error", text_)
+
+
+# The workers of this process, so ``enqueue`` can wake the one sharing its database.
+_LOCAL_WORKERS: weakref.WeakSet[JobWorker] = weakref.WeakSet()
+
+
+async def enqueue(sessionmaker: async_sessionmaker[AsyncSession], kind: str, payload: dict[str, Any], *,
+                  project_id: str | None = None, process_id: str | None = None,
+                  dedupe_key: str | None = None, affinity: str | None = None) -> str | None:
+    """Store a queued job; the handler registered for ``kind`` runs it from ``payload`` on the
+    first worker to claim it (only the worker named ``affinity``, when given).
+
+    ``dedupe_key`` (stored as ``payload["dedupe_key"]``; a key already in ``payload`` counts too)
+    makes this a no-op returning ``None`` while a queued job of ``kind`` carries the same key. A
+    running job does not count: what it read may already be out of date."""
+    if dedupe_key is not None:
+        payload = {**payload, "dedupe_key": dedupe_key}
+    key = payload.get("dedupe_key")
+    async with sessionmaker() as s:
+        job_id = await s.scalar(ENQUEUE_SQL, {
+            "id": new_id(), "kind": kind, "payload": payload, "project_id": project_id,
+            "process_id": process_id, "affinity": affinity,
+            "dedupe_key": None if key is None else str(key)})
+        await s.commit()
+    if job_id is not None:
+        for worker in list(_LOCAL_WORKERS):
+            if worker.sessionmaker is sessionmaker:
+                worker.wake()
+    return job_id
 
 
 class JobContext:
@@ -171,7 +237,7 @@ class JobContext:
             return EventOut.from_row(row)
 
     async def finish(self, values: dict[str, Any], event: EventKind | None = None, text: str = "",
-                    data: dict[str, Any] | None = None) -> bool:
+                     data: dict[str, Any] | None = None, tag: Tag | None = None) -> bool:
         """Set the job's final ``values`` (and write ``event``) if it is still ``running`` and ours.
         Returns whether it was."""
         async with self._lock:
@@ -183,7 +249,7 @@ class JobContext:
                     await s.rollback()
                     return False
                 if event is not None:
-                    await add_event(s, self.job_id, self._seq + 1, event, text, None, data)
+                    await add_event(s, self.job_id, self._seq + 1, event, text, tag, data)
                 await s.commit()
             if event is not None:
                 self._seq += 1
@@ -226,6 +292,7 @@ class JobWorker:
     async def start(self) -> None:
         await self.reap()
         self._loop = asyncio.get_running_loop()
+        _LOCAL_WORKERS.add(self)
         self._hb_stop.clear()
         self._hb_thread = threading.Thread(target=self._heartbeat_thread, daemon=True,
                                            name=f"{self.name}-heartbeat")
@@ -240,6 +307,7 @@ class JobWorker:
     async def drain(self, timeout_s: float) -> None:
         """Stop claiming, let running jobs finish for ``timeout_s``, then requeue the rest."""
         self._draining = True
+        _LOCAL_WORKERS.discard(self)
         self._wake.set()
         if self._claimer is not None:
             await asyncio.gather(self._claimer, return_exceptions=True)  # exits at the next check
@@ -297,13 +365,19 @@ class JobWorker:
     async def _run(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
         try:
             ctx = JobContext(self.sessionmaker, job_id, payload, owner=self.name)
+            services: WorkerServices | None = None
             try:
                 async with self.sessionmaker() as s:  # a requeued job continues its sequence
                     ctx._seq = await s.scalar(select(func.max(JobEvent.seq))
                                               .where(JobEvent.job_id == job_id)) or 0
-                result = await handler_for(kind)(ctx, await self._job_services())
+                services = await self._job_services()
+                result = await handler_for(kind)(ctx, services)
             except asyncio.CancelledError:
-                await self._after_cancel(ctx, self._reasons.pop(job_id, "drain"))
+                await self._after_cancel(ctx, kind, self._reasons.pop(job_id, "drain"))
+                return
+            except RetryLater as retry:
+                self._finishing.add(job_id)
+                await self._retry_later(ctx, kind, retry, services.settings if services else None)
                 return
             except Exception as exc:
                 log.exception("job %s failed", job_id)
@@ -342,7 +416,31 @@ class JobWorker:
             return self.services
         return replace(self.services, settings=with_stored(self.services.settings, stored))
 
-    async def _after_cancel(self, ctx: JobContext, reason: str) -> None:
+    def max_attempts_of(self, kind: str, settings: Settings | None = None) -> int:
+        """``max_attempts_for(kind)``, defaulting to this worker's ``max_attempts``."""
+        if settings is None and self.services is not None:
+            settings = self.services.settings
+        return max_attempts_for(kind, settings, default=self.max_attempts)
+
+    async def _attempts(self, job_id: str) -> int:
+        async with self.sessionmaker() as s:
+            return await s.scalar(select(Job.attempts).where(Job.id == job_id)) or 0
+
+    async def _retry_later(self, ctx: JobContext, kind: str, retry: RetryLater,
+                           settings: Settings | None) -> None:
+        """Back to the queue for ``retry.delay_s`` while attempts are left, else failed."""
+        attempts = await self._attempts(ctx.job_id)
+        if retry.count_attempt and attempts >= self.max_attempts_of(kind, settings):
+            message = f"{retry.reason} after {attempts} attempts"
+            await ctx.finish(_failed(message), "error", message)
+            return
+        values: dict[str, Any] = {"status": "queued", "owner": None, "heartbeat_at": None,
+                                  "not_before": func.now() + timedelta(seconds=retry.delay_s)}
+        if not retry.count_attempt:
+            values["attempts"] = Job.attempts - 1
+        await ctx.finish(values, "log", f"retry in {retry.delay_s:g} s: {retry.reason}", tag="code")
+
+    async def _after_cancel(self, ctx: JobContext, kind: str, reason: str) -> None:
         if reason == "lost":  # another worker already gave the job its outcome
             log.warning("job %s: no longer owned by %s; abandoned", ctx.job_id, self.name)
             return
@@ -350,12 +448,12 @@ class JobWorker:
             await ctx.finish(_failed(CANCELLED_REASON),
                             "error", CANCELLED_REASON)
             return
-        async with self.sessionmaker() as s:  # drain: requeue unless out of attempts
-            attempts = await s.scalar(select(Job.attempts).where(Job.id == ctx.job_id))
-        if (attempts or 0) < self.max_attempts:
+        attempts = await self._attempts(ctx.job_id)  # drain: requeue unless out of attempts
+        allowed = self.max_attempts_of(kind)
+        if attempts < allowed:
             if await ctx.finish({"status": "queued", "owner": None, "heartbeat_at": None}):
                 log.warning("job %s: requeued by %s (attempt %d of %d)", ctx.job_id, self.name,
-                            attempts, self.max_attempts)
+                            attempts, allowed)
         else:
             await ctx.finish(_failed(STOPPED_REASON),
                             "error", STOPPED_REASON)
@@ -420,10 +518,20 @@ class JobWorker:
         stale = func.now() - timedelta(seconds=self.stale_s)
         lost = _failed(LOST_REASON)
         live = aliased(Job)
+        is_stale = and_(Job.status == "running", or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < stale))
+        allowed = {kind: self.max_attempts_of(kind) for kind in kinds_with_own_max_attempts()}
         async with self.sessionmaker() as s:
-            running = (await s.execute(update(Job).where(
-                Job.status == "running", or_(Job.heartbeat_at.is_(None), Job.heartbeat_at < stale),
-            ).values(**lost).returning(Job.id))).scalars().all()
+            requeued = []
+            if allowed:  # kinds that opted in to retries go back to the queue while attempts are left
+                requeued = (await s.execute(update(Job).where(is_stale, or_(*(
+                    and_(Job.kind == kind, Job.attempts < n) for kind, n in allowed.items()),
+                )).values(status="queued", owner=None, heartbeat_at=None)
+                    .returning(Job.id, Job.kind, Job.attempts))).all()
+            for row in requeued:
+                await add_next_event(s, row.id, "log", f"{LOST_REASON}; requeued (attempt {row.attempts} "
+                                     f"of {allowed[row.kind]})", "code")
+            running = (await s.execute(update(Job).where(is_stale).values(**lost)
+                                       .returning(Job.id))).scalars().all()
             orphaned = (await s.execute(update(Job).where(
                 Job.status == "queued", Job.affinity.is_not(None), Job.affinity != self.name,
                 Job.created_at < stale,
@@ -433,10 +541,11 @@ class JobWorker:
             for job_id in (*running, *orphaned):
                 await add_terminal_event(s, job_id, LOST_REASON)
             await s.commit()
-        n = len(running) + len(orphaned)
-        if n:
-            log.warning("worker %s: failed %d job(s) of lost workers", self.name, n)
-        return n
+        if requeued:
+            log.warning("worker %s: requeued %d job(s) of lost workers", self.name, len(requeued))
+        if running or orphaned:
+            log.warning("worker %s: failed %d job(s) of lost workers", self.name, len(running) + len(orphaned))
+        return len(requeued) + len(running) + len(orphaned)
 
 
 class JobRunner:
@@ -456,15 +565,11 @@ class JobRunner:
             await self.worker.stop()
 
     async def submit(self, kind: str, payload: dict[str, Any], *, project_id: str | None = None,
-                     process_id: str | None = None, affinity: str | None = None) -> str:
-        """Store a queued job; the handler registered for ``kind`` runs it from ``payload`` on the
-        first worker to claim it (only the worker named ``affinity``, when given)."""
-        async with self.sessionmaker() as s:
-            job = Job(kind=kind, status="queued", payload=payload, project_id=project_id,
-                      process_id=process_id, affinity=affinity)
-            s.add(job)
-            await s.commit()
-            job_id = job.id
+                     process_id: str | None = None, affinity: str | None = None) -> str | None:
+        """:func:`enqueue` on this runner's database, then wake its worker (``None`` only when
+        ``payload`` carries a ``dedupe_key`` a queued job already has)."""
+        job_id = await enqueue(self.sessionmaker, kind, payload, project_id=project_id,
+                               process_id=process_id, affinity=affinity)
         if self.worker is not None:
             self.worker.wake()
         return job_id

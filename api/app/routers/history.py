@@ -13,10 +13,12 @@ router = APIRouter(tags=["history"])
 
 
 @router.get("/history")
-async def get_history(project_id: str, session: SessionDep) -> dict[str, Any]:
+async def get_history(project_id: str, session: SessionDep, include_internal: bool = False) -> dict[str, Any]:
+    """The project's timeline and totals; internal jobs (the memory ingest) only with
+    ``include_internal=true``."""
     if await session.get(Project, project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    return await svc.history(session, project_id)
+    return await svc.history(session, project_id, include_internal=include_internal)
 
 
 @router.delete("/history/model-calls")

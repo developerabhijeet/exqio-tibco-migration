@@ -35,10 +35,8 @@ TOKEN = "test-internal-token"
 
 
 @pytest.fixture
-def settings(settings, request):
+def settings(settings):
     settings.internal_token = TOKEN
-    if "app_no_worker" in request.fixturenames:
-        settings.exiqo_role = "api"
     return settings
 
 
@@ -308,12 +306,6 @@ def noop_kind():
     registry.register("noop-hosting-test", noop)
     yield "noop-hosting-test"
     registry.unregister("noop-hosting-test")
-
-
-@pytest.fixture
-def app_no_worker(app):
-    assert app.state.runner.worker is None
-    return app
 
 
 async def test_affinity_job_not_claimed_by_other_worker(app_no_worker, noop_kind):

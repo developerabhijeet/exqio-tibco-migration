@@ -25,11 +25,9 @@ BLOCK_SECONDS = BLOCK_STALE_SECONDS + 2  # the loop is stalled longer than a job
 
 
 @pytest.fixture
-def settings(settings, request):
-    """A 1 s heartbeat so cancel and stale tests stay quick; role ``api`` for ``app_no_worker``."""
+def settings(settings):
+    """A 1 s heartbeat so cancel and stale tests stay quick."""
     settings.job_heartbeat_seconds = 1
-    if "app_no_worker" in request.fixturenames:
-        settings.exiqo_role = "api"
     return settings
 
 
@@ -62,13 +60,6 @@ def test_kinds():
     yield
     for kind in ("noop-test", "slow-test", "short-test", "block-test"):
         registry.unregister(kind)
-
-
-@pytest.fixture
-def app_no_worker(app):
-    """The ``app`` fixture with ``EXIQO_ROLE=api``: no in-process worker (see ``settings``)."""
-    assert app.state.runner.worker is None
-    return app
 
 
 @pytest.fixture

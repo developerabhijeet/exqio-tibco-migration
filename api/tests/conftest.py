@@ -25,9 +25,11 @@ TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localho
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, request: pytest.FixtureRequest) -> Settings:
+    """Role ``api`` (no in-process worker) when the test asks for ``app_no_worker``."""
     return Settings(database_url=asyncpg_url(TEST_DSN), data_dir=tmp_path / "data", job_workers=2,
                     provider="fake", upload_allowed_roots=[tmp_path, REPO_ROOT / "samples"],
+                    exiqo_role="api" if "app_no_worker" in request.fixturenames else "all",
                     _env_file=None)
 
 
@@ -58,10 +60,25 @@ async def app(settings: Settings):
 
 
 @pytest.fixture
+def app_no_worker(app):
+    """The ``app`` fixture with ``EXIQO_ROLE=api``: jobs queue, and only the workers a test starts
+    run them."""
+    assert app.state.runner.worker is None
+    return app
+
+
+@pytest.fixture
 async def client(app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
         yield c
+
+
+@pytest.fixture
+async def project_id(client: httpx.AsyncClient) -> str:
+    r = await client.post("/projects", json={"name": "fixture"})
+    assert r.status_code in (200, 201), r.text
+    return r.json()["id"]
 
 
 @pytest.fixture
