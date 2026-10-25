@@ -41,6 +41,11 @@ KEYWORD_WEIGHT = 0.5
 VECTOR_WEIGHT = 0.5
 CANDIDATES_PER_HALF = 50
 ANN_CANDIDATES_PER_K = 100
+# ANN retries double the candidates up to this many when the post-filter leaves fewer than k.
+ANN_CANDIDATES_MAX = 10000
+# Full-text matches fetched per term before the project filter; a term that fills it is
+# fetched again without a limit, so results equal an unbounded query.
+FT_OVERFETCH = 2000
 # Stopwords of Lucene's English analyzer that STOPWORDS lacks: the index drops them, so as
 # terms they would count towards the match requirement but never match.
 LUCENE_STOPWORDS = frozenset({"no", "not", "they"})
@@ -74,14 +79,16 @@ async def hybrid(graph: MemoryGraph, project_id: str, query: str, *,
     if not query.strip() or k <= 0 or not labels:
         return []
     floor = embeddings.default_vector_floor() if vector_floor is None else vector_floor
-    vector = (await asyncio.to_thread(embeddings.embed, [query]))[0]
+    vector = None
+    if any(label in EMBEDDED_LABELS for label in labels):  # else no vector half to embed for
+        vector = (await asyncio.to_thread(embeddings.embed, [query]))[0]
     terms = query_terms(query)
     p = {
         "project_id": project_id, "k": OPEN_VALID_TO - 1 if as_of is None else as_of,
         "open": OPEN_VALID_TO, "labels": list(labels), "side": side, "phase": phase,
         "include_obsolete": include_obsolete, "n": CANDIDATES_PER_HALF, "terms": terms,
         "need": min(max(min_terms, 1), len(terms)), "floor": floor,
-        "v": vector, "candidates": ANN_CANDIDATES_PER_K * k,
+        "v": vector, "want": k, "ft_limit": FT_OVERFETCH,
     }
     keyword, vec = await graph._read(_halves, p, embeddings.backend_name(), graph.exact_scan_max)
     return _combine(keyword, vec, k)
@@ -98,12 +105,10 @@ async def _halves(tx: AsyncManagedTransaction, p: dict[str, Any], backend: str,
     meta = await (await tx.run(cypher.META_GET)).single()
     if meta is not None and meta["value"] != backend:
         raise backend_mismatch(meta["value"], backend)
-    keyword = {}
-    if p["terms"]:
-        keyword = {r["node"]["p"]["uid"]: r for r in await _rows(tx, cypher.SEARCH_KEYWORD, p)}
+    keyword = await _keyword(tx, p) if p["terms"] else {}
     vector: dict[str, dict[str, Any]] = {}
     embedded = [label for label in p["labels"] if label in EMBEDDED_LABELS]
-    if not embedded or not any(p["v"]):  # a query without words has a zero vector, no cosine
+    if not embedded or p["v"] is None or not any(p["v"]):  # a wordless query: zero vector
         return keyword, vector
     counts = {r["label"]: r["n"] for r in await _rows(tx, cypher.SEARCH_EMBEDDED_COUNTS, p,
                                                       labels=embedded)}
@@ -113,11 +118,41 @@ async def _halves(tx: AsyncManagedTransaction, p: dict[str, Any], backend: str,
         rows += await _rows(tx, cypher.SEARCH_VECTOR_EXACT, p, labels=exact)
     for label in embedded:
         if label not in exact:
-            rows += await _rows(tx, cypher.SEARCH_VECTOR_ANN[label], p, labels=[label])
+            rows += await _ann(tx, p, label)
     rows.sort(key=lambda r: (-r["score"], r["node"]["p"]["uid"]))
     for r in rows[:CANDIDATES_PER_HALF]:
         vector.setdefault(r["node"]["p"]["uid"], r)
     return keyword, vector
+
+
+async def _keyword(tx: AsyncManagedTransaction,
+                   p: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The keyword candidates. Each term fetches at most ``ft_limit`` matches across the
+    database; a term that filled it is fetched again without a limit (at most one re-run)."""
+    unbounded: list[str] = []
+    while True:
+        row = (await _rows(tx, cypher.SEARCH_KEYWORD, p, unbounded=unbounded))[0]
+        full = [r["t"] for r in row["raws"]
+                if r["raw"] >= p["ft_limit"] and r["t"] not in unbounded]
+        if not full:
+            return {h["node"]["p"]["uid"]: h for h in row["hits"]}
+        unbounded += full
+
+
+async def _ann(tx: AsyncManagedTransaction, p: dict[str, Any], label: str) -> list[dict[str, Any]]:
+    """The ANN candidates of ``label``: ``100 * k`` nearest, doubled (up to
+    ANN_CANDIDATES_MAX) while the post-filter leaves fewer than k, the index returned all it
+    was asked for and its last candidate still clears the floor."""
+    candidates = ANN_CANDIDATES_PER_K * p["want"]
+    cap = max(candidates, min(16 * candidates, ANN_CANDIDATES_MAX))
+    while True:
+        row = (await _rows(tx, cypher.SEARCH_VECTOR_ANN[label], p, labels=[label],
+                           candidates=candidates))[0]
+        more = (len(row["hits"]) < p["want"] and row["raw"] >= candidates
+                and row["lowest"] >= p["floor"] and candidates < cap)
+        if not more:
+            return row["hits"]
+        candidates = min(2 * candidates, cap)
 
 
 def _combine(keyword: dict[str, dict[str, Any]], vector: dict[str, dict[str, Any]],

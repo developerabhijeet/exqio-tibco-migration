@@ -464,21 +464,25 @@ def _render_search_filter(var: str) -> str:
 
 def _render_search_keyword() -> str:
     """One full-text query per term of `$terms` (only `[a-z0-9_]`, so no Lucene syntax); a node
-    matching at least `$need` terms ranks by the sum of its term scores."""
+    matching at least `$need` terms ranks by the sum of its term scores. Each term fetches at
+    most `$ft_limit` matches across the database, except the terms in `$unbounded` (all of
+    them). `raws` holds what each term fetched before the project filter, so the caller re-runs
+    a term that hit the limit unbounded; `hits` holds the best `$n` nodes."""
     return (
-        "UNWIND $terms AS t CALL db.index.fulltext.queryNodes('mem_text', t) YIELD node, score "
-        f"WITH node, score WHERE {_render_search_filter('node')} "
+        "UNWIND $terms AS t CALL (t) { "
+        "WITH t WHERE t IN $unbounded "
+        "CALL db.index.fulltext.queryNodes('mem_text', t) YIELD node, score RETURN node, score "
+        "UNION ALL WITH t WHERE NOT t IN $unbounded "
+        "CALL db.index.fulltext.queryNodes('mem_text', t, {limit: $ft_limit}) YIELD node, score "
+        "RETURN node, score } "
+        "WITH t, collect({node: node, score: score}) AS found "
+        "WITH collect({t: t, raw: size(found)}) AS raws, collect(found) AS founds "
+        "CALL (founds) { UNWIND founds AS fs UNWIND fs AS f "
+        f"WITH f.node AS node, f.score AS score WHERE {_render_search_filter('node')} "
         "WITH node, count(*) AS matched, sum(score) AS rank WHERE matched >= $need "
-        f"RETURN {_render_node_out('node')} AS node, rank AS score "
-        "ORDER BY score DESC, node.p.uid LIMIT $n"
-    )
-
-
-def _render_vector_tail(var: str, similarity: str) -> str:
-    return (
-        f"WITH {var}, 2 * {similarity} - 1 AS sim WHERE sim >= $floor "
-        f"RETURN {_render_node_out(var)} AS node, sim AS score "
-        "ORDER BY score DESC, node.p.uid LIMIT $n"
+        "WITH node, rank ORDER BY rank DESC, node.uid LIMIT $n "
+        f"RETURN collect({{node: {_render_node_out('node')}, score: rank}}) AS hits }} "
+        "RETURN raws, hits"
     )
 
 
@@ -488,17 +492,26 @@ def _render_search_vector_exact() -> str:
     return (
         "MATCH (n:Mem {project_id: $project_id}) USING INDEX SEEK n:Mem(project_id, uid) "
         f"WHERE n.uid IS NOT NULL AND n.embedding IS NOT NULL AND {_render_search_filter('n')} "
-        + _render_vector_tail("n", "vector.similarity.cosine(n.embedding, $v)")
+        "WITH n, 2 * vector.similarity.cosine(n.embedding, $v) - 1 AS sim WHERE sim >= $floor "
+        f"RETURN {_render_node_out('n')} AS node, sim AS score "
+        "ORDER BY score DESC, node.p.uid LIMIT $n"
     )
 
 
 def _render_search_vector_ann(label: str) -> str:
     """The `$candidates` nearest versions of `label` across the database (ANN, index
-    vec_<label>), then post-filtered by project and validity."""
+    vec_<label>), then post-filtered by project and validity. `raw` counts the candidates the
+    index returned and `lowest` is the raw cosine of the last, so the caller can tell whether
+    more candidates could add hits."""
     return (
         f"CALL db.index.vector.queryNodes('vec_{label.lower()}', $candidates, $v) "
-        f"YIELD node AS n, score WHERE {_render_search_filter('n')} "
-        + _render_vector_tail("n", "score")
+        "YIELD node, score WITH collect({n: node, score: score}) AS found "
+        "CALL (found) { UNWIND found AS f WITH f.n AS n, f.score AS score "
+        f"WHERE {_render_search_filter('n')} "
+        "WITH n, 2 * score - 1 AS sim WHERE sim >= $floor "
+        "WITH n, sim ORDER BY sim DESC, n.uid LIMIT $n "
+        f"RETURN collect({{node: {_render_node_out('n')}, score: sim}}) AS hits }} "
+        "RETURN size(found) AS raw, 2 * coalesce(last(found).score, 1.0) - 1 AS lowest, hits"
     )
 
 

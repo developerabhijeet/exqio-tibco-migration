@@ -162,13 +162,61 @@ async def test_citation_falls_back_when_projector_props_are_missing(memory_graph
         label="Memory", uid="m2", name="decision", text="Use Dapper for JDBC queries")]),
         phase="decision")
     (hit,) = await hybrid(memory_graph, P, "Dapper JDBC queries", labels=["Memory"])
-    assert (hit.citation.artifact_type, hit.citation.artifact_id) == ("memory", "m2")
+    assert (hit.citation.artifact_type, hit.citation.artifact_id) == ("memory", None)
     assert hit.kind is None and hit.citation.process_id is None
+
+
+async def test_endpoint_citation_falls_back_by_its_side(memory_graph):
+    def endpoint(uid, side, text):
+        return MemNode(label="Endpoint", uid=uid, name=uid, text=text, props={"side": side})
+
+    await apply(memory_graph, "k1", ScopedDelta(scope="estate", nodes=[
+        endpoint("endpoint:old:quote", "old", "GET payoff quote endpoint"),
+        endpoint("endpoint:new:quote", "new", "GET payoff quote endpoint")]))
+    hits = await hybrid(memory_graph, P, "payoff quote endpoint", labels=["Endpoint"])
+    assert {h.uid: h.citation.artifact_type for h in hits} == {
+        "endpoint:old:quote": "process", "endpoint:new:quote": "build"}
+    assert all(h.citation.artifact_id is None for h in hits)
+
+
+async def test_full_text_overfetch_still_finds_this_project(memory_graph, monkeypatch):
+    from engine.memory import search
+    # Shorter texts score higher: the other project's five fill a limit of 3 per term.
+    for i in range(5):
+        await seed_chunks(memory_graph, [("summary", "loan payoff")], project="other",
+                          process_key=f"o{i}", key=f"k{i}")
+    await seed_chunks(memory_graph, [("summary", "loan payoff quote for the account holder")])
+    monkeypatch.setattr(search, "FT_OVERFETCH", 3)
+    hits = await hybrid(memory_graph, P, "loan payoff", vector_floor=1.0)  # keyword half only
+    assert [h.uid for h in hits] == ["chunk:p0:summary"] and hits[0].keyword_score == 1.0
+
+
+async def test_ann_retries_when_other_vectors_crowd_the_candidates(memory_graph, monkeypatch):
+    from engine.memory import search
+    monkeypatch.setattr(search, "ANN_CANDIDATES_PER_K", 10)  # keeps the crowd small
+    # 30 of another project's vectors are nearer the query than this project's one chunk,
+    # more than the first 10 * k candidates. Distinct vectors (cosine about 0.92 against
+    # 0.86): HNSW returns few of many duplicates.
+    await seed_chunks(memory_graph, [("summary", f"LoanPayoffQuote q{i}") for i in range(30)],
+                      project="other")
+    await seed_chunks(memory_graph, [("summary", "loan payoff quote")])
+    memory_graph.exact_scan_max = 0
+    hits = await hybrid(memory_graph, P, "LoanPayoffQuote", k=1)
+    assert [h.uid for h in hits] == ["chunk:p0:summary"] and hits[0].keyword_score == 0
+
+
+async def test_query_is_not_embedded_without_an_embedded_label(memory_graph, embed_spy):
+    await apply(memory_graph, "k1", ScopedDelta(scope="estate", nodes=[
+        MemNode(label="Table", uid="table:loans", name="loans", text="loan payoff table")]))
+    embed_spy.reset()
+    hits = await hybrid(memory_graph, P, "loan payoff", labels=["Table"])
+    assert [h.uid for h in hits] == ["table:loans"] and embed_spy.texts == []
 
 
 _PARAMS = {"project_id": P, "k": 1, "labels": ["Chunk", "Memory"], "side": None,
            "phase": None, "include_obsolete": False, "terms": ["loan"], "need": 1, "n": 50,
-           "v": [0.1] * 384, "floor": 0.25, "candidates": 800}
+           "v": [0.1] * 384, "floor": 0.25, "candidates": 800,
+           "unbounded": ["loan"], "ft_limit": 2000}
 
 
 async def test_exact_vector_scan_reads_only_the_project(memory_graph):

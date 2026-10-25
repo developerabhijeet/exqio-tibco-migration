@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel
 
@@ -340,12 +340,10 @@ ArtifactType = Literal[
     "process", "analysis", "design", "build", "build_file", "verify_run", "plan", "gate",
     "memory", "curation",
 ]
-ARTIFACT_TYPES: tuple[str, ...] = (
-    "process", "analysis", "design", "build", "build_file", "verify_run", "plan", "gate",
-    "memory", "curation",
-)
+ARTIFACT_TYPES: tuple[str, ...] = get_args(ArtifactType)
 # The artifact a node cites when its projector set no `artifact_type` (nodes written before the
-# projectors of Tasks 5-6, or by tests): by label; `artifact_id` then falls back to the uid.
+# projectors of Tasks 5-6, or by tests): by label, else by side (an Endpoint's own `side`); its
+# `artifact_id` is then None, never invented.
 _LABEL_ARTIFACT: dict[str, str] = {
     "Process": "process", "Activity": "process", "Chunk": "analysis", "Memory": "memory",
     "Curation": "curation", "GateDecision": "gate", "Error": "verify_run", "Test": "verify_run",
@@ -359,7 +357,7 @@ class Citation(BaseModel):
     phase: str
     revision: int  # valid_from of the version cited
     artifact_type: ArtifactType
-    artifact_id: str  # the Postgres id of that artifact (process id, build id, ...)
+    artifact_id: str | None = None  # the Postgres id of that artifact (process id, build id, ...)
     process_id: str | None = None  # API process id
     path: str | None = None  # file path, for code
 
@@ -367,10 +365,11 @@ class Citation(BaseModel):
     def of(cls, label: str, stored: dict[str, Any]) -> Citation:
         artifact_type = stored.get("artifact_type")
         if artifact_type not in ARTIFACT_TYPES:
-            artifact_type = _LABEL_ARTIFACT.get(label, "process" if label in OLD_LABELS else "build")
+            artifact_type = _LABEL_ARTIFACT.get(
+                label, "build" if stored.get("side") == "new" else "process")
         return cls(uid=stored["uid"], label=label, phase=stored["phase"],
                    revision=stored["valid_from"], artifact_type=artifact_type,
-                   artifact_id=stored.get("artifact_id") or stored["uid"],
+                   artifact_id=stored.get("artifact_id"),
                    process_id=stored.get("process_id"), path=stored.get("path"))
 
 
