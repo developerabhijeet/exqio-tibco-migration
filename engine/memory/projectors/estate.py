@@ -1,7 +1,9 @@
 """Estate projector: parsed applications, domains and the estate graph as old-code nodes."""
 from __future__ import annotations
 
+import logging
 import re
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pydantic import BaseModel
@@ -12,6 +14,7 @@ from engine.ir.models import Activity, Application, Process
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.analysis import ProcessRef
 
+log = logging.getLogger(__name__)
 _SUBST = re.compile(r"%%([^%\s]+)%%")
 _EDGE_TYPES = {"contains": "CONTAINS", "calls": "CALLS", "reads": "READS", "writes": "WRITES",
                "publishes": "PUBLISHES", "consumes": "CONSUMES", "exposes": "EXPOSES",
@@ -19,6 +22,8 @@ _EDGE_TYPES = {"contains": "CONTAINS", "calls": "CALLS", "reads": "READS", "writ
 
 
 class DomainInput(BaseModel):
+    """``key`` is the DomainCandidate id (estate-graph edges use ``domain:<key>``)."""
+
     key: str
     name: str
     suggested_name: str
@@ -49,12 +54,25 @@ def _strings(value: Any):
             yield from _strings(v)
 
 
+def _relative(source_path: str | None, root: Path | str | None) -> str | None:
+    """``source_path`` relative to the scan root; the basename when it cannot be relativized."""
+    if not source_path:
+        return None
+    posix = PurePosixPath(source_path.replace("\\", "/"))
+    if root is not None:
+        try:
+            return posix.relative_to(PurePosixPath(str(root).replace("\\", "/"))).as_posix()
+        except ValueError:
+            pass
+    return posix.name
+
+
 def _starter_kind(p: Process, activity: Activity) -> str | None:
     return p.starter.kind if p.starter and p.starter.activity_id == activity.id else None
 
 
 def project_estate(apps: list[Application], domains: list[DomainInput], graph: Graph,
-                   refs: list[ProcessRef]) -> ScopedDelta:
+                   refs: list[ProcessRef], root: Path | str | None = None) -> ScopedDelta:
     api_ids = {r.ir_id: r.api_id for r in refs}
     nodes: dict[str, MemNode] = {}
     rels: dict[str, MemRel] = {}
@@ -81,7 +99,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
                              props={"type": s.type}))
         for c in app.contracts:
             add_node(MemNode(label="Contract", uid=f"contract:{c.id}", name=c.id,
-                             props={"kind": c.kind, "path": c.path,
+                             props={"kind": c.kind, "path": _relative(c.path, root),
                                     "root_elements": list(c.root_elements)}))
         subst_names = {s.name for s in app.substvars}
         by_id = {p.id: p for p in app.processes}
@@ -100,7 +118,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
                 props=_clean({**cite, "module": p.module, "package": p.package,
                               "starter_kind": starter_kind,
                               "complexity_band": p.complexity.band if p.complexity else None,
-                              "source_path": p.source_path, "path": p.source_path})))
+                              "path": _relative(p.source_path, root)})))
             add_rel("CONTAINS", f"application:{app.id}", puid)
 
             for a in p.activities:
@@ -144,8 +162,11 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
 
     for e in graph.edges:
         src, dst = _uid(e.src), _uid(e.dst)
+        rtype = _EDGE_TYPES.get(e.kind)
+        if rtype is None:
+            log.warning("estate edge kind %r has no memory relationship type; skipped", e.kind)
+            continue
         if src in nodes and dst in nodes:
-            add_rel(_EDGE_TYPES[e.kind], src, dst, _clean(
-                {k: v for k, v in e.attrs.items()}))
+            add_rel(rtype, src, dst, _clean(e.attrs))
     # Estate-graph edges onto nodes outside the delta are dropped, never dangled.
     return ScopedDelta(scope="estate", nodes=list(nodes.values()), rels=list(rels.values()))

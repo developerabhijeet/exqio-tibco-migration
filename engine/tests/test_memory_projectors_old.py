@@ -190,3 +190,25 @@ async def test_projected_deltas_apply_and_are_searchable(memory_graph, apps, dom
     mine = [h for h in hits if h.uid == f"process:{one.id}"]
     assert mine and mine[0].citation.artifact_id == f"api-{one.id}"
     assert mine[0].citation.artifact_type == "process"
+
+
+def test_estate_paths_are_relative_and_independent_of_the_scan_root(tmp_path):
+    import shutil
+
+    deltas = []
+    for name in ("one", "two/deeper"):
+        root = tmp_path / name
+        shutil.copytree(GMF, root)
+        scanned = scan_folder(root).applications
+        g = graph_mod.build_graph(scanned)
+        doms = [DomainInput(key=c.id, name=c.suggested_name, suggested_name=c.suggested_name,
+                            ir_process_ids=c.process_ids) for c in discover.discover_domains(scanned)]
+        refs_ = [ProcessRef(ir_id=p.id, api_id=f"api-{p.id}", name=p.name)
+                 for a in scanned for p in a.processes]
+        deltas.append((project_estate(scanned, doms, g, refs_, root=root.resolve()), str(root)))
+    assert deltas[0][0] == deltas[1][0]
+    for d, root in deltas:
+        assert not any(root in str(v) for n in d.nodes for v in n.props.values())
+        assert all(not n.props["path"].startswith("/")
+                   for n in d.nodes if n.label in ("Process", "Contract") and "path" in n.props)
+        assert all("source_path" not in n.props for n in d.nodes)
