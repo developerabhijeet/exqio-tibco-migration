@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from engine.memory.model import EMBEDDED_LABELS, NODE_LABELS, REL_TYPES
 
+TOP_LEVEL_LABELS = ("Domain", "Application", "Solution")
+
 EMBEDDING_DIMENSIONS = 384
 
 
@@ -20,6 +22,8 @@ def _render_rel_indexes(rel_type: str) -> tuple[str, ...]:
          "ON (r.project_id, r.uid)"),
         (f"CREATE INDEX {name}_scope IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
          "ON (r.project_id, r.scope)"),
+        (f"CREATE INDEX {name}_closed IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
+         "ON (r.project_id, r.closed_in)"),
     )
 
 
@@ -51,6 +55,8 @@ SCHEMA: tuple[str, ...] = (
     "CREATE INDEX mem_scope IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.scope, n.valid_to)",
     "CREATE INDEX mem_from IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.valid_from)",
     "CREATE INDEX mem_target IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.target_uid)",
+    # Closed versions only (`closed_in` is set when a version closes): "closed at revision X".
+    "CREATE INDEX mem_closed IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.closed_in)",
     "CREATE INDEX rev_n IF NOT EXISTS FOR (r:Revision) ON (r.project_id, r.n)",
     *(stmt for t in REL_TYPES for stmt in _render_rel_indexes(t)),
     *(_render_vector_index(label) for label in EMBEDDED_LABELS),
@@ -70,7 +76,9 @@ RESET = "MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS"
 
 # ------------------------------------------------------------------ versioned write path
 # Current versions carry `valid_to = $open` (model.OPEN_VALID_TO, rulings R25), never null, so
-# every lookup of current versions seeks an index. Every write statement takes `$rows`, `$vids`
+# every lookup of current versions seeks an index. Closing a version sets `valid_to` and
+# `closed_in` (the same n; only closed versions have it, so its index serves the revision diff
+# without matching current versions). Every write statement takes `$rows`, `$vids`
 # or `$uids` batches of at most 1000 (MemoryGraph.apply_revision) and `$n`, the revision.
 
 # Current node versions owned by one of the delta scopes (index mem_scope).
@@ -119,7 +127,8 @@ NEXT_REVISION = (
 
 CLOSE_NODES = (
     "UNWIND $vids AS vid MATCH (n:Mem {project_id: $project_id, vid: vid}) "
-    "USING INDEX SEEK n:Mem(vid) WHERE n.valid_to = $open SET n.valid_to = $n RETURN count(n) AS closed"
+    "USING INDEX SEEK n:Mem(vid) WHERE n.valid_to = $open SET n.valid_to = $n, n.closed_in = $n "
+    "RETURN count(n) AS closed"
 )
 
 
@@ -150,7 +159,7 @@ def _render_reattach(rel_type: str) -> tuple[str, str]:
         "WHERE b.valid_to = $open "
         f"CREATE (a)-[moved:{rel_type}]->(b) "
         "SET moved = properties(r), moved.valid_from = $n, moved.phase = $phase "
-        "SET r.valid_to = $n RETURN count(moved) AS moved"
+        "SET r.valid_to = $n, r.closed_in = $n RETURN count(moved) AS moved"
     )
     return (
         "UNWIND $vids AS vid MATCH (src:Mem {project_id: $project_id, vid: vid})"
@@ -169,7 +178,7 @@ def _render_close_rels_of_closed(rel_type: str) -> str:
     return (
         "UNWIND $vids AS vid MATCH (n:Mem {project_id: $project_id, vid: vid})"
         f"-[r:{rel_type}]-() USING INDEX SEEK n:Mem(vid) WHERE r.valid_to = $open "
-        "SET r.valid_to = $n RETURN count(DISTINCT r) AS closed"
+        "SET r.valid_to = $n, r.closed_in = $n RETURN count(DISTINCT r) AS closed"
     )
 
 
@@ -196,7 +205,8 @@ CREATE_RELS: dict[str, str] = {t: _render_create_rels(t) for t in REL_TYPES}
 def _render_close_rels(rel_type: str) -> str:
     return (
         f"UNWIND $uids AS uid MATCH ()-[r:{rel_type} {{project_id: $project_id, uid: uid}}]->() "
-        f"USING INDEX SEEK r:{rel_type}(project_id, uid) WHERE r.valid_to = $open SET r.valid_to = $n RETURN count(r) AS closed"
+        f"USING INDEX SEEK r:{rel_type}(project_id, uid) WHERE r.valid_to = $open "
+        "SET r.valid_to = $n, r.closed_in = $n RETURN count(r) AS closed"
     )
 
 
@@ -214,6 +224,202 @@ COUNTS = (
     "WHERE n.uid IS NOT NULL AND n.valid_to = $open "
     "UNWIND labels(n) AS label WITH label WHERE label <> 'Mem' "
     "RETURN label, count(*) AS n"
+)
+
+# ------------------------------------------------------------------ reads
+# Every read is as of revision `$k`: a version is valid when `valid_from <= $k < valid_to`.
+# Current reads pass `$k = OPEN_VALID_TO - 1`, which only open versions satisfy, so one
+# predicate serves both. A relationship's validity lies within both endpoints' (the write path
+# re-attaches it whenever an endpoint is re-versioned), so walking valid relationships from a
+# valid node reaches valid nodes. Each statement starts from an index seek (uid, vid,
+# target_uid, valid_from, closed_in, Revision n), except TOP_LEVEL (label scans of its three
+# labels).
+
+
+def _render_valid(var: str) -> str:
+    return f"{var}.valid_from <= $k AND $k < {var}.valid_to"
+
+
+def _render_node_out(var: str) -> str:
+    """A node as `{label, p}`: its model label and stored properties without the vector."""
+    return f"{{label: [l IN labels({var}) WHERE l <> 'Mem'][0], p: {var} {{.*, embedding: null}}}}"
+
+
+def _render_edge_out(var: str) -> str:
+    return (f"{{type: type({var}), src: startNode({var}).uid, dst: endNode({var}).uid, "
+            f"p: properties({var})}}")
+
+
+def _render_at_uid(var: str) -> str:
+    """The version of `$uid` valid at `$k` (index mem_uid)."""
+    return (f"MATCH ({var}:Mem {{project_id: $project_id, uid: $uid}}) "
+            f"USING INDEX SEEK {var}:Mem(project_id, uid) WHERE {_render_valid(var)} ")
+
+
+def _render_view_filter(var: str) -> str:
+    return (f"($labels IS NULL OR any(l IN labels({var}) WHERE l IN $labels)) "
+            f"AND ($side IS NULL OR {var}.side = $side)")
+
+
+def _render_node_at() -> str:
+    return _render_at_uid("n") + f"RETURN {_render_node_out('n')} AS node"
+
+
+def _render_neighbourhood(depth: int) -> str:
+    """The node `$uid` first, then its neighbours within `depth` hops over valid relationships
+    that pass the view filter, nearest first; `total` counts them all, `nodes` the first
+    `$limit`."""
+    return (
+        _render_at_uid("c")
+        + f"OPTIONAL MATCH path = (c)-[rels*1..{depth}]-(m:Mem) "
+        f"WHERE m <> c AND {_render_valid('m')} AND all(r IN rels WHERE {_render_valid('r')}) "
+        f"AND {_render_view_filter('m')} "
+        "WITH c, m, min(length(path)) AS d ORDER BY d, m.uid "
+        "WITH c, collect(m) AS found WITH [c] + found AS ms "
+        f"RETURN size(ms) AS total, [m IN ms[0..$limit] | {_render_node_out('m')}] AS nodes"
+    )
+
+
+def _render_top_level() -> str:
+    """The project's top-level nodes (a label scan per label: they are few in any project)."""
+    return (
+        "CALL () { "
+        + " UNION ALL ".join(
+            f"MATCH (m:{label}) USING SCAN m:{label} WHERE m.project_id = $project_id "
+            f"AND {_render_valid('m')} AND {_render_view_filter('m')} RETURN m, {rank} AS rank"
+            for rank, label in enumerate(TOP_LEVEL_LABELS))
+        + " } WITH m ORDER BY rank, m.name, m.uid "
+        "WITH collect(m) AS ms "
+        f"RETURN size(ms) AS total, [m IN ms[0..$limit] | {_render_node_out('m')}] AS nodes"
+    )
+
+
+def _render_edges_among() -> str:
+    """The valid relationships between the versions `$vids` (a subgraph's nodes)."""
+    return (
+        "UNWIND $vids AS vid MATCH (a:Mem {project_id: $project_id, vid: vid}) "
+        "USING INDEX SEEK a:Mem(vid) "
+        f"MATCH (a)-[r]->(b:Mem) WHERE b.vid IN $vids AND {_render_valid('r')} "
+        f"RETURN {_render_edge_out('r')} AS edge ORDER BY edge.type, edge.p.uid"
+    )
+
+
+def _render_lineage() -> str:
+    """Paths of at most 4 valid MIGRATED_TO, TESTS and FAILED_AT relationships in either
+    direction, and CONTAINS only from a Process down to its children."""
+    lineage_types = "MIGRATED_TO|TESTS|FAILED_AT|CONTAINS"
+    return (
+        _render_at_uid("c")
+        + f"OPTIONAL MATCH path = (c)-[rels:{lineage_types}*1..4]-(:Mem) "
+        "WHERE all(i IN range(0, size(rels) - 1) WHERE "
+        "rels[i].valid_from <= $k AND $k < rels[i].valid_to AND (type(rels[i]) <> 'CONTAINS' "
+        "OR (startNode(rels[i]) = nodes(path)[i] AND nodes(path)[i]:Process))) "
+        "WITH c, collect(path) AS paths "
+        "CALL (paths) { UNWIND paths AS p UNWIND nodes(p) AS x RETURN collect(DISTINCT x) AS ns } "
+        "CALL (paths) { UNWIND paths AS p UNWIND relationships(p) AS x "
+        "RETURN collect(DISTINCT x) AS rs } "
+        f"RETURN {_render_node_out('c')} AS center, "
+        f"[x IN ns WHERE x <> c | {_render_node_out('x')}] AS nodes, "
+        f"[x IN rs | {_render_edge_out('x')}] AS edges"
+    )
+
+
+def _render_node_versions() -> str:
+    """Every version of `$uid` opened by `$k`, newest first, with its revision's actor and time."""
+    return (
+        "MATCH (n:Mem {project_id: $project_id, uid: $uid}) USING INDEX SEEK n:Mem(project_id, uid) "
+        "WHERE n.valid_from <= $k "
+        "OPTIONAL MATCH (r:Revision {project_id: $project_id, n: n.valid_from}) "
+        "USING INDEX SEEK r:Revision(project_id, n) "
+        f"RETURN {_render_node_out('n')} AS node, r.actor AS actor, r.at AS at "
+        "ORDER BY node.p.valid_from DESC"
+    )
+
+
+def _render_about_sources() -> str:
+    return (
+        _render_at_uid("t")
+        + f"MATCH (s:Mem)-[r:ABOUT]->(t) WHERE {_render_valid('r')} AND {_render_valid('s')} "
+        f"RETURN {_render_node_out('s')} AS node ORDER BY node.p.valid_from DESC, node.p.uid"
+    )
+
+
+def _render_lineage_edges() -> str:
+    return (
+        _render_at_uid("t")
+        + "MATCH (t)-[r:MIGRATED_TO|TESTS|FAILED_AT]-(o:Mem) "
+        f"WHERE {_render_valid('r')} AND {_render_valid('o')} "
+        f"RETURN {_render_edge_out('r')} AS edge, {_render_node_out('o')} AS other, "
+        "startNode(r) = t AS outgoing ORDER BY edge.type, edge.p.uid"
+    )
+
+
+def _render_curations_of() -> str:
+    """Current-as-of-`$k` Curations whose `target_uid` is `$uid` (index mem_target)."""
+    return (
+        "MATCH (c:Mem {project_id: $project_id, target_uid: $uid}) "
+        f"USING INDEX SEEK c:Mem(project_id, target_uid) WHERE c:Curation AND {_render_valid('c')} "
+        f"RETURN {_render_node_out('c')} AS node ORDER BY node.p.valid_from DESC, node.p.uid"
+    )
+
+
+def _render_curation_targets() -> str:
+    """The actions of the Curations valid at `$k` that target each of `$uids`."""
+    return (
+        "UNWIND $uids AS t MATCH (c:Mem {project_id: $project_id, target_uid: t}) "
+        f"USING INDEX SEEK c:Mem(project_id, target_uid) WHERE c:Curation AND {_render_valid('c')} "
+        "RETURN DISTINCT t AS target_uid, c.action AS action"
+    )
+
+
+def _render_curated() -> str:
+    """Which of the versions `$vids` a Curation valid at `$k` is ABOUT."""
+    return (
+        "UNWIND $vids AS vid MATCH (n:Mem {project_id: $project_id, vid: vid}) "
+        "USING INDEX SEEK n:Mem(vid) "
+        "WHERE EXISTS { MATCH (c:Curation)-[r:ABOUT]->(n) "
+        f"WHERE {_render_valid('r')} AND {_render_valid('c')} }} "
+        "RETURN n.vid AS vid"
+    )
+
+
+def _render_nodes_at_revision(key: str) -> str:
+    """Node versions opened (`valid_from`) or closed (`closed_in`) at `$n`."""
+    return (
+        f"MATCH (v:Mem {{project_id: $project_id, {key}: $n}}) "
+        f"USING INDEX SEEK v:Mem(project_id, {key}) RETURN {_render_node_out('v')} AS node"
+    )
+
+
+def _render_rels_at_revision(key: str) -> str:
+    """Relationship versions of every type opened (`valid_from`) or closed (`closed_in`) at
+    `$n`, one index-seeking branch per type."""
+    return " UNION ALL ".join(
+        f"MATCH ()-[r:{t} {{project_id: $project_id, {key}: $n}}]->() "
+        f"USING INDEX SEEK r:{t}(project_id, {key}) RETURN {_render_edge_out('r')} AS edge"
+        for t in REL_TYPES
+    )
+
+
+NODE_AT = _render_node_at()
+NEIGHBOURHOOD: dict[int, str] = {d: _render_neighbourhood(d) for d in (1, 2)}
+TOP_LEVEL = _render_top_level()
+EDGES_AMONG = _render_edges_among()
+LINEAGE = _render_lineage()
+NODE_VERSIONS = _render_node_versions()
+ABOUT_SOURCES = _render_about_sources()
+LINEAGE_EDGES = _render_lineage_edges()
+CURATIONS_OF = _render_curations_of()
+CURATION_TARGETS = _render_curation_targets()
+CURATED = _render_curated()
+NODES_OPENED_AT = _render_nodes_at_revision("valid_from")
+NODES_CLOSED_AT = _render_nodes_at_revision("closed_in")
+RELS_OPENED_AT = _render_rels_at_revision("valid_from")
+RELS_CLOSED_AT = _render_rels_at_revision("closed_in")
+REVISION_AT = "MATCH (r:Revision {project_id: $project_id, n: $n}) RETURN r {.*} AS revision"
+REVISIONS_BEFORE = (
+    "MATCH (r:Revision {project_id: $project_id}) USING INDEX SEEK r:Revision(project_id, n) "
+    "WHERE r.n < $before RETURN r {.*} AS revision ORDER BY r.n DESC LIMIT $limit"
 )
 
 # Install-wide (rulings R22): the embedding backend whose vectors the database holds.

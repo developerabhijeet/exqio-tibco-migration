@@ -1,10 +1,11 @@
 """``MemoryGraph``: the async Neo4j connection of the memory, its schema, the versioned write
-path (``apply_revision``) and test reset."""
+path (``apply_revision``), the as-of reads and test reset."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -13,22 +14,35 @@ from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncManagedTransaction
 
 from engine.knowledge import embeddings
 from engine.memory import cypher
+from engine.memory.diff import VersionRef, changed_keys, classify
 from engine.memory.model import (
     EMBEDDED_LABELS,
     NODE_LABELS,
     OPEN_VALID_TO,
+    REJECTING_ACTIONS,
     REL_TYPES,
     RESERVED_NODE_KEYS,
     RESERVED_REL_KEYS,
     ApplyResult,
+    EdgeOut,
     KnowledgeError,
+    LineageOut,
     MemNode,
     MemRel,
+    NodeDetail,
+    NodeOut,
+    RevisionDiff,
     RevisionMeta,
+    RevisionOut,
     ScopedDelta,
+    Subgraph,
+    VersionOut,
     mask_node,
     mask_rel,
     node_hash,
+    outward_valid_to,
+    public_node_props,
+    public_rel_props,
     rel_hash,
     side_of,
     text_hash,
@@ -38,6 +52,9 @@ log = logging.getLogger(__name__)
 
 WRITE_BATCH = 1000  # rows per UNWIND statement
 EMBED_BATCH = 256  # texts per embedding call
+GRAPH_LIMIT = 400  # nodes per subgraph at most
+DEPTHS = (1, 2)
+SIDES = ("old", "new", "knowledge")
 _SCALARS = (str, int, float, bool)
 
 
@@ -103,6 +120,207 @@ class MemoryGraph:
                 return await session.execute_write(_write, plan, meta, backend, vectors)
             except _NoChange as nothing:
                 return nothing.result
+
+
+    # -------------------------------------------------------------- reads (as of a revision)
+    async def _read(self, work: Any, *args: Any) -> Any:
+        async with self._driver.session(database=self.database) as session:
+            return await session.execute_read(work, *args)
+
+    async def subgraph(self, project_id: str, *, uid: str | None = None, depth: int = 1,
+                       labels: Sequence[str] | None = None, side: str | None = None,
+                       as_of: int | None = None, limit: int = GRAPH_LIMIT) -> Subgraph:
+        """``uid`` and its neighbours within ``depth`` hops (nearest first), or without
+        ``uid`` the project's Domains, Applications and Solutions; ``labels`` and ``side``
+        filter all but ``uid`` itself. ``total`` counts before ``limit``."""
+        if depth not in DEPTHS:
+            raise ValueError(f"depth must be one of {DEPTHS}, got {depth}")
+        if not 1 <= limit <= GRAPH_LIMIT:
+            raise ValueError(f"limit must be 1..{GRAPH_LIMIT}, got {limit}")
+        unknown = set(labels or ()) - set(NODE_LABELS)
+        if unknown:
+            raise ValueError(f"unknown node labels {sorted(unknown)}")
+        if side is not None and side not in SIDES:
+            raise ValueError(f"side must be one of {SIDES}, got {side!r}")
+        p = {"project_id": project_id, "k": _moment(as_of), "uid": uid, "limit": limit,
+             "labels": list(labels) if labels else None, "side": side}
+        statement = cypher.TOP_LEVEL if uid is None else cypher.NEIGHBOURHOOD[depth]
+        return await self._read(_subgraph, statement, p)
+
+    async def lineage_chain(self, project_id: str, uid: str,
+                            as_of: int | None = None) -> Subgraph:
+        """``uid`` and what MIGRATED_TO, TESTS and FAILED_AT (either direction) and CONTAINS
+        (down from a Process) reach from it in at most 4 hops."""
+        return await self._read(_lineage_chain, {"project_id": project_id, "uid": uid,
+                                                 "k": _moment(as_of)})
+
+    async def node_detail(self, project_id: str, uid: str,
+                          as_of: int | None = None) -> NodeDetail | None:
+        return await self._read(_node_detail, {"project_id": project_id, "uid": uid,
+                                               "k": _moment(as_of)})
+
+    async def current_node(self, project_id: str, uid: str) -> NodeOut | None:
+        return await self._read(_current_node, {"project_id": project_id, "uid": uid,
+                                                "k": _moment(None)})
+
+    async def revisions(self, project_id: str, *, before: int | None = None,
+                        limit: int = 50) -> list[RevisionOut]:
+        """Revisions below ``before`` (all when None), newest first."""
+        async with self._driver.session(database=self.database) as session:
+            result = await session.run(
+                cypher.REVISIONS_BEFORE, project_id=project_id, limit=limit,
+                before=OPEN_VALID_TO if before is None else before)
+            return [RevisionOut(**r["revision"]) async for r in result]
+
+    async def latest_revision(self, project_id: str) -> RevisionOut | None:
+        found = await self.revisions(project_id, limit=1)
+        return found[0] if found else None
+
+    async def diff(self, project_id: str, n: int) -> RevisionDiff | None:
+        """What revision ``n`` added, changed and removed (re-attachments left out)."""
+        return await self._read(_diff, {"project_id": project_id, "n": n})
+
+
+# ------------------------------------------------------------------ read internals
+def _moment(as_of: int | None) -> int:
+    """The `$k` of a read: ``as_of``, or the one value only open versions are valid at."""
+    return OPEN_VALID_TO - 1 if as_of is None else as_of
+
+
+async def _rows(tx: AsyncManagedTransaction, statement: str, p: dict[str, Any],
+                **extra: Any) -> list[dict[str, Any]]:
+    return await (await tx.run(statement, {**p, **extra})).data()
+
+
+async def _annotate(tx: AsyncManagedTransaction, p: dict[str, Any], nodes: list[dict[str, Any]],
+                    edges: list[dict[str, Any]]) -> tuple[list[NodeOut], list[EdgeOut]]:
+    """Builds the read models of ``nodes`` (``{label, p}`` rows) and ``edges`` (``{type, src,
+    dst, p}`` rows), applying the curations valid at ``p["k"]``: curated (ABOUT-target of a
+    Curation), obsolete Memory, rejected MIGRATED_TO."""
+    targeted = [n["p"]["uid"] for n in nodes if n["label"] == "Memory"]
+    targeted += [e["p"]["uid"] for e in edges if e["type"] == "MIGRATED_TO"]
+    actions: dict[str, set[str]] = {}
+    if targeted:
+        for r in await _rows(tx, cypher.CURATION_TARGETS, p, uids=targeted):
+            actions.setdefault(r["target_uid"], set()).add(r["action"])
+    curated: set[str] = set()
+    if nodes:
+        vids = [n["p"]["vid"] for n in nodes]
+        curated = {r["vid"] for r in await _rows(tx, cypher.CURATED, p, vids=vids)}
+    node_out = [
+        NodeOut.of(n["label"], n["p"], curated=n["p"]["vid"] in curated,
+                   obsolete=n["label"] == "Memory" and "obsolete" in actions.get(n["p"]["uid"], ()))
+        for n in nodes
+    ]
+    edge_out = [
+        EdgeOut.of(e["type"], e["src"], e["dst"], e["p"],
+                   rejected=bool(actions.get(e["p"]["uid"], set()) & set(REJECTING_ACTIONS)))
+        for e in edges
+    ]
+    return node_out, edge_out
+
+
+_EMPTY = Subgraph(nodes=[], edges=[], truncated=False, total=0)
+
+
+async def _subgraph(tx: AsyncManagedTransaction, statement: str, p: dict[str, Any]) -> Subgraph:
+    row = await (await tx.run(statement, p)).single()
+    if row is None or not row["nodes"]:
+        return _EMPTY
+    vids = [n["p"]["vid"] for n in row["nodes"]]
+    edges = [r["edge"] for r in await _rows(tx, cypher.EDGES_AMONG, p, vids=vids)]
+    nodes, edge_out = await _annotate(tx, p, row["nodes"], edges)
+    return Subgraph(nodes=nodes, edges=edge_out, truncated=row["total"] > p["limit"],
+                    total=row["total"])
+
+
+async def _lineage_chain(tx: AsyncManagedTransaction, p: dict[str, Any]) -> Subgraph:
+    row = await (await tx.run(cypher.LINEAGE, p)).single()
+    if row is None:
+        return _EMPTY
+    found = [row["center"], *sorted(row["nodes"], key=lambda n: n["p"]["uid"])]
+    kept = found[:GRAPH_LIMIT]
+    uids = {n["p"]["uid"] for n in kept}
+    edges = sorted((e for e in row["edges"] if e["src"] in uids and e["dst"] in uids),
+                   key=lambda e: (e["type"], e["p"]["uid"]))
+    nodes, edge_out = await _annotate(tx, p, kept, edges)
+    return Subgraph(nodes=nodes, edges=edge_out, truncated=len(found) > GRAPH_LIMIT,
+                    total=len(found))
+
+
+async def _current_node(tx: AsyncManagedTransaction, p: dict[str, Any]) -> NodeOut | None:
+    row = await (await tx.run(cypher.NODE_AT, p)).single()
+    if row is None:
+        return None
+    (node,), _ = await _annotate(tx, p, [row["node"]], [])
+    return node
+
+
+def _version_ref(kind: str, stored: dict[str, Any], props: dict[str, Any]) -> VersionRef:
+    return VersionRef(uid=stored["uid"], kind=kind, name=stored.get("name") or "",
+                      content_hash=stored["content_hash"], props=props)
+
+
+def _versions(rows: list[dict[str, Any]]) -> list[VersionOut]:
+    """``rows`` newest first; each version's changed keys are against the next older one."""
+    refs = [_version_ref(r["node"]["label"], r["node"]["p"], public_node_props(r["node"]["p"]))
+            for r in rows]
+    out = []
+    for i, r in enumerate(rows):
+        stored = r["node"]["p"]
+        older = refs[i + 1] if i + 1 < len(refs) else None
+        out.append(VersionOut(
+            valid_from=stored["valid_from"], valid_to=outward_valid_to(stored["valid_to"]),
+            phase=stored["phase"], actor=r["actor"], at=r["at"], props=refs[i].props,
+            changed_keys=changed_keys(older, refs[i]) if older else []))
+    return out
+
+
+async def _node_detail(tx: AsyncManagedTransaction, p: dict[str, Any]) -> NodeDetail | None:
+    row = await (await tx.run(cypher.NODE_AT, p)).single()
+    if row is None:
+        return None
+    versions = _versions(await _rows(tx, cypher.NODE_VERSIONS, p))
+    about = [r["node"] for r in await _rows(tx, cypher.ABOUT_SOURCES, p)]
+    lineage = await _rows(tx, cypher.LINEAGE_EDGES, p)
+    about_uids = {n["p"]["uid"] for n in about}
+    targeting = [r["node"] for r in await _rows(tx, cypher.CURATIONS_OF, p)
+                 if r["node"]["p"]["uid"] not in about_uids]
+    others = [r["other"] for r in lineage]
+    nodes, edges = await _annotate(tx, p, [row["node"], *about, *targeting, *others],
+                                   [r["edge"] for r in lineage])
+    node, about_out = nodes[0], nodes[1:1 + len(about)]
+    targeting_out = nodes[1 + len(about):1 + len(about) + len(targeting)]
+    others_out = nodes[1 + len(about) + len(targeting):]
+    curations = [n for n in about_out if n.label == "Curation"] + targeting_out
+    curations.sort(key=lambda n: (-n.valid_from, n.uid))
+    return NodeDetail(
+        node=node, versions=versions, about=about_out, curations=curations,
+        lineage=[LineageOut(edge=e, other=o, direction="out" if r["outgoing"] else "in")
+                 for r, e, o in zip(lineage, edges, others_out, strict=True)],
+    )
+
+
+async def _diff(tx: AsyncManagedTransaction, p: dict[str, Any]) -> RevisionDiff | None:
+    row = await (await tx.run(cypher.REVISION_AT, p)).single()
+    if row is None:
+        return None
+
+    async def nodes(statement: str) -> list[VersionRef]:
+        return [_version_ref(r["node"]["label"], r["node"]["p"],
+                             public_node_props(r["node"]["p"]))
+                for r in await _rows(tx, statement, p)]
+
+    async def rels(statement: str) -> list[VersionRef]:
+        return [_version_ref(r["edge"]["type"], r["edge"]["p"], public_rel_props(r["edge"]["p"]))
+                for r in await _rows(tx, statement, p)]
+
+    return RevisionDiff(
+        revision=RevisionOut(**row["revision"]),
+        nodes=classify(await nodes(cypher.NODES_OPENED_AT), await nodes(cypher.NODES_CLOSED_AT)),
+        relationships=classify(await rels(cypher.RELS_OPENED_AT),
+                               await rels(cypher.RELS_CLOSED_AT)),
+    )
 
 
 # ------------------------------------------------------------------ apply_revision internals

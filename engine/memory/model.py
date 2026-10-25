@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from engine.agents.provider import mask_sensitive
+from engine.memory.diff import DiffSet
 
 NODE_LABELS: tuple[str, ...] = (
     "Application", "Process", "Activity", "Contract", "SharedResource", "SubstVar", "Table",
@@ -58,10 +60,10 @@ IDENTITY_KEYS = frozenset(
 # Properties the write path sets itself; a projector's `props` may not carry them.
 RESERVED_NODE_KEYS = frozenset(
     {"uid", "vid", "project_id", "scope", "content_hash", "text_hash", "valid_from", "valid_to",
-     "phase", "name", "text", "embedding"}
+     "closed_in", "phase", "name", "text", "embedding"}
 )
 RESERVED_REL_KEYS = frozenset(
-    {"uid", "project_id", "scope", "content_hash", "valid_from", "valid_to", "phase"}
+    {"uid", "project_id", "scope", "content_hash", "valid_from", "valid_to", "closed_in", "phase"}
 )
 
 # `valid_to` of a current version (rulings R25): never null, so current-version lookups seek an
@@ -204,3 +206,122 @@ def mask_node(n: MemNode) -> tuple[MemNode, bool]:
 
 def mask_rel(r: MemRel) -> MemRel:
     return r.model_copy(update={"props": _mask_props(r.props)})
+
+
+# ------------------------------------------------------------------ read models
+# Stored properties a read does not return in `props`: bookkeeping, or carried by a field of
+# its own. `closed_in` (= valid_to of a closed version) exists only so "closed at revision X"
+# seeks an index.
+_NODE_BOOKKEEPING = RESERVED_NODE_KEYS | {"side"}
+_REL_BOOKKEEPING = RESERVED_REL_KEYS
+
+Side = Literal["old", "new", "knowledge"]
+EdgeStatus = Literal["generated", "corrected", "rejected"]
+EDGE_STATUSES: tuple[str, ...] = ("generated", "corrected", "rejected")
+# Curation actions whose target (a MIGRATED_TO uid) reads as rejected.
+REJECTING_ACTIONS: tuple[str, ...] = ("reject_mapping", "correct_mapping")
+
+
+def outward_valid_to(valid_to: int) -> int | None:
+    """``valid_to`` as the outside sees it: None while the version is current (rulings R25)."""
+    return None if valid_to >= OPEN_VALID_TO else valid_to
+
+
+def public_node_props(stored: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in stored.items() if k not in _NODE_BOOKKEEPING}
+
+
+def public_rel_props(stored: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in stored.items() if k not in _REL_BOOKKEEPING}
+
+
+class NodeOut(BaseModel):
+    uid: str
+    label: NodeLabel
+    name: str
+    side: Side
+    props: dict[str, Any]
+    valid_from: int
+    valid_to: int | None
+    curated: bool = False  # the ABOUT-target of a current Curation
+    obsolete: bool = False  # a Memory targeted by a current obsolete Curation
+    text: str = ""
+
+    @classmethod
+    def of(cls, label: str, stored: dict[str, Any], *, curated: bool = False,
+           obsolete: bool = False) -> NodeOut:
+        return cls(uid=stored["uid"], label=label, name=stored.get("name") or "",
+                   side=stored["side"], props=public_node_props(stored),
+                   valid_from=stored["valid_from"], valid_to=outward_valid_to(stored["valid_to"]),
+                   curated=curated, obsolete=obsolete, text=stored.get("text") or "")
+
+
+class EdgeOut(BaseModel):
+    uid: str
+    type: RelType
+    src: str
+    dst: str
+    props: dict[str, Any]
+    status: EdgeStatus | None = None
+
+    @classmethod
+    def of(cls, rel_type: str, src: str, dst: str, stored: dict[str, Any], *,
+           rejected: bool = False) -> EdgeOut:
+        """A MIGRATED_TO reads ``rejected`` when a current curation rejected or corrected it,
+        else its own ``status``; other types carry no status."""
+        status = None
+        if rel_type == "MIGRATED_TO":
+            own = stored.get("status")
+            status = "rejected" if rejected else (own if own in EDGE_STATUSES else None)
+        return cls(uid=stored["uid"], type=rel_type, src=src, dst=dst,
+                   props=public_rel_props(stored), status=status)
+
+
+class Subgraph(BaseModel):
+    nodes: list[NodeOut]
+    edges: list[EdgeOut]
+    truncated: bool
+    total: int
+
+
+class VersionOut(BaseModel):
+    valid_from: int
+    valid_to: int | None
+    phase: str
+    actor: str | None
+    at: datetime | None
+    props: dict[str, Any]
+    changed_keys: list[str]  # against the previous version (none for the first)
+
+
+class LineageOut(BaseModel):
+    edge: EdgeOut
+    other: NodeOut
+    direction: Literal["in", "out"]
+
+
+class NodeDetail(BaseModel):
+    node: NodeOut
+    versions: list[VersionOut]  # newest first
+    about: list[NodeOut]  # knowledge ABOUT the node, newest first
+    lineage: list[LineageOut]
+    curations: list[NodeOut]
+
+
+class RevisionOut(BaseModel):
+    n: int
+    phase: str
+    scopes: list[str]
+    actor: str
+    at: datetime
+    job_id: str | None = None  # Neo4j does not store null properties
+    iteration: int
+    added: int
+    changed: int
+    removed: int
+
+
+class RevisionDiff(BaseModel):
+    revision: RevisionOut
+    nodes: DiffSet
+    relationships: DiffSet

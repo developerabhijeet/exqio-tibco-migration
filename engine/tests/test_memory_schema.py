@@ -26,10 +26,10 @@ async def test_ensure_schema_is_idempotent(memory_graph):
     await memory_graph.ensure_schema()
     await memory_graph.ensure_schema()
     names = await index_names(memory_graph)
-    assert {"mem_uid", "mem_scope", "mem_from", "mem_target", "rev_n", "mem_text",
+    assert {"mem_uid", "mem_scope", "mem_from", "mem_target", "mem_closed", "rev_n", "mem_text",
             "vec_chunk", "vec_memory", "vec_process", "vec_activity", "vec_class",
             "vec_method"} <= names
-    assert {f"rel_{t.lower()}_{k}" for t in REL_TYPES for k in ("from", "uid", "scope")} <= names
+    assert {f"rel_{t.lower()}_{k}" for t in REL_TYPES for k in ("from", "uid", "scope", "closed")} <= names
     assert "mem_to" not in names and not any(n.endswith("_to") for n in names)  # rulings R25
     assert {"mem_vid", "rev_rid", "rev_ikey", "meta_key"} <= await constraint_names(memory_graph)
 
@@ -51,7 +51,7 @@ def test_closed_sets_have_the_specified_sizes():
     assert len(NODE_LABELS) == 24 and len(set(NODE_LABELS)) == 24
     assert len(REL_TYPES) == 12 and len(set(REL_TYPES)) == 12
     assert set(EMBEDDED_LABELS) <= set(NODE_LABELS)
-    assert len(cypher.SCHEMA) == 4 + 5 + 3 * len(REL_TYPES) + len(EMBEDDED_LABELS) + 1 + 1 + len(REL_TYPES)
+    assert len(cypher.SCHEMA) == 4 + 6 + 4 * len(REL_TYPES) + len(EMBEDDED_LABELS) + 1 + 1 + len(REL_TYPES)
 
 
 def _is_str(node: ast.AST) -> bool:

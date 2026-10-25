@@ -17,15 +17,18 @@ def meta(ingest_key: str, phase: str = "discover", project: str = P) -> Revision
 
 
 def estate(n_processes: int, changed: set[str] = frozenset(), vanished: set[str] = frozenset(),
-           *, activities: int = 3, text_same: bool = False) -> ScopedDelta:
-    """Processes ``p0..p<n-1>`` each CONTAINS ``activities`` activities, in scope ``estate``.
+           *, activities: int = 3, text_same: bool = False,
+           added: set[str] = frozenset()) -> ScopedDelta:
+    """Processes ``p0..p<n-1>`` (plus the ``p<i>`` keys in ``added``) each CONTAINS
+    ``activities`` activities, in scope ``estate``.
 
     A key in ``changed`` changes that process's ``complexity_band`` and, unless ``text_same``,
     its text; a key in ``vanished`` leaves the process and its activities out."""
     nodes: list[MemNode] = []
     rels: list[MemRel] = []
-    for i in range(n_processes):
-        key = f"p{i}"
+    keys = [f"p{i}" for i in range(n_processes)] + sorted(added, key=lambda k: int(k[1:]))
+    for key in keys:
+        i = int(key[1:])
         if key in vanished:
             continue
         is_changed = key in changed
@@ -72,6 +75,63 @@ def build_methods(process_key: str = "p0", activity_index: int = 0) -> ScopedDel
         rels=[MemRel(type="MIGRATED_TO", src=f"activity:{process_key}/a{activity_index}",
                      dst=muid, props={"status": "generated"})],
     )
+
+
+def build_delta(process_key: str = "p0", activities: int = 1) -> ScopedDelta:
+    """Scope ``build:<process_key>``: for each activity ``a<j>`` a Method
+    ``method:dotnet:<key>/Api/Flow.A<j>`` it is MIGRATED_TO (status generated) and a Test that
+    TESTS the method."""
+    nodes: list[MemNode] = []
+    rels: list[MemRel] = []
+    for j in range(activities):
+        muid = f"method:dotnet:{process_key}/Api/Flow.A{j}"
+        tuid = f"test:dotnet:{process_key}/A{j}_maps"
+        nodes += [
+            MemNode(label="Method", uid=muid, name=f"Flow.A{j}",
+                    text=f"Flow.A{j} implements Activity {j}",
+                    props={"pattern": "mapper", "stack": "dotnet"}),
+            MemNode(label="Test", uid=tuid, name=f"A{j}_maps",
+                    props={"kind": "unit", "outcome": "passed", "stack": "dotnet"}),
+        ]
+        rels += [
+            MemRel(type="MIGRATED_TO", src=f"activity:{process_key}/a{j}", dst=muid,
+                   props={"status": "generated", "pattern": "mapper"}),
+            MemRel(type="TESTS", src=tuid, dst=muid),
+        ]
+    return ScopedDelta(scope=f"build:{process_key}", nodes=nodes, rels=rels)
+
+
+def curation_delta(action: str, target: str, *, event_id: str = "ev1",
+                   reason: str = "reviewed by the SME") -> ScopedDelta:
+    """Scope ``curation:<event_id>``: a Curation ``{action, target_uid}`` ABOUT the target, which
+    for a mapping action is the source node of the MIGRATED_TO uid ``target``."""
+    about = target.split(":", 1)[1].split("->", 1)[0] if action.endswith("_mapping") else target
+    uid = f"curation:{event_id}"
+    return ScopedDelta(
+        scope=uid,
+        nodes=[MemNode(label="Curation", uid=uid, name=action, text=reason,
+                       props={"action": action, "target_uid": target, "actor": "tester",
+                              "reason": reason})],
+        rels=[MemRel(type="ABOUT", src=uid, dst=about)],
+    )
+
+
+def memory_item(uid: str, text: str, about: str | None = None) -> ScopedDelta:
+    """Scope ``decision:<uid>``: a Memory (kind decision), ABOUT ``about`` when given."""
+    rels = [MemRel(type="ABOUT", src=uid, dst=about)] if about else []
+    return ScopedDelta(scope=f"decision:{uid}", rels=rels, nodes=[
+        MemNode(label="Memory", uid=uid, name="decision", text=text, props={"kind": "decision"})])
+
+
+async def apply(graph, ingest_key: str, delta: ScopedDelta | list[ScopedDelta], *,
+                phase: str = "discover", project: str = P):
+    deltas = delta if isinstance(delta, list) else [delta]
+    return await graph.apply_revision(meta(ingest_key, phase, project), deltas)
+
+
+def names(subgraph) -> set[str]:
+    """The node uids of ``subgraph`` without their label prefix (``process:p1`` -> ``p1``)."""
+    return {n.uid.split(":", 1)[1] for n in subgraph.nodes}
 
 
 _REVISION_COUNT = "MATCH (r:Revision {project_id: $project_id}) RETURN count(r) AS n"

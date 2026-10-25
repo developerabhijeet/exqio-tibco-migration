@@ -24,7 +24,8 @@ class DiffSet(BaseModel):
     removed: list[VersionRef]
 
 
-def _changed_keys(old: VersionRef, new: VersionRef) -> list[str]:
+def changed_keys(old: VersionRef, new: VersionRef) -> list[str]:
+    """The property keys (and ``name``) whose values differ between two versions."""
     keys = {k for k in old.props.keys() | new.props.keys() if old.props.get(k) != new.props.get(k)}
     if old.name != new.name:
         keys.add("name")
@@ -44,6 +45,6 @@ def classify(opened: list[VersionRef], closed: list[VersionRef]) -> DiffSet:
         if c is None:
             added.append(o)
         elif c.content_hash != o.content_hash:
-            changed.append(ChangedRef(**o.model_dump(), changed_keys=_changed_keys(c, o)))
+            changed.append(ChangedRef(**o.model_dump(), changed_keys=changed_keys(c, o)))
     removed = [c for c in closed if c.uid not in opened_uids]
     return DiffSet(added=added, changed=changed, removed=removed)
