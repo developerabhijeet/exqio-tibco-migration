@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from engine.memory import cypher
 from engine.memory.model import KnowledgeError, MemNode, MemRel, ScopedDelta
 from engine.tests.memory_helpers import (
     P,
@@ -10,6 +11,7 @@ from engine.tests.memory_helpers import (
     chunk_with,
     current_rel_count,
     estate,
+    explain,
     meta,
     node_versions,
     revision_count,
@@ -145,6 +147,64 @@ async def test_other_embedding_backend_is_refused(memory_graph):
     await set_embedding_backend(memory_graph, "x")
     with pytest.raises(KnowledgeError, match="'x'"):
         await memory_graph.apply_revision(meta("k2"), [estate(1, changed={"p0"})])
+    assert await revision_count(memory_graph, P) == 1
+    assert [(v["valid_from"], v["valid_to"])
+            for v in await node_versions(memory_graph, P, "process:p0")] == [(1, None)]
+    assert (await memory_graph.counts(P))["Activity"] == 3
+
+
+def _table(uid: str = "table:orders") -> MemNode:
+    return MemNode(label="Table", uid=uid, name="orders", text="orders table")
+
+
+async def test_item_moving_between_scopes_of_one_apply_is_handed_over(memory_graph):
+    await memory_graph.apply_revision(meta("k1"), [ScopedDelta(scope="a", nodes=[_table()])])
+    r = await memory_graph.apply_revision(
+        meta("k2"), [ScopedDelta(scope="a"), ScopedDelta(scope="b", nodes=[_table()])])
+    assert (r.revision, r.added, r.changed, r.removed) == (2, 0, 1, 0)
+    assert (await memory_graph.counts(P))["Table"] == 1
+    old, new = await node_versions(memory_graph, P, "table:orders")
+    assert (old["scope"], old["valid_to"], new["scope"], new["valid_to"]) == ("a", 2, "b", None)
+
+
+async def test_relationship_moving_between_scopes_of_one_apply_is_handed_over(memory_graph):
+    await memory_graph.apply_revision(meta("k1"), [estate(1)])
+    rel = MemRel(type="CALLS", src="process:p0", dst="process:p0")
+    await memory_graph.apply_revision(meta("k2"), [ScopedDelta(scope="a", rels=[rel])])
+    r = await memory_graph.apply_revision(
+        meta("k3"), [ScopedDelta(scope="a"), ScopedDelta(scope="b", rels=[rel])])
+    assert (r.added, r.changed, r.removed) == (0, 1, 0)
+    assert await current_rel_count(memory_graph, P, "CALLS") == 1
+
+
+async def test_item_owned_by_a_scope_outside_the_apply_is_left_alone(memory_graph):
+    await memory_graph.apply_revision(meta("k1"), [ScopedDelta(scope="a", nodes=[_table()])])
+    other = _table().model_copy(update={"text": "claimed by b"})
+    r = await memory_graph.apply_revision(meta("k2"), [ScopedDelta(scope="b", nodes=[other])])
+    assert r.revision is None and await revision_count(memory_graph, P) == 1
+    (v,) = await node_versions(memory_graph, P, "table:orders")
+    assert (v["scope"], v["valid_to"]) == ("a", None)
+    assert await stored_text(memory_graph, P, "table:orders") == "orders table"
+
+
+async def test_mixed_type_list_property_is_rejected(memory_graph):
+    bad = MemNode(label="Table", uid="table:x", name="x", props={"cols": ["a", 1]})
+    with pytest.raises(ValueError, match="one type"):
+        await memory_graph.apply_revision(meta("k1"), [ScopedDelta(scope="a", nodes=[bad])])
+
+
+@pytest.mark.parametrize("statement", [
+    cypher.CURRENT_IN_SCOPE, cypher.CURRENT_BY_UID, cypher.CURRENT_RELS["ABOUT"],
+    cypher.CURRENT_RELS_BY_UID["ABOUT"], cypher.CLOSE_NODES, cypher.CREATE_NODES["Process"],
+    *cypher.REATTACH["CONTAINS"], cypher.CLOSE_RELS_OF_CLOSED["CONTAINS"],
+    cypher.CREATE_RELS["CONTAINS"], cypher.CLOSE_RELS["CONTAINS"], cypher.COUNTS,
+    cypher.REVISION_BY_IKEY, cypher.NEXT_REVISION,
+])
+async def test_write_path_statements_seek_an_index(memory_graph, statement):  # rulings R25
+    await memory_graph.apply_revision(meta("k1"), [estate(3)])
+    plan = await explain(memory_graph, statement, project_id=P, scopes=["estate"], uids=["x"],
+                         vids=["x"], rows=[], n=2, phase="discover", ikey="x")
+    assert "Seek" in plan and "Scan" not in plan, plan
 
 
 async def test_revision_node_records_the_meta(memory_graph):

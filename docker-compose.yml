@@ -41,6 +41,11 @@ services:
     environment:
       NEO4J_AUTH: neo4j/exiqo-test-neo4j
       NEO4J_server_memory_heap_max__size: 1G
+      # /data is tmpfs (RAM): bound the page cache and keep no old transaction logs, so the
+      # 20 000-node ingest test does not grow the container past the Docker VM's memory.
+      NEO4J_server_memory_pagecache_size: 512M
+      NEO4J_db_tx__log_rotation_retention__policy: "false"
+      NEO4J_db_tx__log_rotation_size: 64M
       NEO4J_dbms_usage__report_enabled: "false"
     ports:
       - "7688:7687"

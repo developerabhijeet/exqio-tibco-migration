@@ -64,6 +64,10 @@ RESERVED_REL_KEYS = frozenset(
     {"uid", "project_id", "scope", "content_hash", "valid_from", "valid_to", "phase"}
 )
 
+# `valid_to` of a current version (rulings R25): never null, so current-version lookups seek an
+# index (Neo4j indexes skip null properties). Read paths map it to None at every boundary.
+OPEN_VALID_TO = 2**62
+
 Phase = Literal[
     "discover", "analysis", "design", "build", "verify", "deploy", "gate", "decision", "seed",
     "curation", "migration", "reingest",

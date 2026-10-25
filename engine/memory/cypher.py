@@ -16,10 +16,10 @@ def _render_rel_indexes(rel_type: str) -> tuple[str, ...]:
     return (
         (f"CREATE INDEX {name}_from IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
          "ON (r.project_id, r.valid_from)"),
-        (f"CREATE INDEX {name}_to IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
-         "ON (r.project_id, r.valid_to)"),
         (f"CREATE INDEX {name}_uid IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
          "ON (r.project_id, r.uid)"),
+        (f"CREATE INDEX {name}_scope IF NOT EXISTS FOR ()-[r:{rel_type}]-() "
+         "ON (r.project_id, r.scope)"),
     )
 
 
@@ -38,6 +38,10 @@ def _render_fulltext_index() -> str:
     )
 
 
+def _render_drop_rel_to_index(rel_type: str) -> str:
+    return f"DROP INDEX rel_{rel_type.lower()}_to IF EXISTS"
+
+
 SCHEMA: tuple[str, ...] = (
     "CREATE CONSTRAINT mem_vid IF NOT EXISTS FOR (n:Mem) REQUIRE n.vid IS UNIQUE",
     "CREATE CONSTRAINT rev_rid IF NOT EXISTS FOR (r:Revision) REQUIRE r.rid IS UNIQUE",
@@ -46,12 +50,16 @@ SCHEMA: tuple[str, ...] = (
     "CREATE INDEX mem_uid IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.uid)",
     "CREATE INDEX mem_scope IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.scope, n.valid_to)",
     "CREATE INDEX mem_from IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.valid_from)",
-    "CREATE INDEX mem_to IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.valid_to)",
     "CREATE INDEX mem_target IF NOT EXISTS FOR (n:Mem) ON (n.project_id, n.target_uid)",
     "CREATE INDEX rev_n IF NOT EXISTS FOR (r:Revision) ON (r.project_id, r.n)",
     *(stmt for t in REL_TYPES for stmt in _render_rel_indexes(t)),
     *(_render_vector_index(label) for label in EMBEDDED_LABELS),
     _render_fulltext_index(),
+    # (project_id, valid_to) indexes of the first schema: with `valid_to = OPEN` on every current
+    # version (rulings R25) they match a whole project and the planner preferred them to the
+    # uid index; dropped where an earlier ensure_schema created them.
+    "DROP INDEX mem_to IF EXISTS",
+    *(_render_drop_rel_to_index(t) for t in REL_TYPES),
 )
 
 SHOW_INDEX_NAMES = "SHOW INDEXES YIELD name RETURN name"
@@ -61,13 +69,21 @@ PING = "RETURN 1 AS ok"
 RESET = "MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS"
 
 # ------------------------------------------------------------------ versioned write path
-# Current versions have no `valid_to`. Every write statement takes `$rows`, `$vids` or `$uids`
-# batches of at most 1000 (MemoryGraph.apply_revision) and `$n`, the revision being applied.
+# Current versions carry `valid_to = $open` (model.OPEN_VALID_TO, rulings R25), never null, so
+# every lookup of current versions seeks an index. Every write statement takes `$rows`, `$vids`
+# or `$uids` batches of at most 1000 (MemoryGraph.apply_revision) and `$n`, the revision.
 
-# Current node versions owned by one of the delta scopes, or carrying one of the delta uids.
+# Current node versions owned by one of the delta scopes (index mem_scope).
 CURRENT_IN_SCOPE = (
-    "MATCH (n:Mem {project_id: $project_id}) "
-    "WHERE n.valid_to IS NULL AND (n.scope IN $scopes OR n.uid IN $uids) "
+    "UNWIND $scopes AS scope MATCH (n:Mem {project_id: $project_id, scope: scope}) "
+    "USING INDEX SEEK n:Mem(project_id, scope, valid_to) WHERE n.valid_to = $open "
+    "RETURN n.uid AS uid, n.scope AS scope, n.content_hash AS content_hash, "
+    "n.text_hash AS text_hash, n.vid AS vid"
+)
+# Current node versions of the delta uids, whatever their scope (index mem_uid).
+CURRENT_BY_UID = (
+    "UNWIND $uids AS uid MATCH (n:Mem {project_id: $project_id, uid: uid}) "
+    "USING INDEX SEEK n:Mem(project_id, uid) WHERE n.valid_to = $open "
     "RETURN n.uid AS uid, n.scope AS scope, n.content_hash AS content_hash, "
     "n.text_hash AS text_hash, n.vid AS vid"
 )
@@ -75,13 +91,24 @@ CURRENT_IN_SCOPE = (
 
 def _render_current_rels(rel_type: str) -> str:
     return (
-        f"MATCH ()-[r:{rel_type}]->() WHERE r.project_id = $project_id AND r.valid_to IS NULL "
-        "AND (r.scope IN $scopes OR r.uid IN $uids) "
+        f"UNWIND $scopes AS scope MATCH ()-[r:{rel_type} "
+        f"{{project_id: $project_id, scope: scope}}]->() USING INDEX SEEK r:{rel_type}(project_id, scope) "
+        "WHERE r.valid_to = $open "
+        "RETURN r.uid AS uid, r.scope AS scope, r.content_hash AS content_hash"
+    )
+
+
+def _render_current_rels_by_uid(rel_type: str) -> str:
+    return (
+        f"UNWIND $uids AS uid MATCH ()-[r:{rel_type} "
+        f"{{project_id: $project_id, uid: uid}}]->() USING INDEX SEEK r:{rel_type}(project_id, uid) "
+        "WHERE r.valid_to = $open "
         "RETURN r.uid AS uid, r.scope AS scope, r.content_hash AS content_hash"
     )
 
 
 CURRENT_RELS: dict[str, str] = {t: _render_current_rels(t) for t in REL_TYPES}
+CURRENT_RELS_BY_UID: dict[str, str] = {t: _render_current_rels_by_uid(t) for t in REL_TYPES}
 
 REVISION_BY_IKEY = (
     "MATCH (r:Revision {project_id: $project_id, ikey: $ikey}) RETURN r.n AS n"
@@ -92,7 +119,7 @@ NEXT_REVISION = (
 
 CLOSE_NODES = (
     "UNWIND $vids AS vid MATCH (n:Mem {project_id: $project_id, vid: vid}) "
-    "WHERE n.valid_to IS NULL SET n.valid_to = $n RETURN count(n) AS closed"
+    "USING INDEX SEEK n:Mem(vid) WHERE n.valid_to = $open SET n.valid_to = $n RETURN count(n) AS closed"
 )
 
 
@@ -104,7 +131,7 @@ def _render_create_nodes(label: str) -> str:
     if label in EMBEDDED_LABELS:  # a preset or computed vector, else the previous version's
         statement += (
             " WITH n, row OPTIONAL MATCH (p:Mem {project_id: $project_id, vid: row.copy_from}) "
-            "SET n.embedding = coalesce(row.embedding, p.embedding)"
+            "USING INDEX SEEK p:Mem(vid) SET n.embedding = coalesce(row.embedding, p.embedding)"
         )
     return statement
 
@@ -117,18 +144,21 @@ def _render_reattach(rel_type: str) -> tuple[str, str]:
     of both endpoints: closed at `$n`, re-created with the same uid and hash. Outgoing first,
     then incoming, so a relationship between two re-versioned nodes moves once."""
     tail = (
-        "MATCH (a:Mem {project_id: $project_id, uid: src.uid}) WHERE a.valid_to IS NULL "
-        "MATCH (b:Mem {project_id: $project_id, uid: dst.uid}) WHERE b.valid_to IS NULL "
+        "MATCH (a:Mem {project_id: $project_id, uid: src.uid}) USING INDEX SEEK a:Mem(project_id, uid) "
+        "WHERE a.valid_to = $open "
+        "MATCH (b:Mem {project_id: $project_id, uid: dst.uid}) USING INDEX SEEK b:Mem(project_id, uid) "
+        "WHERE b.valid_to = $open "
         f"CREATE (a)-[moved:{rel_type}]->(b) "
         "SET moved = properties(r), moved.valid_from = $n, moved.phase = $phase "
         "SET r.valid_to = $n RETURN count(moved) AS moved"
     )
     return (
         "UNWIND $vids AS vid MATCH (src:Mem {project_id: $project_id, vid: vid})"
-        f"-[r:{rel_type}]->(dst:Mem) WHERE r.valid_to IS NULL " + tail,
+        f"-[r:{rel_type}]->(dst:Mem) USING INDEX SEEK src:Mem(vid) WHERE r.valid_to = $open "
+        + tail,
         "UNWIND $vids AS vid MATCH (src:Mem)"
         f"-[r:{rel_type}]->(dst:Mem {{project_id: $project_id, vid: vid}}) "
-        "WHERE r.valid_to IS NULL " + tail,
+        "USING INDEX SEEK dst:Mem(vid) WHERE r.valid_to = $open " + tail,
     )
 
 
@@ -138,7 +168,7 @@ REATTACH: dict[str, tuple[str, str]] = {t: _render_reattach(t) for t in REL_TYPE
 def _render_close_rels_of_closed(rel_type: str) -> str:
     return (
         "UNWIND $vids AS vid MATCH (n:Mem {project_id: $project_id, vid: vid})"
-        f"-[r:{rel_type}]-() WHERE r.valid_to IS NULL "
+        f"-[r:{rel_type}]-() USING INDEX SEEK n:Mem(vid) WHERE r.valid_to = $open "
         "SET r.valid_to = $n RETURN count(DISTINCT r) AS closed"
     )
 
@@ -151,8 +181,10 @@ def _render_create_rels(rel_type: str) -> str:
     has no current version returns nothing (dangling)."""
     return (
         "UNWIND $rows AS row "
-        "MATCH (a:Mem {project_id: $project_id, uid: row.src}) WHERE a.valid_to IS NULL "
-        "MATCH (b:Mem {project_id: $project_id, uid: row.dst}) WHERE b.valid_to IS NULL "
+        "MATCH (a:Mem {project_id: $project_id, uid: row.src}) USING INDEX SEEK a:Mem(project_id, uid) "
+        "WHERE a.valid_to = $open "
+        "MATCH (b:Mem {project_id: $project_id, uid: row.dst}) USING INDEX SEEK b:Mem(project_id, uid) "
+        "WHERE b.valid_to = $open "
         f"CREATE (a)-[r:{rel_type}]->(b) SET r = row.props, r.project_id = $project_id "
         "RETURN r.uid AS uid"
     )
@@ -164,7 +196,7 @@ CREATE_RELS: dict[str, str] = {t: _render_create_rels(t) for t in REL_TYPES}
 def _render_close_rels(rel_type: str) -> str:
     return (
         f"UNWIND $uids AS uid MATCH ()-[r:{rel_type} {{project_id: $project_id, uid: uid}}]->() "
-        "WHERE r.valid_to IS NULL SET r.valid_to = $n RETURN count(r) AS closed"
+        f"USING INDEX SEEK r:{rel_type}(project_id, uid) WHERE r.valid_to = $open SET r.valid_to = $n RETURN count(r) AS closed"
     )
 
 
@@ -178,7 +210,8 @@ CREATE_REVISION = (
 )
 
 COUNTS = (
-    "MATCH (n:Mem {project_id: $project_id}) WHERE n.valid_to IS NULL "
+    "MATCH (n:Mem {project_id: $project_id}) USING INDEX SEEK n:Mem(project_id, uid) "
+    "WHERE n.uid IS NOT NULL AND n.valid_to = $open "
     "UNWIND labels(n) AS label WITH label WHERE label <> 'Mem' "
     "RETURN label, count(*) AS n"
 )

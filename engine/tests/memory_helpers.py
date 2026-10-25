@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from engine.memory.model import MemNode, MemRel, RevisionMeta, ScopedDelta
+from engine.memory.model import OPEN_VALID_TO, MemNode, MemRel, RevisionMeta, ScopedDelta
 
 P = "proj-memory-test"
 
@@ -78,25 +78,25 @@ _REVISION_COUNT = "MATCH (r:Revision {project_id: $project_id}) RETURN count(r) 
 _NODE_VERSIONS = (
     "MATCH (n:Mem {project_id: $project_id, uid: $uid}) "
     "RETURN n.valid_from AS valid_from, n.valid_to AS valid_to, n.vid AS vid, "
-    "n.embedding AS embedding, n.phase AS phase ORDER BY n.valid_from"
+    "n.embedding AS embedding, n.phase AS phase, n.scope AS scope ORDER BY n.valid_from"
 )
 _CURRENT_REL_COUNT = (
     "MATCH (a:Mem {project_id: $project_id})-[r]->(b:Mem {project_id: $project_id}) "
-    "WHERE type(r) = $type AND r.valid_to IS NULL AND a.valid_to IS NULL "
-    "AND b.valid_to IS NULL AND ($src IS NULL OR a.uid = $src) AND ($dst IS NULL OR b.uid = $dst) "
+    "WHERE type(r) = $type AND r.valid_to = $open AND a.valid_to = $open "
+    "AND b.valid_to = $open AND ($src IS NULL OR a.uid = $src) AND ($dst IS NULL OR b.uid = $dst) "
     "RETURN count(r) AS n"
 )
 _REVISIONS = "MATCH (r:Revision {project_id: $project_id}) RETURN r ORDER BY r.n"
 _SET_BACKEND = "MATCH (m:MemoryMeta {key: 'embedding_backend'}) SET m.value = $value"
 _STORED_TEXT = (
-    "MATCH (n:Mem {project_id: $project_id, uid: $uid}) WHERE n.valid_to IS NULL "
+    "MATCH (n:Mem {project_id: $project_id, uid: $uid}) WHERE n.valid_to = $open "
     "RETURN n.text AS text"
 )
 
 
 async def query(graph, statement: str, **params: Any) -> list[dict[str, Any]]:
     async with graph._driver.session(database=graph.database) as session:
-        result = await session.run(statement, params)
+        result = await session.run(statement, {"open": OPEN_VALID_TO, **params})
         return [r.data() async for r in result]
 
 
@@ -105,7 +105,12 @@ async def revision_count(graph, project_id: str) -> int:
 
 
 async def node_versions(graph, project_id: str, uid: str) -> list[dict[str, Any]]:
-    return await query(graph, _NODE_VERSIONS, project_id=project_id, uid=uid)
+    """Every version of ``uid``, oldest first; a current version's ``valid_to`` reads None."""
+    rows = await query(graph, _NODE_VERSIONS, project_id=project_id, uid=uid)
+    for row in rows:
+        if row["valid_to"] == OPEN_VALID_TO:
+            row["valid_to"] = None
+    return rows
 
 
 async def current_rel_count(graph, project_id: str, rel_type: str, *, src: str | None = None,
@@ -125,3 +130,16 @@ async def revisions(graph, project_id: str) -> list[dict[str, Any]]:
 
 async def set_embedding_backend(graph, value: str) -> None:
     await query(graph, _SET_BACKEND, value=value)
+
+
+async def explain(graph, statement: str, **params: Any) -> str:
+    """The operator tree of ``statement``'s plan (EXPLAIN runs nothing)."""
+    async with graph._driver.session(database=graph.database) as session:
+        result = await session.run("EXPLAIN " + statement, {"open": OPEN_VALID_TO, **params})
+        summary = await result.consume()
+
+    def ops(plan: dict[str, Any], depth: int = 0) -> list[str]:
+        line = "  " * depth + plan["operatorType"] + " " + plan.get("args", {}).get("Details", "")
+        return [line] + [x for child in plan.get("children", []) for x in ops(child, depth + 1)]
+
+    return "\n".join(ops(summary.plan))
