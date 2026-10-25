@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     neo4j_uri: str = ""
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+    neo4j_ready_grace_seconds: int = 900
+    neo4j_gates_readiness: bool = True
+    memory_ingest_max_attempts: int = 10
+    memory_exact_scan_max: int = 50000
     brand_name: str = "ExiQO"
     support_contact: str = ""
     azure_openai_auth: Literal["key", "managed_identity"] = "key"

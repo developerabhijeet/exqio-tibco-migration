@@ -32,6 +32,18 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
+def memory_settings(settings: Settings) -> Settings:
+    """``settings`` pointing at the test Neo4j; skipped when NEO4J_TEST_URI is unset or empty."""
+    uri = os.environ.get("NEO4J_TEST_URI", "")
+    if not uri:
+        pytest.skip("NEO4J_TEST_URI is not set: run make test (starts neo4j-test) or point it at "
+                    "a Neo4j 5.26")
+    return settings.model_copy(update={
+        "neo4j_uri": uri, "neo4j_user": os.environ.get("NEO4J_TEST_USER", "neo4j"),
+        "neo4j_password": os.environ.get("NEO4J_TEST_PASSWORD", "exiqo-test-neo4j")})
+
+
+@pytest.fixture
 async def app(settings: Settings):
     engine = make_engine(settings.database_url)
     try:
@@ -48,5 +60,26 @@ async def app(settings: Settings):
 @pytest.fixture
 async def client(app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
+        yield c
+
+
+@pytest.fixture
+async def memory_app(memory_settings: Settings):
+    engine = make_engine(memory_settings.database_url)
+    try:
+        await reset_schema(engine)
+    except Exception as exc:  # noqa: BLE001  no database: skip, do not fail the suite
+        await engine.dispose()
+        pytest.skip(f"Postgres is not available: {exc}")
+    await engine.dispose()
+    application = create_app(memory_settings)
+    async with application.router.lifespan_context(application):
+        yield application
+
+
+@pytest.fixture
+async def memory_client(memory_app) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=memory_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
         yield c

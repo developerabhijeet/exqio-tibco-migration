@@ -18,14 +18,34 @@ services:
 
   # Local development only: the cluster uses GM Financial's Neo4j (NEO4J_URI in the chart values).
   neo4j:
-    image: neo4j:5.26.2
+    image: neo4j:5.26.32
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-exiqo-dev-neo4j}
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_dbms_usage__report_enabled: "false"
     ports:
       - "7474:7474"
       - "7687:7687"
     volumes:
       - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Tests only (profile `test`, started by `make test`): throwaway data on tmpfs, its own port.
+  neo4j-test:
+    image: neo4j:5.26.32
+    profiles: ["test"]
+    environment:
+      NEO4J_AUTH: neo4j/exiqo-test-neo4j
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_dbms_usage__report_enabled: "false"
+    ports:
+      - "7688:7687"
+    tmpfs:
+      - /data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
       interval: 10s

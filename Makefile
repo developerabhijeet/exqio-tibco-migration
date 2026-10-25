@@ -20,7 +20,7 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
+.PHONY: setup db neo4j neo4j-test api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
 	azure-validate pipeline-lint kind-tools kind-e2e
 
@@ -43,6 +43,28 @@ db:
 		fi; \
 	else echo "docker not available: using the Postgres at DATABASE_URL"; fi
 	.venv/bin/alembic -c api/alembic.ini upgrade head
+
+NEO4J_NOTE = neo4j: docker not available: set NEO4J_URI (or NEO4J_TEST_URI) to a Neo4j 5.26
+
+neo4j:
+	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+		docker compose up -d --wait neo4j; \
+		if ! $(PORT_OPEN) 7687; then \
+			echo "neo4j: healthy but port 7687 is not reachable from the host; recreating the container"; \
+			docker compose up -d --force-recreate --wait neo4j; \
+			$(PORT_OPEN) 7687 || { echo "neo4j: port 7687 is still unreachable; restart Docker Desktop"; exit 1; }; \
+		fi; \
+	else echo "$(NEO4J_NOTE)"; fi
+
+neo4j-test:
+	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+		docker compose --profile test up -d --wait neo4j-test; \
+		if ! $(PORT_OPEN) 7688; then \
+			echo "neo4j-test: healthy but port 7688 is not reachable from the host; recreating the container"; \
+			docker compose --profile test up -d --force-recreate --wait neo4j-test; \
+			$(PORT_OPEN) 7688 || { echo "neo4j-test: port 7688 is still unreachable; restart Docker Desktop"; exit 1; }; \
+		fi; \
+	else echo "$(NEO4J_NOTE)"; fi
 
 # A port left busy by an earlier session shows up as uvicorn's bare "[Errno 48] Address already in
 # use", which says nothing about what to do; name the holder and the override instead.
@@ -84,8 +106,8 @@ web:
 	cd web && ([ -d node_modules ] || npm install) && \
 		NEXT_PUBLIC_API_URL=$${NEXT_PUBLIC_API_URL:-$(API_URL)} npm run dev -- -p $(WEB_PORT)
 
-test:
-	$(PYTEST)
+test: neo4j-test
+	NEO4J_TEST_URI=$${NEO4J_TEST_URI:-bolt://localhost:7688} NEO4J_TEST_PASSWORD=$${NEO4J_TEST_PASSWORD:-exiqo-test-neo4j} $(PYTEST)
 
 # Playwright starts its own API (PROVIDER=fake, EMBEDDINGS_BACKEND=hash) and web on two free ports,
 # so a server someone left on 9000 or 3000 is never reused. Override with E2E_API_PORT/E2E_WEB_PORT;
@@ -93,7 +115,7 @@ test:
 TWO_FREE_PORTS := python3 -c 'import socket; a, b = socket.socket(), socket.socket(); \
 	a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0)); print(a.getsockname()[1], b.getsockname()[1])'
 
-e2e:
+e2e: neo4j
 	@ports=$$($(TWO_FREE_PORTS)); api=$(or $(E2E_API_PORT),$${ports% *}); web=$(or $(E2E_WEB_PORT),$${ports#* }); \
 	echo "e2e: API on port $$api, web on port $$web"; \
 	cd web && ([ -d node_modules ] || npm install) && \
@@ -106,7 +128,7 @@ e2e:
 # DEMO_ARGS passes options through, for example DEMO_ARGS="--mode offline".
 DEMO_LOG ?= data/demo-check-api.log
 
-demo-check: samples samples-zip
+demo-check: neo4j samples samples-zip
 	@if curl -sf -m 5 $(API_URL)/health >/dev/null 2>&1; then \
 		echo "demo-check: using the API already answering at $(API_URL)"; \
 		$(PY) scripts/demo_check.py --api $(API_URL) $(DEMO_ARGS); \

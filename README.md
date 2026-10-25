@@ -82,6 +82,10 @@ shows each provider as configured or missing and never shows a value.
 | `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener; a worker (`make worker`) refuses to start without `INTERNAL_TOKEN`, role `all` does not need it |
 | `JOB_STALE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS`                   | job heartbeat every 10 s (default), a job is stale after 90 s, at most 2 attempts |
 | `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`                                        | the Neo4j graph (user default `neo4j`) |
+| `NEO4J_DATABASE`                                                                   | the Neo4j database (default `neo4j`) |
+| `NEO4J_READY_GRACE_SECONDS`, `NEO4J_GATES_READINESS`                               | Neo4j gates `/readyz` when `NEO4J_URI` is set (default true); after this grace (default 900 s) |
+| `MEMORY_INGEST_MAX_ATTEMPTS`, `MEMORY_EXACT_SCAN_MAX`                              | memory ingest attempts per job (default 10); the exact-scan vector limit (default 50000) |
+| `NEO4J_TEST_URI`, `NEO4J_TEST_USER`, `NEO4J_TEST_PASSWORD`                         | the throwaway Neo4j the memory tests reset; `make test` starts `neo4j-test` (`bolt://localhost:7688`, password `exiqo-test-neo4j`); unset or empty skips them |
 | `BRAND_NAME`, `SUPPORT_CONTACT`                                                    | product name shown in the UI (default `ExiQO`) and the support contact line |
 | `AZURE_OPENAI_AUTH`                                                                | `key` (default) or `managed_identity` |
 | `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `SESSION_SECRET` | Entra ID sign-in and the session cookie key, used when `AUTH_MODE=oidc` |
