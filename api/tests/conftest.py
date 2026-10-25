@@ -82,7 +82,13 @@ async def project_id(client: httpx.AsyncClient) -> str:
 
 
 @pytest.fixture
-async def memory_app(memory_settings: Settings):
+async def memory_app(memory_settings: Settings, monkeypatch: pytest.MonkeyPatch):
+    """The app with the test Neo4j as its memory: the test Neo4j is reset first, and embeddings use
+    the hash backend (no model download; one backend across the suite's memory tests)."""
+    from engine.knowledge import embeddings
+
+    monkeypatch.setenv("EMBEDDINGS_BACKEND", "hash")
+    embeddings.reset_backend()
     engine = make_engine(memory_settings.database_url)
     try:
         await reset_schema(engine)
@@ -92,7 +98,9 @@ async def memory_app(memory_settings: Settings):
     await engine.dispose()
     application = create_app(memory_settings)
     async with application.router.lifespan_context(application):
+        await application.state.memory.reset()
         yield application
+    embeddings.reset_backend()
 
 
 @pytest.fixture
@@ -100,3 +108,48 @@ async def memory_client(memory_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=memory_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
         yield c
+
+
+@pytest.fixture
+def sample_upload() -> Path:
+    """The synthetic GMF estate, uploaded by server path (``upload_allowed_roots`` covers it)."""
+    return REPO_ROOT / "samples" / "synthetic-gmf"
+
+
+class Neo4jDown:
+    """``memory_app``'s memory graph swapped for one whose driver points at a closed port (the
+    managed-transaction retries off, so each attempt fails at once); ``restore()`` puts it back."""
+
+    def __init__(self, app, down) -> None:
+        self.app, self.down, self.real = app, down, app.state.memory
+        self._set(down)
+
+    def _set(self, memory) -> None:
+        self.app.state.memory = memory
+        self.app.state.worker_services.memory = memory  # the worker copies it into each job
+
+    def restore(self) -> None:
+        self._set(self.real)
+
+
+@pytest.fixture
+async def neo4j_down(memory_app):
+    import socket
+
+    from neo4j import AsyncGraphDatabase
+
+    from engine.memory.graph import MemoryGraph
+
+    with socket.socket() as sock:  # a port nothing listens on
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    uri = f"bolt://127.0.0.1:{port}"
+    real = memory_app.state.memory
+    driver = AsyncGraphDatabase.driver(uri, auth=("neo4j", "unused"), connection_timeout=1,
+                                       max_transaction_retry_time=0)
+    handle = Neo4jDown(memory_app, MemoryGraph(driver, uri, real.database, real.exact_scan_max))
+    try:
+        yield handle
+    finally:
+        handle.restore()
+        await driver.close()

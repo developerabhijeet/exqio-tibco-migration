@@ -38,6 +38,7 @@ from api.app.services import hosting as hosting_svc
 from api.app.services.hosting import Hosting
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
+from api.app.services.memory_ingest import open_memory
 from api.app.services.settings import apply_stored, load_stored
 
 log = logging.getLogger("api.app.worker")
@@ -108,8 +109,9 @@ async def run(settings: Settings) -> None:
     fernet, _ = make_fernet(settings)
     name = worker_name()
     hosting = Hosting(settings, sessionmaker, owner=name)
+    memory = await open_memory(settings)
     services = WorkerServices(settings=settings, knowledge=Knowledge(psycopg_url(settings.database_url)),
-                              sessionmaker=sessionmaker, hosting=hosting, fernet=fernet)
+                              sessionmaker=sessionmaker, hosting=hosting, fernet=fernet, memory=memory)
     async with sessionmaker() as s:  # provider keys and models saved in the Settings screen
         apply_stored(settings, await load_stored(s))
     cleared = await hosting.clear_stale()
@@ -141,6 +143,8 @@ async def run(settings: Settings) -> None:
     finally:
         await http.aclose()
         await engine.dispose()
+        if memory is not None:
+            await memory.close()
 
 
 def main() -> None:

@@ -6,7 +6,8 @@ session-level ``pg_advisory_lock(hashtext(name))`` on a dedicated connection hel
 it is released in ``finally`` (also on cancellation), and a connection whose unlock failed is
 invalidated so a held lock never returns to the pool.
 
-Lock names: ``scan``, ``analyse:<process_id>``, ``scenario``, ``service:<build_id>`` (one start or
+Lock names: ``scan``, ``analyse:<process_id>``, ``scenario``, ``memory:<project_id>`` (one memory
+ingest per project, taken with :func:`try_advisory_lock`), ``service:<build_id>`` (one start or
 stop of a build's generated service at a time, held by the API while it checks and queues).
 """
 from __future__ import annotations
@@ -42,6 +43,31 @@ async def advisory_lock(sessionmaker: async_sessionmaker[AsyncSession], name: st
             raise
         try:
             yield
+        finally:
+            try:
+                await asyncio.shield(conn.execute(text("SELECT pg_advisory_unlock(hashtext(:n))"), {"n": name}))
+            except BaseException:
+                log.exception("advisory lock %r: unlock failed, discarding the connection", name)
+                await asyncio.shield(conn.invalidate())
+
+
+@asynccontextmanager
+async def try_advisory_lock(sessionmaker: async_sessionmaker[AsyncSession], name: str) -> AsyncIterator[bool]:
+    """Take the named advisory lock if it is free; yields whether it was taken (never waits).
+    Released in ``finally`` like :func:`advisory_lock`."""
+    engine: AsyncEngine = sessionmaker.kw["bind"]
+    async with engine.connect() as conn:
+        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        try:
+            got = bool(await conn.scalar(text("SELECT pg_try_advisory_lock(hashtext(:n))"), {"n": name}))
+        except BaseException:
+            await asyncio.shield(conn.invalidate())
+            raise
+        if not got:
+            yield False
+            return
+        try:
+            yield True
         finally:
             try:
                 await asyncio.shield(conn.execute(text("SELECT pg_advisory_unlock(hashtext(:n))"), {"n": name}))

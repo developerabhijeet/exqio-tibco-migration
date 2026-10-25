@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from api.app.jobs.runner import JobContext
     from api.app.services.hosting import Hosting
     from api.app.services.knowledge import Knowledge
+    from engine.memory.graph import MemoryGraph
 
 
 @dataclass
@@ -36,6 +37,7 @@ class WorkerServices:
     sessionmaker: async_sessionmaker[AsyncSession]
     hosting: Hosting
     fernet: Fernet
+    memory: MemoryGraph | None = None
 
 
 Handler = Callable[["JobContext", WorkerServices], Awaitable[dict[str, Any]]]

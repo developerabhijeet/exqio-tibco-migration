@@ -6,7 +6,7 @@ is not enforced here, as before.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from api.app.auth.roles import GATE_OWNERS
 from api.app.deps import PrincipalDep, SessionDep, SettingsDep
@@ -27,7 +27,7 @@ async def list_gates(process_id: str, session: SessionDep) -> list[dict]:
 
 @router.post("/gates/{process_id}/{gate}", response_model=GateOut)
 async def decide_gate(process_id: str, gate: str, body: GateDecision, session: SessionDep,
-                      principal: PrincipalDep, settings: SettingsDep) -> dict:
+                      principal: PrincipalDep, settings: SettingsDep, request: Request) -> dict:
     """Approve or reject a gate. 409 with the reason when the gate is not enabled."""
     if gate not in svc.GATES:
         raise HTTPException(status_code=404, detail=f"unknown gate {gate}")
@@ -44,4 +44,5 @@ async def decide_gate(process_id: str, gate: str, body: GateDecision, session: S
         await session.commit()  # keep any stale-gate resets reconcile wrote
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
+    await svc.enqueue_gate_ingest(request.app.state.sessionmaker, settings, proc, gate)
     return out

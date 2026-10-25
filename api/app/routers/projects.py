@@ -31,6 +31,7 @@ from api.app.schemas.project import (
 )
 from api.app.services import uploads
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
+from api.app.services.memory_ingest import enqueue_ingest, seed_ingest_key
 
 router = APIRouter(tags=["projects"])
 log = logging.getLogger(__name__)
@@ -44,13 +45,21 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
 
 
 @router.post("/projects", status_code=201, response_model=ProjectOut)
-async def create_project(body: ProjectCreate, request: Request, session: SessionDep) -> Project:
-    """Create a project and, in the background, seed its migration memory with the
-    TIBCO-to-.NET seed patterns (``source: seed``). Seeding failures are logged, never fatal."""
+async def create_project(body: ProjectCreate, request: Request, session: SessionDep,
+                         settings: SettingsDep) -> Project:
+    """Create a project and seed its migration memory with the TIBCO-to-.NET seed patterns
+    (``source: seed``): with ``NEO4J_URI`` a ``memory.ingest`` of phase ``seed`` is queued, else (no
+    Neo4j) the Postgres knowledge store is seeded in the background. Seeding failures are logged,
+    never fatal."""
     project = Project(name=body.name.strip())
     session.add(project)
     await session.commit()
     await session.refresh(project)
+    if settings.neo4j_uri:
+        await enqueue_ingest(request.app.state.sessionmaker, settings, project_id=project.id,
+                             phase="seed", scope="seed", source={}, actor="system",
+                             ingest_key=seed_ingest_key())
+        return project
     task = asyncio.create_task(_seed(request.app.state.knowledge, project.id))
     request.app.state.background.add(task)
     task.add_done_callback(request.app.state.background.discard)

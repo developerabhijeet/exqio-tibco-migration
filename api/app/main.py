@@ -52,6 +52,7 @@ from api.app.routers import settings as settings_router
 from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
+from api.app.services.memory_ingest import open_memory
 from api.app.services.settings import apply_stored, load_stored
 from api.app.services.verify import clear_stale_runs
 
@@ -109,8 +110,9 @@ def _create_api(settings: Settings) -> FastAPI:
         name = worker_name()
         # only role all's worker starts services here; in role api nothing ever registers one
         hosting = Hosting(settings, sessionmaker, owner=name)
+        memory = await open_memory(settings)
         worker_services = WorkerServices(settings=settings, knowledge=knowledge, sessionmaker=sessionmaker,
-                                         hosting=hosting, fernet=fernet)
+                                         hosting=hosting, fernet=fernet, memory=memory)
         worker = None
         if settings.exiqo_role == "all":
             worker = JobWorker(sessionmaker, worker_services, name=name,
@@ -128,6 +130,7 @@ def _create_api(settings: Settings) -> FastAPI:
         app.state.worker_services = worker_services
         app.state.listener = listener
         app.state.knowledge = knowledge
+        app.state.memory = memory  # None when NEO4J_URI is empty
         app.state.background = set()  # fire-and-forget tasks (project seeding), awaited on shutdown
         app.state.hosting = hosting
         app.state.http = http_client()  # the run proxy's and the worker host clients' connections
@@ -161,6 +164,8 @@ def _create_api(settings: Settings) -> FastAPI:
             if listener is not None:
                 await listener.stop()
             await engine.dispose()
+            if memory is not None:
+                await memory.close()
 
     # The interactive docs and the OpenAPI schema are a development aid; with sign-in on (oidc, the
     # installed product) they are not served, so nobody unauthenticated can map the API.

@@ -131,17 +131,19 @@ def assign_finding_keys(findings: list[EngineFinding], existing: list[dict[str, 
 
 
 # ------------------------------------------------------------------ knowledge chunks
-def chunk_items(process_name: str, summary: str | None, rules: list[Any],
-                findings: list[Any]) -> list[tuple[str, str]]:
-    """Prose chunks for Ask. Rows or engine models both work (duck typed)."""
-    items: list[tuple[str, str]] = []
+def chunk_entries(process_name: str, summary: str | None, rules: list[Any],
+                  findings: list[Any]) -> list[tuple[str, str, str, list[str]]]:
+    """``(kind, key, text, cited activity ids)`` of every prose chunk, unguarded (the memory
+    ingest counts the raw-XML refusals itself). Rows or engine models both work (duck typed)."""
+    items: list[tuple[str, str, str, list[str]]] = []
     if summary:
-        items.append(("summary", f"Summary of {process_name}: {summary}"))
+        items.append(("summary", "summary", f"Summary of {process_name}: {summary}", []))
     for r in rules:
         key = getattr(r, "rule_key", None) or r.id
-        steps = ", ".join(dict.fromkeys(_cit(c)["activity_id"] for c in r.citations or []))
-        items.append(("rule", f"Rule {key} of {process_name} ({r.status}): {r.text}"
-                              + (f" Steps: {steps}." if steps else "")))
+        cited = list(dict.fromkeys(_cit(c)["activity_id"] for c in r.citations or []))
+        steps = ", ".join(cited)
+        items.append(("rule", key, f"Rule {key} of {process_name} ({r.status}): {r.text}"
+                                   + (f" Steps: {steps}." if steps else ""), cited))
     for f in findings:
         key = getattr(f, "finding_key", None) or f.id
         text = f"Finding {key} ({f.severity}) in {process_name}: {f.text}"
@@ -149,9 +151,17 @@ def chunk_items(process_name: str, summary: str | None, rules: list[Any],
             text += f" Business impact: {f.business_impact}"
         if getattr(f, "decision", None):
             text += f" Decision: {f.decision}" + (f" ({f.note})" if f.note else "") + "."
-        items.append(("finding", text))
+        cited = list(dict.fromkeys(_cit(c)["activity_id"] for c in f.citations or []
+                                   if _cit(c).get("activity_id")))
+        items.append(("finding", key, text, cited))
+    return items
+
+
+def chunk_items(process_name: str, summary: str | None, rules: list[Any],
+                findings: list[Any]) -> list[tuple[str, str]]:
+    """Prose chunks for Ask. Rows or engine models both work (duck typed)."""
     out = []
-    for kind, text in items:
+    for kind, _key, text, _cited in chunk_entries(process_name, summary, rules, findings):
         try:
             guard_text(text)
         except KnowledgeError:

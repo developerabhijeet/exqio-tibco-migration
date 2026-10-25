@@ -266,6 +266,18 @@ async def test_enqueue_wakes_the_local_worker(app):
 
 
 # ----------------------------------------------------------------- internal kinds
+def test_entrypoints_register_memory_ingest():
+    """The API app and the worker import every handler module before a runner starts, so the
+    reaper knows memory.ingest's own max attempts."""
+    import importlib
+
+    for module in ("api.app.main", "api.app.worker"):
+        importlib.import_module(module)
+
+    assert registry.handler_for("memory.ingest") is not None
+    assert "memory.ingest" in registry.kinds_with_own_max_attempts()
+
+
 async def test_internal_jobs_hidden_from_history(app_no_worker, client, project_id):
     app = app_no_worker  # no worker claims the queued ingest
     await enqueue(app.state.sessionmaker, "memory.ingest", {"project_id": project_id},

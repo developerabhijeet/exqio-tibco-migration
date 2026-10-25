@@ -21,6 +21,7 @@ from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
 from api.app.services import infra as infra_svc
+from api.app.services import memory_ingest as memory_ingest_svc
 from api.app.services import providers as provider_svc
 from api.app.services import scan as scan_svc
 from api.app.services import verify as verify_svc
@@ -108,3 +109,9 @@ async def _plan_inputs(ctx: JobContext, w: WorkerServices) -> tuple[dict[str, st
 async def eval_(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     p = ctx.payload
     return await provider_svc.eval_job(p["eval_id"], p["process_ids"], w.settings)(ctx)
+
+
+@job(memory_ingest_svc.INGEST_KIND, max_attempts="memory_ingest_max_attempts")
+async def memory_ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Project one phase's Postgres state into the memory graph (``services.memory_ingest``)."""
+    return await memory_ingest_svc.ingest(ctx, w)

@@ -30,6 +30,11 @@ finish within its timeout, and requeues the rest (``attempts < max_attempts_for(
 them with "worker stopped". Kinds without their own ``max_attempts`` use the worker's
 ``max_attempts`` (``JOB_MAX_ATTEMPTS``).
 
+With ``NEO4J_URI`` set, the transaction that marks a phase job ``done`` also queues its
+``memory.ingest`` follow-up (``services.memory_ingest.followup_payload``), in a savepoint so a
+failure there never loses the phase's outcome. A handler sees its attempt number as
+``JobContext.attempt``.
+
 Each job gets its own copy of the worker's ``Settings`` with the Settings-screen edits stored when
 it starts (``services.settings.with_stored``): the PATCH lands on one API pod, the table reaches all.
 
@@ -51,12 +56,13 @@ import os
 import socket
 import threading
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 import psycopg
-from sqlalchemy import String, and_, bindparam, func, or_, select, text, update
+from sqlalchemy import Integer, String, and_, bindparam, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
@@ -91,8 +97,8 @@ UPDATE {_JOBS} SET status='running', owner=:me, heartbeat_at=now(), started_at=c
 WHERE id = (SELECT id FROM {_JOBS} WHERE status='queued' AND (affinity IS NULL OR affinity=:me)
               AND (not_before IS NULL OR not_before <= now())
             ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-RETURNING id, kind, payload
-""").columns(id=String, kind=String, payload=JSONB)
+RETURNING id, kind, payload, attempts
+""").columns(id=String, kind=String, payload=JSONB, attempts=Integer)
 # One statement, so a dedupe check and its insert see the same snapshot; a NULL key never matches.
 ENQUEUE_SQL = text(f"""
 INSERT INTO {_JOBS} (id, kind, status, payload, project_id, process_id, affinity)
@@ -178,6 +184,32 @@ async def add_terminal_event(s: AsyncSession, job_id: str, text_: str) -> None:
     await add_next_event(s, job_id, "error", text_)
 
 
+FinishHook = Callable[[AsyncSession, Any], Awaitable[None]]
+
+
+def _memory_followup(kind: str, job_id: str, payload: dict[str, Any],
+                     services: WorkerServices | None) -> FinishHook | None:
+    """The hook that queues a phase job's memory ingest in its ``done`` transaction (spec section
+    2), or ``None`` when memory is not configured or ``kind`` changes no memory."""
+    if services is None or not services.settings.neo4j_uri:
+        return None
+    from api.app.services.memory_ingest import INGEST_AFTER, INGEST_KIND, followup_payload
+
+    if kind not in INGEST_AFTER:
+        return None
+
+    async def queue(s: AsyncSession, row: Any) -> None:
+        try:  # a savepoint: the phase's own outcome commits even if this insert fails
+            async with s.begin_nested():
+                ingest = followup_payload(kind, job_id, row.project_id, row.process_id, payload)
+                if ingest is not None:
+                    await insert_job(s, INGEST_KIND, ingest, project_id=ingest["project_id"],
+                                     process_id=row.process_id)
+        except Exception:
+            log.exception("job %s: memory ingest not queued", job_id)
+    return queue
+
+
 # The workers of this process, so ``enqueue`` can wake the one sharing its database.
 _LOCAL_WORKERS: weakref.WeakSet[JobWorker] = weakref.WeakSet()
 
@@ -193,31 +225,47 @@ async def enqueue(sessionmaker: async_sessionmaker[AsyncSession], kind: str, pay
     running job does not count: what it read may already be out of date."""
     if dedupe_key is not None:
         payload = {**payload, "dedupe_key": dedupe_key}
-    key = payload.get("dedupe_key")
     async with sessionmaker() as s:
-        if key is not None:  # two concurrent enqueues of one key: the second waits, then sees the first
-            await s.execute(DEDUPE_LOCK_SQL, {"kind": kind, "dedupe_key": str(key)})
-        job_id = await s.scalar(ENQUEUE_SQL, {
-            "id": new_id(), "kind": kind, "payload": payload, "project_id": project_id,
-            "process_id": process_id, "affinity": affinity,
-            "dedupe_key": None if key is None else str(key)})
+        job_id = await insert_job(s, kind, payload, project_id=project_id, process_id=process_id,
+                                  affinity=affinity)
         await s.commit()
     if job_id is not None:
-        for worker in list(_LOCAL_WORKERS):
-            if worker.sessionmaker is sessionmaker:
-                worker.wake()
+        wake_local_workers(sessionmaker)
     return job_id
 
 
+async def insert_job(s: AsyncSession, kind: str, payload: dict[str, Any], *,
+                     project_id: str | None = None, process_id: str | None = None,
+                     affinity: str | None = None) -> str | None:
+    """:func:`enqueue`'s statement inside the caller's transaction (``payload["dedupe_key"]``
+    dedupes); the caller commits and wakes the workers."""
+    key = payload.get("dedupe_key")
+    if key is not None:  # two concurrent enqueues of one key: the second waits, then sees the first
+        await s.execute(DEDUPE_LOCK_SQL, {"kind": kind, "dedupe_key": str(key)})
+    return await s.scalar(ENQUEUE_SQL, {
+        "id": new_id(), "kind": kind, "payload": payload, "project_id": project_id,
+        "process_id": process_id, "affinity": affinity,
+        "dedupe_key": None if key is None else str(key)})
+
+
+def wake_local_workers(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+    for worker in list(_LOCAL_WORKERS):
+        if worker.sessionmaker is sessionmaker:
+            worker.wake()
+
+
 class JobContext:
-    """Handed to a running job: write log lines and stage changes."""
+    """Handed to a running job: write log lines and stage changes. ``attempt`` is the claimed
+    row's ``attempts`` (1 on the first run)."""
 
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], job_id: str,
-                 payload: dict[str, Any], *, owner: str | None = None, seq: int = 0) -> None:
+                 payload: dict[str, Any], *, owner: str | None = None, seq: int = 0,
+                 attempt: int = 1) -> None:
         self.sessionmaker = sessionmaker
         self.job_id = job_id
         self.payload = payload
         self.owner = owner
+        self.attempt = attempt
         self._seq = seq  # the job's last stored event: a requeued job continues its sequence
         self._lock = asyncio.Lock()
 
@@ -241,19 +289,23 @@ class JobContext:
             return EventOut.from_row(row)
 
     async def finish(self, values: dict[str, Any], event: EventKind | None = None, text: str = "",
-                     data: dict[str, Any] | None = None, tag: Tag | None = None) -> bool:
-        """Set the job's final ``values`` (and write ``event``) if it is still ``running`` and ours.
-        Returns whether it was."""
+                     data: dict[str, Any] | None = None, tag: Tag | None = None,
+                     then: FinishHook | None = None) -> bool:
+        """Set the job's final ``values`` (and write ``event``) if it is still ``running`` and ours;
+        ``then(session, row)`` runs in the same transaction (``row``: the job's ``id``,
+        ``project_id``, ``process_id``). Returns whether it was."""
         async with self._lock:
             async with self.sessionmaker() as s:
-                ours = await s.scalar(update(Job).where(
+                ours = (await s.execute(update(Job).where(
                     Job.id == self.job_id, Job.status == "running", Job.owner == self.owner,
-                ).values(**values).returning(Job.id))
+                ).values(**values).returning(Job.id, Job.project_id, Job.process_id))).first()
                 if ours is None:
                     await s.rollback()
                     return False
                 if event is not None:
                     await add_event(s, self.job_id, self._seq + 1, event, text, tag, data)
+                if then is not None:
+                    await then(s, ours)
                 await s.commit()
             if event is not None:
                 self._seq += 1
@@ -338,11 +390,11 @@ class JobWorker:
         await self.drain(0)
 
     # ------------------------------------------------------------- claiming
-    async def claim(self) -> tuple[str, str, dict[str, Any]] | None:
+    async def claim(self) -> tuple[str, str, dict[str, Any], int] | None:
         async with self.sessionmaker() as s:
             row = (await s.execute(CLAIM_SQL, {"me": self.name})).first()
             await s.commit()
-        return (row.id, row.kind, dict(row.payload or {})) if row else None
+        return (row.id, row.kind, dict(row.payload or {}), row.attempts) if row else None
 
     async def _claim_loop(self) -> None:
         while not self._draining:
@@ -354,10 +406,10 @@ class JobWorker:
                 except Exception:
                     log.exception("worker %s: claim failed", self.name)
             if claimed is not None:  # also when drain began meanwhile: drain waits for it
-                job_id, kind, payload = claimed
+                job_id, kind, payload, attempt = claimed
                 with self._running_lock:
                     self._running.add(job_id)
-                self._tasks[job_id] = asyncio.create_task(self._run(job_id, kind, payload),
+                self._tasks[job_id] = asyncio.create_task(self._run(job_id, kind, payload, attempt),
                                                           name=f"job-{job_id}")
                 continue
             try:
@@ -366,9 +418,9 @@ class JobWorker:
                 pass
 
     # ------------------------------------------------------------- running
-    async def _run(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
+    async def _run(self, job_id: str, kind: str, payload: dict[str, Any], attempt: int = 1) -> None:
         try:
-            ctx = JobContext(self.sessionmaker, job_id, payload, owner=self.name)
+            ctx = JobContext(self.sessionmaker, job_id, payload, owner=self.name, attempt=attempt)
             services: WorkerServices | None = None
             try:
                 async with self.sessionmaker() as s:  # a requeued job continues its sequence
@@ -393,8 +445,11 @@ class JobWorker:
                 return
             result = result or {}
             self._finishing.add(job_id)
+            followup = _memory_followup(kind, job_id, payload, services)
             await ctx.finish({"status": "done", "result": result, "finished_at": func.now()},
-                            "done", "done", data=result)
+                            "done", "done", data=result, then=followup)
+            if followup is not None:
+                wake_local_workers(self.sessionmaker)
         except Exception:
             log.exception("job %s: worker bookkeeping failed", job_id)
         finally:
