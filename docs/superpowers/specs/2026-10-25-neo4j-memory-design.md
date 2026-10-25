@@ -102,7 +102,7 @@ opened the version; outside the hash), `side` (`old`, `new`,
 | Knowledge | `Chunk` | `chunk:<ir process id>:summary`, `...:rule:<rule_key>`, `...:finding:<finding_key>`, `...:design:narrative`, `...:design:decision:<slug>` | kind (`summary`, `rule`, `finding`, `design`) |
 | | `Memory` | `seed:<pattern id>`, or the `memory_events` id (`mem_<12 hex>`, or the migrated memory id kept) | kind (`decision`, `pattern`, `mapping`, `note`, `seed`), source, created_by, created_at, context (JSON string) |
 | | `GateDecision` | `gate:<ir process id>:<G1..G6>` | gate, state, actor, note, decided_at, spec_hash, design_hash, build_hash, evidence_hash |
-| | `Error` | `error:<phase>:<ir process id>:<key>` | kind (`build`, `test`, `parity`, `deploy`), message (masked, at most 500 characters), at |
+| | `Error` | `error:<phase>:<ir process id>:<key>` | kind (`build`, `test`, `parity`, `deploy`), message (masked, at most 500 characters); no `at` — the Revision carries the time (Ruling R27) |
 | | `Curation` | `curation:<event id>` | action, target_uid, replacement_uid, actor, reason, at |
 
 `stack` is `dotnet` for every new-code node now; sub-project 5 adds `java`, `go`, `python`
