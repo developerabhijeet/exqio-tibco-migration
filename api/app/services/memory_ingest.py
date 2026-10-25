@@ -498,7 +498,6 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                                 actor=p.get("actor") or SYSTEM_ACTOR,
                                 source_job_id=p.get("source_job_id"), ingest_job_id=ctx.job_id,
                                 iteration=iteration)
-            await w.memory.ensure_ready()  # a start with Neo4j down left the schema to this ingest
             result = await w.memory.apply_revision(meta, projected.deltas)
         except UNAVAILABLE as exc:
             cls = type(exc).__name__

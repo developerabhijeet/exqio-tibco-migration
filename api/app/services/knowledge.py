@@ -22,7 +22,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.app.models import MemoryEvent, Process
-from engine.agents.provider import mask_sensitive
+from engine.agents.jsonout import JsonOutputError
+from engine.agents.provider import ProviderError, mask_sensitive
 from engine.knowledge.ask import Answer
 from engine.knowledge.ask import ask as engine_ask
 from engine.knowledge.memory import MEMORY_KINDS, MemoryItem
@@ -37,8 +38,11 @@ T = TypeVar("T")
 MEMORY_SOURCE = "sme"
 NOT_CONFIGURED = "memory not configured"
 # What a read of the memory graph raises when Neo4j is down, refuses the request or holds
-# vectors of another embedding backend.
+# vectors of another embedding backend; reported by class name. Any other failure of a read (an
+# embedding backend that cannot load, a bug) is reported too, with its class, so an agent run
+# logs it and carries on; only the model's own errors (Ask) pass through.
 MEMORY_ERRORS = (Neo4jError, DriverError, MemoryUnavailable, KnowledgeError, OSError)
+PASS_THROUGH = (ProviderError, JsonOutputError)
 
 
 class KnowledgeUnavailable(Exception):
@@ -86,6 +90,17 @@ def memory_item(project_id: str, h: MemoryHit) -> MemoryItem | None:
                       created_at=_created_at(p.get("created_at")), score=h.score)
 
 
+async def about_uid(s: AsyncSession, context: dict[str, Any]) -> str | None:
+    """The node a decision is about: its process, else its domain."""
+    process_id = context.get("process_id")
+    if isinstance(process_id, str) and process_id:
+        process = await s.get(Process, process_id)
+        if process is not None:
+            return f"process:{process.ir_id}"
+    key = context.get("domain_key")
+    return f"domain:{key}" if isinstance(key, str) and key else None
+
+
 class Knowledge:
     def __init__(self, memory: MemoryGraph | None, sessionmaker: async_sessionmaker[AsyncSession],
                  settings: Settings) -> None:
@@ -102,9 +117,14 @@ class Knowledge:
             raise KnowledgeUnavailable(NOT_CONFIGURED)
         try:
             return await work(self.memory)
+        except PASS_THROUGH:
+            raise
         except MEMORY_ERRORS as exc:
             cls = str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__
             raise KnowledgeUnavailable(f"memory unavailable: {cls}") from exc
+        except Exception as exc:  # never fail the caller's phase over memory
+            log.exception("memory read failed")
+            raise KnowledgeUnavailable(f"memory unavailable: {type(exc).__name__}") from exc
 
     # ------------------------------------------------------------ reads
     async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[MemoryItem]:
@@ -123,15 +143,6 @@ class Knowledge:
         return {"Chunk": counts.get("Chunk", 0), "Memory": counts.get("Memory", 0)}
 
     # ------------------------------------------------------------ writes (Postgres, then an ingest)
-    async def _about_uid(self, s: AsyncSession, context: dict[str, Any]) -> str | None:
-        """The node a decision is about: its process, else its domain."""
-        process_id = context.get("process_id")
-        if isinstance(process_id, str) and process_id:
-            process = await s.get(Process, process_id)
-            if process is not None:
-                return f"process:{process.ir_id}"
-        key = context.get("domain_key")
-        return f"domain:{key}" if isinstance(key, str) and key else None
 
     async def record_decision(self, project_id: str, text: str, context: dict[str, Any],
                               user: str) -> str:
@@ -145,7 +156,7 @@ class Knowledge:
         masked = _mask_value(dict(context))
         try:
             async with self.sessionmaker() as s:
-                about = await self._about_uid(s, context)
+                about = await about_uid(s, context)
                 if about:
                     masked["about_uid"] = about
                 row = MemoryEvent(project_id=project_id, kind="decision", text=mask_sensitive(text),
@@ -153,14 +164,20 @@ class Knowledge:
                 s.add(row)
                 await s.commit()
                 event_id = row.id
-            source = {"event_id": event_id}
-            if isinstance(context.get("process_id"), str) and context["process_id"]:
-                source["process_id"] = context["process_id"]
+        except SQLAlchemyError as exc:
+            raise KnowledgeUnavailable(f"decision not stored: {type(exc).__name__}") from exc
+        source = {"event_id": event_id}
+        if isinstance(context.get("process_id"), str) and context["process_id"]:
+            source["process_id"] = context["process_id"]
+        try:
             await enqueue_ingest(self.sessionmaker, self.settings, project_id=project_id,
                                  phase="decision", scope=f"decision:{event_id}", source=source,
                                  actor=user, ingest_key=f"decision:{event_id}")
-        except SQLAlchemyError as exc:
-            raise KnowledgeUnavailable(f"decision not stored: {type(exc).__name__}") from exc
+        except SQLAlchemyError as exc:  # the row is stored: a re-ingest of the project brings it
+            log.error("decision %s stored but its memory ingest was not queued: %s", event_id,
+                      type(exc).__name__)
+            raise KnowledgeUnavailable(f"decision {event_id} stored; memory ingest not queued: "
+                                       f"{type(exc).__name__}") from exc
         return event_id
 
     async def reindex_process(self, project_id: str, process_id: str) -> None:

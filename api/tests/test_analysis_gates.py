@@ -787,3 +787,47 @@ async def test_analysis_stores_the_hash_of_the_ir_it_analyzed(client, app, monke
     assert view["ir_changed"] is True
     gates = {g["gate"]: g for g in (await client.get(f"/processes/{proc_id}/gates")).json()}
     assert gate_svc.IR_CHANGED in gates["G1"]["reason"]
+
+
+class _BrokenMemory:
+    """A memory graph whose search fails the way a broken embedding backend does."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    async def retrieve(self, *args, **kwargs):
+        raise self.exc
+
+
+async def test_any_memory_read_failure_is_knowledge_unavailable(app):
+    from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
+
+    knowledge = Knowledge(_BrokenMemory(RuntimeError("model failed to load")),  # type: ignore[arg-type]
+                          app.state.sessionmaker, app.state.settings)
+    with pytest.raises(KnowledgeUnavailable, match="^memory unavailable: RuntimeError$"):
+        await knowledge.retrieve_memory("p", "dealer funding")
+    with pytest.raises(KnowledgeUnavailable, match="^memory unavailable: RuntimeError$"):
+        await knowledge.ask("p", "what funds dealers?")
+    provider_down = Knowledge(_BrokenMemory(ProviderError("model down")),  # type: ignore[arg-type]
+                              app.state.sessionmaker, app.state.settings)
+    with pytest.raises(ProviderError):  # Ask retries without a model on these
+        await provider_down.ask("p", "what funds dealers?")
+
+
+async def test_decision_stored_but_ingest_not_queued_says_so(app, project_id, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from api.app.services import memory_ingest
+    from api.app.services.knowledge import KnowledgeUnavailable
+
+    async def fail(*args, **kwargs):
+        raise OperationalError("INSERT INTO jobs", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(memory_ingest, "enqueue_ingest", fail)
+    with pytest.raises(KnowledgeUnavailable) as caught:
+        await app.state.knowledge.record_decision(project_id, "keep the dealer cap", {}, "sme.vicky")
+    async with app.state.sessionmaker() as s:
+        row = await s.scalar(select(MemoryEvent).where(MemoryEvent.project_id == project_id))
+    assert row is not None and row.text == "keep the dealer cap"
+    assert str(caught.value) == f"decision {row.id} stored; memory ingest not queued: OperationalError"
+    assert "not stored" not in str(caught.value)

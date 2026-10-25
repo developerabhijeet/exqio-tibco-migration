@@ -124,8 +124,10 @@ class MemoryGraph:
     async def apply_revision(self, meta: RevisionMeta, deltas: list[ScopedDelta]) -> ApplyResult:
         """Apply the projected ``deltas`` as revision n of ``meta.project_id`` in one write
         transaction; no revision when nothing changed, the existing one when ``ingest_key``
-        was already applied."""
+        was already applied. A start with Neo4j down left the schema to the first writer
+        (``ensure_ready``); its driver errors propagate as Neo4j being unavailable."""
         plan = _Prepared.of(meta.project_id, deltas)
+        await self.ensure_ready()
         backend = embeddings.backend_name()
         async with self._driver.session(database=self.database) as session:
             current, recorded = await session.execute_read(_read_current, plan)

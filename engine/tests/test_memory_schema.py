@@ -109,3 +109,22 @@ async def test_ensure_schema_backfills_closed_in(memory_graph, hash_embeddings):
     rows = await query(memory_graph, "MATCH (n:Mem {project_id: $project_id}) "
                        "RETURN n.valid_to AS to, n.closed_in AS closed", project_id=P)
     assert sorted((r["to"], r["closed"]) for r in rows) == [(2, 2)] * 4
+
+
+async def test_apply_revision_and_counts_ensure_the_schema_first(memory_graph):
+    """A start with Neo4j down leaves ``schema_ok`` false: any writer (an ingest, the migration)
+    and any read ensure the schema before they run."""
+    from engine.tests.memory_helpers import P, about_chunk, meta
+
+    async with memory_graph._driver.session(database=memory_graph.database) as session:
+        await (await session.run("DROP CONSTRAINT rev_ikey IF EXISTS")).consume()
+    memory_graph.schema_ok = False
+    result = await memory_graph.apply_revision(meta("late-schema"), [about_chunk("p0")])
+    assert result.revision == 1 and memory_graph.schema_ok is True
+    assert "rev_ikey" in await constraint_names(memory_graph)
+
+    async with memory_graph._driver.session(database=memory_graph.database) as session:
+        await (await session.run("DROP CONSTRAINT rev_ikey IF EXISTS")).consume()
+    memory_graph.schema_ok = False
+    assert (await memory_graph.counts(P))["Chunk"] == 1
+    assert memory_graph.schema_ok is True and "rev_ikey" in await constraint_names(memory_graph)
