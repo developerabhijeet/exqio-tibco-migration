@@ -123,6 +123,39 @@ def memory_item(uid: str, text: str, about: str | None = None) -> ScopedDelta:
         MemNode(label="Memory", uid=uid, name="decision", text=text, props={"kind": "decision"})])
 
 
+def chunk_uid(process_key: str, kind: str, i: int) -> str:
+    """``chunk:<key>:summary`` for a process's first summary, else ``chunk:<key>:<kind>:<K><i>``
+    (``chunk:p0:rule:R1``)."""
+    if kind == "summary" and i == 1:
+        return f"chunk:{process_key}:summary"
+    return f"chunk:{process_key}:{kind}:{kind[0].upper()}{i}"
+
+
+async def seed_chunks(graph, items: list[tuple[str, str]], *, key: str = "k1",
+                      project: str = P, process_key: str = "p0"):
+    """Applies the analysis Chunks ``(kind, text)`` of one process (scope
+    ``analysis:<process_key>``, phase analysis) with their citation properties; a later call
+    with another ``key`` replaces that scope's chunks."""
+    seen: dict[str, int] = {}
+    nodes = []
+    for kind, text in items:
+        seen[kind] = seen.get(kind, 0) + 1
+        nodes.append(MemNode(
+            label="Chunk", uid=chunk_uid(process_key, kind, seen[kind]), name=kind, text=text,
+            props={"kind": kind, "artifact_type": "analysis",
+                   "artifact_id": f"analysis-{process_key}", "process_id": f"proc-{process_key}"}))
+    return await apply(graph, key, ScopedDelta(scope=f"analysis:{process_key}", nodes=nodes),
+                       phase="analysis", project=project)
+
+
+async def seed_memory(graph, uid: str, text: str, *, key: str | None = None, project: str = P):
+    """Applies a decision Memory ``uid`` (scope ``decision:<uid>``, phase decision)."""
+    delta = ScopedDelta(scope=f"decision:{uid}", nodes=[MemNode(
+        label="Memory", uid=uid, name="decision", text=text,
+        props={"kind": "decision", "artifact_type": "memory", "artifact_id": uid})])
+    return await apply(graph, key or f"seed:{uid}", delta, phase="decision", project=project)
+
+
 async def apply(graph, ingest_key: str, delta: ScopedDelta | list[ScopedDelta], *,
                 phase: str = "discover", project: str = P):
     deltas = delta if isinstance(delta, list) else [delta]
@@ -152,6 +185,20 @@ _STORED_TEXT = (
     "MATCH (n:Mem {project_id: $project_id, uid: $uid}) WHERE n.valid_to = $open "
     "RETURN n.text AS text"
 )
+
+
+_RAW_SIMILARITY = (
+    "MATCH (n:Mem {project_id: $project_id}) WHERE n.valid_to = $open AND n.embedding IS NOT NULL "
+    "RETURN max(2 * vector.similarity.cosine(n.embedding, $v) - 1) AS sim"
+)
+
+
+async def raw_similarity(graph, text: str, project: str = P) -> float:
+    """The best raw cosine (``2s - 1`` of Neo4j's score) between ``text``'s vector and a current
+    embedded node of ``project``."""
+    from engine.knowledge import embeddings
+    rows = await query(graph, _RAW_SIMILARITY, project_id=project, v=embeddings.embed([text])[0])
+    return rows[0]["sim"]
 
 
 async def query(graph, statement: str, **params: Any) -> list[dict[str, Any]]:

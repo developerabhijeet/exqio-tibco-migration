@@ -23,9 +23,9 @@ from engine.memory.model import (
     REL_TYPES,
     RESERVED_NODE_KEYS,
     RESERVED_REL_KEYS,
+    SIDES,
     ApplyResult,
     EdgeOut,
-    KnowledgeError,
     LineageOut,
     MemNode,
     MemRel,
@@ -37,6 +37,7 @@ from engine.memory.model import (
     ScopedDelta,
     Subgraph,
     VersionOut,
+    backend_mismatch,
     mask_node,
     mask_rel,
     node_hash,
@@ -47,6 +48,7 @@ from engine.memory.model import (
     side_of,
     text_hash,
 )
+from engine.memory.search import hybrid
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +56,6 @@ WRITE_BATCH = 1000  # rows per UNWIND statement
 EMBED_BATCH = 256  # texts per embedding call
 GRAPH_LIMIT = 400  # nodes per subgraph at most
 DEPTHS = (1, 2)
-SIDES = ("old", "new", "knowledge")
 _SCALARS = (str, int, float, bool)
 
 
@@ -114,7 +115,7 @@ class MemoryGraph:
         async with self._driver.session(database=self.database) as session:
             current, recorded = await session.execute_read(_read_current, plan)
         if recorded is not None and recorded != backend:
-            raise _backend_mismatch(recorded, backend)
+            raise backend_mismatch(recorded, backend)
         vectors: dict[str, list[float]] = {}
         await _embed_missing(_classify(plan, current).nodes_to_embed(), vectors)
         async with self._driver.session(database=self.database) as session:
@@ -123,6 +124,8 @@ class MemoryGraph:
             except _NoChange as nothing:
                 return nothing.result
 
+    # MemoryRetriever: hybrid search (engine.memory.search) as a method.
+    retrieve = hybrid
 
     # -------------------------------------------------------------- reads (as of a revision)
     async def _read(self, work: Any, *args: Any) -> Any:
@@ -530,13 +533,6 @@ async def _embed_missing(nodes: list[_Node], vectors: dict[str, list[float]]) ->
     return len(hashes)
 
 
-def _backend_mismatch(recorded: str, active: str) -> KnowledgeError:
-    return KnowledgeError(
-        f"the memory graph holds vectors from {recorded!r} but the active embedding backend is "
-        f"{active!r}; re-embed or reset the memory"
-    )
-
-
 class _NoChange(Exception):
     """Rolls back the write transaction of a revision that would change nothing."""
 
@@ -569,7 +565,7 @@ async def _write(tx: AsyncManagedTransaction, plan: _Prepared, meta: RevisionMet
     n = (await (await tx.run(cypher.NEXT_REVISION, **p)).single())["n"]
     recorded = (await (await tx.run(cypher.META_SET, value=backend)).single())["value"]
     if recorded != backend:
-        raise _backend_mismatch(recorded, backend)
+        raise backend_mismatch(recorded, backend)
 
     diff = _classify(plan, await _current(tx, plan))  # re-read: the state this tx changes
     to_embed = diff.nodes_to_embed()

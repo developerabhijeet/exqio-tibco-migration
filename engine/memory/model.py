@@ -216,6 +216,7 @@ _NODE_BOOKKEEPING = RESERVED_NODE_KEYS | {"side"}
 _REL_BOOKKEEPING = RESERVED_REL_KEYS
 
 Side = Literal["old", "new", "knowledge"]
+SIDES: tuple[str, ...] = ("old", "new", "knowledge")
 EdgeStatus = Literal["generated", "corrected", "rejected"]
 EDGE_STATUSES: tuple[str, ...] = ("generated", "corrected", "rejected")
 # Curation actions whose target (a MIGRATED_TO uid) reads as rejected.
@@ -325,3 +326,60 @@ class RevisionDiff(BaseModel):
     revision: RevisionOut
     nodes: DiffSet
     relationships: DiffSet
+
+
+def backend_mismatch(recorded: str, active: str) -> KnowledgeError:
+    return KnowledgeError(
+        f"the memory graph holds vectors from {recorded!r} but the active embedding backend is "
+        f"{active!r}; re-embed or reset the memory"
+    )
+
+
+# ------------------------------------------------------------------ retrieval
+ArtifactType = Literal[
+    "process", "analysis", "design", "build", "build_file", "verify_run", "plan", "gate",
+    "memory", "curation",
+]
+ARTIFACT_TYPES: tuple[str, ...] = (
+    "process", "analysis", "design", "build", "build_file", "verify_run", "plan", "gate",
+    "memory", "curation",
+)
+# The artifact a node cites when its projector set no `artifact_type` (nodes written before the
+# projectors of Tasks 5-6, or by tests): by label; `artifact_id` then falls back to the uid.
+_LABEL_ARTIFACT: dict[str, str] = {
+    "Process": "process", "Activity": "process", "Chunk": "analysis", "Memory": "memory",
+    "Curation": "curation", "GateDecision": "gate", "Error": "verify_run", "Test": "verify_run",
+    "CodeFile": "build_file", "Class": "build_file", "Method": "build_file",
+}
+
+
+class Citation(BaseModel):
+    uid: str
+    label: str
+    phase: str
+    revision: int  # valid_from of the version cited
+    artifact_type: ArtifactType
+    artifact_id: str  # the Postgres id of that artifact (process id, build id, ...)
+    process_id: str | None = None  # API process id
+    path: str | None = None  # file path, for code
+
+    @classmethod
+    def of(cls, label: str, stored: dict[str, Any]) -> Citation:
+        artifact_type = stored.get("artifact_type")
+        if artifact_type not in ARTIFACT_TYPES:
+            artifact_type = _LABEL_ARTIFACT.get(label, "process" if label in OLD_LABELS else "build")
+        return cls(uid=stored["uid"], label=label, phase=stored["phase"],
+                   revision=stored["valid_from"], artifact_type=artifact_type,
+                   artifact_id=stored.get("artifact_id") or stored["uid"],
+                   process_id=stored.get("process_id"), path=stored.get("path"))
+
+
+class MemoryHit(BaseModel):
+    uid: str
+    label: str
+    kind: str | None
+    text: str
+    score: float
+    keyword_score: float
+    vector_score: float
+    citation: Citation

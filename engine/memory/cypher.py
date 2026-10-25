@@ -442,6 +442,84 @@ REVISIONS_BEFORE = (
     "WHERE r.n < $before RETURN r {.*} AS revision ORDER BY r.n DESC LIMIT $limit"
 )
 
+# ------------------------------------------------------------------ hybrid search
+# As of `$k` like the reads. Each half keeps the nodes of `$project_id` valid at `$k` whose
+# labels meet `$labels`, filtered by `$side` and `$phase` (version properties) and, unless
+# `$include_obsolete`, without the Memory targeted by an obsolete Curation valid at `$k`, and
+# returns its best `$n` as `{label, p}` with its score. Neo4j's cosine score `s` is
+# `(1 + cos) / 2`; the vector half returns raw cosine `2s - 1`, compared with `$floor`.
+
+
+def _render_search_filter(var: str) -> str:
+    return (
+        f"{var}.project_id = $project_id AND {_render_valid(var)} "
+        f"AND any(l IN labels({var}) WHERE l IN $labels) "
+        f"AND ($side IS NULL OR {var}.side = $side) AND ($phase IS NULL OR {var}.phase = $phase) "
+        f"AND ($include_obsolete OR NOT ({var}:Memory AND EXISTS {{ "
+        f"MATCH (c:Mem {{project_id: $project_id, target_uid: {var}.uid}}) "
+        "USING INDEX SEEK c:Mem(project_id, target_uid) "
+        f"WHERE c:Curation AND c.action = 'obsolete' AND {_render_valid('c')} }}))"
+    )
+
+
+def _render_search_keyword() -> str:
+    """One full-text query per term of `$terms` (only `[a-z0-9_]`, so no Lucene syntax); a node
+    matching at least `$need` terms ranks by the sum of its term scores."""
+    return (
+        "UNWIND $terms AS t CALL db.index.fulltext.queryNodes('mem_text', t) YIELD node, score "
+        f"WITH node, score WHERE {_render_search_filter('node')} "
+        "WITH node, count(*) AS matched, sum(score) AS rank WHERE matched >= $need "
+        f"RETURN {_render_node_out('node')} AS node, rank AS score "
+        "ORDER BY score DESC, node.p.uid LIMIT $n"
+    )
+
+
+def _render_vector_tail(var: str, similarity: str) -> str:
+    return (
+        f"WITH {var}, 2 * {similarity} - 1 AS sim WHERE sim >= $floor "
+        f"RETURN {_render_node_out(var)} AS node, sim AS score "
+        "ORDER BY score DESC, node.p.uid LIMIT $n"
+    )
+
+
+def _render_search_vector_exact() -> str:
+    """Exact cosine over the project's versions (a range seek of index mem_uid on project_id:
+    never another project's nodes)."""
+    return (
+        "MATCH (n:Mem {project_id: $project_id}) USING INDEX SEEK n:Mem(project_id, uid) "
+        f"WHERE n.uid IS NOT NULL AND n.embedding IS NOT NULL AND {_render_search_filter('n')} "
+        + _render_vector_tail("n", "vector.similarity.cosine(n.embedding, $v)")
+    )
+
+
+def _render_search_vector_ann(label: str) -> str:
+    """The `$candidates` nearest versions of `label` across the database (ANN, index
+    vec_<label>), then post-filtered by project and validity."""
+    return (
+        f"CALL db.index.vector.queryNodes('vec_{label.lower()}', $candidates, $v) "
+        f"YIELD node AS n, score WHERE {_render_search_filter('n')} "
+        + _render_vector_tail("n", "score")
+    )
+
+
+def _render_search_embedded_counts() -> str:
+    """Current embedded versions per label of `$labels` (index mem_uid on project_id)."""
+    return (
+        "MATCH (n:Mem {project_id: $project_id}) USING INDEX SEEK n:Mem(project_id, uid) "
+        "WHERE n.uid IS NOT NULL AND n.valid_to = $open "
+        "AND any(l IN labels(n) WHERE l IN $labels) AND n.embedding IS NOT NULL "
+        "UNWIND labels(n) AS label WITH label WHERE label IN $labels "
+        "RETURN label, count(*) AS n"
+    )
+
+
+SEARCH_KEYWORD = _render_search_keyword()
+SEARCH_VECTOR_EXACT = _render_search_vector_exact()
+SEARCH_VECTOR_ANN: dict[str, str] = {
+    label: _render_search_vector_ann(label) for label in EMBEDDED_LABELS
+}
+SEARCH_EMBEDDED_COUNTS = _render_search_embedded_counts()
+
 # Install-wide (rulings R22): the embedding backend whose vectors the database holds.
 META_GET = "MATCH (m:MemoryMeta {key: 'embedding_backend'}) RETURN m.value AS value"
 META_SET = (
