@@ -7,13 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from engine.domains.graph import endpoint_of
 from engine.dotnet_gen.models import DesignRecord, MappingRow
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.analysis import ProcessRef
-from engine.memory.projectors.estate import _clean
+from engine.memory.projectors.util import MESSAGE_MAX, clean, error_node
 
 STACK = "dotnet"
-MESSAGE_MAX = 500
 _COMPILER_AT = re.compile(r"([\w./-]+\.cs)\((\d+),(\d+)\)")
 
 
@@ -55,13 +55,6 @@ class BuildInput(BaseModel):
     app_id: str = ""  # IR application id, the prefix of ``substvar:<app id>/<name>``
 
 
-def _error(uid: str, name: str, kind: str, message: str, build_id: str) -> MemNode:
-    message = message[:MESSAGE_MAX]
-    return MemNode(label="Error", uid=uid, name=name, text=message or name,
-                   props={"kind": kind, "message": message, "artifact_type": "build",
-                          "artifact_id": build_id})
-
-
 def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
     ir, stack, design = ref.ir_id, b.stack, b.design
     nodes: dict[str, MemNode] = {}
@@ -77,7 +70,7 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
     def new(label: str, uid: str, name: str, text: str = "", *, path: str | None = None,
             artifact_type: str = "build_file", **props: Any) -> MemNode:
         return add_node(MemNode(label=label, uid=uid, name=name, text=text,  # type: ignore[arg-type]
-                                props=_clean({"stack": stack, "artifact_type": artifact_type,
+                                props=clean({"stack": stack, "artifact_type": artifact_type,
                                               "artifact_id": b.build_id, "process_id": ref.api_id,
                                               "path": path, **props})))
 
@@ -103,13 +96,23 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         file_uids[f.path] = uid
         new("CodeFile", uid, f.path.rsplit("/", 1)[-1], f.path, path=f.path, origin=f.origin,
             sha256=f.sha256, size=f.size)
-        owner = max((n for n in project_uid if f.path.startswith(n + "/")), key=len, default=None)
+        owner = max((n for n in project_uid if f"/{n}/" in f"/{f.path}"), key=len, default=None)
         add_rel("CONTAINS", project_uid[owner] if owner else solution, uid)
+
+    def file_path(project: str, file: str) -> str | None:
+        """The solution-relative path of a project's file: the real build file when one ends
+        with ``<project>/<file>`` (the generator writes ``src/<project>/<file>``), else that
+        layout."""
+        if not file:
+            return None
+        tail = f"{project}/{file}"
+        return next((p for p in file_uids if p == tail or p.endswith("/" + tail)),
+                    f"src/{tail}")
 
     def add_class(project: str, cls: str, file: str, text: str) -> str:
         uid = f"class:{stack}:{ir}/{project}/{cls}"
-        full = f"{project}/{file}" if file else ""
-        new("Class", uid, cls, text, path=full or None, file=file or None)
+        full = file_path(project, file)
+        new("Class", uid, cls, text, path=full, file=file or None)
         if full in file_uids:
             add_rel("CONTAINS", file_uids[full], uid)
         return uid
@@ -130,7 +133,7 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
             muid = method_uid(r)
             new("Method", muid, r.method,
                 f"{cls}.{r.method} implements {r.activity_name} ({r.canonical_type}) "
-                f"using {r.pattern}", path=f"{project}/{r.file}", pattern=r.pattern,
+                f"using {r.pattern}", path=file_path(project, r.file), pattern=r.pattern,
                 origin=r.origin)
             add_rel("CONTAINS", cuid, muid)
             add_rel("MIGRATED_TO", f"activity:{ir}/{r.activity_id}", muid,
@@ -161,7 +164,7 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         muid = f"messaging:{stack}:{ir}/{m.kind}/{m.name}"
         new("MessagingEntity", muid, m.name, f"{m.kind} {m.name} ({m.direction})",
             artifact_type="build", kind=m.kind, direction=m.direction)
-        if starter_method:
+        if starter_method:  # the entry Method anchors messaging: the design does not say more
             add_rel("CONSUMES" if m.direction == "in" else "PUBLISHES", starter_method, muid)
 
     if api_uid:
@@ -171,9 +174,10 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         add_rel("MIGRATED_TO", f"process:{ir}", starter_class,
                 {"status": "generated", "origin": "code"})
 
-    path = str(b.starter_config.get("path") or "")
-    if b.starter_kind in ("rest", "http") and path and starter_method:
-        verb = str(b.starter_config.get("verb") or "POST").upper()
+    if b.starter_kind in ("rest", "http", "soap") and starter_method:
+        cfg = b.starter_config  # as gen_controller reads it
+        verb = str(cfg.get("verb") or "POST").upper()
+        path = str(cfg.get("path") or cfg.get("resource_path") or f"/{ref.name}")
         euid = f"endpoint:new:{verb} {path}"
         add_node(MemNode(label="Endpoint", uid=euid, name=f"{verb} {path}",
                          text=f"{verb} {path} served by {ref.name}",
@@ -181,8 +185,10 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
                                 "artifact_type": "build", "artifact_id": b.build_id,
                                 "process_id": ref.api_id}))
         add_rel("EXPOSES", starter_method, euid)
-        add_rel("MIGRATED_TO", f"endpoint:old:{verb} {path}", euid,
-                {"status": "generated", "origin": "code"})
+        old = endpoint_of(b.starter_kind, cfg, ref.name)  # the estate graph's own naming
+        if old:
+            add_rel("MIGRATED_TO", f"endpoint:old:{old[0]}", euid,
+                    {"status": "generated", "origin": "code"})
 
     tested: dict[str, list[str]] = {}
     for t in b.tests:
@@ -202,14 +208,14 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         if s.ok:
             continue
         euid = f"error:build:{ir}:{s.name}"
-        add_node(_error(euid, f"build step {s.name} failed", "build", s.log, b.build_id))
+        add_node(error_node(euid, f"build step {s.name} failed", "build", s.log,
+                            artifact_type="build", artifact_id=b.build_id, process_id=ref.api_id))
         target = None
-        for m in _COMPILER_AT.finditer(s.log):
-            found = m.group(1)
+        for m in _COMPILER_AT.finditer(s.log):  # the first path that is a file of this build
+            found = m.group(1).removeprefix("./")
             target = next((u for p, u in file_uids.items()
-                           if found == p or found.endswith("/" + p)), None)
-            if target is None and not found.startswith("/"):
-                target = f"codefile:{stack}:{ir}/{found.removeprefix('./')}"
+                           if found == p or found.endswith("/" + p) or p.endswith("/" + found)),
+                          None)
             if target:
                 break
         if target:
@@ -222,7 +228,8 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
             continue
         tuid = f"test:{stack}:{ir}/{t.name}"
         euid = f"error:test:{ir}:{t.name}"
-        add_node(_error(euid, f"test {t.name} failed", "test", t.message, b.build_id))
+        add_node(error_node(euid, f"test {t.name} failed", "test", t.message,
+                            artifact_type="build", artifact_id=b.build_id, process_id=ref.api_id))
         for muid in tested[tuid]:
             add_rel("FAILED_AT", euid, muid)
         if not tested[tuid] and api_uid:

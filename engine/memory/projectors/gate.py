@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.analysis import ProcessRef
-from engine.memory.projectors.estate import _clean
+from engine.memory.projectors.util import clean
 
 
 class GateInput(BaseModel):
@@ -29,7 +29,7 @@ def project_gate(ref: ProcessRef, g: GateInput) -> ScopedDelta:
     node = MemNode(
         label="GateDecision", uid=uid, name=f"{g.gate} {g.state}",
         text=f"{g.gate} {g.state} by {g.actor}" + (f": {g.note}" if g.note else ""),
-        props=_clean({"gate": g.gate, "state": g.state, "actor": g.actor, "note": g.note,
+        props=clean({"gate": g.gate, "state": g.state, "actor": g.actor, "note": g.note,
                       "decided_at": decided, "spec_hash": g.spec_hash,
                       "design_hash": g.design_hash, "build_hash": g.build_hash,
                       "evidence_hash": g.evidence_hash, "artifact_type": "gate",

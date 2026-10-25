@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from engine.memory.model import MemNode, MemRel, ScopedDelta
-from engine.memory.projectors.estate import _clean
+from engine.memory.projectors.util import clean
 
 
 class EventInput(BaseModel):
@@ -30,12 +30,15 @@ def _tail(uid: str) -> str:
 
 def _mapping_ends(rel_uid: str) -> tuple[str, str]:
     """``(src, dst)`` of a ``MIGRATED_TO:<src>-><dst>`` relationship uid."""
-    src, _, dst = rel_uid.partition(":")[2].partition("->")
+    head, _, rest = rel_uid.partition(":")
+    src, arrow, dst = rest.partition("->")
+    if head != "MIGRATED_TO" or not arrow:
+        raise ValueError(f"not a MIGRATED_TO relationship uid: {rel_uid!r}")
     return src, dst
 
 
 def _memory(e: EventInput, uid: str, kind: str, name: str, text: str, source: str) -> MemNode:
-    return MemNode(label="Memory", uid=uid, name=name, text=text, props=_clean({
+    return MemNode(label="Memory", uid=uid, name=name, text=text, props=clean({
         "kind": kind, "source": source, "created_by": e.actor,
         "created_at": e.created_at.isoformat(),
         "context": json.dumps(e.context, sort_keys=True, default=str),
@@ -51,6 +54,12 @@ def project_event(e: EventInput, target_label: str | None,
         return ScopedDelta(scope=f"decision:{e.id}", nodes=[node], rels=rels)
 
     action, target, reason = e.action or "", e.target_uid or "", str(e.context.get("reason", ""))
+    if action not in ("note", "reject_mapping", "correct_mapping", "obsolete"):
+        raise ValueError(f"unknown curation action {action!r}")
+    if not target:
+        raise ValueError(f"curation {action} needs a target_uid")
+    if action == "correct_mapping" and not e.replacement_uid:
+        raise ValueError("curation correct_mapping needs a replacement_uid")
     cuid = f"curation:{e.id}"
     mapping = action in ("reject_mapping", "correct_mapping")
     source, old_dst = _mapping_ends(target) if mapping else (target, "")
@@ -59,7 +68,7 @@ def project_event(e: EventInput, target_label: str | None,
         label="Curation", uid=cuid, name=f"{action} {subject}".strip(),
         text=f"{action} on {subject} by {e.actor}: {reason}" if reason else
         f"{action} on {subject} by {e.actor}",
-        props=_clean({"action": action, "target_uid": target,
+        props=clean({"action": action, "target_uid": target,
                       "replacement_uid": e.replacement_uid, "actor": e.actor, "reason": reason,
                       "at": e.created_at.isoformat(), "artifact_type": "curation",
                       "artifact_id": e.id, "process_id": e.context.get("process_id")}))

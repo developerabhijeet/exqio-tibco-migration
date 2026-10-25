@@ -13,6 +13,7 @@ from engine.domains.models import Graph
 from engine.ir.models import Activity, Application, Process
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.analysis import ProcessRef
+from engine.memory.projectors.util import clean
 
 log = logging.getLogger(__name__)
 _SUBST = re.compile(r"%%([^%\s]+)%%")
@@ -37,10 +38,6 @@ def _uid(graph_id: str) -> str:
     if graph_id.startswith("endpoint:"):
         return "endpoint:old:" + graph_id[9:]
     return graph_id  # domain:, process:, activity:, table:, queue:, topic:, resource: match
-
-
-def _clean(props: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in props.items() if v is not None and v != ""}
 
 
 def _strings(value: Any):
@@ -107,7 +104,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
         for p in app.processes:
             puid = f"process:{p.id}"
             api_id = api_ids.get(p.id)
-            cite = _clean({"artifact_type": "process", "artifact_id": api_id,
+            cite = clean({"artifact_type": "process", "artifact_id": api_id,
                            "process_id": api_id})
             starter_kind = p.starter.kind if p.starter else None
             summary = (f"{p.name} ({app.name}/{p.module or 'default'}), "
@@ -115,7 +112,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
                        + ", ".join(a.name for a in p.activities))
             add_node(MemNode(
                 label="Process", uid=puid, name=p.name, text=summary,
-                props=_clean({**cite, "module": p.module, "package": p.package,
+                props=clean({**cite, "module": p.module, "package": p.package,
                               "starter_kind": starter_kind,
                               "complexity_band": p.complexity.band if p.complexity else None,
                               "path": _relative(p.source_path, root)})))
@@ -129,7 +126,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
                 if sk:
                     props["starter_kind"] = sk
                 add_node(MemNode(label="Activity", uid=auid, name=a.name,
-                                 text=f"{a.name} ({a.type}) in {p.name}", props=_clean(props)))
+                                 text=f"{a.name} ({a.type}) in {p.name}", props=clean(props)))
                 add_rel("CONTAINS", puid, auid)
 
             for cid in p.contracts_used:
@@ -150,7 +147,7 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
     for n in graph.nodes:
         uid = _uid(n.id)
         if n.kind == "table":
-            add_node(MemNode(label="Table", uid=uid, name=n.name, props=_clean(
+            add_node(MemNode(label="Table", uid=uid, name=n.name, props=clean(
                 {"schema": n.attrs.get("schema")})))
         elif n.kind in ("queue", "topic"):
             add_node(MemNode(label=n.kind.capitalize(), uid=uid, name=n.name))  # type: ignore[arg-type]
@@ -167,6 +164,6 @@ def project_estate(apps: list[Application], domains: list[DomainInput], graph: G
             log.warning("estate edge kind %r has no memory relationship type; skipped", e.kind)
             continue
         if src in nodes and dst in nodes:
-            add_rel(rtype, src, dst, _clean(e.attrs))
+            add_rel(rtype, src, dst, clean(e.attrs))
     # Estate-graph edges onto nodes outside the delta are dropped, never dangled.
     return ScopedDelta(scope="estate", nodes=list(nodes.values()), rels=list(rels.values()))

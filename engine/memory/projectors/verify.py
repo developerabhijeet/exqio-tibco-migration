@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.analysis import ProcessRef
-from engine.memory.projectors.build import MESSAGE_MAX
+from engine.memory.projectors.util import MESSAGE_MAX, error_node
 
 
 class DefectInput(BaseModel):
@@ -51,12 +51,9 @@ def project_verify(ref: ProcessRef, p: ParityInput, starter_method_uid: str | No
             euid = f"error:parity:{ref.ir_id}:{run.scenario_key}/{d.field}"
             message = (f"{d.field}: expected {d.expected!r}, actual {d.actual!r}"
                        + (f". {d.note}" if d.note else ""))[:MESSAGE_MAX]
-            props = {"kind": "parity", "message": message, "artifact_type": "verify_run",
-                     "artifact_id": run.run_id, "process_id": ref.api_id}
-            if d.finding_key:
-                props["finding_key"] = d.finding_key
-            nodes[euid] = MemNode(label="Error", uid=euid, name=f"parity {d.field}",
-                                  text=message, props=props)
+            nodes[euid] = error_node(euid, f"parity {d.field}", "parity", message,
+                                     artifact_type="verify_run", artifact_id=run.run_id,
+                                     process_id=ref.api_id, finding_key=d.finding_key)
             add_rel("ABOUT", euid, process_uid)
             if starter_method_uid:
                 add_rel("FAILED_AT", euid, starter_method_uid)

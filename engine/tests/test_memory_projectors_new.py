@@ -62,8 +62,8 @@ def design() -> DesignRecord:
 def build_input(**kw) -> BuildInput:
     base = {
         "build_id": "b1", "build_hash": "h", "design": design(),
-        "files": [BuildFileInput(path="Api/Flow.cs", origin="code", sha256="x", size=10),
-               BuildFileInput(path="Core/Repo.cs", origin="agent", sha256="y", size=20),
+        "files": [BuildFileInput(path="src/Api/Flow.cs", origin="code", sha256="x", size=10),
+               BuildFileInput(path="src/Core/Repo.cs", origin="agent", sha256="y", size=20),
                BuildFileInput(path="infra/main.tf", origin="infra", sha256="z", size=5)],
         "tests": [TestInput(name="T.Flow.R1", kind="rule", rule_key="R1", outcome="passed")],
         "steps": [StepInput(name="build", ok=True)],
@@ -95,16 +95,16 @@ def test_test_links_to_method_by_rule_key():
 def test_compile_error_fails_at_the_named_file():
     d = project_build(ref, build_input(
         steps=[StepInput(name="build", ok=False, log="Api/Flow.cs(12,5): error CS1002")]))
-    assert ("FAILED_AT", f"codefile:dotnet:{IR}/Api/Flow.cs") in {(r.type, r.dst) for r in d.rels}
+    assert ("FAILED_AT", f"codefile:dotnet:{IR}/src/Api/Flow.cs") in {(r.type, r.dst) for r in d.rels}
     assert any(n.uid == f"error:build:{IR}:build" for n in d.nodes)
 
 
 def test_absolute_compiler_path_resolves_to_the_known_file_and_unknown_goes_to_the_project():
     d = project_build(ref, build_input(steps=[
-        StepInput(name="build", ok=False, log="/work/out/Core/Repo.cs(1,1): error"),
+        StepInput(name="build", ok=False, log="/work/src/Core/Repo.cs(1,1): error"),
         StepInput(name="pack", ok=False, log="/work/Other.cs(1,1): error")]))
     rels = {(r.src, r.type, r.dst) for r in d.rels}
-    assert (f"error:build:{IR}:build", "FAILED_AT", f"codefile:dotnet:{IR}/Core/Repo.cs") in rels
+    assert (f"error:build:{IR}:build", "FAILED_AT", f"codefile:dotnet:{IR}/src/Core/Repo.cs") in rels
     assert (f"error:build:{IR}:pack", "ABOUT", f"codeproject:dotnet:{IR}/Api") in rels
 
 
@@ -123,10 +123,10 @@ def test_build_tree_lineage_and_paths():
     rels = {(r.type, r.src, r.dst) for r in d.rels}
     sol, api = f"solution:dotnet:{IR}", f"codeproject:dotnet:{IR}/Api"
     assert ("CONTAINS", sol, api) in rels
-    assert ("CONTAINS", api, f"codefile:dotnet:{IR}/Api/Flow.cs") in rels
-    assert ("CONTAINS", f"codefile:dotnet:{IR}/Api/Flow.cs", f"class:dotnet:{IR}/Api/Flow") in rels
+    assert ("CONTAINS", api, f"codefile:dotnet:{IR}/src/Api/Flow.cs") in rels
+    assert ("CONTAINS", f"codefile:dotnet:{IR}/src/Api/Flow.cs", f"class:dotnet:{IR}/Api/Flow") in rels
     assert ("CONTAINS", sol, f"codefile:dotnet:{IR}/infra/main.tf") in rels
-    assert ("MIGRATED_TO", f"process:{IR}", api) in {(t, s, x) for t, s, x in rels}
+    assert ("MIGRATED_TO", f"process:{IR}", api) in rels
     assert ("MIGRATED_TO", f"process:{IR}", f"class:dotnet:{IR}/Api/Flow") in rels
     assert ("MIGRATED_TO", "contract:c.xsd", f"class:dotnet:{IR}/Core/LoanRequest") in rels
     assert ("MIGRATED_TO", "substvar:CreditApp/DbPass", f"configkey:dotnet:{IR}/App:DbPass") in rels
@@ -139,6 +139,65 @@ def test_build_tree_lineage_and_paths():
         "stack", "secret", "artifact_type", "artifact_id", "process_id"}
     assert all(not str(n.props.get("path", "")).startswith("/") for n in d.nodes if n.label != "Endpoint")
     assert project_build(ref, build_input()) == d
+
+
+def test_compiler_scan_skips_unknown_paths_and_falls_back_to_the_project():
+    log = "/usr/lib/Generated.cs(1,1): warn\nApi/Flow.cs(3,4): error CS0103"
+    d = project_build(ref, build_input(steps=[StepInput(name="build", ok=False, log=log)]))
+    assert ("FAILED_AT", f"codefile:dotnet:{IR}/src/Api/Flow.cs") in {
+        (r.type, r.dst) for r in d.rels if r.src == f"error:build:{IR}:build"}
+    d = project_build(ref, build_input(steps=[
+        StepInput(name="build", ok=False, log="Missing/Nope.cs(1,1): error")]))
+    assert [(r.type, r.dst) for r in d.rels if r.src == f"error:build:{IR}:build"] == [
+        ("ABOUT", f"codeproject:dotnet:{IR}/Api")]
+    assert all(n.props["process_id"] == "api-1" for n in d.nodes if n.label == "Error")
+
+
+def test_class_and_method_paths_are_the_real_build_paths_and_files_belong_by_segment():
+    d = project_build(ref, build_input())
+    by = {n.uid: n for n in d.nodes}
+    assert by[f"class:dotnet:{IR}/Core/Repo"].props["path"] == "src/Core/Repo.cs"
+    assert by[f"method:dotnet:{IR}/Api/Flow.Run"].props["path"] == "src/Api/Flow.cs"
+    rels = {(r.type, r.src, r.dst) for r in d.rels}
+    assert ("CONTAINS", f"codeproject:dotnet:{IR}/Core",
+            f"codefile:dotnet:{IR}/src/Core/Repo.cs") in rels
+    rows = [design().mapping[0].model_copy(update={"file": ""})]
+    m = project_build(ref, build_input(design=design().model_copy(update={"mapping": rows})))
+    assert "path" not in next(n for n in m.nodes if n.label == "Method").props
+
+
+@pytest.mark.parametrize(("kind", "cfg", "old", "new"), [
+    ("rest", {"path": "/loans"}, "endpoint:old:/loans", "endpoint:new:POST /loans"),
+    ("rest", {"verb": "get", "path": "/loans"}, "endpoint:old:GET /loans",
+     "endpoint:new:GET /loans"),
+    ("http", {"resource_path": "/in"}, "endpoint:old:HTTP /in", "endpoint:new:POST /in"),
+    ("soap", {"operation": "Quote"}, "endpoint:old:SOAP Quote", "endpoint:new:POST /One"),
+])
+def test_new_endpoint_and_old_endpoint_uid_follow_the_estate_graph(kind, cfg, old, new):
+    d = project_build(ref, build_input(starter_kind=kind, starter_config=cfg))
+    rels = {(r.type, r.src, r.dst) for r in d.rels}
+    assert ("MIGRATED_TO", old, new) in rels
+    assert ("EXPOSES", STARTER_METHOD, new) in rels
+
+
+def test_substvar_lineage_is_skipped_without_app_id_or_for_resource_fields():
+    d = design().model_copy(update={"config": [
+        ConfigMap(substvar="Timeout", key="App:Timeout"),
+        ConfigMap(substvar="resource:Db.password", key="ConnectionStrings:Db", secret=True)]})
+    with_app = project_build(ref, build_input(design=d))
+    assert [r.src for r in with_app.rels if r.type == "MIGRATED_TO"
+            and r.src.startswith("substvar:")] == ["substvar:CreditApp/Timeout"]
+    without = project_build(ref, build_input(design=d, app_id=""))
+    assert not any(r.src.startswith("substvar:") for r in without.rels)
+
+
+def test_curation_without_its_target_or_replacement_is_refused():
+    with pytest.raises(ValueError, match="target_uid"):
+        project_event(event("note"), None, None)
+    with pytest.raises(ValueError, match="replacement_uid"):
+        project_event(event("correct_mapping", target_uid=MIG_UID), "Activity", "Query")
+    with pytest.raises(ValueError, match="MIGRATED_TO"):
+        project_event(event("reject_mapping", target_uid="process:x"), "Activity", "Query")
 
 
 def test_verify_chunk_and_defect_errors():
