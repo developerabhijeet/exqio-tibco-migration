@@ -269,13 +269,18 @@ async def test_enqueue_wakes_the_local_worker(app):
 def test_entrypoints_register_memory_ingest():
     """The API app and the worker import every handler module before a runner starts, so the
     reaper knows memory.ingest's own max attempts."""
-    import importlib
+    import subprocess
+    import sys
+    from pathlib import Path
 
-    for module in ("api.app.main", "api.app.worker"):
-        importlib.import_module(module)
-
-    assert registry.handler_for("memory.ingest") is not None
-    assert "memory.ingest" in registry.kinds_with_own_max_attempts()
+    root = Path(__file__).resolve().parents[2]
+    for module in ("api.app.main", "api.app.worker"):  # each in a fresh interpreter
+        check = (f"import {module}; from api.app.jobs import registry; "
+                 "assert registry.handler_for('memory.ingest') is not None; "
+                 "assert 'memory.ingest' in registry.kinds_with_own_max_attempts()")
+        done = subprocess.run([sys.executable, "-c", check], check=False, cwd=root, capture_output=True, text=True,
+                              timeout=120)
+        assert done.returncode == 0, f"{module}: {done.stderr[-2000:]}"
 
 
 async def test_internal_jobs_hidden_from_history(app_no_worker, client, project_id):

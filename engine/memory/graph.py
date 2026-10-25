@@ -69,6 +69,10 @@ class MemoryGraph:
         self.uri = uri
         self.database = database
         self.exact_scan_max = exact_scan_max
+        # False until ensure_schema succeeds: a start with Neo4j down leaves it False, and the
+        # first ingest or read retries it (ensure_ready)
+        self.schema_ok = False
+        self._schema_lock = asyncio.Lock()
 
     @classmethod
     def connect(cls, uri: str, user: str, password: str, database: str = "neo4j", *,
@@ -92,6 +96,16 @@ class MemoryGraph:
                 await (await session.run(statement)).consume()
             for statement in cypher.BACKFILL_CLOSED_IN:
                 await (await session.run(statement, open=OPEN_VALID_TO)).consume()
+        self.schema_ok = True
+
+    async def ensure_ready(self) -> None:
+        """``ensure_schema`` unless it already succeeded in this process; its driver errors
+        propagate, so callers treat them as Neo4j being unavailable."""
+        if self.schema_ok:
+            return
+        async with self._schema_lock:
+            if not self.schema_ok:
+                await self.ensure_schema()
 
     async def reset(self) -> None:
         if not self.uri or self.uri != os.environ.get("NEO4J_TEST_URI"):
@@ -101,6 +115,7 @@ class MemoryGraph:
 
     async def counts(self, project_id: str) -> dict[str, int]:
         """Current node versions per label (every label, zero when absent)."""
+        await self.ensure_ready()
         async with self._driver.session(database=self.database) as session:
             result = await session.run(cypher.COUNTS, project_id=project_id, open=OPEN_VALID_TO)
             found = {r["label"]: r["n"] async for r in result}
@@ -129,6 +144,7 @@ class MemoryGraph:
 
     # -------------------------------------------------------------- reads (as of a revision)
     async def _read(self, work: Any, *args: Any) -> Any:
+        await self.ensure_ready()
         async with self._driver.session(database=self.database) as session:
             return await session.execute_read(work, *args)
 

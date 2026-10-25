@@ -42,6 +42,7 @@ from api.app.models import (
     Gate,
     GraphEdge,
     GraphNode,
+    Job,
     MemoryEvent,
     Plan,
     Process,
@@ -159,8 +160,9 @@ def seed_ingest_key() -> str:
 
 
 async def open_memory(settings: Settings) -> MemoryGraph | None:
-    """The process's Neo4j memory graph when ``NEO4J_URI`` is set, its schema ensured; Neo4j being
-    down is logged, and the first operation retries (spec section 2, Driver)."""
+    """The process's Neo4j memory graph when ``NEO4J_URI`` is set, with its schema ensured. Neo4j
+    being down at start is logged and leaves ``schema_ok`` false: the first ingest or read then
+    ensures the schema (``MemoryGraph.ensure_ready``) before it runs (spec section 2, Driver)."""
     if not settings.neo4j_uri:
         return None
     memory = MemoryGraph.connect(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password,
@@ -243,11 +245,19 @@ async def load_design(s: AsyncSession, process: Process) -> tuple[EngineDesign, 
 
 
 async def _latest_build(s: AsyncSession, process: Process, build_id: str) -> Build:
+    """The build, unless a newer finished build of the process exists whose build job ended
+    ``done`` (and so queued an ingest of its own): then :class:`Superseded`. A newer build whose
+    job crashed queued no ingest, so it supersedes nothing."""
     build = await s.get(Build, build_id)
     if build is None or build.process_id != process.id:
         raise ValueError(f"build {build_id!r} not found for process {process.id}")
-    latest = await evidence_svc.latest_build(s, process.id)
-    if latest is None or latest.id != build.id:
+    newer = await s.scalar(
+        select(Build.id).join(Job, Job.id == Build.job_id)
+        .where(Build.process_id == process.id, Build.id != build.id,
+               Build.status.in_(evidence_svc.FINISHED_BUILDS), Job.status == "done",
+               Build.created_at > build.created_at)
+        .limit(1))
+    if newer is not None:
         raise Superseded
     return build
 
@@ -488,6 +498,7 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                                 actor=p.get("actor") or SYSTEM_ACTOR,
                                 source_job_id=p.get("source_job_id"), ingest_job_id=ctx.job_id,
                                 iteration=iteration)
+            await w.memory.ensure_ready()  # a start with Neo4j down left the schema to this ingest
             result = await w.memory.apply_revision(meta, projected.deltas)
         except UNAVAILABLE as exc:
             cls = type(exc).__name__

@@ -18,7 +18,22 @@ from sqlalchemy import select, update
 from api.app.db import utcnow
 from api.app.jobs import registry
 from api.app.jobs.runner import JobWorker, enqueue
-from api.app.models import AnalysisRun, Build, Job, JobEvent, Rule
+from api.app.models import (
+    AnalysisRun,
+    Build,
+    BuildFile,
+    DesignRecord,
+    FieldDiff,
+    Job,
+    JobEvent,
+    MemoryEvent,
+    Plan,
+    Process,
+    Rule,
+    Scenario,
+    ScenarioRun,
+    TestResult,
+)
 from api.app.services import memory_ingest as mi
 
 os.environ.setdefault("EMBEDDINGS_LOAD_TIMEOUT", "8")
@@ -166,13 +181,15 @@ async def two_builds(memory_client, memory_app, sample_upload):
     proc = next(p for p in await processes(memory_client, pid) if p["ir_id"] == DFR)
     async with memory_app.state.sessionmaker() as s:
         old = Build(process_id=proc["id"], status="passed", created_at=utcnow() - timedelta(hours=1))
-        new = Build(process_id=proc["id"], status="failed")
-        s.add_all([old, new])
+        done = Job(kind="build", status="done", project_id=pid, process_id=proc["id"])
+        s.add_all([old, done])
+        await s.flush()
+        s.add(Build(process_id=proc["id"], status="failed", job_id=done.id))  # a failed build, job done
         await s.commit()
         old_id = old.id
     payload = mi.followup_payload("build", "job-old-build", pid, proc["id"],
                                   {"process_id": proc["id"], "build_id": old_id})
-    return pid, payload
+    return pid, proc, payload
 
 
 async def run_ingest_directly(app, payload: dict[str, Any]) -> dict[str, Any]:
@@ -282,10 +299,29 @@ async def test_gate_decision_creates_a_gate_revision(memory_app, approved_g1):
 
 
 async def test_older_build_ingest_is_superseded(memory_app, two_builds):
-    _pid, old_build_ingest_payload = two_builds
+    _pid, _proc, old_build_ingest_payload = two_builds
     assert old_build_ingest_payload["dedupe_key"].endswith(old_build_ingest_payload["source"]["build_id"])
     out = await run_ingest_directly(memory_app, old_build_ingest_payload)
     assert out == {"superseded": True}
+
+
+async def test_a_newer_build_whose_job_crashed_supersedes_nothing(memory_app, two_builds):
+    pid, proc, payload = two_builds
+    async with memory_app.state.sessionmaker() as s:
+        crashed = Job(kind="build", status="failed", project_id=pid, process_id=proc["id"])
+        s.add(crashed)
+        await s.flush()
+        s.add(Build(process_id=proc["id"], status="failed", job_id=crashed.id,
+                    created_at=utcnow() + timedelta(minutes=1)))
+        await s.commit()
+    newest_done = (await run_ingest_directly(memory_app, {**payload, "ingest_key": "build:x"}))
+    assert newest_done == {"superseded": True}  # the done one still supersedes the old build
+    async with memory_app.state.sessionmaker() as s:  # without it, the crashed build does not
+        await s.execute(update(Job).where(Job.kind == "build", Job.status == "done",
+                                          Job.project_id == pid).values(status="failed"))
+        await s.commit()
+    out = await run_ingest_directly(memory_app, {**payload, "ingest_key": "build:y"})
+    assert out.get("superseded") is None and out["phase"] == "build"
 
 
 async def test_lock_busy_requeues_without_counting_the_attempt(memory_client, memory_app):
@@ -324,3 +360,140 @@ async def test_no_neo4j_uri_queues_no_ingest(client, app, sample_upload):
     pid = await scan_sample(client, sample_upload)
     assert app.state.memory is None
     assert await jobs_of_kind(app, pid, KIND) == []
+
+
+# ------------------------------------------------------------------ loaders on real rows
+def _design(ir_id: str, starter: str) -> dict[str, Any]:
+    from engine.dotnet_gen.models import (
+        Decision,
+        MappingRow,
+        ProjectLayout,
+        SolutionLayout,
+    )
+    from engine.dotnet_gen.models import DesignRecord as EngineDesign
+
+    return EngineDesign(
+        process_id=ir_id, spec_hash="s",
+        solution=SolutionLayout(name="DealerFunding", projects=[
+            ProjectLayout(name="Api", kind="api", files=["Flow.cs"])]),
+        mapping=[MappingRow(activity_id=starter, activity_name="Start", canonical_type="rest_receive",
+                            pattern="controller", project="Api", file="Flow.cs", class_name="Flow",
+                            method="Run", rule_ids=["R1"])],
+        decisions=[Decision(title="Data access", choice="Dapper", reason="SQL kept verbatim")],
+        narrative="DealerFundingRequest becomes one ASP.NET Core service.",
+    ).model_dump(mode="json")
+
+
+@pytest.fixture
+async def phase_rows(memory_client, memory_app, sample_upload):
+    """A scanned project (its seed and estate ingested) with a design, a finished build (job
+    done), a verify run with one defect, a failed plan and a curation note, as real rows."""
+    pid = await scan_sample(memory_client, sample_upload)
+    await idle(memory_app, pid)
+    proc = next(p for p in await processes(memory_client, pid) if p["ir_id"] == DFR)
+    async with memory_app.state.sessionmaker() as s:
+        row = await s.get(Process, proc["id"])
+        starter = row.ir["starter"]["activity_id"]
+        design = DesignRecord(process_id=proc["id"], version=1, spec_hash="s", design_hash="d",
+                              record=_design(row.ir_id, starter))
+        job = Job(kind="build", status="done", project_id=pid, process_id=proc["id"])
+        s.add_all([design, job])
+        await s.flush()
+        build = Build(process_id=proc["id"], design_id=design.id, job_id=job.id, status="passed",
+                      build_hash="h", steps=[{"name": "build", "ok": True, "log": ""}])
+        s.add(build)
+        await s.flush()
+        s.add_all([BuildFile(build_id=build.id, path="src/Api/Flow.cs", origin="code", sha256="x", size=10),
+                   BuildFile(build_id=build.id, path="infra/main.tf", origin="infra", sha256="z", size=5),
+                   TestResult(build_id=build.id, name="T.Flow.R1", kind="rule", rule_key="R1",
+                              outcome="passed", duration_ms=3)])
+        scenario = Scenario(process_id=proc["id"], key="happy", name="happy", data={})
+        s.add(scenario)
+        await s.flush()
+        run = ScenarioRun(build_id=build.id, scenario_id=scenario.id, job_id="verify-1",
+                          status="differs", parity=50.0)
+        plan = Plan(build_id=build.id, status="failed", connected=True,
+                    output="infra/main.tf line 3: bad")
+        event = MemoryEvent(project_id=pid, kind="curation", action="note", text="checked with ops",
+                            context={"reason": "checked"}, target_uid=f"process:{row.ir_id}",
+                            actor="sme.vicky")
+        s.add_all([run, plan, event])
+        await s.flush()
+        s.add(FieldDiff(run_id=run.id, field="amount", expected=1, actual=2, classification="defect",
+                        finding_key="F1"))
+        await s.commit()
+        ids = SimpleNamespace(pid=pid, proc=proc["id"], ir=row.ir_id, name=row.name,
+                              build=build.id, plan=plan.id, event=event.id)
+    return ids
+
+
+async def _ingest(app, r, phase: str) -> dict[str, Any]:
+    scope, source = {
+        "design": (f"design:{r.proc}", {"process_id": r.proc}),
+        "build": (f"build:{r.proc}", {"process_id": r.proc, "build_id": r.build}),
+        "verify": (f"verify:{r.proc}", {"process_id": r.proc, "build_id": r.build}),
+        "deploy": (f"deploy:{r.proc}", {"process_id": r.proc, "plan_id": r.plan}),
+        "curation": (f"curation:{r.event}", {"event_id": r.event}),
+    }[phase]
+    job_id = await mi.enqueue_ingest(app.state.sessionmaker, app.state.settings, project_id=r.pid,
+                                     phase=phase, scope=scope, source=source, actor="test",
+                                     ingest_key=f"{phase}:loader-test")
+    job = await wait_terminal(app, job_id)
+    assert job.status == "done", job.error
+    return job.result
+
+
+async def _edges_from(app, pid: str, uid: str) -> set[tuple[str, str]]:
+    sub = await app.state.memory.subgraph(pid, uid=uid, depth=1)
+    return {(e.type, e.dst) for e in sub.edges if e.src == uid}
+
+
+@pytest.mark.parametrize("phase", ["design", "build", "verify", "deploy", "curation"])
+async def test_each_loader_ingests_real_rows(memory_app, phase_rows, phase):
+    app, r = memory_app, phase_rows
+    method = f"method:dotnet:{r.ir}/Api/Flow.Run"
+    if phase in ("verify", "deploy"):  # their errors fail at nodes the build ingest writes
+        await _ingest(app, r, "build")
+    out = await _ingest(app, r, phase)
+    assert out["revision"] is not None and out["added"] > 0, out
+    memory = app.state.memory
+    if phase == "design":
+        assert await memory.node_detail(r.pid, f"chunk:{r.ir}:design:narrative") is not None
+    elif phase == "build":
+        assert (await memory.node_detail(r.pid, method)).node.label == "Method"
+    elif phase == "verify":
+        err = f"error:parity:{r.ir}:happy/amount"
+        assert await memory.node_detail(r.pid, err) is not None
+        assert ("FAILED_AT", method) in await _edges_from(app, r.pid, err)
+    elif phase == "deploy":
+        err = f"error:deploy:{r.ir}:{r.plan}"
+        assert ("FAILED_AT", f"codefile:dotnet:{r.ir}/infra/main.tf") in await _edges_from(app, r.pid, err)
+    else:
+        node = (await memory.node_detail(r.pid, f"curation:{r.event}")).node
+        assert node.name == f"note Process {r.name}"
+        assert ("ABOUT", f"process:{r.ir}") in await _edges_from(app, r.pid, node.uid)
+
+
+async def test_schema_is_ensured_by_the_first_ingest_after_a_failed_start(memory_client, memory_app):
+    """Spec section 2, Driver: Neo4j down at start leaves the schema to the first operation."""
+    import socket
+
+    with socket.socket() as sock:  # a port nothing listens on
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    down = await mi.open_memory(memory_app.state.settings.model_copy(
+        update={"neo4j_uri": f"bolt://127.0.0.1:{port}"}))
+    try:
+        assert down.schema_ok is False  # logged, not fatal
+    finally:
+        await down.close()
+    memory = memory_app.state.memory  # now as if it had started while Neo4j was down
+    async with memory._driver.session(database=memory.database) as session:
+        await (await session.run("DROP CONSTRAINT rev_ikey IF EXISTS")).consume()
+    memory.schema_ok = False
+    pid = (await memory_client.post("/projects", json={"name": "late schema"})).json()["id"]
+    seed = await wait_kind(memory_app, pid, KIND, status="done", phase="seed")
+    assert seed.result["revision"] == 1 and memory.schema_ok is True
+    async with memory._driver.session(database=memory.database) as session:
+        names = [r["name"] async for r in await session.run("SHOW CONSTRAINTS YIELD name RETURN name")]
+    assert "rev_ikey" in names
