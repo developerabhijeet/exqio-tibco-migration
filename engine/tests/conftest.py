@@ -30,3 +30,35 @@ async def memory_graph():
         yield graph
     finally:
         await graph.close()
+
+
+@pytest.fixture
+def hash_embeddings(monkeypatch):
+    """The deterministic hash embedding backend (no model download, fast)."""
+    from engine.knowledge import embeddings
+    monkeypatch.setenv("EMBEDDINGS_BACKEND", "hash")
+    embeddings.reset_backend()
+    yield
+    embeddings.reset_backend()
+
+
+class EmbedSpy:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def reset(self) -> None:
+        self.texts.clear()
+
+
+@pytest.fixture
+def embed_spy(monkeypatch, hash_embeddings):
+    """Records every text passed to ``embeddings.embed`` (still embedding with the hash backend)."""
+    from engine.knowledge import embeddings
+    spy, real = EmbedSpy(), embeddings.embed
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        spy.texts.extend(texts)
+        return real(texts)
+
+    monkeypatch.setattr(embeddings, "embed", embed)
+    return spy

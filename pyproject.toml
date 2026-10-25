@@ -54,6 +54,7 @@ include = ["engine*", "api*"]
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "api/tests", "scripts/tests"]
 asyncio_mode = "auto"
+markers = ["slow: a long-running test (large Neo4j transactions)"]
 
 [tool.ruff]
 line-length = 100

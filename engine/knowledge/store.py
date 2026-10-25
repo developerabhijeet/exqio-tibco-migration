@@ -7,7 +7,6 @@ migration-memory items. ``ensure_schema()`` is idempotent.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +18,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from engine.domains.models import Edge, Graph, Node
+from engine.memory.model import KnowledgeError, guard_text
 
 from . import embeddings
 
@@ -26,24 +26,6 @@ SCHEMA = "knowledge"
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 CHUNK_KINDS = ("summary", "rule", "finding", "decision", "design")
 IVFFLAT_LISTS = 10
-
-# Raw TIBCO process markup is never embedded or stored as knowledge: summaries and rules are
-# written in prose, and the XML stays in the parsed model.
-_RAW_XML = re.compile(r"<\s*/?\s*(?:bpws|pd|tibex)\s*:", re.IGNORECASE)
-
-
-class KnowledgeError(Exception):
-    """A write was refused (raw XML, unknown kind) or the store is inconsistent."""
-
-
-def guard_text(text: str) -> None:
-    if not text or not text.strip():
-        raise KnowledgeError("empty text cannot be stored")
-    if _RAW_XML.search(text):
-        raise KnowledgeError(
-            "raw TIBCO process XML (bpws:/pd:/tibex: markup) is never embedded; "
-            "store a prose summary instead"
-        )
 
 
 def vector_literal(vec: list[float]) -> str:

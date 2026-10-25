@@ -63,7 +63,7 @@ from engine.analysis.static_rules import run_static_rules
 from engine.analysis.verifier import verify_citations
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
-from engine.knowledge.store import KnowledgeError, guard_text
+from engine.memory.model import KnowledgeError, guard_text
 
 log = logging.getLogger(__name__)
 
