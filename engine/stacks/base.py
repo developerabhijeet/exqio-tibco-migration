@@ -85,7 +85,13 @@ class SourceLanguage(Protocol):
     @property
     def placeholder(self) -> re.Pattern[str]: ...
 
-    def test_placeholder(self, test_id: str) -> str: ...
+    def test_placeholder(self, test_id: str) -> str:
+        """The failing statement of a test with no body, naming ``test_id`` (``fail("no test body
+        for R1");``). It must be a valid statement for any ``test_id`` free of quotes, backticks,
+        backslashes and line breaks (the agents remove those first,
+        ``test_engineer.placeholder_safe``), and contain the text ``no test body for <test_id>``
+        inside one plain string literal."""
+        ...
 
     def strip_comments(self, text: str) -> str: ...
 

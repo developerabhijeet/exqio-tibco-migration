@@ -71,6 +71,7 @@ TEST_SCHEMA: dict = {
 TEST_FILE_KINDS = ("RulesTests", "BranchTests")
 DRIVEN_SUFFIXES = ("Service", "Controller", "Consumer", "Job")
 FIXTURE_TEXT_LIMIT = 3000
+CONTRACTS_TEXT_LIMIT = 12000  # all contract files shown to a non-.NET test writer, together
 REASON_LIMIT = 160
 
 _PLACEHOLDER = re.compile(r'Assert\.Fail\(\s*"no test body for ([^"]*)"\s*\)')
@@ -210,6 +211,17 @@ def _method_name(entry: IndexEntry) -> str:
     return re.split(r"[.:/]", entry.name)[-1]
 
 
+def _signature_line(lines: list[str], lang: SourceLanguage, name: str) -> int | None:
+    word = re.compile(rf"\b{re.escape(name)}\s*\(")
+    return next((i for i, ln in enumerate(lines) if word.search(ln) and lang.declarations(ln)), None)
+
+
+def _declared(text: str, lang: SourceLanguage, entries: list[IndexEntry]) -> set[str]:
+    """The indexed test methods ``text`` declares."""
+    lines = text.split("\n")
+    return {n for n in {_method_name(e) for e in entries} if _signature_line(lines, lang, n) is not None}
+
+
 def _indexed_placeholder_methods(text: str, lang: SourceLanguage,
                                  entries: list[IndexEntry]) -> list[TestMethod]:
     pattern = test_placeholder_pattern(lang)
@@ -219,8 +231,7 @@ def _indexed_placeholder_methods(text: str, lang: SourceLanguage,
         if e.kind not in ("rule", "branch"):
             continue
         name = _method_name(e)
-        word = re.compile(rf"\b{re.escape(name)}\s*\(")
-        sig = next((i for i, ln in enumerate(lines) if word.search(ln) and lang.declarations(ln)), None)
+        sig = _signature_line(lines, lang, name)
         if sig is None:
             continue
         first, end = _body_range(lines, sig)
@@ -832,6 +843,15 @@ def _splice(lines: list[str], m: TestMethod, body: str, placeholder: bool = Fals
     lines[m.start + 2:m.end] = new
 
 
+_UNSAFE = re.compile(r"[\"'`\\\r\n]+")
+
+
+def placeholder_safe(text: str) -> str:
+    """``text`` without quotes, backticks, backslashes and line breaks, so any stack's
+    ``test_placeholder`` can hold it in one plain string literal (and its pattern matches it)."""
+    return " ".join(_UNSAFE.sub(" ", text).split())
+
+
 def _reason_text(reason: str) -> str:
     why = one_line(reason)
     if len(why) > REASON_LIMIT:
@@ -964,9 +984,18 @@ def _contracts_block(solution: GeneratedSolution, process: Process,
     contract source files as they are (bounded), and no map."""
     if stack != "dotnet":
         st = get_stack(stack)
-        shown = [f"=== {f.path}\n{f.content[:FIXTURE_TEXT_LIMIT]}" for f in sorted(solution.files, key=lambda x: x.path)
-                 if "contracts" in f.path.lower() and f.path.endswith(st.source_suffixes)
-                 and not st.language.is_test_path(f.path)]
+        shown: list[str] = []
+        size = 0
+        for f in sorted(solution.files, key=lambda x: x.path):
+            if ("contracts" not in f.path.lower() or not f.path.endswith(st.source_suffixes)
+                    or st.language.is_test_path(f.path) or f.process_id not in (None, process.id)):
+                continue
+            block = f"=== {f.path}\n{f.content[:FIXTURE_TEXT_LIMIT]}"
+            if size + len(block) > CONTRACTS_TEXT_LIMIT:
+                shown.append(f"(further contract files left out: over {CONTRACTS_TEXT_LIMIT} characters)")
+                break
+            shown.append(block)
+            size += len(block)
         return "\n".join(shown) or "(none)", {}
     used: set[str] = set()
     for f in solution.files:
@@ -1203,8 +1232,8 @@ async def _fill_file(
     lines = f.content.split("\n")
     for m in sorted(methods, key=lambda x: x.start, reverse=True):  # bottom up keeps indices
         if not dotnet:
-            _splice_indented(lines, m, accepted.get(m.name) or lang.test_placeholder(
-                f"{m.label}: {_reason_text(reasons.get(m.name, 'rejected'))}"))
+            _splice_indented(lines, m, accepted.get(m.name) or lang.test_placeholder(placeholder_safe(
+                f"{m.label}: {_reason_text(reasons.get(m.name, 'rejected'))}")))
         elif m.name in accepted:
             _splice(lines, m, accepted[m.name])
         else:
@@ -1214,8 +1243,8 @@ async def _fill_file(
         text = _add_usings(text, list(accepted.values()), _type_index(solution))
     if dotnet:
         changed_count = len(_TEST_ATTR.findall(code_only(text))) != len(_TEST_ATTR.findall(code_only(f.content)))
-    else:
-        changed_count = len(lang.declarations(text)) != len(lang.declarations(f.content))
+    else:  # every indexed test of the file is still declared (nested defs and lambdas do not count)
+        changed_count = _declared(text, lang, entries or []) != _declared(f.content, lang, entries or [])
     if changed_count:
         log.warning("test engineer dropped %s: the number of tests changed", f.path)
         return None

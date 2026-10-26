@@ -74,8 +74,13 @@ def detect_toolchains(max_age_s: float = TOOLCHAIN_TTL_SECONDS) -> dict[str, Any
 
 
 def tool_path(name: str) -> str | None:
-    """Where ``name`` was detected (``detect_toolchains``), or ``None``. Blocking."""
-    return (detect_toolchains().get(name) or {}).get("path")
+    """Where ``name`` was detected (``detect_toolchains``), or ``None``, also when the detection
+    itself fails (``scripts/toolchain.py`` missing or unloadable). Blocking."""
+    try:
+        return (detect_toolchains().get(name) or {}).get("path")
+    except (OSError, ImportError) as exc:
+        log.warning("toolchain detection failed: %s", exc)
+        return None
 
 
 async def load_stored(session: AsyncSession) -> dict[str, Any]:

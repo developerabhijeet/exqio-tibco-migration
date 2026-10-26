@@ -77,7 +77,7 @@ from engine.agents.builder import BuildRejection, fill_method_bodies
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
 from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
-from engine.agents.test_engineer import fill_test_bodies
+from engine.agents.test_engineer import fill_test_bodies, placeholder_methods
 from engine.dotnet_gen import runner as dotnet_runner
 from engine.dotnet_gen.generator import GeneratedSolution, GenFile
 from engine.dotnet_gen.metrics import compute_metrics
@@ -94,7 +94,7 @@ from engine.dotnet_gen.trx import BRANCH_SUFFIX, RULES_SUFFIX, SCENARIO_SUFFIX, 
 from engine.infra_gen.generator import generate_infra
 from engine.infra_gen.validators import validate_infra
 from engine.parity.models import Scenario as EngineScenario
-from engine.stacks import get_stack, stack_status
+from engine.stacks import get_stack
 from engine.stacks.base import Mirrors, StackGenerator, StackRunner
 from engine.stacks.testindex import INDEX_PATH, IndexEntry
 
@@ -135,7 +135,7 @@ def stack_mismatch(design_stack: str, project_stack: str) -> str:
 def find_dotnet() -> str | None:
     """The ``dotnet`` binary the build uses (the cached ``detect_toolchains``, else ``PATH``);
     blocking, so the job calls it through ``asyncio.to_thread``; tests monkeypatch it."""
-    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")
+    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")  # tool_path never raises
 
 
 def run_restore(root: Path, dotnet: str) -> StepResult:
@@ -186,17 +186,22 @@ def mirrors(settings: Settings) -> Mirrors:
                    goproxy=settings.goproxy, pypi=settings.uv_index_url)
 
 
-def stack_tool_missing(stack: StackGenerator, settings: Settings) -> str | None:
-    """Why the worker cannot run ``stack``'s restore, build, format and test (a missing tool), or
-    ``None``. .NET keeps its own message and its ``find_dotnet`` lookup. Blocking (detection)."""
+class ToolchainMissing(RuntimeError):
+    """The worker lacks a tool a non-.NET stack needs; the build job fails before generating."""
+
+
+def missing_tools(stack: StackGenerator) -> list[str]:
+    """The tools of ``stack.required_tools`` this worker does not have (.NET: ``find_dotnet``).
+    Blocking (detection), so the job calls it through ``asyncio.to_thread``."""
     if stack.key == "dotnet":
-        return None if find_dotnet() else NO_DOTNET
-    status = stack_status(stack.key, toolchain(), settings.enabled_stack_list)
-    if status.available:
-        return None
-    if (status.reason or "").startswith("toolchain missing"):
-        return f"{status.reason}: install it on the worker (Settings shows the toolchains)"
-    return status.reason
+        return [] if find_dotnet() else ["dotnet"]
+    tools = toolchain()
+    return [t for t in stack.required_tools if not (tools.get(t) or {}).get("present")]
+
+
+def toolchain_missing_message(stack: StackGenerator, tools: list[str]) -> str:
+    return (f"the {stack.key} toolchain is missing on this worker: {', '.join(tools)}; install it "
+            "(Settings shows the toolchains) and build again")
 
 
 def _tail(text: str, limit: int = LOG_LIMIT) -> str:
@@ -215,8 +220,11 @@ def _step(name: str, ok: bool, log: str, started: float, *, skipped: bool = Fals
             "duration_ms": int((time.monotonic() - started) * 1000)}
 
 
-async def approved_design(session: AsyncSession, process: Process) -> DesignRecord:
-    """The design record G3 approved (by its design hash); ``BuildRefused`` otherwise."""
+async def approved_design(session: AsyncSession, process: Process,
+                          enabled: list[str] | None = None) -> DesignRecord:
+    """The design record G3 approved (by its design hash); ``BuildRefused`` otherwise, also when
+    its stack is not the project's, is not implemented, or is not in ``enabled`` (this install's
+    ``enabled_stack_list``; ``None`` skips that check)."""
     rows = await gate_svc.gate_rows(session, process.id)
     g3 = rows.get("G3")
     if g3 is None or g3.state != "approved":
@@ -238,6 +246,9 @@ async def approved_design(session: AsyncSession, process: Process) -> DesignReco
         get_stack(design_stack)
     except KeyError as exc:
         raise BuildRefused(f"the {design_stack} stack cannot be built on this install: {exc.args[0]}") from exc
+    if enabled is not None and design_stack not in enabled:
+        raise BuildRefused(f"the {design_stack} stack cannot be built on this install: "
+                           "not enabled on this install (stacks.enabled)")
     return design
 
 
@@ -295,16 +306,26 @@ def _cs_literal(lit: str) -> str:
 def test_inventory(files: list[GenFile], app_name: str, stack: str = "dotnet") -> list[dict[str, Any]]:
     """Every generated ``[Fact]`` with its rule, branch or scenario id and whether it has a body.
 
-    Other stacks carry the same facts in ``.exiqo/test-index.json`` (written with the project)."""
+    Other stacks carry the same facts in ``.exiqo/test-index.json`` (written with the project). The
+    index says what the generator wrote; ``has_body`` of a rule or branch test is read again from its
+    file (the Test Engineer fills bodies after the index was written), the index's own value kept
+    only when the file is not among ``files``."""
     out: list[dict[str, Any]] = []
     if stack != "dotnet":
+        texts = {f.path: f.content for f in files}
         for f in files:
             if f.path != INDEX_PATH:
                 continue
             for e in (IndexEntry.model_validate(d) for d in json.loads(f.content)):
+                has_body = e.has_body
+                if e.kind in ("rule", "branch") and e.path in texts:
+                    try:
+                        has_body = not placeholder_methods(texts[e.path], stack, [e])
+                    except KeyError:  # a stack not registered on this install: the index's word
+                        pass
                 out.append({"name": e.name, "display_name": e.display_name or e.name, "kind": e.kind,
                             "rule_key": e.rule_id, "ref": e.branch_id or e.scenario_id, "file": e.path or None,
-                            "has_body": e.has_body, "outcome": "not_run", "message": None, "duration_ms": None})
+                            "has_body": has_body, "outcome": "not_run", "message": None, "duration_ms": None})
         return out
     for f in files:
         name = Path(f.path).stem
@@ -439,7 +460,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         project_id = row.project_id
         process_id = row.id
         await ctx.stage(STAGES[0])
-        design_row = await approved_design(s, row)
+        design_row = await approved_design(s, row, settings.enabled_stack_list)
         design = EngineDesign.model_validate(design_row.record)
         stack = get_stack(design.stack)  # approved_design refused a stack this install cannot build
         await ctx.log(f"G3 approved; design record v{design_row.version} (design hash "
@@ -469,12 +490,14 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     out_dir = settings.builds_dir / build_id
     approved_rules = [r for r in rules if r.status in ("approved", "edited")]
     lang = stack.language
-    # The worker checks its own toolchain when the build starts (the API pods of a split install
-    # have none); a missing tool is said here, by name, and again on each step it stops.
-    tool_missing = await asyncio.to_thread(stack_tool_missing, stack, settings) \
-        if settings.build_toolchain else None
-    if tool_missing:
-        await ctx.log(f"restore, build, format and test will not run: {tool_missing}")
+    # X14a: the worker checks its own toolchain when the build starts (the API pods of a split
+    # install have none). A non-.NET stack without its tools fails here, naming them, before any
+    # model is paid to write code nothing could compile; .NET keeps building and says "dotnet not
+    # found" on each step it skips.
+    if stack.key != "dotnet" and settings.build_toolchain:
+        absent = await asyncio.to_thread(missing_tools, stack)
+        if absent:
+            raise ToolchainMissing(toolchain_missing_message(stack, absent))
 
     # 2. generate (code)
     await ctx.stage(STAGES[1])
@@ -657,11 +680,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     runner: StackRunner | DotnetRunner | None
     if is_dotnet:
         runner = DotnetRunner(solution.root, dotnet=dotnet, coverage_scope=scope, env=test_env) if dotnet else None
-    else:
-        runner = (stack.runner(solution.root, env=test_env, coverage_scope=scope)
-                  if dotnet_steps and not tool_missing else None)
-    # the reason a step that needs the toolchain did not run: .NET's own message, else the stack's
-    no_tool = NO_DOTNET if is_dotnet else (tool_missing or NO_DOTNET)
+    else:  # the tools were checked before generating
+        runner = stack.runner(solution.root, env=test_env, coverage_scope=scope) if dotnet_steps else None
+    no_tool = NO_DOTNET  # only .NET reaches a step without its toolchain
     if not dotnet_steps:
         await ctx.log(TOOLCHAIN_OFF)
     elif runner is not None and not test_db:

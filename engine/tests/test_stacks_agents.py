@@ -346,3 +346,118 @@ def test_repair_gate_reads_test_paths_through_the_stack(tmp_path, java_stack):
     _, reason = check_diff(diff, solution)
     assert "is a test file" not in reason
 
+
+
+async def test_a_rejection_reason_with_quotes_and_backslashes_stays_one_literal(tmp_path, java_stack, monkeypatch):
+    monkeypatch.setattr(JavaLikeLanguage, "check_test_body",
+                        lambda self, body, stem, kind="rule", json_kinds=None: 'the body said "x" and \\e `y`\nz')
+    solution = _solution(tmp_path, GenFile(path=TESTS, content=JAVA_TESTS, origin="agent", process_id="LoanRates"),
+                         _index())
+    reply = json.dumps({"tests": [{"method": "r1_counts_pulls", "body": "assertThat(a).isEqualTo(1);"},
+                                  {"method": "r2_waits", "body": "assertThat(b).isEqualTo(2);"}]})
+    fake = FakeProvider([reply, reply])
+    written = await fill_test_bodies(solution, _process(), _rules(), [], _design(), [], routed(fake), stack="java")
+    text = written[0].content
+    assert 'fail("no test body for R1: the body said x and e y z");' in text
+    entries = [IndexEntry.model_validate(d) for d in json.loads(_index().content)]
+    assert [m.label for m in placeholder_methods(text, "java", entries)] == ["R1", "R2"]  # still found
+
+
+# ---------------------------------------------------------------- indentation languages (Python, Go)
+class PythonLikeLanguage(JavaLikeLanguage):
+    comment_prefix = "#"
+
+    def test_placeholder(self, test_id: str) -> str:
+        return f'pytest.fail("no test body for {test_id}")'
+
+    def declarations(self, text: str) -> list[str]:
+        return [" ".join(ln.split()) for ln in text.splitlines() if re.match(r"^\s*(?:async\s+)?def \w+\(", ln)]
+
+    def is_test_path(self, path: str) -> bool:
+        return path.startswith("tests/")
+
+    def check_test_body(self, body, stem, kind="rule", json_kinds=None):
+        return check_generic_test_body(body, "python")
+
+
+class GoLikeLanguage(JavaLikeLanguage):
+    def test_placeholder(self, test_id: str) -> str:
+        return f't.Fatal("no test body for {test_id}")'
+
+    def declarations(self, text: str) -> list[str]:
+        return [" ".join(ln.split()).rstrip("{ ") for ln in text.splitlines() if re.match(r"^func \w+\(", ln)]
+
+    def is_test_path(self, path: str) -> bool:
+        return path.endswith("_test.go")
+
+    def check_test_body(self, body, stem, kind="rule", json_kinds=None):
+        return check_generic_test_body(body, "go")
+
+
+def _register(monkeypatch, key: str, lang) -> None:
+    stack = type(f"{key}Stack", (JavaLikeStack,), {"key": key, "prompt_pack": key, "language": lang,
+                                                   "source_suffixes": (".py",) if key == "python" else (".go",)})
+    monkeypatch.setitem(stacks._FACTORIES, key, stack)
+    monkeypatch.delitem(stacks._INSTANCES, key, raising=False)
+
+
+PY_TESTS = "tests/test_loan_rates_rules.py"
+PY_TEXT = '''import pytest
+
+
+def test_r1_counts_pulls(service):
+    pytest.fail("no test body for R1")
+
+
+def test_r2_kept(service):
+    assert service.count(1) == 2
+'''
+GO_TESTS = "internal/core/loan_rates_rules_test.go"
+GO_TEXT = '''package core
+
+func TestR1CountsPulls(t *testing.T) {
+\tt.Fatal("no test body for R1")
+}
+
+func TestR2Kept(t *testing.T) {
+\tif Count(1) != 2 {
+\t\tt.Fatal("count")
+\t}
+}
+'''
+
+
+def _entries(path: str, *names: str) -> GenFile:
+    return write_index([IndexEntry(name=n, kind="rule", rule_id=f"R{i}", process_id="LoanRates", path=path)
+                        for i, n in enumerate(names, 1)])
+
+
+async def test_python_body_is_spliced_by_indentation(tmp_path, monkeypatch):
+    _register(monkeypatch, "python", PythonLikeLanguage())
+    solution = _solution(tmp_path, GenFile(path=PY_TESTS, content=PY_TEXT, origin="agent"),
+                         _entries(PY_TESTS, "tests.test_loan_rates_rules.test_r1_counts_pulls",
+                                  "tests.test_loan_rates_rules.test_r2_kept"))
+    body = "def helper(x):\n    return x\n\nresult = service.count(helper(2))\nassert result == 3"
+    fake = FakeProvider([json.dumps({"tests": [{"method": "test_r1_counts_pulls", "body": body}]})])
+    written = await fill_test_bodies(solution, _process(), _rules(), [], _design(), [], routed(fake), stack="python")
+    assert written, "a nested def is not a changed number of tests"
+    assert ("def test_r1_counts_pulls(service):\n    def helper(x):\n        return x\n\n"
+            "    result = service.count(helper(2))\n    assert result == 3\n\n\ndef test_r2_kept") in written[0].content
+    stacks._INSTANCES.pop("python", None)
+
+
+async def test_go_body_is_spliced_with_the_file_s_tabs(tmp_path, monkeypatch):
+    _register(monkeypatch, "go", GoLikeLanguage())
+    solution = _solution(tmp_path, GenFile(path=GO_TESTS, content=GO_TEXT, origin="agent"),
+                         _entries(GO_TESTS, "core.TestR1CountsPulls", "core.TestR2Kept"))
+    body = 'got := Count(2)\nif got != 3 {\n    t.Fatalf("got %d", got)\n}'
+    fake = FakeProvider([json.dumps({"tests": [{"method": "TestR1CountsPulls", "body": body}]})])
+    written = await fill_test_bodies(solution, _process(), _rules(), [], _design(), [], routed(fake), stack="go")
+    assert ('func TestR1CountsPulls(t *testing.T) {\n\tgot := Count(2)\n\tif got != 3 {\n\t    t.Fatalf("got %d", got)\n'
+            '\t}\n}\n') in written[0].content
+    stacks._INSTANCES.pop("go", None)
+
+
+def test_go_fatal_after_a_closed_if_is_not_an_assertion():
+    assert "no assertion" in check_generic_test_body('if got != 1 { log(got) }\nt.Fatal("x")', "go")
+    assert check_generic_test_body('if got != 1 {\n\tlog(got)\n\tt.Fatal("x")\n}', "go") is None

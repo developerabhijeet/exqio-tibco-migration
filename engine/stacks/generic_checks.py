@@ -109,6 +109,16 @@ _PY_ASSERT = re.compile(r"(?m)^\s*assert\b(.*)$")
 _PY_RAISES = re.compile(r"\bpytest\s*\.\s*raises\s*\(")
 
 
+def _open_at(code: str, start: int, at: int) -> bool:
+    """Whether the block opened just before ``start`` is still open at ``at``."""
+    depth = 1
+    for c in code[start:at]:
+        depth += {"{": 1, "}": -1}.get(c, 0)
+        if depth == 0:
+            return False
+    return True
+
+
 def _asserts_a_value(code: str, stack: str) -> bool:
     if stack == "java":
         return any(_names_a_value(_args(code, m.end() - 1)) for m in _JAVA_ASSERT.finditer(code))
@@ -116,7 +126,8 @@ def _asserts_a_value(code: str, stack: str) -> bool:
         for m in _GO_FAIL.finditer(code):
             guard = None
             for g in _GO_IF.finditer(code, 0, m.start()):
-                guard = g  # the nearest if opened before the call
+                if _open_at(code, g.end(), m.start()):
+                    guard = g  # the nearest if whose block still holds the call
             if guard is not None and _names_a_value(guard.group(1)):
                 return True
         return False

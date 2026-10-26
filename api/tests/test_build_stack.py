@@ -3,18 +3,22 @@ project's, ``Build.stack``, the worker's toolchain check, one cached toolchain d
 note and the download exclusions, and the memory projection's stack."""
 from __future__ import annotations
 
-import pytest
-from sqlalchemy import select
+from typing import ClassVar
 
-from api.app.models import Build, DesignRecord, Project
+import pytest
+from sqlalchemy import func, select
+
+from api.app.models import Build, DesignRecord, ModelCall, Project
 from api.app.models import Process as ProcessRow
 from api.app.routers import stacks as stacks_mod
 from api.app.routers.build import DOWNLOAD_EXCLUDED, _export_note, download_excluded
 from api.app.services import build as build_svc
 from api.app.services import memory_ingest
 from api.app.services import settings as settings_svc
-from api.tests.test_build_verify import ARCHITECT, _built, _designed
+from api.tests.test_build_verify import ARCHITECT, _built, _designed, _wait_job
 from engine import stacks
+from engine.dotnet_gen.generator import GenFile
+from engine.tests.test_stacks_agents import JAVA_TESTS, TESTS, JavaLikeStack, _index
 
 
 @pytest.fixture
@@ -68,27 +72,92 @@ async def test_dotnet_build_records_stack(client, app, monkeypatch):
 
 
 # ---------------------------------------------------------------- worker toolchain check
-class _Stub:
-    key = "java"
-    label = "Java (stand-in)"
-    required_tools = ("java", "mvn")
+class _Stub(JavaLikeStack):
+    """A registered Java stand-in whose generator must never run in these tests."""
+    generated: ClassVar[list[str]] = []
+
+    def generate(self, *a, **k):
+        self.generated.append("called")
+        raise AssertionError("the generator ran without the toolchain")
 
 
-def test_worker_names_the_missing_tool(monkeypatch, settings):
+@pytest.fixture
+def java_registered(monkeypatch):
+    _Stub.generated.clear()
     monkeypatch.setitem(stacks._FACTORIES, "java", _Stub)
     monkeypatch.delitem(stacks._INSTANCES, "java", raising=False)
-    monkeypatch.setattr(build_svc, "toolchain", lambda: {"java": {"present": True}, "mvn": {"present": False}})
-    settings.enabled_stacks = "dotnet,java"
-    why = build_svc.stack_tool_missing(stacks.get_stack("java"), settings)
+    yield
     stacks._INSTANCES.pop("java", None)
-    assert why == "toolchain missing: mvn: install it on the worker (Settings shows the toolchains)"
 
 
-def test_dotnet_keeps_its_own_toolchain_lookup(monkeypatch, settings):
+async def _to_java(app, pid: str, proc: str) -> None:
+    async with app.state.sessionmaker() as s:
+        (await s.get(Project, pid)).target_stack = "java"
+        for row in (await s.execute(select(DesignRecord).where(DesignRecord.process_id == proc))).scalars():
+            row.record = {**row.record, "stack": "java"}
+        await s.commit()
+
+
+async def test_non_dotnet_build_fails_before_generating_without_its_tools(client, app, settings, monkeypatch,
+                                                                          approved_g3_dotnet, java_registered):
+    """X14a: the worker checks the stack's tools before stage 2 and fails the job naming them."""
+    pid, proc = await approved_g3_dotnet()
+    await _to_java(app, pid, proc)
+    monkeypatch.setattr(build_svc, "toolchain", lambda: {"java": {"present": False}, "mvn": {"present": False}})
+    r = await client.post(f"/processes/{proc}/build", json={})
+    assert r.status_code == 202, r.text
+    job = await _wait_job(client, r.json()["job_id"])
+    assert job["status"] == "failed"
+    build = (await client.get(f"/builds/{r.json()['build_id']}")).json()
+    assert build["status"] == "failed" and build["stack"] == "java"
+    assert build["error"] == ("ToolchainMissing: the java toolchain is missing on this worker: java, mvn; "
+                              "install it (Settings shows the toolchains) and build again")
+    assert _Stub.generated == []
+    async with app.state.sessionmaker() as s:
+        calls = await s.scalar(select(func.count()).select_from(ModelCall).where(ModelCall.job_id == job["id"]))
+    assert calls == 0  # no model was paid to write code nothing could compile
+
+
+async def test_a_disabled_stack_is_refused_before_a_build_row(client, app, settings, approved_g3_dotnet,
+                                                             java_registered):
+    pid, proc = await approved_g3_dotnet()
+    await _to_java(app, pid, proc)
+    app.state.settings.enabled_stacks = "dotnet"
+    r = await client.post(f"/processes/{proc}/build", json={})
+    assert r.status_code == 409
+    assert r.json()["detail"] == ("the java stack cannot be built on this install: "
+                                  "not enabled on this install (stacks.enabled)")
+    assert (await client.get(f"/processes/{proc}/builds")).json() == []
+
+
+def test_missing_tools_lists_every_absent_tool(monkeypatch, java_registered):
+    monkeypatch.setattr(build_svc, "toolchain", lambda: {"java": {"present": True}, "mvn": {"present": False}})
+    assert build_svc.missing_tools(stacks.get_stack("java")) == ["mvn"]
     monkeypatch.setattr(build_svc, "find_dotnet", lambda: None)
-    assert build_svc.stack_tool_missing(stacks.get_stack("dotnet"), settings) == build_svc.NO_DOTNET
-    monkeypatch.setattr(build_svc, "find_dotnet", lambda: "/usr/bin/dotnet")
-    assert build_svc.stack_tool_missing(stacks.get_stack("dotnet"), settings) is None
+    assert build_svc.missing_tools(stacks.get_stack("dotnet")) == ["dotnet"]
+
+
+def test_find_dotnet_survives_a_failing_detection(monkeypatch):
+    def broken():
+        raise ImportError("scripts/toolchain.py is not there")
+
+    monkeypatch.setattr("engine.dotnet_gen.runner._toolchain_detect", broken)
+    monkeypatch.setattr(settings_svc, "_toolchain_cache", None)
+    monkeypatch.setattr(build_svc.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert build_svc.find_dotnet() == "/usr/bin/dotnet"
+
+
+def test_inventory_reads_has_body_from_the_filled_file(java_registered):
+    """The index is written before the Test Engineer runs; a filled body has to count."""
+    files = [GenFile(path=TESTS, content=JAVA_TESTS), _index()]
+    by_rule = {t["rule_key"]: t["has_body"] for t in build_svc.test_inventory(files, "app", "java") if t["rule_key"]}
+    assert by_rule == {"R1": False, "R2": False}
+    filled = JAVA_TESTS.replace('fail("no test body for R1");', "assertThat(count(1)).isEqualTo(2);")
+    files = [GenFile(path=TESTS, content=filled), _index()]
+    by_rule = {t["rule_key"]: t["has_body"] for t in build_svc.test_inventory(files, "app", "java") if t["rule_key"]}
+    assert by_rule == {"R1": True, "R2": False}
+    branch = next(t for t in build_svc.test_inventory(files, "app", "java") if t["kind"] == "branch")
+    assert branch["has_body"] is True
 
 
 def test_mirrors_come_from_settings(settings):

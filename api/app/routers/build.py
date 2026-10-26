@@ -62,7 +62,7 @@ async def start_build(process_id: str, request: Request, session: SessionDep, ru
         raise HTTPException(status_code=404, detail="process not found")
     runtime = (body or BuildRequest()).runtime
     try:
-        await svc.approved_design(session, proc)
+        await svc.approved_design(session, proc, settings.enabled_stack_list)
     except svc.BuildRefused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     running = await active_job(session, "build", process_id=process_id)
