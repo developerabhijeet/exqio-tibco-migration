@@ -28,3 +28,5 @@ src = ["src", "tests"]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-p no:cacheprovider"
+# Starlette's TestClient warns that it will move from httpx to httpx2; the pinned httpx is the one locked.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

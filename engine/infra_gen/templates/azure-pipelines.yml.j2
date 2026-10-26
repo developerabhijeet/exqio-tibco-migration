@@ -99,14 +99,32 @@ stages:
     jobs:
       - job: build_test
         steps:
+[% if stack == "python" %]
+          - task: UsePythonVersion@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              versionSpec: "[[ ci.python_version ]]"
+          - script: python -m pip install "uv==0.11.7"
+            displayName: Install uv
+[% else %]
           - task: JavaToolInstaller@0
             displayName: Use [[ ci.label ]]
             inputs:
               versionSpec: "[[ ci.java_version ]]"
               jdkArchitectureOption: x64
               jdkSourceOption: PreInstalled
+[% endif %]
+[% if stack == "python" %]
+          - script: |
+              case "${UV_INDEX_URL:-}" in '$('*|'') unset UV_INDEX_URL ;; esac
+              [[ ci.restore ]]
+            displayName: Restore
+            env:
+              UV_INDEX_URL: $(UV_INDEX_URL)
+[% else %]
           - script: [[ ci.restore ]]
             displayName: Restore
+[% endif %]
           - script: [[ ci.build ]]
             displayName: Build
           - script: [[ ci.test ]]
@@ -118,7 +136,7 @@ stages:
               testResultsFormat: JUnit
               testResultsFiles: "[[ ci.results ]]"
           - task: PublishCodeCoverageResults@2
-            displayName: Publish JaCoCo coverage
+            displayName: Publish [[ "Cobertura" if stack == "python" else "JaCoCo" ]] coverage
             condition: succeededOrFailed()
             inputs:
               summaryFileLocation: "[[ ci.coverage ]]"

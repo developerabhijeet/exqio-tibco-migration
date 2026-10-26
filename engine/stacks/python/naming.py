@@ -222,12 +222,12 @@ class PythonNaming:
         the layer folder); ``process`` is the type name."""
         p = snake(process)
         files: dict[str, set[str]] = {
-            "api": {"__init__.py", "auth.py", "devtoken.py", "bus_dev.py", "fault.py"},
-            "core": {"__init__.py", f"{p}_service.py", "tib.py", "masking.py", "bus.py", "faults.py",
+            "api": {"__init__.py", "auth.py", "devtoken.py", "bus_dev.py", "fault.py", "http.py"},
+            "core": {"__init__.py", f"{p}_service.py", "tib.py", "tib_text.py", "masking.py", "bus.py",
                      "contracts/__init__.py", "exceptions/__init__.py"},
             "infrastructure": {"__init__.py", "bus_memory.py", "bus_servicebus.py"},
-            "tests": {f"test_{p}_rules.py", f"test_{p}_branch.py", f"test_{p}_scenario.py", "conftest.py",
-                      "scenario_support.py"},
+            "tests": {"__init__.py", "conftest.py", "scenario_support.py", f"test_{p}_rules.py", f"test_{p}_branch.py",
+                      f"test_{p}_scenario.py"},
         }
         if patterns & JDBC_PATTERNS:
             files["infrastructure"].add("database.py")

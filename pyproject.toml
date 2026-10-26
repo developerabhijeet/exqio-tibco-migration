@@ -59,4 +59,4 @@ markers = ["slow: a long-running test (large Neo4j transactions)"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["samples"]
+extend-exclude = ["samples", "engine/tests/golden"]  # goldens are generated output, byte for byte

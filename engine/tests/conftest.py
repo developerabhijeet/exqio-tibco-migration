@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Golden files are generated output compared byte for byte; a generated test module is not a test here.
+collect_ignore_glob = ["golden/*"]
 for p in (REPO_ROOT, REPO_ROOT / "scripts"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))

@@ -16,7 +16,8 @@
 #   toolchain  the SDK base plus Python 3.12 (Ubuntu 24.04's), tini, Terraform, Terragrunt,
 #              Temurin JDK 21 and Maven 3.9, each download checked against a SHA256 (Maven: SHA512)
 #              build argument; the JDK is per target architecture
-#   uv         only the uv binary, used to export uv.lock as a hash-pinned requirements file
+#   uv         only the uv binary: exports uv.lock as a hash-pinned requirements file, and runs the
+#              Python target stack's builds in the final image
 #   deps       the locked Python dependencies in /opt/venv and the fastembed model in /opt/models
 #   final      the application, no apt, UID 10001, read-only by design (writes: /tmp and /data)
 
@@ -184,6 +185,13 @@ RUN dpkg --purge --force-remove-essential --force-depends apt \
 
 COPY --from=deps /opt/venv /opt/venv
 COPY --from=deps /opt/models /opt/models
+# uv for the Python target stack: a generated project's venv is made with it from the platform's
+# python3 and its hash-pinned requirements.lock (from GMF's mirror, UV_INDEX_URL); its cache is on
+# the worker's /cache/stacks volume and it never downloads an interpreter.
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_CACHE_DIR=/cache/stacks/uv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_NO_PROGRESS=1
 # The application, owned by root and not writable by the process user.
 COPY --chmod=0755 deploy/docker/entrypoint.sh /entrypoint.sh
 COPY scripts/toolchain.py /app/scripts/toolchain.py

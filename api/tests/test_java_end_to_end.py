@@ -2,8 +2,8 @@
 with the runtime contract's environment, and parity runs against it.
 
 The start/ownership tests stand a fake runner in for ``MavenRunner``, so they run without a JDK;
-``test_java_seven_steps_parity_clean`` is the real thing (scan, analyse, design, build with Maven,
-``java -jar``, Verify) and skips without ``java``/``mvn``.
+``test_seven_steps_parity_clean`` is the real thing per stack (scan, analyse, design, build with
+Maven or uv, ``java -jar`` or uvicorn, Verify) and skips a stack whose tools the machine lacks.
 """
 from __future__ import annotations
 
@@ -19,9 +19,6 @@ from api.tests.test_build_verify import ARCHITECT, FSL, SME, _scanned, _wait_job
 from engine.stacks import get_stack
 from engine.stacks.java import stack as java_stack_mod
 from engine.stacks.java.runner import find_tool
-
-needs_maven = pytest.mark.skipif(not (find_tool("mvn") and find_tool("java")),
-                                 reason="java/mvn not found (scripts/toolchain.py)")
 
 CONTRACT = {"connections": ["GMFFundingDB"], "clients": ["DealerApi"],
             "secrets": [{"name": "ConnectionStrings--GMFFundingDB", "key": "ConnectionStrings__GMFFundingDB"}],
@@ -158,12 +155,24 @@ async def run_verify_and_wait(client, build_id: str) -> dict:
         await client.delete(f"/builds/{build_id}/run")
 
 
-@pytest.fixture
-async def java_project_through_g4(client, settings):
-    """FundingStatusLookup of a Java project: scanned, analysed, decided, designed (G3), built with Maven."""
+def _stack_tools(stack: str) -> bool:
+    """Whether this machine has the stack's build tools (``scripts/toolchain.py``)."""
+    if stack == "python":
+        from engine.stacks.python.runner import find_tool as find_python_tool
+        return bool(find_python_tool("uv") and find_python_tool("python3"))
+    return bool(find_tool("mvn") and find_tool("java"))
+
+
+@pytest.fixture(params=["java", "python"])
+async def project_through_g4(request, client, settings):
+    """FundingStatusLookup of a project on the stack: scanned, analysed, decided, designed (G3), built
+    with the stack's tools (Maven, uv); skipped when the machine lacks them."""
+    stack = request.param
+    if not _stack_tools(stack):
+        pytest.skip(f"the {stack} toolchain is not found (scripts/toolchain.py)")
     settings.test_database_url = settings.scenario_database_url
     pid, procs = await _scanned(client)
-    r = await client.patch(f"/projects/{pid}", json={"target_stack": "java"}, headers=ARCHITECT)
+    r = await client.patch(f"/projects/{pid}", json={"target_stack": stack}, headers=ARCHITECT)
     assert r.status_code == 200, r.text
     proc_id = procs[FSL]["id"]
     r = await client.post(f"/processes/{proc_id}/analyse")
@@ -190,14 +199,13 @@ async def java_project_through_g4(client, settings):
     build = (await client.get(f"/builds/{build_id}")).json()
     steps = {s["name"]: s for s in build["steps"]}
     assert steps["restore"]["ok"] and steps["build"]["ok"], steps
-    return build_id
+    return stack, build_id
 
 
-@needs_maven
-async def test_java_seven_steps_parity_clean(client, java_project_through_g4):  # spec criterion 1
-    build_id = java_project_through_g4
+async def test_seven_steps_parity_clean(client, project_through_g4):  # spec criterion 1
+    stack, build_id = project_through_g4
     report = await run_verify_and_wait(client, build_id)
-    print("java parity summary:", json.dumps(report["summary"], sort_keys=True))
+    print(f"{stack} parity summary:", json.dumps(report["summary"], sort_keys=True))
     assert report["summary"]["unexplained"] == 0 and report["summary"]["scenarios"] > 0
     assert report["summary"]["errors"] == 0
-    assert (await client.get(f"/builds/{build_id}")).json()["stack"] == "java"
+    assert (await client.get(f"/builds/{build_id}")).json()["stack"] == stack

@@ -534,6 +534,21 @@ def _ci(stack: str) -> dict[str, str]:
             "results": "target/surefire-reports/*.xml",
             "coverage": "target/site/jacoco/jacoco.xml",
         }
+    if stack == "python":
+        from engine.stacks.python.runner import LINT_RULES
+
+        return {
+            "label": "Python 3.12",
+            "python_version": "3.12",
+            # UvRunner's steps: the locked files from the mirror (UV_INDEX_URL), hash-checked, then offline
+            "restore": "uv venv .venv --python python3 && uv pip install --require-hashes -r requirements.lock "
+                       "--python .venv/bin/python",
+            "build": f".venv/bin/python -m compileall -q src && .venv/bin/ruff check --select {LINT_RULES} src tests",
+            "test": ".venv/bin/python -m pytest --junitxml=.exiqo-bin/junit.xml --cov=src "
+                    "--cov-report=xml:.exiqo-bin/coverage.xml",
+            "results": ".exiqo-bin/junit.xml",
+            "coverage": ".exiqo-bin/coverage.xml",
+        }
     return {}
 
 

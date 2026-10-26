@@ -35,6 +35,20 @@ tests:
     set: {stacks.enabled: [dotnet, python]}
     asserts:
       - failedTemplate: {errorPattern: "mirrors.pypi"}
+  - it: refuses python with a PyPI index that is not https
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, python], mirrors.pypi: "http://artifactory.gmf.internal/pypi/simple"}
+    asserts:
+      - failedTemplate: {errorPattern: "mirrors.pypi"}
+  - it: python alone writes the PyPI index for uv and pip, and no Maven mirror
+    template: templates/configmap.yaml
+    documentIndex: 0
+    set: {stacks.enabled: [dotnet, python], mirrors.pypi: "https://artifactory.gmf.internal/pypi/simple"}
+    asserts:
+      - equal: {path: data.ENABLED_STACKS, value: "dotnet,python"}
+      - equal: {path: data.UV_INDEX_URL, value: "https://artifactory.gmf.internal/pypi/simple"}
+      - equal: {path: data.PIP_INDEX_URL, value: "https://artifactory.gmf.internal/pypi/simple"}
+      - equal: {path: data.MAVEN_MIRROR_URL, value: ""}
   - it: refuses an unknown stack
     template: templates/configmap.yaml
     set: {stacks.enabled: [dotnet, cobol]}

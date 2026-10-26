@@ -1,0 +1,358 @@
+"""What every generated test stands on: the scenario drivers, the test database, and field-by-field
+comparison with a fixture (tests/fixtures/<process>/<scenario>.json: the scenario input, the request it
+becomes, and the expected output, fault and side effects derived from the TIBCO model; paths listed as
+noise, wall-clock values, are not compared).
+
+A test body reaches the service through ``support.component(name)`` (a process service, a consumer,
+a job: the container's attribute, ``dealer_funding_request_service``), runs a coroutine of the app
+with ``support.call(fn, *args)``, sends HTTP requests with ``support.send(method, path, body)``
+(already authenticated), reads the database with ``support.database`` and what was published with
+``support.published_since(mark)``.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+import urllib.parse
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+import httpx
+import psycopg
+import pytest
+from fastapi.testclient import TestClient
+from psycopg import sql
+
+from {{ pkg }}.core.bus import COMPLETE, DEAD_LETTER, Message, Outcome
+from {{ pkg }}.core.exceptions import ProcessFault
+
+HERE = Path(__file__).resolve().parent
+# Schemas the estate's SQL creates; dropped and recreated on every reset.
+SCHEMAS: tuple[str, ...] = ({% for s in schemas %}{{ s | py_string }}, {% endfor %})
+# The estate's SQL files (tests/database/), run in this order on every reset.
+SQL_FILES: tuple[str, ...] = ({% for f in sql_files %}{{ f | py_string }}, {% endfor %})
+
+
+# ------------------------------------------------------------------ fixtures
+@dataclass(frozen=True)
+class Fixture:
+    """One loaded fixture."""
+
+    scenario_id: str
+    root: dict[str, Any]
+
+    @staticmethod
+    def load(process: str, scenario: str) -> Fixture:
+        path = HERE / "fixtures" / process / f"{scenario}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"fixture {path} is missing")
+        root = json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
+        return Fixture(str(root.get("scenario_id") or scenario), root)
+
+    def expected(self, name: str) -> Any:
+        """``expected.<name>``: output, fault or side_effects (None when absent)."""
+        return (self.root.get("expected") or {}).get(name)
+
+    @property
+    def fault(self) -> dict[str, Any] | None:
+        """The expected fault (``name``, ``data``), or None when the run must not fault."""
+        fault = self.expected("fault")
+        return fault if isinstance(fault, dict) else None
+
+    @property
+    def output_noise(self) -> set[str]:
+        return set(self.expected("output_noise") or [])
+
+    @property
+    def input(self) -> Any:
+        return self.root.get("input")
+
+    @property
+    def request(self) -> dict[str, Any]:
+        return self.root.get("request") or {}
+
+    @property
+    def seed_rows(self) -> list[tuple[str, dict[str, Any]]]:
+        return [(str(s.get("table")), dict(s.get("row") or {})) for s in self.root.get("seed_state") or []]
+
+
+# ------------------------------------------------------------------ the database
+class TestDatabase:
+    """The estate's own SQL on the database at TEST_DATABASE_URL; every scenario resets the schemas, so
+    scenarios do not see each other's writes."""
+
+    __test__ = False  # not a test class
+    _instance: TestDatabase | None = None
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    @classmethod
+    def get(cls) -> TestDatabase:
+        """The database at TEST_DATABASE_URL; the calling test is skipped when it is not set."""
+        url = os.environ.get("TEST_DATABASE_URL", "").strip()
+        if not url:
+            pytest.skip("TEST_DATABASE_URL is not set")
+        if cls._instance is None or cls._instance.url != url:
+            cls._instance = TestDatabase(url)
+        return cls._instance
+
+    def _connect(self) -> psycopg.Connection[Any]:
+        from {{ pkg }}.infrastructure.database import conninfo
+
+        return psycopg.connect(conninfo(self.url), autocommit=True)
+
+    def reset(self, fixture: Fixture | None = None) -> None:
+        """Recreates the schemas, runs the estate SQL, then inserts the scenario's seed rows."""
+        with self._connect() as connection:
+            name = connection.info.dbname
+            if not name.endswith("_test"):
+                raise RuntimeError(f"Refusing to reset database '{name}': the name must end with _test.")
+            for schema in SCHEMAS:
+                connection.execute(sql.SQL("DROP SCHEMA IF EXISTS {s} CASCADE; CREATE SCHEMA {s};")
+                                   .format(s=sql.Identifier(schema)))
+            for file in SQL_FILES:
+                connection.execute((HERE / "database" / file).read_text(encoding="utf-8"))  # type: ignore[arg-type]
+            for table, row in fixture.seed_rows if fixture else []:
+                columns = list(row)
+                statement = sql.SQL("INSERT INTO {t} ({c}) VALUES ({v})").format(
+                    t=self._table(table), c=sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+                    v=sql.SQL(", ").join(sql.Placeholder() * len(columns)))
+                connection.execute(statement, [None if row[c] is None else str(row[c]) if not isinstance(row[c], dict | list)
+                                               else json.dumps(row[c]) for c in columns])
+
+    def query(self, table: str) -> list[dict[str, Any]]:
+        """Every row of a table (schema-qualified, or in the first schema), column name to value."""
+        from psycopg.rows import dict_row
+
+        with self._connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(sql.SQL("SELECT * FROM {t}").format(t=self._table(table)))
+            return [{str(k).lower(): v for k, v in row.items()} for row in cursor.fetchall()]
+
+    @staticmethod
+    def _table(table: str) -> sql.Composable:
+        parts = table.split(".")
+        if len(parts) == 1 and SCHEMAS:
+            parts = [SCHEMAS[0], parts[0]]
+        return sql.SQL(".").join(sql.Identifier(p) for p in parts)
+
+
+# ------------------------------------------------------------------ the support
+class ScenarioSupport:
+    """The service under test and the scenario drivers."""
+
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+        self._token: str | None = None
+
+    @property
+    def container(self) -> Any:
+        return self.client.app.state.container  # type: ignore[attr-defined]
+
+    @property
+    def bus(self) -> Any:
+        """The in-memory bus the service publishes to."""
+        return self.client.app.state.bus  # type: ignore[attr-defined]
+
+    @property
+    def database(self) -> TestDatabase:
+        """The test database; the test is skipped when TEST_DATABASE_URL is not set."""
+        return TestDatabase.get()
+
+    def component(self, name: str) -> Any:
+        """A component of the running service by its container attribute (``x_service``, ``x_consumer``)."""
+        return getattr(self.container, name)
+
+    def call(self, fn: Callable[..., Awaitable[Any]], *args: Any) -> Any:
+        """Runs ``fn(*args)`` (a coroutine function of the service) on the service's event loop."""
+        return self.client.portal.call(fn, *args)  # type: ignore[union-attr]
+
+    def published_mark(self) -> int:
+        """How many messages were published so far: pass it to ``published_since``."""
+        return len(self.bus.published)
+
+    def published_since(self, mark: int) -> list[Message]:
+        return list(self.bus.published[mark:])
+
+    def fixture(self, process: str, scenario: str) -> Fixture:
+        return Fixture.load(process, scenario)
+
+    # -------------------------------------------------------------- HTTP
+    def token(self) -> str:
+        if self._token is None:
+            response = self.client.post("/auth/dev-token", json={"subject": "scenario-tests"})
+            if response.status_code != 200:
+                pytest.fail(f"/auth/dev-token answered {response.status_code}: the service under test does not "
+                            "issue development tokens")
+            self._token = str(response.json()["access_token"])
+        return self._token
+
+    def send(self, method: str, path: str, body: Any = None) -> httpx.Response:
+        """A request to the running service with a development token; ``body`` may be None."""
+        headers = {"Authorization": f"Bearer {self.token()}", "Accept": "application/json"}
+        if body is None:
+            return self.client.request(method, path, headers=headers)
+        headers["Content-Type"] = "application/json"
+        return self.client.request(method, path, headers=headers, content=_dumps(body))
+
+    # -------------------------------------------------------------- drivers
+    def run_request(self, process: str, scenario: str) -> None:
+        """A REST or HTTP scenario: reset, send the fixture request, compare response and side effects."""
+        fixture = self.fixture(process, scenario)
+        self.database.reset(fixture)
+        mark = self.published_mark()
+        request = fixture.request
+        query = request.get("query") or {}
+        path = str(request.get("path") or "/")
+        if query:
+            path += "?" + urllib.parse.urlencode({k: text(v) for k, v in query.items()})
+        response = self.send(str(request.get("method") or "GET"), path, request.get("body"))
+        assert_response_matches(fixture, response)
+        self.assert_side_effects_match(fixture, mark)
+
+    def run_message(self, process: str, scenario: str, entity: str, properties: dict[str, str],
+                    handler: Callable[[Message], Awaitable[Outcome]]) -> None:
+        """A JMS scenario: reset, hand the fixture input to the consumer as a message on ``entity`` with
+        ``properties`` (what the TIBCO selector asks for), compare the settlement and the side effects."""
+        fixture = self.fixture(process, scenario)
+        self.database.reset(fixture)
+        mark = self.published_mark()
+        outcome = self.call(handler, Message(entity, _dumps(fixture.input), dict(properties)))
+        if fixture.fault is None:
+            assert outcome.disposition == COMPLETE, \
+                f"{fixture.scenario_id}: dead-lettered ({outcome.reason}): {outcome.description}"
+        else:
+            assert outcome.disposition == DEAD_LETTER, f"{fixture.scenario_id}: no fault"
+            assert outcome.reason == fixture.fault.get("name"), f"{fixture.scenario_id}: fault name"
+        self.assert_side_effects_match(fixture, mark)
+
+    def run_job(self, process: str, scenario: str, job: Callable[[], Awaitable[None]]) -> None:
+        """A timer scenario: reset, run the job once, compare side effects."""
+        fixture = self.fixture(process, scenario)
+        self.database.reset(fixture)
+        mark = self.published_mark()
+        error: Exception | None = None
+        try:
+            self.call(job)
+        except Exception as ex:  # compared with the expected fault below
+            error = ex
+        if fixture.fault is None and error is not None:
+            raise error
+        if fixture.fault is not None:
+            assert isinstance(error, ProcessFault), f"{fixture.scenario_id}: no fault"
+            assert error.fault_name == fixture.fault.get("name")
+        self.assert_side_effects_match(fixture, mark)
+
+    # -------------------------------------------------------------- comparison
+    def assert_side_effects_match(self, fixture: Fixture, mark: int) -> None:
+        """Rows written (in the test database) and messages published after ``mark`` (on the bus)."""
+        for effect in fixture.expected("side_effects") or []:
+            payload = effect.get("payload") or {}
+            noise = set(effect.get("noise") or [])
+            kind = effect.get("kind")
+            if kind == "row_written":
+                table = str(effect.get("table"))
+                rows = self.database.query(table)
+                assert any(_matches(payload, lambda name, r=row: text(r.get(name.lower())), noise) for row in rows), \
+                    f"{fixture.scenario_id}: no row in {table} matches {payload}"
+            elif kind == "message_published":
+                entity = str(effect.get("target"))
+                bodies = [json.loads(m.body, parse_float=Decimal) for m in self.published_since(mark) if m.entity == entity]
+                assert any(_matches(payload, lambda name, b=body: text(b.get(name) if isinstance(b, dict) else None),
+                                    noise) for body in bodies), \
+                    f"{fixture.scenario_id}: no message on {entity} matches {payload}"
+            # service_called and subprocess_called are compared by the verifier, not here
+
+
+def assert_response_matches(fixture: Fixture, response: httpx.Response) -> None:
+    """Status and body against expected.output (status, body); a fault answers 500 with its name as title."""
+    body = _loads(response.text)
+    if fixture.fault is not None:
+        assert response.status_code == 500, f"{fixture.scenario_id}: status {response.status_code}"
+        assert isinstance(body, dict) and body.get("title") == fixture.fault.get("name"), \
+            f"{fixture.scenario_id}: fault name"
+        return
+    assert_fields(fixture.scenario_id, fixture.expected("output"), {"status": response.status_code, "body": body},
+                  fixture.output_noise)
+
+
+def assert_fields(scenario_id: str, expected: Any, actual: Any, noise: set[str]) -> None:
+    """Every leaf of ``expected`` equals the same path of ``actual``, except the noise paths."""
+    want, got = _flatten(expected), _flatten(actual)
+    mismatches = [f"{k}: expected {v!r}, actual {got.get(k, '(missing)')!r}" for k, v in want.items()
+                  if k not in noise and not field_equals(v, got.get(k))]
+    assert not mismatches, f"{scenario_id}: {len(mismatches)} field(s) differ:\n" + "\n".join(mismatches)
+
+
+def text(value: Any) -> str:
+    """A value as text: a string's content, a number in plain notation, a date in ISO form."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, _dt.datetime | _dt.date | _dt.time):
+        return value.isoformat()
+    if isinstance(value, dict | list):
+        return json.dumps(value, default=str)
+    return str(value)
+
+
+def field_equals(expected: str | None, actual: str | None) -> bool:
+    """Equal as text, as numbers, or as dates; an empty expected value matches a missing one."""
+    e, a = expected or "", actual or ""
+    if e == a:
+        return True
+    try:
+        return Decimal(e) == Decimal(a)
+    except (InvalidOperation, ValueError):
+        pass
+    de, da = _date(e), _date(a)
+    if de is None or da is None:
+        return False
+    if (de.tzinfo is None) != (da.tzinfo is None):
+        return de.replace(tzinfo=None) == da.replace(tzinfo=None)
+    return de == da
+
+
+def _date(value: str) -> _dt.datetime | None:
+    try:
+        return _dt.datetime.fromisoformat(value.replace(" ", "T").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _matches(expected: dict[str, Any], actual: Callable[[str], str], noise: set[str]) -> bool:
+    return all(k in noise or field_equals(text(v), actual(k)) for k, v in expected.items())
+
+
+def _flatten(value: Any, path: str = "") -> dict[str, str]:
+    out: dict[str, str] = {}
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out.update(_flatten(v, f"{path}.{k}" if path else str(k)))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            out.update(_flatten(v, f"{path}[{i}]"))
+    elif path:
+        out[path] = text(value)
+    return out
+
+
+def _dumps(value: Any) -> str:
+    from {{ pkg }}.core import tib
+
+    return tib.dumps(value)
+
+
+def _loads(body: str) -> Any:
+    try:
+        return json.loads(body, parse_float=Decimal) if body.strip() else None
+    except json.JSONDecodeError:
+        return body

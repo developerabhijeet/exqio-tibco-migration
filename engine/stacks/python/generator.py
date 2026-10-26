@@ -52,7 +52,7 @@ from engine.parity.models import Scenario
 from engine.stacks.base import Mirrors
 from engine.stacks.contracts import contract_model, ident, plan_contracts
 from engine.stacks.plan import ServicePlan, build_plan
-from engine.stacks.python import versions
+from engine.stacks.python import tests_gen, versions
 from engine.stacks.python.contracts import render as render_contract
 from engine.stacks.python.naming import PythonNaming, package_name, snake, upper_snake
 from engine.stacks.python.printer import (
@@ -824,8 +824,27 @@ class _PythonSolution:
 
     # -------------------------------------------------------------- tests (written before the bodies)
     def test_files(self, printers: list[PythonProcess]) -> None:
-        """The test index (the tests themselves arrive with ``tests_gen``)."""
-        index = write_index([])
+        """The tests of every process, the shared test support, the estate SQL and the test index."""
+        sql_texts: dict[str, str] = {}
+        estate = dotnet._estate_root(self.app)
+        for rel in self.app.sql_files:
+            path = (estate / rel) if estate else None
+            if path and path.is_file():
+                sql_texts[PurePosixPath(rel).name] = path.read_text(encoding="utf-8")
+        schemas = sorted({m.lower() for t in sql_texts.values()
+                          for m in re.findall(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?([A-Za-z_]\w*)\.", t)})
+        for f in tests_gen.generate_test_support(self.pkg, schemas, sql_texts, sorted(set(self.connections.values()))):
+            self.out.add(f.path, f.content, f.origin)
+        entries = []
+        for pp in printers:
+            ctx = tests_gen.PythonTestContext(pkg=self.pkg, app=self.app_name, process=pp.p, name=pp.name,
+                                              sql_texts=sql_texts, schemas=schemas)
+            files, found = tests_gen.generate_python_tests(pp.plan, self.rules.get(pp.p.id, []), self.scenarios,
+                                                           pp.design, ctx)
+            for f in files:
+                self.out.add(f.path, f.content, f.origin, f.activity_id, process_id=pp.p.id)
+            entries += found
+        index = write_index(entries)
         self.out.add(index.path, index.content)
 
     # -------------------------------------------------------------- configuration

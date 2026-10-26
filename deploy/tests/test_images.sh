@@ -167,6 +167,14 @@ expect_ok "entrypoint imports MIRROR_CA_BUNDLE into the Maven trust store" \
   -e EXIQO_ROLE=bogus --entrypoint sh "$PLATFORM" -c \
   '/entrypoint.sh >/dev/null 2>&1; test $? -eq 64 && keytool -list -keystore /tmp/exiqo-cacerts -storepass changeit | grep -q exiqo-mirror-1'
 rm -rf "$ca_dir"
+# Python stack toolchain (uv): the generated project's venv is made from the platform's python3 (3.12)
+# with no interpreter download, and uv's cache sits on the /cache/stacks volume.
+expect_ok "uv is on PATH, caches on /cache/stacks/uv and never downloads an interpreter" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'uv --version >/dev/null && test "$UV_CACHE_DIR" = /cache/stacks/uv && test "$UV_PYTHON_DOWNLOADS" = never'
+expect_ok "uv makes a Python 3.12 venv as 10001, offline, from the platform python3" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'uv venv /tmp/probe --python python3 >/dev/null 2>&1 && /tmp/probe/bin/python -c "import sys; sys.exit(sys.version_info[:2] != (3, 12))"'
 
 echo "== $WEB"
 expect_output "web image config sets USER 10001" "10001:10001" docker image inspect -f '{{.Config.User}}' "$WEB"

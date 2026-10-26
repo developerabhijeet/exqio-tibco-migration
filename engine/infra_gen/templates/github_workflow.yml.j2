@@ -28,6 +28,15 @@ env:
   DOTNET_VERSION: 10.0.x
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   SOLUTION: [[ sln ]]
+[% elif stack == "python" %]
+  PYTHON_VERSION: "[[ ci.python_version ]]"
+  # Image build arguments, set as repository variables (empty ones are not passed); UV_INDEX_URL is
+  # the PyPI mirror the restore step installs the locked files from.
+  # [[ build_args | join(', ') ]]
+[% for arg in build_args %]
+  [[ arg ]]: ${{ vars.[[ arg ]] }}
+[% endfor %]
+  UV_INDEX_URL: ${{ vars.UV_INDEX_URL }}
 [% else %]
   JAVA_VERSION: "[[ ci.java_version ]]"
   # Image build arguments, set as repository variables (empty ones are not passed):
@@ -80,12 +89,28 @@ jobs:
           path: TestResults/**
           if-no-files-found: warn
 [% else %]
+[% if stack == "python" %]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.7"
+[% else %]
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+[% endif %]
+[% if stack == "python" %]
+      - name: Restore
+        run: |
+          [ -n "${UV_INDEX_URL:-}" ] || unset UV_INDEX_URL
+          [[ ci.restore ]]
+[% else %]
       - name: Restore
         run: [[ ci.restore ]]
+[% endif %]
       - name: Build
         run: [[ ci.build ]]
       - name: Test

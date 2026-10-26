@@ -29,8 +29,8 @@ DEV_DEPENDENCIES: tuple[tuple[str, str], ...] = (
     ("ruff", "0.17.2"),
 )
 
-# Default base image of the generated Dockerfile; GMF passes its own registry's image as the
-# BASE_IMAGE build argument.
+# The upstream image the generated Dockerfile names for GMF to mirror; the Dockerfile has no default
+# (GMF passes its own registry's images as BASE_IMAGE_BUILD and BASE_IMAGE_RUNTIME).
 BASE_IMAGE = f"python:{PYTHON}-slim"
 
 
