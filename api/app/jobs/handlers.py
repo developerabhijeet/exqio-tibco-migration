@@ -20,6 +20,7 @@ from api.app.services import build as build_svc
 from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
+from api.app.services import github_push as github_push_svc
 from api.app.services import infra as infra_svc
 from api.app.services import memory_ingest as memory_ingest_svc
 from api.app.services import memory_migrate as memory_migrate_svc
@@ -129,3 +130,10 @@ async def memory_migrate(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
 async def memory_reembed(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Re-embed one project's memory with the active embedding backend."""
     return await memory_migrate_svc.reembed_job(ctx, w)
+
+
+@job(github_push_svc.PUSH_KIND)
+async def github_push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Push a build to an ``exiqo/`` branch of a GitHub repository and open its pull request
+    (``services.github_push``); the token is read from its mounted file now, never stored."""
+    return await github_push_svc.push_job(ctx, w)

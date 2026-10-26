@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _Patch(BaseModel):
@@ -61,3 +61,20 @@ class LinkOut(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class GithubPushIn(BaseModel):
+    """``POST /builds/{id}/github/push``: the repository (``owner/name``), the branch (default
+    ``exiqo/<process slug>/build-<build id[:8]>``; ``exiqo/`` branches only), whether to open the
+    pull request, and its base (default: the repository's default branch)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repo: str = Field(min_length=3, max_length=201)
+    branch: str | None = None
+    open_pr: bool = True
+    base: str | None = None
+
+
+class JobAccepted(BaseModel):
+    job_id: str

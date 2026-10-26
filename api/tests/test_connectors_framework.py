@@ -317,9 +317,9 @@ async def test_enabled_test_runs_and_records_last_test(client_with_fake_github, 
     c = client_with_fake_github
     assert (await c.put("/settings/connectors", json={"github": {"enabled": True}}, headers=admin)).status_code == 200
     r = await c.post("/connectors/github/test", headers=admin)
-    assert r.status_code == 200 and r.json()["ok"] is False  # Task 3 implements GitHub
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["account"] == "exiqo-bot"
     last = (await c.get("/settings/connectors", headers=admin)).json()["github"]["last_test"]
-    assert last["actor"] == "ops.sam" and last["result"]["message"] == "not implemented yet"
+    assert last["actor"] == "ops.sam" and last["result"]["account"] == "exiqo-bot"
     assert "t0k-secret" not in (await c.get("/settings/connectors", headers=admin)).text
 
 

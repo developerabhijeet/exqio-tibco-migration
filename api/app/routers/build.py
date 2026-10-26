@@ -21,6 +21,7 @@ from api.app.routers.run_proxy import public_urls
 from api.app.services import build as svc
 from api.app.services import hosting
 from api.app.services import verify as verify_svc
+from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files, export_note
 from api.app.services.context import active_job
 
 router = APIRouter(tags=["build"])
@@ -126,22 +127,19 @@ async def get_file(build_id: str, path: str, session: SessionDep) -> dict[str, A
             "language": LANGUAGES.get(suffix, "dockerfile" if target.name == "Dockerfile" else "plaintext")}
 
 
-DOWNLOAD_EXCLUDED = frozenset({"bin", "obj", "TestResults", ".exiqo"})
-
 #: Zip entries that have to arrive executable. A zip stores the mode in the external attributes, and
 #: a generator writes every file 0644, so without this ``bash run-local.sh`` is the only way to start
 #: the exported bundle and ``./run-local.sh`` answers "permission denied".
 _EXECUTABLE = (".sh",)
 
+_export_note = export_note  # the name earlier callers and tests import
+
 
 def _zip_solution(root: Path, note: str | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(root.rglob("*")):
-            rel = path.relative_to(root)
-            if DOWNLOAD_EXCLUDED & set(rel.parts) or path.is_symlink() or not path.is_file():
-                continue
-            name = rel.as_posix()
+        for name in build_tree_files(root, DOWNLOAD_EXCLUDED):
+            path = root / name
             if path.suffix in _EXECUTABLE:
                 info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
@@ -154,36 +152,6 @@ def _zip_solution(root: Path, note: str | None = None) -> bytes:
     return buf.getvalue()
 
 
-def _export_note(build: Build, process: Process | None) -> str:
-    """Which build this bundle is, written into it, so a folder on someone's laptop can still be
-    traced back to the TIBCO process and the gate record it came from."""
-    rows = [
-        ("Build", build.id),
-        ("Status", build.status),
-        ("Build hash", build.build_hash or "not recorded"),
-        ("Design hash", build.design_hash or "not recorded"),
-        ("TIBCO spec hash", build.spec_hash or "not recorded"),
-        ("TIBCO process", f"{process.name} ({process.id})" if process else build.process_id),
-        ("Source file", process.source_path if process else "not recorded"),
-        ("Target runtime", "AKS" if build.runtime == "aks" else "Azure Container Apps"),
-        ("Finished", build.finished_at.isoformat() if build.finished_at else "did not finish"),
-    ]
-    steps = "\n".join(
-        f"| {s.get('name')} | {'skipped' if s.get('skipped') else 'passed' if s.get('ok') else 'failed'} |"
-        for s in (build.steps or []) if s.get("name"))
-    return (
-        "# Exported from ExiQO Migrate\n\n"
-        "This folder is one build of one migrated TIBCO BusinessWorks process. Start it with\n"
-        "`bash run-local.sh` and read `RUN_LOCALLY.md`.\n\n"
-        + "| Field | Value |\n| --- | --- |\n"
-        + "".join(f"| {k} | {v} |\n" for k, v in rows)
-        + ("\n## Pipeline steps as recorded\n\n| Step | Outcome |\n| --- | --- |\n" + steps + "\n" if steps else "")
-        + "\nThe status above is what the pipeline recorded for this build. It is the build's own\n"
-        "result, not a statement that the migration was approved: the approval is the G4 gate\n"
-        "record in ExiQO Migrate, against the build hash above.\n"
-    )
-
-
 @router.get("/builds/{build_id}/download")
 async def download(build_id: str, session: SessionDep) -> Response:
     """The solution, its infrastructure and its local-run scripts as a zip, ready to run on another
@@ -192,7 +160,7 @@ async def download(build_id: str, session: SessionDep) -> Response:
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise HTTPException(status_code=404, detail="the build has no solution on disk")
     proc = await session.get(Process, build.process_id)
-    note = _export_note(build, proc)
+    note = export_note(build, proc)
     data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note)
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", proc.name) if proc and proc.name else "build"
     return Response(content=data, media_type="application/zip",

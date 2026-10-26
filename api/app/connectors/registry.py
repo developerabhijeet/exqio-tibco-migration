@@ -96,7 +96,13 @@ def register(kind: ConnectorKind, cls: type[BaseConnector]) -> None:
     _CLASSES[kind] = cls
 
 
+def _load_builtin() -> None:
+    """Import the connector modules (each ``register``s its class); deferred, as they import this one."""
+    from api.app.connectors import github  # noqa: F401
+
+
 def get_connector(kind: ConnectorKind, *, settings: Settings, stored: dict[str, Any]) -> BaseConnector:
+    _load_builtin()
     if kind not in KINDS:
         raise ValueError(f"unknown connector {kind!r}")
     return _CLASSES.get(kind, _Pending)(merged(kind, settings, stored), settings)

@@ -7,11 +7,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from api.app.auth.roles import dev_principal
+from api.app.auth.roles import Principal, dev_principal
 from api.app.connectors.audit import audit_connector
 from api.app.connectors.base import (
     KINDS,
@@ -22,13 +23,28 @@ from api.app.connectors.base import (
     ConnectorNotConfigured,
 )
 from api.app.connectors.config import LAST_TEST_KEY, STORED_KEY, load_install, validate_app
+from api.app.connectors.github import (
+    PUSH_REFUSED,
+    default_push_branch,
+    valid_branch,
+    valid_push_branch,
+    valid_repo,
+)
 from api.app.connectors.http import header_secrets, redact
 from api.app.connectors.links import links_for
 from api.app.connectors.registry import connector_for, connectors_view, enabled_flags
 from api.app.db import utcnow
-from api.app.deps import AdminDep, SessionDep, SettingsDep, current_principal
-from api.app.models import AuditLog, Process, Setting
-from api.app.schemas.connector import ConnectorsPatch, LinkOut
+from api.app.deps import (
+    AdminDep,
+    RunnerDep,
+    SessionDep,
+    SettingsDep,
+    current_principal,
+    require_roles,
+)
+from api.app.models import AuditLog, Build, Process, Setting
+from api.app.schemas.connector import ConnectorsPatch, GithubPushIn, JobAccepted, LinkOut
+from api.app.services.github_push import PUSH_KIND
 from api.app.services.settings import load_stored
 
 log = logging.getLogger(__name__)
@@ -145,3 +161,45 @@ async def process_links(process_id: str, session: SessionDep) -> list[LinkOut]:
     if await session.get(Process, process_id) is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
     return [LinkOut.model_validate(link) for link in await links_for(session, process_id)]
+
+
+PushRoles = Annotated[Principal, Depends(require_roles("engineer", "admin"))]
+UNFINISHED = frozenset({"queued", "running"})
+
+
+@router.post("/builds/{build_id}/github/push", status_code=202)
+async def push_build_to_github(build_id: str, body: GithubPushIn, session: SessionDep, settings: SettingsDep,
+                               runner: RunnerDep, principal: PushRoles) -> JobAccepted:
+    """Queue ``connector.github.push``: 409 when GitHub is off or has no credential (no request is
+    made), 422 for a repository or branch name refused before anything is queued."""
+    build = await session.get(Build, build_id)
+    if build is None:
+        raise HTTPException(status_code=404, detail="build not found")
+    proc = await session.get(Process, build.process_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail="the build's process is gone")
+    if not valid_repo(body.repo):
+        raise HTTPException(status_code=422, detail=f"repo: not owner/name: {body.repo!r}")
+    branch = (body.branch or "").strip() or default_push_branch(proc.name, build.id)
+    if not valid_push_branch(branch):
+        raise HTTPException(status_code=422, detail=PUSH_REFUSED)
+    base = (body.base or "").strip() or None
+    if base is not None and not valid_branch(base):
+        raise HTTPException(status_code=422, detail=f"base: not a branch name: {base!r}")
+    connector = await connector_for(session, settings, "github")
+    try:
+        connector.ready()
+    except (ConnectorDisabled, ConnectorNotConfigured) as exc:
+        await audit_connector(session, principal.actor, "github", "push", project_id=proc.project_id,
+                              process_id=proc.id, target=f"{body.repo}@{branch}", outcome="refused",
+                              detail={"build_id": build.id, "message": str(exc)})
+        await session.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if build.status in UNFINISHED:
+        raise HTTPException(status_code=409, detail="the build has not finished")
+    if not build.output_dir or not Path(build.output_dir).is_dir():
+        raise HTTPException(status_code=409, detail="the build has no solution on disk")
+    job_id = await runner.submit(PUSH_KIND, {"build_id": build.id, "repo": body.repo, "branch": branch,
+                                             "open_pr": body.open_pr, "base": base, "actor": principal.actor},
+                                 project_id=proc.project_id, process_id=proc.id)
+    return JobAccepted(job_id=job_id or "")
