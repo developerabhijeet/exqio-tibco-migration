@@ -110,6 +110,9 @@ test("the stepper shows one status pill and works from the keyboard", async ({ p
 test("the stepper never overflows from 1024 px to 1440 px, no step is squeezed, and the header compacts on scroll", async ({ page }) => {
   await page.goto("/");
   await newProjectAndScan(page);
+  // Clicking Scan scrolls the content area to bring the button into view (the page below the
+  // stepper is taller than the window now), which compacts the header: start from the top.
+  await page.evaluate(() => document.querySelector("main")!.scrollTo(0, 0));
   for (const width of [1024, 1100, 1280, 1440]) {
     await page.setViewportSize({ width, height: 800 });
     const tablist = page.getByRole("navigation", { name: "Migration steps" });
