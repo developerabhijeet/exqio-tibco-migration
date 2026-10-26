@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_sp3_citation_model_exists():
-    from engine.citations.model import CiteRef, CiteSpan, CitedText, CiteTarget  # noqa: F401
+    from engine.citations.model import CitedText, CiteRef, CiteSpan, CiteTarget  # noqa: F401
     from engine.citations.spans import sentence_bounds
     assert sentence_bounds("A. B.") == [(0, 2), (3, 5)]
     with pytest.raises(ValueError):
@@ -17,10 +17,10 @@ def test_sp3_citation_model_exists():
 
 
 def test_sp2_projectors_and_routes_exist():
+    from api.app.routers.memory import router
     from engine.memory.projectors.analysis import project_analysis  # noqa: F401
     from engine.memory.projectors.build import project_build  # noqa: F401
     from engine.memory.projectors.design import project_design  # noqa: F401
-    from api.app.routers.memory import router
     assert "/memory/{project_id}/node" in {r.path for r in router.routes}
 
 
