@@ -838,7 +838,7 @@ class _JavaSolution:
         seed = hashlib.sha256(f"exiqo-dev:{self.app.id}".encode()).hexdigest()
         main: dict[str, Any] = {
             "spring": {"application": {"name": self.paths["artifact"]}, "main": {"banner-mode": "off"}},
-            "server": {"port": 8080},
+            "server": {"port": "${PORT:8080}"},
             "management": {"endpoints": {"web": {"base-path": "/", "exposure": {"include": "health"}}},
                            "endpoint": {"health": {"show-details": "never"}}},
             "auth": {"mode": "Production", "entra-id": {"instance": "https://login.microsoftonline.com/",

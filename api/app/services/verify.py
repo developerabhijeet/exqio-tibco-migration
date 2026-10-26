@@ -61,6 +61,7 @@ from api.app.services import settings as settings_svc
 from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.stub_server import StubServer, client_names
 from engine.analysis.models import Finding
+from engine.child_env import scrub_urls
 from engine.domains.discover import activity_sql, sql_tables
 from engine.dotnet_gen.generator import is_sensitive_name, solution_layout
 from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle
@@ -416,14 +417,26 @@ def release_port(port: int) -> None:
 def service_contract(build_root: Path, app_name: str, stack: str) -> dict[str, Any] | None:
     """The project's ``.exiqo/service-contract.json`` (``StackLayout.contract_file``); ``None`` for
     a stack without one (.NET) or when it cannot be read."""
+    return service_contract_state(build_root, app_name, stack)[0]
+
+
+def service_contract_state(build_root: Path, app_name: str, stack: str) -> tuple[dict[str, Any] | None, str]:
+    """``(contract, problem)``: problem is "" when read, "missing" when the file is absent (or the
+    stack has none) and "invalid" when it exists but is not a JSON object."""
     contract_file = get_stack(stack).layout(app_name).contract_file
     if contract_file is None:
-        return None
+        return None, "missing"
     try:
-        data = json.loads((build_root / contract_file).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+        text = (build_root / contract_file).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "invalid"
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None, "invalid"
+    return (data, "") if isinstance(data, dict) else (None, "invalid")
 
 
 def connection_names(build_root: Path, app_name: str, stack: str = "dotnet") -> list[str]:
@@ -479,7 +492,7 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
         text = Path(info.handle.log_path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return text[-limit:]
+    return scrub_urls(text[-limit:])
 
 
 START_TIMEOUT_S = 240.0  # dotnet run (java -jar) until /health answers
@@ -524,9 +537,10 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
             raise RuntimeError(f"the {stack_key} toolchain is missing on this worker: {', '.join(missing)}; "
                                "install it (Settings shows the toolchains) to start the service")
         app_name = root.name
-        contract = service_contract(root, app_name, stack_key)
+        contract, problem = service_contract_state(root, app_name, stack_key)
         if contract is None:
-            raise RuntimeError("no .exiqo/service-contract.json in the build folder")
+            raise RuntimeError("no .exiqo/service-contract.json in the build folder" if problem == "missing"
+                               else ".exiqo/service-contract.json in the build folder is not a valid JSON object")
         clients = sorted(str(c) for c in contract.get("clients") or [])
     dsn = scenario_dsn(settings, project_id)
 

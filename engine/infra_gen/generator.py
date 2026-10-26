@@ -519,19 +519,22 @@ def _prune_stale(root: Path, app_slug: str, keep: set[str]) -> None:
 #: Build and test steps of the pipelines per non-.NET stack (the .NET steps are in the templates).
 #: Maven runs with the project's settings (the GMF mirror) and, after the dependency step, offline.
 _MVN = "mvn -B -ntp -s .exiqo/maven-settings.xml"
-_CI: dict[str, dict[str, str]] = {
-    "java": {
-        "label": "Java 21",
-        "java_version": "21",
-        # MavenRunner's restore (the layout's): also the formatter and Surefire's provider, so the
-        # steps after it run offline
-        "restore": f"{_MVN} {get_stack('java').layout('app').dockerfile_context['restore_goals']}",
-        "build": f"{_MVN} -o -DskipTests package",
-        "test": f"{_MVN} -o test",
-        "results": "target/surefire-reports/*.xml",
-        "coverage": "target/site/jacoco/jacoco.xml",
-    },
-}
+def _ci(stack: str) -> dict[str, str]:
+    """The pipeline steps of ``stack`` (empty for .NET, whose steps are in the templates). Built on
+    demand: the stack registry is not touched when this module is imported."""
+    if stack == "java":
+        return {
+            "label": "Java 21",
+            "java_version": "21",
+            # MavenRunner's restore (the layout's): also the formatter and Surefire's provider, so the
+            # steps after it run offline
+            "restore": f"{_MVN} {get_stack('java').layout('app').dockerfile_context['restore_goals']}",
+            "build": f"{_MVN} -o -DskipTests package",
+            "test": f"{_MVN} -o test",
+            "results": "target/surefire-reports/*.xml",
+            "coverage": "target/site/jacoco/jacoco.xml",
+        }
+    return {}
 
 
 def _stack_layout(stack: str, solution_name: str) -> dict[str, Any]:
@@ -549,11 +552,16 @@ def _stack_dockerfile(stack: str, context: dict[str, Any]) -> str:
 
 
 def _stack_dockerignore(stack: str) -> str:
-    """The .NET ignore list with the stack's build output (``download_excluded`` without ``.exiqo``,
-    which holds the Maven settings the image build reads) in place of ``bin``/``obj``."""
-    base = (TEMPLATES / "dockerignore").read_text(encoding="utf-8")
-    output = "".join(f"**/{d}\n" for d in sorted(get_stack(stack).download_excluded - {".exiqo"}))
-    return base.replace("**/bin\n**/obj\n", output)
+    """The .NET ignore list with the stack's build output in place of its ``bin``/``obj`` lines.
+    ``.exiqo`` (the Maven settings the image build reads) is not ignored."""
+    output = [f"**/{d}" for d in sorted(get_stack(stack).download_excluded - {".exiqo"})]
+    lines: list[str] = []
+    for line in (TEMPLATES / "dockerignore").read_text(encoding="utf-8").splitlines():
+        if line == "**/bin":
+            lines += output  # the stack's output folders take the place of bin and obj
+        elif line != "**/obj":
+            lines.append(line)
+    return "\n".join(lines) + "\n"
 
 
 def generate_infra(
@@ -666,13 +674,16 @@ def generate_infra(
             "needs_gh": f"[apply-{prev}]" if prev else "[image]",
             "needs_ado": f"Apply_{prev}" if prev else "Image",
         })
+    build_args = layout.get("dockerfile_context", {}).get("build_args", [])
     ctx = {
         "app_id": app.id, "app_slug": facts.app_slug, "sln": layout["solution"],
         "image_name": facts.app_slug, "envs": pipeline_envs,
         "terraform_version": TERRAFORM_VERSION, "terragrunt_version": TERRAGRUNT_VERSION,
         "tfstate_script": "infra/bootstrap/tfstate.sh",
-        "stack": stack, "build_args": layout.get("dockerfile_context", {}).get("build_args", []),
-        "ci": _CI.get(stack, {}),
+        "stack": stack, "build_args": build_args,
+        "ci": _ci(stack),
+        # Build arguments that name base images have no default: the pipeline stops when one is empty
+        "required_build_args": [a for a in build_args if a.startswith("BASE_IMAGE_")],
     }
     files[f".github/workflows/{facts.app_slug}.yml"] = jenv.get_template(
         "github_workflow.yml.j2").render(**ctx)

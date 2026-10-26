@@ -180,6 +180,11 @@ jobs:
         run: |
           az acr login --name "$ACR_NAME"
 [% if build_args %]
+[% if required_build_args %]
+          for name in [[ required_build_args | join(' ') ]]; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name is empty: set it to an image in your registry (the Dockerfile has no default)"; exit 1; fi
+          done
+[% endif %]
           args=()
           for name in [[ build_args | join(' ') ]]; do
             if [ -n "${!name:-}" ]; then args+=(--build-arg "${name}=${!name}"); fi

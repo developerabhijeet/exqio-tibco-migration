@@ -444,3 +444,5 @@ prefers a JDK base image, the toolchain stage gains one more `FROM`.
   path), polyglot solutions (one stack per project), Kotlin/Gradle, other Python frameworks.
 - Iteration re-entry (sub-project 6) and publishing to GitHub/Atlassian (sub-project 7); both
   consume `Build.stack`.
+
+- Follow-up (Task 9 review): the generated Dockerfile has no default base image (BASE_IMAGE_BUILD/BASE_IMAGE_RUNTIME must come from GMF's registry; pipelines stop when empty). The defaults should come from a GMF registry setting (X11 spirit), and the .NET Dockerfile should adopt BASE_IMAGE_* the same way later.

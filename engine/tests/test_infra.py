@@ -706,7 +706,7 @@ def test_java_dockerfile_and_contract_secrets(java_solution, java_designs, gmf_a
     files = {f.path: f.content for f in generator.generate_infra(
         gmf_app, list(java_designs.values()), java_solution.root, java_solution.name, stack="java")}
     df = files["Dockerfile"]
-    assert "ARG BASE_IMAGE_BUILD=maven:3.9-eclipse-temurin-21" in df and "USER 10001" in df and "MAVEN_MIRROR_URL" in df
+    assert re.search(r"^ARG BASE_IMAGE_BUILD$", df, re.MULTILINE) and "USER 10001" in df and "MAVEN_MIRROR_URL" in df
     assert "dotnet" not in df
     contract = json.loads((java_solution.root / ".exiqo/service-contract.json").read_text())
     assert set(secret_names_in(files)) == {s["name"] for s in contract["secrets"]}
@@ -717,7 +717,9 @@ def test_java_dockerfile_builds_the_jar_the_layout_names(java_infra, java_soluti
 
     df = java_infra["Dockerfile"]
     layout = get_stack("java").layout(java_solution.name)
-    assert "ARG BASE_IMAGE_RUNTIME=eclipse-temurin:21-jre" in df
+    # no silent Docker Hub default; the exec-form entrypoint needs no shell (distroless runtimes)
+    assert re.search(r"^ARG BASE_IMAGE_RUNTIME$", df, re.MULTILINE) and "=maven:" not in df
+    assert 'ENTRYPOINT ["java", "-jar", "/app/app.jar"]' in df
     assert "FROM ${BASE_IMAGE_BUILD} AS build" in df and "FROM ${BASE_IMAGE_RUNTIME} AS runtime" in df
     assert f"/src/{layout.api_entry}" in df
     assert "EXPOSE 8080" in df and "ENV PORT=8080" in df
@@ -780,3 +782,12 @@ def yaml_load(text: str):
 def test_java_infra_without_the_contract_is_refused(gmf_app, java_designs, tmp_path):
     with pytest.raises(FileNotFoundError, match="service-contract.json"):
         generator.generate_infra(gmf_app, list(java_designs.values()), tmp_path, "GmfCredit", stack="java")
+
+
+def test_java_pipelines_stop_on_an_empty_base_image(java_infra):
+    gh = java_infra[".github/workflows/" + next(p for p in java_infra if p.startswith(".github/workflows/"))[len(".github/workflows/"):]]
+    az = java_infra["azure-pipelines.yml"]
+    assert "for name in BASE_IMAGE_BUILD BASE_IMAGE_RUNTIME; do" in gh and "exit 1" in gh
+    assert "for name in BASE_IMAGE_BUILD BASE_IMAGE_RUNTIME; do" in az and "exit 1" in az
+    assert "MAVEN_MIRROR_URL: $(MAVEN_MIRROR_URL)" in az  # secret variables only reach env: explicitly
+    assert "PublishCodeCoverageResults@2" in az and "target/site/jacoco/jacoco.xml" in az

@@ -117,6 +117,11 @@ stages:
             inputs:
               testResultsFormat: JUnit
               testResultsFiles: "[[ ci.results ]]"
+          - task: PublishCodeCoverageResults@2
+            displayName: Publish JaCoCo coverage
+            condition: succeededOrFailed()
+            inputs:
+              summaryFileLocation: "[[ ci.coverage ]]"
 
 [% endif %]
   - stage: ValidateInfra
@@ -173,6 +178,12 @@ stages:
               scriptType: bash
               scriptLocation: inlineScript
               addSpnToEnvironment: true
+[% if build_args %]
+              env:
+[% for arg in build_args %]
+                [[ arg ]]: $([[ arg ]])
+[% endfor %]
+[% endif %]
               inlineScript: |
                 [[ azure_env() | trim | indent(16) ]]
                 for unit in resource_group container_registry; do
@@ -180,11 +191,22 @@ stages:
                 done
                 az acr login --name [[ envs[0].acr ]]
 [% if build_args %]
-                # image build arguments from the variable group (empty ones are not passed)
+                # image build arguments from the variable group (empty ones are not passed). The
+                # env: block below maps them explicitly: secret variables are never exposed to the
+                # script as environment variables otherwise. An unset variable arrives as the
+                # literal "$(NAME)", which counts as empty.
                 args=()
                 for name in [[ build_args | join(' ') ]]; do
-                  if [ -n "${!name:-}" ]; then args+=(--build-arg "${name}=${!name}"); fi
+                  value="${!name:-}"
+                  case "$value" in '$('*) value="" ;; esac
+                  if [ -n "$value" ]; then args+=(--build-arg "${name}=${value}"); fi
                 done
+[% if required_build_args %]
+                for name in [[ required_build_args | join(' ') ]]; do
+                  value="${!name:-}"
+                  case "$value" in ''|'$('*) echo "##vso[task.logissue type=error]$name is empty: set it in the variable group to an image in your registry (the Dockerfile has no default)"; exit 1 ;; esac
+                done
+[% endif %]
                 docker build "${args[@]}" --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
 [% else %]
                 docker build --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
