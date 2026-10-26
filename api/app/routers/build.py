@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 import zipfile
+from collections.abc import Callable, Iterable
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -29,6 +32,12 @@ from api.app.services.build_tree import (
 )
 from api.app.services.citations import cite_review, mask_lines
 from api.app.services.context import active_job
+from api.app.services.edits import (
+    BASELINE_NAME,
+    NOTE_NAME,
+    baseline_manifest,
+    text_sha256,
+)
 
 router = APIRouter(tags=["build"])
 
@@ -145,33 +154,43 @@ _export_note = export_note  # the name earlier callers and tests import
 
 
 def _zip_solution(root: Path, note: str | None = None,
-                  excluded: frozenset[str] = DOWNLOAD_EXCLUDED) -> bytes:
+                  baseline: Callable[[dict[str, str]], dict[str, Any]] | None = None,
+                  excluded: Iterable[str] = DOWNLOAD_EXCLUDED) -> bytes:
+    """The shipped files of ``root`` as a zip, with ``note`` as ``EXPORTED_FROM.md`` and, when
+    ``baseline`` is given, ``EXIQO_BASELINE.json``: ``baseline(files)`` where ``files`` maps every
+    zipped path (the note and the manifest aside) to the ``text_sha256`` of the bytes zipped."""
     buf = io.BytesIO()
+    hashes: dict[str, str] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name in build_tree_files(root, excluded):
-            path = root / name
-            if path.suffix in _EXECUTABLE:
-                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = (0o100755 << 16)
-                zf.writestr(info, path.read_bytes())
-            else:
-                zf.write(path, name)
+            if name in (NOTE_NAME, BASELINE_NAME):
+                continue  # the platform's own files are written below, never a stale copy
+            data = (root / name).read_bytes()
+            hashes[name] = text_sha256(data)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = ((0o100755 if Path(name).suffix in _EXECUTABLE else 0o100644) << 16)
+            zf.writestr(info, data)
         if note is not None:
-            zf.writestr("EXPORTED_FROM.md", note)
+            zf.writestr(NOTE_NAME, note)
+        if baseline is not None:
+            zf.writestr(BASELINE_NAME, json.dumps(baseline(hashes), indent=2, sort_keys=True) + "\n")
     return buf.getvalue()
 
 
 @router.get("/builds/{build_id}/download")
 async def download(build_id: str, session: SessionDep) -> Response:
     """The solution, its infrastructure and its local-run scripts as a zip, ready to run on another
-    machine (without the stack's build output: bin, obj, TestResults and .exiqo for .NET)."""
+    machine (without the stack's build output: bin, obj, TestResults and .exiqo for .NET), with
+    ``EXIQO_BASELINE.json`` naming the build so an edited copy can be uploaded against it
+    (``POST /builds/{id}/edits``)."""
     build = await _build(session, build_id)
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise HTTPException(status_code=404, detail="the build has no solution on disk")
     proc = await session.get(Process, build.process_id)
     note = export_note(build, proc)
-    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note, download_excluded(build.stack))
+    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note,
+                                   partial(baseline_manifest, build, proc), download_excluded(build.stack))
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", proc.name) if proc and proc.name else "build"
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{stem}-{build_id[:12]}.zip"'})
