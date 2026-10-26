@@ -96,23 +96,18 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await g2.getByRole("button", { name: "Approve G2" }).click();
   await expect(g2).toHaveAttribute("data-state", "approved");
 
-  // ExiQoian answers with inline citation chips; a chip that names a step opens it on the canvas.
+  // ExiQoian answers a suggested question with inline chips; a chip that names a step opens it.
   await page.getByRole("button", { name: "Ask ExiQoian" }).click();
-  const chatInput = page.getByRole("textbox", { name: "Message ExiQoian" });
-  await chatInput.fill("Which workflows read the funding table?");
-  await chatInput.press("Enter");
-  const reply = page.getByTestId("exiqoian-message").and(page.locator('[data-role="assistant"]')).first();
+  const chat = page.getByTestId("exiqoian-panel");
+  await chat.locator("ul button").first().click();
+  const reply = chat.locator('[data-testid="exiqoian-message"][data-role="assistant"]').first();
   await expect(reply).toHaveAttribute("data-verdict", "answer", { timeout: 60_000 });
-  const askCite = reply.locator('[data-testid="cite-chip"][data-target-kind="activity"]').first();
-  if (await askCite.count()) {
-    const askStep = await askCite.getAttribute("data-step");
-    await askCite.click();
-    await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
-    await page.getByRole("button", { name: "Close ExiQoian" }).click();
-    await page.getByRole("button", { name: "Back to Validate" }).click();
-  } else {
-    await page.getByRole("button", { name: "Close ExiQoian" }).click();
-  }
+  const stepCite = reply.locator('[data-testid="cite-chip"]:not([data-step=""])').first();
+  const askStep = await stepCite.getAttribute("data-step");
+  await stepCite.click();
+  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
+  await page.getByRole("button", { name: "Close ExiQoian" }).click();
+  await page.getByRole("button", { name: "Back to Validate" }).click();
 
   // Design: generate the record as the architect and approve G3.
   await actAs(page, "architect.lee");

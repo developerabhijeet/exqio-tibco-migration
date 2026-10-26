@@ -63,6 +63,7 @@ export function ExiQoianPanel() {
 
   useEffect(() => {
     if (!chatOpen) return;
+    void profile.refetch(); // the starter questions follow the project (a scan or an analysis since last time)
     // The panel turns visible as it slides in; focus lands as soon as the browser allows it.
     let tries = 0;
     const t = window.setInterval(() => {
@@ -70,6 +71,7 @@ export function ExiQoianPanel() {
       if (document.activeElement === input.current || ++tries > 15) window.clearInterval(t);
     }, 20);
     return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatOpen]);
   useEffect(() => {
     log.current?.scrollTo({ top: log.current.scrollHeight });
@@ -80,6 +82,20 @@ export function ExiQoianPanel() {
     setChatOpen(false);
     document.querySelector<HTMLElement>('[data-testid="exiqoian-launcher"]')?.focus();
   }, [setChatOpen]);
+
+  // Escape closes the panel from anywhere on the page while it is open, unless something on top of
+  // it (a citation preview, a menu) took the key.
+  useEffect(() => {
+    if (!chatOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[data-testid="cite-preview"]')) return;
+      e.preventDefault();
+      close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [chatOpen, close]);
 
   const send = async (raw: string) => {
     const text = raw.trim();
@@ -153,13 +169,7 @@ export function ExiQoianPanel() {
       data-testid="exiqoian-panel"
       data-open={chatOpen}
       inert={!chatOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && !e.defaultPrevented) {
-          e.preventDefault();
-          close();
-        }
-      }}
-      className={`fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-line bg-surface shadow-e3 transition-[transform,visibility] duration-200 motion-reduce:transition-none md:w-[480px] print:hidden ${
+      className={`fixed inset-y-0 right-0 z-40 flex w-full flex-col md:top-16 border-l border-line bg-surface shadow-e3 transition-[transform,visibility] duration-200 motion-reduce:transition-none md:w-[480px] print:hidden ${
         chatOpen ? "visible translate-x-0" : "invisible translate-x-full"
       }`}
     >
