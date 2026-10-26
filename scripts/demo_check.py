@@ -498,6 +498,63 @@ class Flow:
         self.run.check(s, "gate decisions audited by named users", named <= set(actors),
                        f"{len(audit)} audit lines; gate actors {actors}")
 
+    def memory(self) -> None:
+        s = "memory"
+        base = f"/memory/{self.project_id}"
+        st = self.get(f"{base}/status")
+        info = st.json() if st.status_code == 200 else {}
+        self.run.check(s, "memory available", info.get("available") is True,
+                       f"revision {info.get('revision')}, {sum((info.get('counts') or {}).values())} nodes"
+                       if info.get("available") else f"HTTP {st.status_code}: {info or st.text}", fatal=True)
+        revs = self.get(f"{base}/revisions", params={"limit": 200}).json().get("revisions") or []
+        per_phase: dict[str, int] = {}
+        for r in revs:
+            per_phase[r["phase"]] = per_phase.get(r["phase"], 0) + 1
+        # a revision per phase that projects content (estate/discover, each analysis, design, build);
+        # verify and deploy only when they produced deltas, so they are not demanded
+        short = [p for p in ("discover", "design", "build") if per_phase.get(p, 0) < 1]
+        if per_phase.get("analysis", 0) < len(TARGETS):
+            short.append(f"analysis ({per_phase.get('analysis', 0)} of {len(TARGETS)})")
+        self.run.check(s, "revisions per phase", not short,
+                       ", ".join(f"{k} {v}" for k, v in sorted(per_phase.items())) + (f"; missing {short}" if short else ""))
+        procs = {p["name"]: p for p in self.get(f"/projects/{self.project_id}/processes").json()}
+        for t in TARGETS:
+            uid = f"process:{procs[t]['ir_id']}"
+            node = self.get(f"{base}/node", params={"uid": uid})
+            lineage = (node.json().get("lineage") or []) if node.status_code == 200 else []
+            migrated = [x for x in lineage if x["edge"]["type"] == "MIGRATED_TO"]
+            self.run.check(s, f"lineage {t}", len(migrated) > 0,
+                           f"{len(migrated)} MIGRATED_TO from {uid}" if migrated else f"HTTP {node.status_code}, no MIGRATED_TO")
+            hits = self.get(f"{base}/search", params={"q": t, "labels": "Process", "k": 8})
+            found = [h for h in (hits.json().get("hits") or []) if h["label"] == "Process"
+                     and (h.get("props") or {}).get("name", t) == t] if hits.status_code == 200 else []
+            self.run.check(s, f"search {t}", len(found) > 0, f"{len(found)} Process hits" if found else f"HTTP {hits.status_code}")
+        latest = max((r["n"] for r in revs), default=0)
+        diff = self.get(f"{base}/revisions/{latest}/diff") if latest else None
+        d = diff.json() if diff is not None and diff.status_code == 200 else {}
+        sizes = {k: sum(len(d.get(k, {}).get(x, [])) for x in ("added", "changed", "removed"))
+                 for k in ("nodes", "relationships")}
+        self.run.check(s, "latest diff", sum(sizes.values()) > 0, f"revision {latest}: {sizes}")
+        first = f"process:{procs[TARGETS[0]]['ir_id']}"
+        cur = self.post(f"{base}/curations", headers={"X-User": SME},
+                        json={"action": "note", "target_uid": first, "reason": "acceptance run",
+                              "text": "Acceptance run note: confirmed by the business owner."})
+        applied, detail = False, f"HTTP {cur.status_code}"
+        if cur.status_code == 202:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and not applied:
+                now = self.get(f"{base}/revisions", params={"limit": 20}).json().get("revisions") or []
+                applied = any(r["phase"] == "curation" and r["n"] > latest for r in now)
+                if not applied:
+                    time.sleep(1.5)
+            detail = "curation revision appeared" if applied else "no curation revision within 60 s"
+        self.run.check(s, "curation applied", cur.status_code == 202 and applied, detail)
+        ask = self.post("/ask", json={"project_id": self.project_id,
+                                      "question": f"What does {TARGETS[0]} do?"})
+        cites = [c["citation"]["uid"] for c in (ask.json().get("citations") or [])
+                 if c.get("citation")] if ask.status_code == 200 else []
+        self.run.check(s, "ask cites memory", len(cites) > 0, cites[0] if cites else f"HTTP {ask.status_code}")
+
 
 def _first_line(text: str | None) -> str:
     for line in (text or "").splitlines():
@@ -603,6 +660,7 @@ def main(argv: list[str] | None = None) -> int:
                   (f"verify {t}", lambda t=t: flow.verify(t), False),
                   (f"plan {t}", lambda t=t: flow.plan(t), False)]
     steps.append(("evidence", flow.evidence, False))
+    steps.append(("memory", flow.memory, False))
 
     stopped_at: str | None = None
     for name, fn, blocking in steps:

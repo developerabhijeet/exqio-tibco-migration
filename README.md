@@ -161,7 +161,9 @@ It creates a project, uploads the synthetic zip, scans, discovers, analyzes `Dea
 and `CreditApplicationIntake`, approves G1 to G3 as `sme.vicky` and `architect.lee`, builds,
 checks the infrastructure, verifies, runs the plan in connect-later mode and checks test data
 masking, readiness and the audit trail. It prints a pass/fail table and exits non-zero on any
-failed row.
+failed row. A final `memory` step checks the project memory: available, a revision per
+content phase, lineage and search for each target, a non-empty latest diff, a curation note as
+`sme.vicky` that lands as a new revision, and an answer that cites a memory node.
 
 It probes NuGet (or the offline cache) and the provider registry first and runs in one of two
 modes, named at the top of the table with the reason:
@@ -178,6 +180,17 @@ Against an installed platform (the smoke test in the install guide) run the scri
 `scripts/demo_check.py --base-url https://<host>` talks to the API under `<host>/api`, and `--token`
 (or `EXIQO_TOKEN`) sends an Entra access token for an `AUTH_MODE=oidc` install. Without those flags
 it behaves as described above.
+
+## Memory
+
+Each project keeps a versioned memory in Neo4j: the estate, analyses, designs, builds and the
+decisions people take, linked from legacy process to generated code, and every change creates a
+numbered revision. Search, Ask and the generation steps read from it. `make neo4j` starts the
+local database (set `NEO4J_URI` and its credentials in `.env`); the API and workers ingest into it
+after each phase. Open the **Memory** explorer in the web app to search, browse the graph and
+lineage, step through revisions and diffs, and add curations (notes, mapping corrections,
+obsolete marks) as an SME or admin; viewers read only. `make demo-check` ends with a `memory`
+step that exercises all of this.
 
 ## Install on AKS
 
