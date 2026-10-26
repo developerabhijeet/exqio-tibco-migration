@@ -6,8 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from api.app.models import Rule
-from api.app.services.citations import activity_ref, cite_domain, cite_finding, cite_rule, hints_for
+from api.app.models import Finding, Rule
+from api.app.services.citations import (
+    activity_names,
+    activity_ref,
+    cite_domain,
+    cite_finding,
+    cite_rule,
+    hints_for,
+)
 from api.tests.test_analysis_gates import DFR, SME, _analyse, _scanned
 from engine.citations.model import CitedText, cut
 
@@ -102,6 +109,27 @@ async def test_payloads_keep_existing_fields(client, analysed):
     assert {"evidence", "name", "process_ids"} <= d.keys()
 
 
+async def test_cited_text_is_masked_and_spans_slice_it(client, app, analysed):
+    """An SSN in a rule or finding: ``cited.text`` is masked, differs from ``text``, and every
+    span slices ``cited.text`` cleanly."""
+    a = (await client.get(f"/processes/{analysed.proc}/analysis")).json()
+    rule, finding = a["rules"][0], a["findings"][0]
+    async with app.state.sessionmaker() as s:
+        (await s.get(Rule, rule["id"])).text = "Applicant ssn 123-45-6789 is checked. Then funded."
+        (await s.get(Finding, finding["id"])).text = "Leaks 987-65-4321 in logs. Fix it."
+        await s.commit()
+    a = (await client.get(f"/processes/{analysed.proc}/analysis")).json()
+    for item, raw in ((next(r for r in a["rules"] if r["id"] == rule["id"]), "123-45-6789"),
+                      (next(f for f in a["findings"] if f["id"] == finding["id"]), "987-65-4321")):
+        ct = CitedText.model_validate(item["cited"])
+        assert raw in item["text"] and raw not in ct.text and ct.text != item["text"]
+        assert "***-**-****" in ct.text
+        assert ct.spans and len(ct.refs) == len(item["citations"])
+        sentences = [x.strip().rstrip(".") for x in ct.text.split(". ") if x.strip()]
+        for span in ct.spans:
+            assert ct.text[span.start:span.end] in sentences
+
+
 # ------------------------------------------------------------------ builders
 PROC = SimpleNamespace(id="p1", ir_id="dealer.Funding", ir={"activities": [
     {"id": "a1", "name": "LookupDealer"}, {"id": "a2", "name": "Map"},
@@ -167,3 +195,20 @@ def test_domain_sentences_in_order_of_first_appearance():
     assert spans == ["Shares the tables DEALER, FUNDING", "Calls between a calls b", "Weird: w1"]
     assert [s.refs for s in ct.spans] == [["c1", "c3"], ["c2"], ["c4"]]
     assert cite_domain(SimpleNamespace(evidence=[])) == CitedText.plain("")
+
+
+def test_queues_and_topics_share_one_sentence():
+    domain = SimpleNamespace(evidence=[
+        {"kind": "queue", "text": "Q.FUND"}, {"kind": "table", "text": "DEALER"},
+        {"kind": "topic", "text": "T.CREDIT"}])
+    ct = cite_domain(domain)
+    assert ct.text == "Uses the queues Q.FUND, T.CREDIT. Shares the tables DEALER."
+    assert [s.refs for s in ct.spans] == [["c1", "c3"], ["c2"]]
+
+
+def test_names_built_once_are_used():
+    names = activity_names(PROC)
+    assert names == {"a1": "LookupDealer", "a2": "Map", "a3": "Check Credit"}
+    rule = SimpleNamespace(rule_key="R1", text="Renamed runs.",
+                           citations=[{"activity_id": "a1", "kind": "sql", "text": "q"}])
+    assert cite_rule(rule, PROC, names={"a1": "Renamed"}).refs[0].label == "Renamed"

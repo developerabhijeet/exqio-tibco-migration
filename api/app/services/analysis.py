@@ -41,7 +41,7 @@ from api.app.models import (
     Rule,
 )
 from api.app.services import gates as gate_svc
-from api.app.services.citations import cite_finding, cite_rule
+from api.app.services.citations import activity_names, cite_finding, cite_rule
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import (
     CODE_ONLY_NOTICE,
@@ -640,7 +640,8 @@ async def _remember(knowledge: Knowledge, project_id: str, memory: tuple[str, di
 
 
 # ------------------------------------------------------------------ view
-def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process) -> dict[str, Any]:
+def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process,
+              names: dict[str, str]) -> dict[str, Any]:
     cits = []
     for c in r.citations or []:
         c = _cit(c)
@@ -654,15 +655,15 @@ def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process) -> dict
             "citations": cits, "confidence": r.confidence, "status": r.status, "owner": r.owner,
             "memory_refs": r.memory_refs or [], "challenge": r.challenge, "updated_by": r.updated_by,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-            "cited": cite_rule(r, process, citations=cits)}
+            "cited": cite_rule(r, process, citations=cits, names=names)}
 
 
-def _finding_out(f: Finding, process: Process) -> dict[str, Any]:
+def _finding_out(f: Finding, process: Process, names: dict[str, str]) -> dict[str, Any]:
     return {"id": f.id, "finding_key": f.finding_key, "severity": f.severity, "text": f.text,
             "citations": [_cit(c) for c in f.citations or []], "source": f.source,
             "business_impact": f.business_impact, "decision": f.decision, "note": f.note,
             "decided_by": f.decided_by, "decided_at": f.decided_at.isoformat() if f.decided_at else None,
-            "cited": cite_finding(f, process)}
+            "cited": cite_finding(f, process, names=names)}
 
 
 async def analysis_view(session: AsyncSession, process: Process) -> dict[str, Any]:
@@ -679,6 +680,7 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
     status = {r.rule_key: r.status for r in rules}
     live = [f for f in failures if status.get(f.get("rule_id")) != "rejected"]
     covered = sum(1 for i in items if i.covered_by or i.technical_reason)
+    names = activity_names(process)
     return {
         "process_id": process.id,
         "analysed": analysis is not None,
@@ -691,8 +693,8 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
         "notice": summary.get("notice"),
         "static_only": analysis.static_only if analysis else None,
         "summary": summary.get("text"),
-        "rules": [_rule_out(r, failures, process) for r in rules],
-        "findings": [_finding_out(f, process) for f in findings],
+        "rules": [_rule_out(r, failures, process, names) for r in rules],
+        "findings": [_finding_out(f, process, names) for f in findings],
         "verification": {"verified": ver.get("verified", 0), "total": ver.get("total", 0),
                          "failures": failures, "passed": not live},
         "coverage": {"covered": covered, "total": len(items), "complete": covered == len(items),

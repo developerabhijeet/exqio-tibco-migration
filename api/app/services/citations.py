@@ -25,10 +25,11 @@ _WORD = re.compile(r"[A-Za-z_][\w]*")
 # An identifier, not a common word: snake case, a digit, or a capital after the first letter.
 _IDENTIFIER = re.compile(r"_|\d|.[A-Z]")
 
+# Queues and topics read as one sentence.
+_SAME_SENTENCE = {"topic": "queue"}
 _DOMAIN_SENTENCE = {
     "table": "Shares the tables {}.",
     "queue": "Uses the queues {}.",
-    "topic": "Uses the queues {}.",
     "call": "Calls between {}.",
     "module": "Lives in the modules {}.",
     "name": "Named alike: {}.",
@@ -61,12 +62,15 @@ def activity_ref(ref_id: str, process_id: str, ir_id: str, activity_id: str, act
         target=CiteTarget(kind="activity", process_id=process_id, activity_id=activity_id or None))
 
 
-def _activity_names(process: Any) -> dict[str, str]:
+def activity_names(process: Any) -> dict[str, str]:
+    """Activity id to name from ``Process.ir``: build it once per view, pass it to each claim."""
     return {a.get("id"): a.get("name") or "" for a in (process.ir or {}).get("activities") or []}
 
 
-def _cite_claim(key: str, text: str | None, citations: list[Any], process: Any) -> CitedText:
-    names = _activity_names(process)
+def _cite_claim(key: str, text: str | None, citations: list[Any], process: Any,
+                names: dict[str, str] | None) -> CitedText:
+    """``cited.text`` is the masked claim text and every span indexes into it."""
+    names = activity_names(process) if names is None else names
     hinted = []
     for i, c in enumerate(citations):
         c = c if isinstance(c, dict) else c.model_dump()
@@ -81,24 +85,28 @@ def _cite_claim(key: str, text: str | None, citations: list[Any], process: Any) 
     return anchor(text, hinted)
 
 
-def cite_rule(rule: Any, process: Any, citations: list[dict[str, Any]] | None = None) -> CitedText:
-    """``citations`` overrides ``rule.citations`` (the view's, carrying ``verified``/``reason``)."""
+def cite_rule(rule: Any, process: Any, citations: list[dict[str, Any]] | None = None, *,
+              names: dict[str, str] | None = None) -> CitedText:
+    """``citations`` overrides ``rule.citations`` (the view's, carrying ``verified``/``reason``);
+    ``names`` is ``activity_names(process)``, built once per view."""
     return _cite_claim(rule.rule_key, rule.text,
-                       rule.citations or [] if citations is None else citations, process)
+                       rule.citations or [] if citations is None else citations, process, names)
 
 
-def cite_finding(finding: Any, process: Any) -> CitedText:
-    return _cite_claim(finding.finding_key, finding.text, finding.citations or [], process)
+def cite_finding(finding: Any, process: Any, *, names: dict[str, str] | None = None) -> CitedText:
+    return _cite_claim(finding.finding_key, finding.text, finding.citations or [], process, names)
 
 
 def cite_domain(domain: Any) -> CitedText:
-    """One rationale sentence per evidence kind, in order of first appearance; one ref per
-    evidence item, anchored on its kind's sentence."""
+    """One rationale sentence per evidence kind (queues and topics share one), in order of first
+    appearance; one ref per evidence item, hinted by its masked text: it anchors on the first
+    sentence that names that text (its own kind's, unless an earlier sentence also holds it),
+    else on the last sentence."""
     items = [(str(e.get("kind") or ""), mask_sensitive(str(e.get("text") or "")))
              for e in domain.evidence or []]
     by_kind: dict[str, list[str]] = {}
     for kind, text in items:
-        by_kind.setdefault(kind, []).append(text)
+        by_kind.setdefault(_SAME_SENTENCE.get(kind, kind), []).append(text)
     sentences = []
     for kind, texts in by_kind.items():
         template = _DOMAIN_SENTENCE.get(kind) or f"{(kind or 'evidence').capitalize()}: {{}}."
