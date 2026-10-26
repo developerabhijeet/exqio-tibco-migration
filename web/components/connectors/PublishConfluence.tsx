@@ -10,6 +10,7 @@ import { useConnectors } from "@/lib/connectors";
 import { useJob } from "@/lib/jobs";
 import { actionError, useActionAccess, useLinks } from "@/lib/publish";
 import { RoleLock } from "@/components/shell/RoleNotice";
+import { FigmaReferences } from "./FigmaReferences";
 import { ActionStatus, LinkChips } from "./LinkChips";
 
 function summary(result: Record<string, unknown>): string | null {
@@ -63,5 +64,18 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
       </p>
       <ActionStatus stream={stream} error={error} testId="publish-confluence" summary={summary} />
     </section>
+  );
+}
+
+/** The Design tab's connector row: Confluence publishing beside the Figma references; nothing when
+ * both connectors are off. */
+export function DesignConnectorPanels({ processId, hasDesign }: { processId: string; hasDesign: boolean }) {
+  const flags = useConnectors();
+  if (!flags.data?.atlassian.confluence && !flags.data?.figma.enabled) return null;
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-2 print:hidden" data-testid="design-connectors">
+      <PublishConfluence processId={processId} hasDesign={hasDesign} />
+      <FigmaReferences processId={processId} />
+    </div>
   );
 }

@@ -11,68 +11,12 @@ import { Loader2, TicketPlus } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConnectors } from "@/lib/connectors";
 import { useJob } from "@/lib/jobs";
-import { actionError, jiraLinks, jiraRef, useActionAccess, useLinks } from "@/lib/publish";
-import type { ScenarioReport } from "@/lib/buildTypes";
-import type { DesignRecord, FindingView, JiraItem } from "@/lib/types";
+import { actionError, jiraLinks, jiraRef, useActionAccess, useLinks, type JiraCandidate } from "@/lib/publish";
 import { RoleLock } from "@/components/shell/RoleNotice";
 import { ActionStatus, LinkChip } from "./LinkChips";
 
-export interface JiraCandidate {
-  item: JiraItem;
-  /** One line naming the item (its key and text). */
-  label: string;
-  /** False when the item has nothing to track any more (decided keep or ask, answered, explained). */
-  trackable: boolean;
-  /** Why it is not trackable, for the disabled box. */
-  note?: string;
-}
-
-const clip = (t: string, n = 140) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
-
-/** Findings: one to track is undecided or decided Fix (keep and ask have nothing to track). */
-export function findingCandidates(findings: readonly FindingView[]): JiraCandidate[] {
-  return findings
-    .filter((f) => f.finding_key)
-    .map((f) => {
-      const trackable = !f.decision || f.decision === "fix";
-      return {
-        item: { type: "finding" as const, ref: f.finding_key! },
-        label: `${f.finding_key!.split("-")[0]}${f.severity ? ` (${f.severity})` : ""}: ${clip(f.text)}`,
-        trackable,
-        note: trackable ? undefined : `decided ${f.decision}`,
-      };
-    });
-}
-
-/** Open questions, by their stable id (never their position); answered ones have nothing to track. */
-export function questionCandidates(questions: DesignRecord["open_questions"]): JiraCandidate[] {
-  return questions
-    .filter((q) => q.question_id)
-    .map((q) => ({
-      item: { type: "question" as const, ref: q.question_id! },
-      label: clip(q.question),
-      trackable: !q.decision,
-      note: q.decision ? `${q.decision}` : undefined,
-    }));
-}
-
-/** Unexplained differences (defects) of the parity run, as `<scenario key>:<field path>`. */
-export function parityCandidates(reports: readonly ScenarioReport[]): JiraCandidate[] {
-  const out = new Map<string, JiraCandidate>();
-  for (const r of reports) {
-    if (!r.scenario_key) continue;
-    for (const f of [...(r.fields ?? []), ...(r.side_effects ?? [])]) {
-      if (f.status !== "defect") continue;
-      const ref = `${r.scenario_key}:${f.path}`;
-      out.set(ref, {
-        item: { type: "parity", ref },
-        label: `${r.scenario_name ?? r.scenario_key}: ${f.path}`,
-        trackable: true,
-      });
-    }
-  }
-  return [...out.values()];
-}
+export type { JiraCandidate } from "@/lib/publish";
+export { findingCandidates, parityCandidates, questionCandidates } from "@/lib/publish";
 
 function summary(result: Record<string, unknown>): string | null {
   const n = (k: string) => (Array.isArray(result[k]) ? (result[k] as unknown[]).length : 0);
@@ -160,7 +104,7 @@ export function JiraIssues({
       {shown.length === 0 ? (
         <p className="text-[13px] text-slate">{empty}</p>
       ) : (
-        <ul className="divide-y divide-line rounded-btn border border-line text-[13px]">
+        <ul className="max-h-[320px] divide-y divide-line overflow-y-auto rounded-btn border border-line text-[13px]" data-testid={`jira-${scope}-items`}>
           {shown.map((c) => {
             const ref = jiraRef(c.item);
             const link = byRef.get(ref);

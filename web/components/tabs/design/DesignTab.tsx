@@ -16,9 +16,8 @@ import { JobLog } from "@/components/jobs/JobLog";
 import { GateButton } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
-import { FigmaReferences } from "@/components/connectors/FigmaReferences";
 import { JiraIssues, questionCandidates } from "@/components/connectors/JiraIssues";
-import { PublishConfluence } from "@/components/connectors/PublishConfluence";
+import { DesignConnectorPanels } from "@/components/connectors/PublishConfluence";
 import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { ConfigTable } from "./ConfigTable";
 import { DecisionList, OpenQuestions } from "./DecisionList";
@@ -157,10 +156,7 @@ export function DesignTab() {
             ) : null}
           </div>
 
-          <div className="grid items-start gap-4 xl:grid-cols-2 print:hidden">
-            <PublishConfluence processId={processId} hasDesign={!!rec} />
-            <FigmaReferences processId={processId} />
-          </div>
+          <DesignConnectorPanels processId={processId} hasDesign={!!rec} />
 
           {design.error ? <ErrorNote error={design.error} /> : null}
           {!rec ? (

@@ -33,20 +33,21 @@ async def seed(build_id: str, fixture: Path) -> str:
     job_id = f"e2e-seed-{new_id()[:8]}"
     try:
         async with make_sessionmaker(engine)() as s:
-            build = await s.get(Build, build_id)
-            if build is None:
+            # Only the columns this needs: the script runs against whatever schema the API migrated.
+            process_id = await s.scalar(select(Build.process_id).where(Build.id == build_id))
+            if process_id is None:
                 raise SystemExit(f"build {build_id} not found")
             for rep in parity["reports"]:
                 key = rep["scenario_key"]
-                scenario = await s.scalar(select(Scenario).where(Scenario.process_id == build.process_id,
+                scenario = await s.scalar(select(Scenario).where(Scenario.process_id == process_id,
                                                                 Scenario.key == key))
                 if scenario is None:
-                    scenario = Scenario(process_id=build.process_id, key=key, name=rep.get("scenario_name") or key,
+                    scenario = Scenario(process_id=process_id, key=key, name=rep.get("scenario_name") or key,
                                         data={})
                     s.add(scenario)
                     await s.flush()
                 report: dict[str, Any] = {k: v for k, v in rep.items() if k not in REPORT_KEYS}
-                run = ScenarioRun(build_id=build.id, scenario_id=scenario.id, job_id=job_id, status=rep["status"],
+                run = ScenarioRun(build_id=build_id, scenario_id=scenario.id, job_id=job_id, status=rep["status"],
                                   report=report, parity=rep.get("parity"))
                 s.add(run)
                 await s.flush()

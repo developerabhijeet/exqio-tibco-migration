@@ -47,14 +47,18 @@ export function LinkChip({ link }: { link: ConnectorLinkView }) {
       data-stale={link.stale ? "true" : undefined}
       title={title}
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-medium underline-offset-2 hover:underline ${
-        link.stale ? "border-line bg-warm text-slate line-through" : "border-purple/30 bg-purple-lt text-purple-dk"
+        link.stale ? "border-line bg-warm text-slate" : "border-purple/30 bg-purple-lt text-purple-dk"
       }`}
     >
       <Icon size={12} aria-hidden />
       <span className="sr-only">{label} </span>
-      {link.object_type === "jira_issue" ? null : <span aria-hidden>{label}</span>}
-      <span className="font-mono">{text(link)}</span>
-      {link.stale ? <span className="no-underline">(gone)</span> : null}
+      {link.object_type === "jira_issue" ? null : (
+        <span aria-hidden className={link.stale ? "line-through" : undefined}>
+          {label}
+        </span>
+      )}
+      <span className={`font-mono ${link.stale ? "line-through" : ""}`}>{text(link)}</span>
+      {link.stale ? <span data-testid="link-stale">(gone)</span> : null}
     </a>
   );
 }

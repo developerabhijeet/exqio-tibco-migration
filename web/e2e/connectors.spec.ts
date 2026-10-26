@@ -3,8 +3,9 @@ import { actAs } from "./helpers";
 import { apiUrl } from "../scripts/root-env";
 
 // Settings → Connectors against the local fakes the e2e stack starts (playwright.config.ts): the
-// install enables GitHub and Atlassian (Data Center) and leaves Figma off, so both install states
-// are on screen. Credentials come from token files only; the page shows whether they are mounted.
+// install enables GitHub, Atlassian (Data Center) and Figma; the "off in this install" state is
+// shown by routing the settings answer for Figma. Credentials come from token files only; the page
+// shows whether they are mounted.
 
 /** The fakes' tokens (api/tests/fakes defaults): they must never reach the page. */
 const FAKE_TOKENS = ["ghs-fake-token", "atlassian-fake-token", "figma-fake-token"];
@@ -16,6 +17,7 @@ async function resetConnectors(request: APIRequestContext): Promise<void> {
     data: {
       github: { enabled: false, base_url: "", api_url: "", default_owner: "" },
       atlassian: { enabled: false, confluence_url: "", jira_url: "", space_key: "", project_key: "" },
+      figma: { enabled: false, api_url: "", web_url: "", file_keys: [] },
     },
   });
   expect(res.status(), await res.text()).toBe(200);
@@ -166,7 +168,16 @@ test.describe("connectors", () => {
     expect(puts).toEqual([]);
   });
 
-  test("figma is off in this install and cannot be toggled", async ({ page }) => {
+  test("a connector off in this install cannot be toggled", async ({ page }) => {
+    // The e2e install enables every connector, so the API's answer for Figma is turned into what
+    // an install with connectors.figma.enabled=false gives (the same shape, the ceiling off).
+    await page.route("**/settings/connectors", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      const view = await res.json();
+      view.figma = { ...view.figma, install_enabled: false, enabled: false };
+      await route.fulfill({ response: res, json: view });
+    });
     await page.goto("/settings?tab=connectors");
     await actAs(page, "ops.sam");
     await expect(page.getByTestId("connector-figma-install")).toContainText("Off in this install: set connectors.figma.enabled");

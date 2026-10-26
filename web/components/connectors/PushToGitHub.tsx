@@ -3,7 +3,7 @@
 // Build tab: push the finished build to an exiqo/ branch of a GitHub repository and open the pull
 // request (POST /builds/{id}/github/push, a `connector.github.push` job). Hidden when GitHub is off;
 // shown disabled, with the reason, to anyone the API would refuse (engineer or admin only).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitPullRequest, Loader2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useConnectors } from "@/lib/connectors";
@@ -24,6 +24,34 @@ export function defaultBranch(processName: string, buildId: string): string {
       .slice(0, 60)
       .replace(/-+$/g, "") || "process";
   return `exiqo/${slug}/build-${buildId.slice(0, 8)}`;
+}
+
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select, textarea, a[href], [tabindex]:not([tabindex="-1"])';
+
+/** Keep Tab inside the dialog while it is open, and give focus back to its trigger when it closes. */
+function useDialogFocus(open: boolean, dialog: React.RefObject<HTMLElement | null>, trigger: React.RefObject<HTMLElement | null>) {
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) wasOpen.current = true;
+    else if (wasOpen.current) {
+      wasOpen.current = false;
+      trigger.current?.focus();
+    }
+  }, [open, trigger]);
+  return (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab" || !dialog.current) return;
+    const items = Array.from(dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 }
 
 function summary(result: Record<string, unknown>): string | null {
@@ -55,6 +83,9 @@ export function PushToGitHub({
   const [openPr, setOpenPr] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const trapTab = useDialogFocus(open, dialogRef, triggerRef);
 
   if (!flags.data?.github.enabled) return null;
   const mine = (links.data ?? []).filter(
@@ -98,6 +129,8 @@ export function PushToGitHub({
             type="button"
             className="btn-secondary"
             data-testid="push-github"
+            ref={triggerRef}
+            aria-haspopup="dialog"
             disabled={!!reason || running}
             onClick={() => {
               setError(null);
@@ -123,7 +156,11 @@ export function PushToGitHub({
             data-testid="push-github-dialog"
             className="relative w-[480px] max-w-full space-y-3 rounded-card bg-white p-5 shadow-pop"
             onSubmit={submit}
-            onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+            ref={dialogRef}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setOpen(false);
+              else trapTab(e);
+            }}
           >
             <div className="flex items-center justify-between">
               <h4 id="push-github-heading" className="text-[16px] font-semibold text-plum">

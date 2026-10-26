@@ -44,8 +44,9 @@ const fakePorts = Object.fromEntries(process.env.E2E_FAKE_PORTS.split(",").map((
 >;
 const fakeTokens = process.env.E2E_FAKE_TOKENS;
 const fakeHost = (name: (typeof FAKE_SERVICES)[number]) => `127.0.0.1:${fakePorts[name]}`;
-// The install layer (the chart's connectors.* values): GitHub and Atlassian (Data Center) on the
-// fakes, Figma left off, so the page shows both install states.
+// The install layer (the chart's connectors.* values): GitHub, Atlassian (Data Center) and Figma
+// on the fakes. Each spec turns the application toggles on and off itself; the "off in this
+// install" state is shown by routing the settings answer (connectors.spec.ts).
 const CONNECTORS = {
   github: {
     enabled: true,
@@ -61,7 +62,13 @@ const CONNECTORS = {
     jiraUrl: `http://${fakeHost("jira")}`,
     allowedHosts: [fakeHost("confluence"), fakeHost("jira")],
   },
-  figma: { enabled: false },
+  figma: {
+    enabled: true,
+    apiUrl: `http://${fakeHost("figma")}`,
+    webUrl: "https://www.figma.example",
+    allowedHosts: [fakeHost("figma")],
+    imageHosts: [fakeHost("figma-images")],
+  },
 };
 
 export default defineConfig({
@@ -126,6 +133,7 @@ export default defineConfig({
         CONNECTORS_ALLOW_INSECURE_LOOPBACK: "true",
         GITHUB_TOKEN_FILE: join(fakeTokens, "github"),
         ATLASSIAN_TOKEN_FILE: join(fakeTokens, "atlassian"),
+        FIGMA_TOKEN_FILE: join(fakeTokens, "figma"),
         // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),
         // so the Verify tab's dev-token call from this run's web origin is allowed there too.
       },
