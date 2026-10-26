@@ -1,6 +1,6 @@
 import toolchain
 
-EXPECTED = {"dotnet", "terraform", "terragrunt", "docker", "az", "node"}
+EXPECTED = {"dotnet", "terraform", "terragrunt", "docker", "az", "node", "java", "mvn", "go", "python3", "uv"}
 
 
 def test_detect_returns_all_keys():
