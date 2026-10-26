@@ -21,6 +21,7 @@ import hashlib
 import json
 import unicodedata
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,10 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import new_id
-from api.app.models import Build, BuildFile, DesignRecord, EditSet, Process
+from api.app.models import Build, BuildFile, DesignRecord, EditSet, Iteration, Process
 from api.app.services import gates as gate_svc
 from api.app.services import iterations as iteration_svc
-from api.app.services.build_tree import build_tree_files
+from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files
 from api.app.services.build_tree import download_excluded as stack_download_excluded
 from api.app.services.uploads import (
     UploadError,
@@ -138,7 +139,7 @@ def _origin(origins: dict[str, str], path: str) -> str:
     return origin if origin in ("code", "agent", "ai", "infra", "tests", "hand") else "code"
 
 
-def _infra_path(path: str) -> bool:
+def infra_path(path: str) -> bool:
     return path in INFRA_FILES or path.startswith(INFRA_PREFIXES)
 
 
@@ -148,7 +149,7 @@ def decide_resume(changes: list[FileChange], baseline_design_hash: str | None,
     (or none is approved), ``infra`` when every change is infrastructure, else ``build``."""
     if not current_design_hash or baseline_design_hash != current_design_hash:
         return "design"
-    if changes and all(_infra_path(c.path) for c in changes):
+    if changes and all(infra_path(c.path) for c in changes):
         return "infra"
     return "build"
 
@@ -293,3 +294,46 @@ async def create_edit_set(session: AsyncSession, settings: Settings, build_id: s
         remove_tree(dest)
         raise
     return row
+
+
+# ------------------------------------------------------------------ building from an edit set
+@dataclass
+class EditBuild:
+    """What a build with ``edit_set_id`` needs: the changes, the baseline build's folder (``None``
+    when it is gone), the edited tree, and whether only infrastructure changed."""
+
+    edit_set_id: str
+    baseline_build_id: str | None
+    changes: list[FileChange]
+    baseline_root: Path | None
+    edited_root: Path
+    infra_only: bool
+    excluded: frozenset[str] = DOWNLOAD_EXCLUDED
+    baseline_files: list[dict[str, Any]] = field(default_factory=list)  # the baseline's build_files rows
+
+
+def infra_change(change: FileChange) -> bool:
+    """A change the infrastructure generation owns: merged after it, not before."""
+    return change.origin == "infra" or (change.origin == "new" and infra_path(change.path))
+
+
+async def load_edit_build(session: AsyncSession, build: Build) -> EditBuild:
+    row = await session.get(EditSet, build.edit_set_id)
+    if row is None:
+        raise ValueError(f"edit set {build.edit_set_id} not found")
+    iteration = await session.get(Iteration, row.iteration_id)
+    baseline = await session.get(Build, row.baseline_build_id) if row.baseline_build_id else None
+    edited = Path(row.root_dir)
+    if not edited.is_dir():
+        raise ValueError("the edit set's files are no longer on disk: upload the edits again")
+    root = Path(baseline.output_dir) if baseline is not None and baseline.output_dir else None
+    rows = [] if baseline is None else list((await session.scalars(
+        select(BuildFile).where(BuildFile.build_id == baseline.id).order_by(BuildFile.path))).all())
+    return EditBuild(
+        edit_set_id=row.id, baseline_build_id=row.baseline_build_id,
+        changes=[FileChange.model_validate(f) for f in row.files or []],
+        baseline_root=root if root is not None and root.is_dir() else None, edited_root=edited,
+        infra_only=iteration is not None and iteration.resume_phase == "infra",
+        excluded=download_excluded(baseline if baseline is not None else build),
+        baseline_files=[{"path": r.path, "origin": r.origin, "sha256": r.sha256, "size": r.size,
+                         "process_id": r.process_id, "tibco_ref": r.tibco_ref} for r in rows])

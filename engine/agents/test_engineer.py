@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import textwrap
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -266,15 +267,17 @@ def test_files_with_entries(solution: GeneratedSolution, process: Process | None
 
 
 def _test_files(solution: GeneratedSolution, process: Process,
-                stack: str = "dotnet") -> list[tuple[GenFile, list[IndexEntry]]]:
+                stack: str = "dotnet",
+                hand_paths: Collection[str] = frozenset()) -> list[tuple[GenFile, list[IndexEntry]]]:
+    """The process's rule and branch test files with a placeholder; a hand-edited one is left alone."""
     if stack != "dotnet":
         return [(f, entries) for f, entries in test_files_with_entries(solution, process, stack)
-                if placeholder_methods(f.content, stack, entries)]
+                if f.path not in hand_paths and placeholder_methods(f.content, stack, entries)]
     stem = ident(process.name, "Process")
     names = {f"{stem}{k}.cs" for k in TEST_FILE_KINDS}
     out: list[tuple[GenFile, list[IndexEntry]]] = []
     for f in solution.files:
-        if not is_test_path(f.path) or PurePosixPath(f.path).name not in names:
+        if f.path in hand_paths or not is_test_path(f.path) or PurePosixPath(f.path).name not in names:
             continue
         if f.process_id not in (None, process.id):
             continue
@@ -1268,6 +1271,7 @@ async def fill_test_bodies(
     warnings: list[dict[str, str]] | None = None,
     stack: str = "dotnet",
     iteration: IterationContext | None = None,
+    hand_paths: Collection[str] = frozenset(),
 ) -> list[GenFile]:
     """Write the placeholder bodies of ``<Process>RulesTests.cs`` and ``<Process>BranchTests.cs``
     (another ``stack``: of the rule and branch tests its test index lists).
@@ -1284,7 +1288,7 @@ async def fill_test_bodies(
     branch expression or fixtures (:func:`expected_value_warning`), for a person to check."""
     del design  # the test classes and their ids come from the files themselves
     out: list[GenFile] = []
-    targets = _test_files(solution, process, stack)
+    targets = _test_files(solution, process, stack, hand_paths)
     test_paths = {f.path for f, _ in targets}
     for f, entries in targets:
         changed = await _fill_file(f, solution, process, rules, scenarios, memory_items, provider,

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -368,14 +369,16 @@ def claimed_files(
     process: Process,
     others: list[tuple[DesignRecord, Process]] | None = None,
     stack: str = "dotnet",
+    hand_paths: Collection[str] = frozenset(),
 ) -> tuple[list[GenFile], list[BuildRejection]]:
     """The agent-written, non-test files with a placeholder that ``process`` owns, and a
-    rejection for each such file another process in ``others`` also claims (neither fills it)."""
+    rejection for each such file another process in ``others`` also claims (neither fills it).
+    A file in ``hand_paths`` (a person's edit, sub-project 6) is never claimed."""
     lang = language(stack)
     owned: list[GenFile] = []
     rejected: list[BuildRejection] = []
     for f in solution.files:
-        if not _fillable(f, lang) or not _claims(f, design, process, stack):
+        if f.path in hand_paths or not _fillable(f, lang) or not _claims(f, design, process, stack):
             continue
         rivals = sorted(p.id for d, p in others or [] if p.id != process.id and _claims(f, d, p, stack))
         if rivals:
@@ -555,6 +558,7 @@ async def fill_method_bodies(
     others: list[tuple[DesignRecord, Process]] | None = None,
     stack: str = "dotnet",
     iteration: IterationContext | None = None,
+    hand_paths: Collection[str] = frozenset(),
 ) -> list[GenFile]:
     """Fill the placeholder bodies of this process's agent-written files, one model call per file.
 
@@ -565,7 +569,7 @@ async def fill_method_bodies(
     reason; a file rejected twice is left out. Every rejection is appended to ``rejections``
     (``attempt`` 0 for an ownership conflict). ``solution`` is not modified. ``stack`` picks the
     language checks and the prompt pack."""
-    files, conflicts = claimed_files(solution, design, process, others, stack)
+    files, conflicts = claimed_files(solution, design, process, others, stack, hand_paths)
     for c in conflicts:
         log.warning("builder skipped %s: %s", c.path, c.reason)
     if rejections is not None:

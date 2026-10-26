@@ -87,7 +87,7 @@ PACKAGES: tuple[tuple[str, str], ...] = (
     ("xunit.runner.visualstudio", "3.0.2"),
 )
 
-Origin = Literal["code", "agent"]
+Origin = Literal["code", "agent", "hand"]  # hand: a person edited it (sub-project 6)
 
 
 class GenFile(BaseModel):

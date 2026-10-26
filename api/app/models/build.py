@@ -50,7 +50,7 @@ class BuildFile(IdMixin, Base):
 
     build_id: Mapped[str] = mapped_column(fk("builds.id"), index=True)
     path: Mapped[str]
-    origin: Mapped[str]  # code|agent|ai|infra (agent: a body left for a model; ai: filled by one)
+    origin: Mapped[str]  # code|agent|ai|infra|hand (agent: a body left for a model; ai: filled by one; hand: a person's edit, sub-project 6)
     process_id: Mapped[str | None]  # IR process id of a per-process file; None for shared files
     tibco_ref: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     sha256: Mapped[str]

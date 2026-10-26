@@ -65,11 +65,12 @@ class ReviewFinding(BaseModel):
 
 
 def reviewed_files(solution: GeneratedSolution, stack: str = "dotnet") -> dict[str, str]:
-    """The agent-written production files: what a model changed."""
+    """The agent-written production files (what a model changed) and the hand-edited ones (what a
+    person changed, sub-project 6: the panel still reviews them)."""
     lang = language(stack)
     return {
         f.path: f.content for f in solution.files
-        if f.origin == "agent" and not lang.is_test_path(f.path)
+        if f.origin in ("agent", "hand") and not lang.is_test_path(f.path)
     }
 
 

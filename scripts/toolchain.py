@@ -20,6 +20,7 @@ TOOLS: dict[str, list[str]] = {
     "terragrunt": ["--version"],
     "docker": ["--version"],
     "az": ["version", "--output", "tsv"],
+    "git": ["--version"],  # git merge-file: hand edits into a fresh generation (sub-project 6)
     "node": ["--version"],
     "java": ["-version"],
     "mvn": ["-v"],
