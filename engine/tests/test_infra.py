@@ -305,6 +305,27 @@ def test_validate_infra_registry_unreachable_is_not_ok(generated, tmp_path):
     assert not list((root / "infra").rglob(".terraform"))
 
 
+def test_validate_infra_init_disabled_is_skipped_not_passed(generated, tmp_path):
+    root, _ = generated
+    calls = tmp_path / "calls"
+    tf = _fake_tool(tmp_path, "terraform", f'echo "$1" >> "{calls}"\nexit 0\n')
+    result = validators.validate_infra(root, tf, None, init=False)
+    assert result.fmt_ok is True
+    assert len(result.modules) == len(MODULES)
+    assert all(m.init_ok is None and m.validate_ok is None for m in result.modules)
+    assert all("INFRA_VALIDATE_INIT=false" in m.log for m in result.modules)
+    assert any("skipped" in n for n in result.notes)
+    assert result.ok is False and result.registry_unreachable is False
+    assert set(calls.read_text().split()) == {"fmt"}  # init and validate never ran
+
+
+def test_validate_infra_init_uses_configured_timeout(generated, tmp_path):
+    root, _ = generated
+    tf = _fake_tool(tmp_path, "terraform", 'case "$1" in\n  init) sleep 5;;\nesac\nexit 0\n')
+    result = validators.validate_infra(root, tf, None, init_timeout_s=1)
+    assert all(m.init_ok is False and "timed out after 1s" in m.log for m in result.modules)
+
+
 def test_validate_infra_fmt_failure(generated, tmp_path):
     root, _ = generated
     tf = _fake_tool(tmp_path, "terraform", 'echo "main.tf"; exit 3\n')

@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     api_base_path: str = ""
     nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
     tf_cli_config_file: str = ""  # Terraform CLI config (provider network mirror) for the validators
+    # terraform init in the infra validation downloads providers. False skips init and module validate
+    # (recorded as skipped, never as passed): for e2e and machines with no registry or mirror.
+    infra_validate_init: bool = True
+    terraform_init_timeout_s: int = 300
     internal_token: str = ""  # bearer for the worker's cluster-internal listener
     internal_port: int = 9100
     worker_host: str = ""  # pod IP the worker advertises; empty means 127.0.0.1

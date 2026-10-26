@@ -49,6 +49,9 @@ export default defineConfig({
         // /memory explorer reads it.
         NEO4J_URI: process.env.NEO4J_URI ?? "bolt://localhost:7687",
         NEO4J_PASSWORD: process.env.NEO4J_PASSWORD ?? "exiqo-dev-neo4j",
+        // Infra validation's `terraform init` needs the provider registry (or a mirror), which a dev
+        // machine or CI without one cannot reach: skip init and module validate (recorded as skipped).
+        INFRA_VALIDATE_INIT: process.env.INFRA_VALIDATE_INIT ?? "false",
         // The browser calls the API directly: allow this run's web origin.
         CORS_ORIGINS: process.env.CORS_ORIGINS ?? `http://localhost:${webPort}`,
         // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),

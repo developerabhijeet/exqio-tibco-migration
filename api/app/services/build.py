@@ -736,7 +736,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     validation = await asyncio.to_thread(validate_infra, solution.root, (tools.get("terraform") or {}).get("path"),
                                          (tools.get("terragrunt") or {}).get("path"),
                                          {"TF_CLI_CONFIG_FILE": settings.tf_cli_config_file}
-                                         if settings.tf_cli_config_file else None)
+                                         if settings.tf_cli_config_file else None,
+                                         init=settings.infra_validate_init,
+                                         init_timeout_s=settings.terraform_init_timeout_s)
     await ctx.log(f"terraform fmt -check: {validation.fmt_ok}; module validate: "
                   f"{sum(1 for m in validation.modules if m.validate_ok)} of {len(validation.modules)}; "
                   f"terragrunt hcl fmt --check: {validation.hclfmt_ok}; ok: {validation.ok}")

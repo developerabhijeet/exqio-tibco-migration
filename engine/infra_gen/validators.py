@@ -28,6 +28,7 @@ from engine.child_env import child_env
 
 LOG_LIMIT = 4000
 TIMEOUT_S = 300
+INIT_TIMEOUT_S = 300  # default for ``terraform init`` (provider downloads); overridable per call
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # Only failures that mean "the provider registry or network cannot be reached". A bare "Forbidden" or
 # "403" is deliberately not here: it can come from anywhere (a bad module source, a private registry
@@ -64,13 +65,13 @@ def _present(tool: str | None) -> bool:
     return bool(tool) and (Path(str(tool)).exists() or shutil.which(str(tool)) is not None)
 
 
-def _run(argv: list[str], cwd: Path, env: dict[str, str]) -> tuple[int, str]:
+def _run(argv: list[str], cwd: Path, env: dict[str, str], timeout: int = TIMEOUT_S) -> tuple[int, str]:
     try:
         proc = subprocess.run(
-            argv, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=TIMEOUT_S, check=False
+            argv, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
-        return 124, f"timed out after {TIMEOUT_S}s: {' '.join(argv)}"
+        return 124, f"timed out after {timeout}s: {' '.join(argv)}"
     except OSError as exc:
         return 127, f"could not run {argv[0]}: {exc}"
     text = _ANSI.sub("", (proc.stdout or "") + (proc.stderr or "")).strip()
@@ -95,11 +96,21 @@ def _terragrunt_fmt_args(terragrunt: str, cwd: Path, env: dict[str, str]) -> lis
 
 
 def _validate_modules(
-    terraform: str, modules_dir: Path, env: dict[str, str], result: InfraValidation
+    terraform: str, modules_dir: Path, env: dict[str, str], result: InfraValidation,
+    init: bool = True, init_timeout_s: int = INIT_TIMEOUT_S,
 ) -> None:
     names = sorted(p.name for p in modules_dir.iterdir() if p.is_dir()) if modules_dir.is_dir() else []
     if not names:
         result.notes.append(f"no modules found under {modules_dir}")
+        return
+    if not init:
+        # Explicitly disabled (INFRA_VALIDATE_INIT=false): nothing was initialised or validated, and
+        # the modules say so; init_ok/validate_ok stay None so `ok` can never be true.
+        for name in names:
+            result.modules.append(ModuleValidation(
+                name=name, log="terraform init and validate skipped: INFRA_VALIDATE_INIT=false"))
+        result.notes.append("terraform init and module validate were skipped (INFRA_VALIDATE_INIT=false); "
+                            "fmt and hclfmt checks still ran.")
         return
     # Work on a copy: init writes .terraform and lock files that must not land in the solution.
     with tempfile.TemporaryDirectory(prefix="exiqo-tfvalidate-") as tmp:
@@ -110,6 +121,8 @@ def _validate_modules(
         Path(run_env["TF_PLUGIN_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
         run_env.setdefault("TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE", "true")
         first_failure: str | None = None
+        run_env.setdefault("TF_REGISTRY_CLIENT_TIMEOUT", "10")
+        run_env.setdefault("TF_REGISTRY_DISCOVERY_RETRY", "0")
         for name in names:
             mod = ModuleValidation(name=name)
             if first_failure is not None:
@@ -119,7 +132,7 @@ def _validate_modules(
                 result.modules.append(mod)
                 continue
             rc, log = _run([terraform, "init", "-backend=false", "-input=false", "-no-color"],
-                           work / name, run_env)
+                           work / name, run_env, init_timeout_s)
             mod.init_ok = rc == 0
             if not mod.init_ok:
                 mod.registry_unreachable = bool(_REGISTRY_FAILURE.search(log))
@@ -135,7 +148,8 @@ def _validate_modules(
 
 
 def validate_infra(root: Path, terraform: str | None, terragrunt: str | None,
-                   env: dict[str, str] | None = None) -> InfraValidation:
+                   env: dict[str, str] | None = None, *, init: bool = True,
+                   init_timeout_s: int = INIT_TIMEOUT_S) -> InfraValidation:
     """Run the infrastructure checks over ``root/infra`` with the given tool paths (``None`` = absent).
 
     ``env`` is added to the allowlisted child environment of every tool run."""
@@ -152,7 +166,7 @@ def validate_infra(root: Path, terraform: str | None, terragrunt: str | None,
         result.fmt_ok = rc == 0
         if not result.fmt_ok:
             result.notes.append(f"terraform fmt -check failed: {_tail(log)}")
-        _validate_modules(terraform, infra / "modules", tool_env, result)
+        _validate_modules(terraform, infra / "modules", tool_env, result, init, init_timeout_s)
         if any(m.registry_unreachable for m in result.modules):
             result.registry_unreachable = True
             result.notes.append(
