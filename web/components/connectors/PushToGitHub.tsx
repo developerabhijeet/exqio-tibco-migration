@@ -118,9 +118,9 @@ export function PushToGitHub({
   };
 
   return (
-    <section className="card space-y-2 p-4" data-testid="github-publish" aria-labelledby="github-publish-title">
+    <section className="card card-compact space-y-2" data-testid="github-publish" aria-labelledby="github-publish-title">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 id="github-publish-title" className="text-[16px] font-semibold text-plum">
+        <h3 id="github-publish-title" className="text-lg font-semibold text-heading">
           GitHub
         </h3>
         <LinkChips links={mine} testId="github-links" />
@@ -143,7 +143,7 @@ export function PushToGitHub({
           </button>
         </span>
       </div>
-      {access.reason ? <p className="text-[12.5px] text-slate">{access.reason}</p> : null}
+      {access.reason ? <p className="text-sm text-slate">{access.reason}</p> : null}
       <ActionStatus stream={stream} error={open ? null : error} testId="push-github" summary={summary} />
 
       {open ? (
@@ -154,7 +154,7 @@ export function PushToGitHub({
             aria-modal="true"
             aria-labelledby="push-github-heading"
             data-testid="push-github-dialog"
-            className="relative w-[480px] max-w-full space-y-3 rounded-card bg-white p-5 shadow-pop"
+            className="relative w-[480px] max-w-full space-y-3 rounded-card bg-surface p-5 shadow-pop"
             onSubmit={submit}
             ref={dialogRef}
             onKeyDown={(e) => {
@@ -163,14 +163,14 @@ export function PushToGitHub({
             }}
           >
             <div className="flex items-center justify-between">
-              <h4 id="push-github-heading" className="text-[16px] font-semibold text-plum">
+              <h4 id="push-github-heading" className="text-lg font-semibold text-heading">
                 Push build {buildId.slice(0, 8)} to GitHub
               </h4>
               <button type="button" className="btn-ghost" aria-label="Close" onClick={() => setOpen(false)}>
                 <X size={16} />
               </button>
             </div>
-            <label className="block text-[13px]">
+            <label className="block text-sm">
               <span className="label">Repository (owner/name)</span>
               <input
                 className="input mt-1 w-full"
@@ -183,11 +183,11 @@ export function PushToGitHub({
                 autoFocus
                 required
               />
-              <span id="push-github-repo-hint" className="mt-0.5 block text-[12px] text-slate">
+              <span id="push-github-repo-hint" className="mt-0.5 block text-xs text-slate">
                 {repo.trim() !== "" && !repoOk ? "Not owner/name." : "The repository must already exist."}
               </span>
             </label>
-            <label className="block text-[13px]">
+            <label className="block text-sm">
               <span className="label">Branch</span>
               <input
                 className="input mt-1 w-full font-mono"
@@ -198,16 +198,16 @@ export function PushToGitHub({
                 aria-invalid={!branchOk}
                 aria-describedby="push-github-branch-hint"
               />
-              <span id="push-github-branch-hint" className={`mt-0.5 block text-[12px] ${branchOk ? "text-slate" : "text-error"}`}>
+              <span id="push-github-branch-hint" className={`mt-0.5 block text-xs ${branchOk ? "text-slate" : "text-error"}`}>
                 {branchOk ? "Empty: the default above. Pushes go to exiqo/ branches only." : "Pushes go to exiqo/ branches only."}
               </span>
             </label>
-            <label className="flex items-center gap-2 text-[13px]">
+            <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={openPr} onChange={(e) => setOpenPr(e.target.checked)} data-testid="push-github-open-pr" />
               Open a pull request
             </label>
             {openPr ? (
-              <label className="block text-[13px]">
+              <label className="block text-sm">
                 <span className="label">Base branch</span>
                 <input
                   className="input mt-1 w-full font-mono"
@@ -219,7 +219,7 @@ export function PushToGitHub({
               </label>
             ) : null}
             {error ? (
-              <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-[13px] text-error">
+              <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-sm text-error">
                 {error}
               </p>
             ) : null}

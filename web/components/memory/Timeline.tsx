@@ -77,31 +77,31 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
       <div className="flex min-h-[30px] items-center gap-3">
         <History size={15} className="shrink-0 text-slate" aria-hidden />
         {asOf ? (
-          <div className="flex items-center gap-2.5 rounded-full bg-decision-bg py-0.5 pl-3 pr-1 text-[13px] font-medium text-decision ring-1 ring-inset ring-decision/20" >
+          <div className="flex items-center gap-2.5 rounded-full bg-decision-bg py-0.5 pl-3 pr-1 text-sm font-medium text-decision ring-1 ring-inset ring-decision/20" >
             <span>
               Viewing revision {value} of {latest}
             </span>
             <button
               type="button"
               onClick={() => onChange(null)}
-              className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-0.5 text-[12.5px] font-semibold text-plum shadow-card transition-colors hover:bg-warm"
+              className="inline-flex items-center gap-1 rounded-full bg-surface px-2.5 py-0.5 text-sm font-semibold text-heading shadow-card transition-colors hover:bg-sunken"
             >
               <RotateCcw size={12} aria-hidden />
               Back to current
             </button>
           </div>
         ) : (
-          <p className="text-[13px] font-medium text-slate">
-            <span className="text-plum">Current</span>
+          <p className="text-sm font-medium text-slate">
+            <span className="text-heading">Current</span>
             {latest !== null ? ` · ${fmt(latest)} ${latest === 1 ? "revision" : "revisions"}` : ""}
           </p>
         )}
 
         {/* What the hovered (else the active) revision did. */}
-        <div className="ml-auto flex min-w-0 items-center gap-3 text-[12.5px] text-slate">
+        <div className="ml-auto flex min-w-0 items-center gap-3 text-sm text-slate">
           {shown ? (
             <>
-              <span className="inline-flex items-center gap-1.5 font-semibold text-plum">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-heading">
                 <span className="h-2 w-2 rounded-full" style={{ background: phaseHex(shown.phase) }} aria-hidden />
                 Revision {shown.n} · {shown.phase}
               </span>
@@ -118,7 +118,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           {active !== null ? (
             <button
               type="button"
-              className={`btn-secondary shrink-0 py-1 text-[13px] ${showing === active ? "bg-purple-lt text-purple-dk" : ""}`}
+              className={`btn-secondary shrink-0 py-1 text-sm ${showing === active ? "bg-accent-soft text-accent-ink" : ""}`}
               onClick={() => onShowChanges(active)}
               aria-pressed={showing === active}
             >
@@ -139,7 +139,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
             type="button"
             onClick={onLoadEarlier}
             disabled={loadingEarlier}
-            className="mb-4 inline-flex shrink-0 items-center gap-1 self-end rounded-btn border border-line px-2 py-1 text-[12px] font-medium text-slate transition-colors hover:border-line-dk hover:text-plum disabled:opacity-60"
+            className="mb-4 inline-flex shrink-0 items-center gap-1 self-end rounded-btn border border-line px-2 py-1 text-xs font-medium text-slate transition-colors hover:border-line-strong hover:text-heading disabled:opacity-60"
           >
             {loadingEarlier ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <ChevronsLeft size={13} aria-hidden />}
             Earlier revisions
@@ -153,7 +153,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           onMouseLeave={() => setHover(null)}
           className={`flex h-full min-w-0 flex-1 items-end gap-[3px] overflow-x-auto overflow-y-hidden [scrollbar-width:thin]`}
         >
-          {ordered.length === 0 ? <p className="self-center text-[13px] text-slate">No revisions yet.</p> : null}
+          {ordered.length === 0 ? <p className="self-center text-sm text-slate">No revisions yet.</p> : null}
           {ordered.map((r) => {
             const on = r.n === active;
             const colour = phaseHex(r.phase);
@@ -170,19 +170,19 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
                 onMouseEnter={() => setHover(r)}
                 onFocus={() => setHover(r)}
                 onBlur={() => setHover(null)}
-                className="group relative flex h-full min-w-[9px] max-w-[30px] flex-1 flex-col items-center justify-end rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-purple"
+                className="group relative flex h-full min-w-[9px] max-w-[30px] flex-1 flex-col items-center justify-end rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 {on ? <span className="mb-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: colour }} aria-hidden /> : null}
                 <span
                   className={`block w-full shrink-0 rounded-t-[3px] transition-all duration-150 ${on ? "opacity-100" : "opacity-45 group-hover:opacity-80"} ${
-                    showing === r.n ? "ring-2 ring-purple ring-offset-1" : ""
+                    showing === r.n ? "ring-2 ring-accent ring-offset-1" : ""
                   }`}
                   style={{ height: tickHeight(r, max), background: colour }}
                   aria-hidden
                 />
                 {numbered ? (
                   <span
-                    className={`tnum mt-0.5 h-[14px] border-t border-line pt-px text-center text-[10.5px] leading-[13px] w-full ${on ? "font-semibold text-plum" : "text-slate/80"}`}
+                    className={`tnum mt-0.5 h-[14px] border-t border-line pt-px text-center text-2xs leading-[13px] w-full ${on ? "font-semibold text-heading" : "text-slate/80"}`}
                     aria-hidden
                   >
                     {r.n}
@@ -192,7 +192,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
             );
           })}
         </div>
-        <ul className="hidden shrink-0 grid-cols-2 gap-x-4 gap-y-0.5 self-end pb-4 text-[11.5px] leading-4 text-slate lg:grid" aria-label="Phases">
+        <ul className="hidden shrink-0 grid-cols-2 gap-x-4 gap-y-0.5 self-end pb-4 text-xs leading-4 text-slate lg:grid" aria-label="Phases">
           {phases.slice(0, 6).map((p) => (
             <li key={p} className="inline-flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-sm" style={{ background: phaseHex(p) }} aria-hidden />

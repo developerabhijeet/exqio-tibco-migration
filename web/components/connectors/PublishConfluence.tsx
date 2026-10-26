@@ -48,9 +48,9 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
   };
 
   return (
-    <section className="card space-y-2 p-4 print:hidden" data-testid="confluence-publish" aria-labelledby="confluence-publish-title">
+    <section className="card card-compact space-y-2 print:hidden" data-testid="confluence-publish" aria-labelledby="confluence-publish-title">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 id="confluence-publish-title" className="text-[16px] font-semibold text-plum">
+        <h3 id="confluence-publish-title" className="text-lg font-semibold text-heading">
           Confluence
         </h3>
         <LinkChips links={page} />
@@ -62,12 +62,12 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
           </button>
         </span>
       </div>
-      <p className="text-[12.5px] text-slate">
+      <p className="text-sm text-slate">
         {access.reason ??
           "The architecture page is built from this design record by code: the mapping, views, decisions and open questions."}
       </p>
       {stale ? (
-        <label className="flex items-center gap-2 text-[13px]">
+        <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={createAgain}

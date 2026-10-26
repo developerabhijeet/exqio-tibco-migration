@@ -46,8 +46,8 @@ export function LinkChip({ link }: { link: ConnectorLinkView }) {
       data-testid={linkTestId(link)}
       data-stale={link.stale ? "true" : undefined}
       title={title}
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-medium underline-offset-2 hover:underline ${
-        link.stale ? "border-line bg-warm text-slate" : "border-purple/30 bg-purple-lt text-purple-dk"
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium underline-offset-2 hover:underline ${
+        link.stale ? "border-line bg-sunken text-slate" : "border-accent/30 bg-accent-soft text-accent-ink"
       }`}
     >
       <Icon size={12} aria-hidden />
@@ -92,7 +92,7 @@ export function ActionStatus({
 }) {
   if (error) {
     return (
-      <p role="alert" data-testid={`${testId}-error`} className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-[13px] text-error">
+      <p role="alert" data-testid={`${testId}-error`} className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-sm text-error">
         {error}
       </p>
     );
@@ -100,7 +100,7 @@ export function ActionStatus({
   if (!stream) return null;
   const line = stream.status === "done" && stream.result && summary ? summary(stream.result) : null;
   return (
-    <div role="status" aria-live="polite" data-testid={`${testId}-status`} data-state={stream.status} className="space-y-1 text-[13px]">
+    <div role="status" aria-live="polite" data-testid={`${testId}-status`} data-state={stream.status} className="space-y-1 text-sm">
       {stream.status === "running" ? (
         <Pill tone="purple">
           <Loader2 size={12} className="animate-spin" aria-hidden /> {stream.stage ? `running: ${stream.stage}` : "queued"}

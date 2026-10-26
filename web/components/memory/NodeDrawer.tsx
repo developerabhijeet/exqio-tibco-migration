@@ -226,7 +226,7 @@ function LineageRow({ l, onSelect }: { l: LineageOut; onSelect(uid: string): voi
             <LabelChip label={l.other.label} side={l.other.side} />
             <span className="truncate text-md font-medium text-heading">{displayName(l.other)}</span>
           </span>
-          <span className="mt-0.5 block truncate font-mono text-[11.5px] text-slate" title={l.other.uid}>
+          <span className="mt-0.5 block truncate font-mono text-xs text-slate" title={l.other.uid}>
             {l.other.uid}
           </span>
         </span>
@@ -334,7 +334,7 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
         </div>
         <CopyUid uid={uid} />
         {removedNote ? (
-          <p className="mt-2 rounded-btn bg-error-bg px-3 py-1.5 text-[12.5px] text-error ring-1 ring-inset ring-error/15">{removedNote}</p>
+          <p className="mt-2 rounded-btn bg-error-bg px-3 py-1.5 text-sm text-error ring-1 ring-inset ring-error/15">{removedNote}</p>
         ) : null}
         <div className="mt-2 flex justify-end">
           <button type="button" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-ink hover:underline" onClick={() => onFocus(uid)}>
@@ -367,7 +367,7 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
             <Loader2 size={15} className="animate-spin" aria-hidden /> Reading the node…
           </p>
         ) : detail.error instanceof ApiError && detail.error.status === 404 ? (
-          <p className="rounded-btn bg-warm/80 px-4 py-3 text-[14px] leading-relaxed text-slate">
+          <p className="rounded-btn bg-sunken/80 px-4 py-3 text-md leading-relaxed text-slate">
             {asOf !== null ? `Not in the memory at revision ${asOf}: recorded after it, or removed before it.` : "Not in this project's memory."}
           </p>
         ) : detail.error ? (

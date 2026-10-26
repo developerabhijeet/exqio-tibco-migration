@@ -47,7 +47,7 @@ const STATE_TONE: Record<ConnectorState, "det" | "decision" | "error" | "gate" |
 };
 
 const INPUT =
-  "mt-1 w-full rounded-btn border border-line bg-white px-2.5 py-1.5 text-[13.5px] text-ink placeholder:text-slate disabled:cursor-not-allowed disabled:bg-page disabled:text-slate";
+  "mt-1 w-full rounded-btn border border-line bg-surface px-2.5 py-1.5 text-md text-ink placeholder:text-slate disabled:cursor-not-allowed disabled:bg-page disabled:text-slate";
 
 type Form = { enabled: boolean; values: Record<string, string> };
 
@@ -110,7 +110,7 @@ function TestResult({ last, testing, error }: { last: ConnectorLastTest | null; 
         {r.ok ? "Connected" : "Connection failed"}
         {r.account ? <span className="font-normal text-ink">as {r.account}</span> : null}
       </p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12.5px]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
         {r.site ? (
           <>
             <dt className="text-slate">Site</dt>
@@ -132,7 +132,7 @@ function TestResult({ last, testing, error }: { last: ConnectorLastTest | null; 
           </>
         ) : null}
       </dl>
-      <p className="text-[12px] text-slate">
+      <p className="text-xs text-slate">
         Tested {when(last.at)} by {last.actor}
       </p>
     </div>
@@ -267,13 +267,13 @@ export function ConnectorCard({
         : null;
 
   return (
-    <section className="card p-6" data-testid={`connector-${kind}`} aria-labelledby={`${uid}-title`}>
+    <section className="card" data-testid={`connector-${kind}`} aria-labelledby={`${uid}-title`}>
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 id={`${uid}-title`} className="flex items-center gap-2 text-[18px] font-semibold text-plum">
-            <PlugZap size={18} className="text-purple" aria-hidden /> {meta.name}
+          <h3 id={`${uid}-title`} className="flex items-center gap-2 text-xl font-semibold text-heading">
+            <PlugZap size={18} className="text-accent-ink" aria-hidden /> {meta.name}
           </h3>
-          <p className="mt-1 max-w-[70ch] text-[13.5px] text-slate">{meta.summary}</p>
+          <p className="mt-1 max-w-[70ch] text-md text-slate">{meta.summary}</p>
         </div>
         <Pill tone={STATE_TONE[state]} testId={tid("state")}>
           {STATE_LABEL[state]}
@@ -283,7 +283,7 @@ export function ConnectorCard({
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <p
           data-testid={tid("install")}
-          className="flex items-start gap-2 rounded-btn border border-line bg-page/60 px-3 py-2.5 text-[13px] text-ink"
+          className="flex items-start gap-2 rounded-btn border border-line bg-page/60 px-3 py-2.5 text-sm text-ink"
         >
           {view.install_enabled ? (
             <ServerCog size={15} className="mt-0.5 shrink-0 text-gate" aria-hidden />
@@ -300,13 +300,13 @@ export function ConnectorCard({
               </>
             ) : (
               <>
-                Off in this install: set <code className="font-mono text-[12px]">connectors.{kind}.enabled</code>
+                Off in this install: set <code className="font-mono text-xs">connectors.{kind}.enabled</code>
               </>
             )}
           </span>
         </p>
-        <div className="rounded-btn border border-line px-3 py-2.5 text-[13px]">
-          <label className="flex items-center gap-2 font-semibold text-plum">
+        <div className="rounded-btn border border-line px-3 py-2.5 text-sm">
+          <label className="flex items-center gap-2 font-semibold text-heading">
             <input
               type="checkbox"
               role="switch"
@@ -321,7 +321,7 @@ export function ConnectorCard({
             />
             On in Settings
           </label>
-          <p id={`${uid}-toggle-hint`} className="mt-0.5 text-[12px] text-slate">
+          <p id={`${uid}-toggle-hint`} className="mt-0.5 text-xs text-slate">
             {!view.install_enabled
               ? "Cannot be turned on while the install leaves it off."
               : admin
@@ -339,7 +339,7 @@ export function ConnectorCard({
             return (
               <div key={section.title ?? "main"}>
                 {section.title ? (
-                  <h4 className="mb-2 flex items-center gap-2 text-[14px] font-semibold text-plum">
+                  <h4 className="mb-2 flex items-center gap-2 text-md font-semibold text-heading">
                     {section.title}
                     {on !== undefined ? (
                       <Pill tone={on ? "gate" : "det"}>{on ? "on" : "off: needs the connector on and a URL"}</Pill>
@@ -354,7 +354,7 @@ export function ConnectorCard({
                     const placeholder =
                       field.kind === "url" ? installValue || "not set in the install" : field.kind === "list" ? "none" : "";
                     return (
-                      <div key={field.key} className="text-[13px]">
+                      <div key={field.key} className="text-sm">
                         <label htmlFor={id} className="label">
                           {field.label}
                         </label>
@@ -363,7 +363,7 @@ export function ConnectorCard({
                           type={field.kind === "url" ? "url" : "text"}
                           inputMode={field.kind === "url" ? "url" : undefined}
                           spellCheck={false}
-                          className={`${INPUT} ${field.kind === "url" ? "font-mono text-[12.5px]" : ""} ${err ? "border-error" : ""}`}
+                          className={`${INPUT} ${field.kind === "url" ? "font-mono text-sm" : ""} ${err ? "border-error" : ""}`}
                           data-testid={field.key === meta.primaryUrl ? tid("url") : tid(`field-${field.key}`)}
                           placeholder={placeholder}
                           value={form.values[field.key] ?? ""}
@@ -373,11 +373,11 @@ export function ConnectorCard({
                           onChange={(e) => edit(field.key, e.target.value)}
                         />
                         {err ? (
-                          <p id={`${id}-error`} data-testid={`connector-${kind}-error-${field.key}`} className="mt-1 text-[12px] font-medium text-error">
+                          <p id={`${id}-error`} data-testid={`connector-${kind}-error-${field.key}`} className="mt-1 text-xs font-medium text-error">
                             {err}
                           </p>
                         ) : null}
-                        <p id={`${id}-hint`} className="mt-1 text-[12px] text-slate">
+                        <p id={`${id}-hint`} className="mt-1 text-xs text-slate">
                           {field.kind === "url"
                             ? `${field.hint ? `${field.hint}. ` : ""}Empty uses the install's value.`
                             : field.hint ?? ""}
@@ -389,12 +389,12 @@ export function ConnectorCard({
               </div>
             );
           })}
-          <div className="text-[13px]">
+          <div className="text-sm">
             <p className="label">Allowed hosts</p>
             <p className="mt-1 flex flex-wrap gap-1.5">
               {(view.allowed_hosts ?? []).length > 0 ? (
                 view.allowed_hosts!.map((h) => (
-                  <code key={h} className="rounded bg-page px-1.5 py-0.5 font-mono text-[12px] text-slate">
+                  <code key={h} className="rounded bg-page px-1.5 py-0.5 font-mono text-xs text-slate">
                     {h}
                   </code>
                 ))
@@ -402,14 +402,14 @@ export function ConnectorCard({
                 <span className="text-slate">None in the install: every URL is refused.</span>
               )}
             </p>
-            <p className="mt-1 text-[12px] text-slate">Set by the install (connectors.{kind}.allowedHosts); URLs must use https and one of these hosts.</p>
+            <p className="mt-1 text-xs text-slate">Set by the install (connectors.{kind}.allowedHosts); URLs must use https and one of these hosts.</p>
           </div>
         </fieldset>
       ) : null}
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <div className="text-[13px]">
-          <h4 className="flex items-center gap-1.5 text-[14px] font-semibold text-plum">
+        <div className="text-sm">
+          <h4 className="flex items-center gap-1.5 text-md font-semibold text-heading">
             <KeyRound size={15} aria-hidden /> Credentials
           </h4>
           {admin ? (
@@ -419,7 +419,7 @@ export function ConnectorCard({
                 return (
                   <li key={role} data-testid={tid(`secret-${role}`)} className="flex flex-wrap items-center gap-2 px-3 py-2">
                     <span className="font-medium text-ink">{meta.secrets[role] ?? role}</span>
-                    <code className="rounded bg-page px-1.5 py-0.5 font-mono text-[11.5px] text-slate">{name}</code>
+                    <code className="rounded bg-page px-1.5 py-0.5 font-mono text-xs text-slate">{name}</code>
                     <Pill tone={present ? "gate" : "error"} className="ml-auto">
                       {present ? "present" : "missing"}
                     </Pill>
@@ -430,13 +430,13 @@ export function ConnectorCard({
           ) : (
             <p className="mt-2 text-slate">Which credentials are mounted is shown to administrators.</p>
           )}
-          <p className="mt-1.5 text-[12px] text-slate">
+          <p className="mt-1.5 text-xs text-slate">
             Credentials come only from Key Vault mounted files; their values are never shown or stored here.
           </p>
         </div>
-        <div className="text-[13px]">
+        <div className="text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-[14px] font-semibold text-plum">Connection test</h4>
+            <h4 className="text-md font-semibold text-heading">Connection test</h4>
             <button
               type="button"
               className="btn-secondary"
@@ -450,7 +450,7 @@ export function ConnectorCard({
             </button>
           </div>
           {testBlocked ? (
-            <p id={`${uid}-test-hint`} className="mt-1 text-[12px] text-slate">
+            <p id={`${uid}-test-hint`} className="mt-1 text-xs text-slate">
               {testBlocked}
             </p>
           ) : null}
@@ -469,10 +469,10 @@ export function ConnectorCard({
           <button type="button" className="btn-primary" data-testid={tid("save")} disabled={!editable || !dirty} onClick={save}>
             {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Save size={15} aria-hidden />} Save {meta.name}
           </button>
-          <span role="status" className="text-[13px] text-gate">
+          <span role="status" className="text-sm text-gate">
             {saved ? "Saved." : ""}
           </span>
-          {!dirty && !saved ? <span className="text-[12px] text-slate">No unsaved changes.</span> : null}
+          {!dirty && !saved ? <span className="text-xs text-slate">No unsaved changes.</span> : null}
           {error ? (
             <div className="w-full">
               <ErrorNote error={error} />
@@ -480,7 +480,7 @@ export function ConnectorCard({
           ) : null}
         </footer>
       ) : (
-        <p className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-[13px] text-slate">
+        <p className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-sm text-slate">
           <Lock size={14} aria-hidden /> Read only: connector settings and connection tests are managed by administrators.
         </p>
       )}

@@ -53,8 +53,8 @@ export function SettingsTabs({ panels }: { panels: Record<SettingsTab, React.Rea
               aria-controls={`settings-panel-${key}`}
               tabIndex={selected ? 0 : -1}
               data-testid={`settings-tab-${key}`}
-              className={`-mb-px border-b-2 px-4 py-2 text-[14px] font-semibold transition-colors ${
-                selected ? "border-purple text-purple-dk" : "border-transparent text-slate hover:text-plum"
+              className={`-mb-px border-b-2 px-4 py-2 text-md font-semibold transition-colors ${
+                selected ? "border-accent text-accent-ink" : "border-transparent text-slate hover:text-heading"
               }`}
               onClick={() => setTab(key)}
               onKeyDown={(e) => {

@@ -87,9 +87,9 @@ export function JiraIssues({
 
   const headingId = `jira-${scope}-title`;
   return (
-    <section className="card space-y-2 p-4 print:hidden" data-testid={`jira-${scope}`} aria-labelledby={headingId}>
+    <section className="card card-compact space-y-2 print:hidden" data-testid={`jira-${scope}`} aria-labelledby={headingId}>
       <div className="flex flex-wrap items-center gap-2">
-        <h3 id={headingId} className="text-[16px] font-semibold text-plum">
+        <h3 id={headingId} className="text-lg font-semibold text-heading">
           {title}
         </h3>
         <span className="ml-auto" title={reason}>
@@ -100,11 +100,11 @@ export function JiraIssues({
           </button>
         </span>
       </div>
-      {access.reason ? <p className="text-[12.5px] text-slate">{access.reason}</p> : null}
+      {access.reason ? <p className="text-sm text-slate">{access.reason}</p> : null}
       {shown.length === 0 ? (
-        <p className="text-[13px] text-slate">{empty}</p>
+        <p className="text-sm text-slate">{empty}</p>
       ) : (
-        <ul className="max-h-[320px] divide-y divide-line overflow-y-auto rounded-btn border border-line text-[13px]" data-testid={`jira-${scope}-items`}>
+        <ul className="max-h-[320px] divide-y divide-line overflow-y-auto rounded-btn border border-line text-sm" data-testid={`jira-${scope}-items`}>
           {shown.map((c) => {
             const ref = jiraRef(c.item);
             const link = byRef.get(ref);
@@ -132,7 +132,7 @@ export function JiraIssues({
         </ul>
       )}
       {anyStale ? (
-        <label className="flex items-center gap-2 text-[13px]">
+        <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={createAgain} onChange={(e) => setCreateAgain(e.target.checked)} data-testid="jira-create-again" />
           Create again the issues that were deleted in Jira
         </label>

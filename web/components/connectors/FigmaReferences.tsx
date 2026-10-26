@@ -35,7 +35,7 @@ function Thumb({ frame }: { frame: FigmaFrameLink }) {
   }, [image.data]);
   if (!frame.has_image) {
     return (
-      <span className="flex h-16 w-24 shrink-0 items-center justify-center rounded-btn border border-dashed border-line text-[11px] text-slate" title={frame.image_note ?? undefined}>
+      <span className="flex h-16 w-24 shrink-0 items-center justify-center rounded-btn border border-dashed border-line text-2xs text-slate" title={frame.image_note ?? undefined}>
         no thumbnail
       </span>
     );
@@ -44,7 +44,7 @@ function Thumb({ frame }: { frame: FigmaFrameLink }) {
     // eslint-disable-next-line @next/next/no-img-element -- a blob URL of a stored thumbnail
     <img src={src} alt={`Figma frame ${frame.name}`} className="h-16 w-24 shrink-0 rounded-btn border border-line object-cover" />
   ) : (
-    <span className="h-16 w-24 shrink-0 rounded-btn border border-line bg-warm" aria-hidden />
+    <span className="h-16 w-24 shrink-0 rounded-btn border border-line bg-sunken" aria-hidden />
   );
 }
 
@@ -115,32 +115,32 @@ export function FigmaReferences({ processId }: { processId: string }) {
     });
 
   return (
-    <section className="card space-y-3 p-4 print:hidden" data-testid="figma-references" aria-labelledby="figma-references-title">
+    <section className="card card-compact space-y-3 print:hidden" data-testid="figma-references" aria-labelledby="figma-references-title">
       <div>
-        <h3 id="figma-references-title" className="text-[16px] font-semibold text-plum">
+        <h3 id="figma-references-title" className="text-lg font-semibold text-heading">
           Figma references
         </h3>
-        <p className="text-[12.5px] text-slate">
+        <p className="text-sm text-slate">
           Frames attached here are design references: the designer reads their text on the next design run.
         </p>
       </div>
 
-      {attached.error ? <p role="alert" className="text-[13px] text-error">{actionError(attached.error)}</p> : null}
+      {attached.error ? <p role="alert" className="text-sm text-error">{actionError(attached.error)}</p> : null}
       {(attached.data ?? []).length === 0 ? (
-        <p className="text-[13px] text-slate">{attached.isLoading ? "Loading." : "No frames attached."}</p>
+        <p className="text-sm text-slate">{attached.isLoading ? "Loading." : "No frames attached."}</p>
       ) : (
         <ul className="space-y-2" data-testid="figma-attached">
           {(attached.data ?? []).map((f) => (
-            <li key={f.id} className="flex items-start gap-3 text-[13px]" data-testid={`figma-attached-${f.node_id}`}>
+            <li key={f.id} className="flex items-start gap-3 text-sm" data-testid={`figma-attached-${f.node_id}`}>
               <Thumb frame={f} />
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-1.5">
                   {f.url ? (
-                    <a href={f.url} target="_blank" rel="noopener noreferrer" className="font-medium text-purple-dk underline-offset-2 hover:underline">
+                    <a href={f.url} target="_blank" rel="noopener noreferrer" className="font-medium text-accent-ink underline-offset-2 hover:underline">
                       {f.name}
                     </a>
                   ) : (
-                    <span className="font-medium text-plum">{f.name}</span>
+                    <span className="font-medium text-heading">{f.name}</span>
                   )}
                   {f.page ? <span className="text-slate">{f.page}</span> : null}
                   {f.stale ? <Pill tone="decision">gone from Figma</Pill> : null}
@@ -153,7 +153,7 @@ export function FigmaReferences({ processId }: { processId: string }) {
       )}
 
       <form className="flex flex-wrap items-end gap-2" onSubmit={browse}>
-        <label className="text-[13px]">
+        <label className="text-sm">
           <span className="label">Figma file key</span>
           <input
             className="input mt-1 w-[260px] max-w-full font-mono"
@@ -173,14 +173,14 @@ export function FigmaReferences({ processId }: { processId: string }) {
           </button>
         </span>
       </form>
-      {access.reason ? <p className="text-[12.5px] text-slate">{access.reason}</p> : null}
+      {access.reason ? <p className="text-sm text-slate">{access.reason}</p> : null}
 
       {browsed ? (
         browsed.frames.length === 0 ? (
-          <p className="text-[13px] text-slate">File {browsed.key} has no frames.</p>
+          <p className="text-sm text-slate">File {browsed.key} has no frames.</p>
         ) : (
           <div className="space-y-2">
-            <ul className="max-h-[260px] divide-y divide-line overflow-y-auto rounded-btn border border-line text-[13px]">
+            <ul className="max-h-[260px] divide-y divide-line overflow-y-auto rounded-btn border border-line text-sm">
               {browsed.frames.map((fr) => {
                 const already = attachedIds.has(`${browsed.key}:${fr.node_id}`);
                 const full = picked.size >= MAX_FRAMES && !picked.has(fr.node_id);

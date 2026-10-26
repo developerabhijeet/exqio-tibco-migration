@@ -29,7 +29,7 @@ export function ConnectorsTab() {
   if (settings.error) return <ErrorNote error={settings.error} />;
   if (!view) {
     return settings.isLoading ? (
-      <p role="status" className="text-[14px] text-slate">
+      <p role="status" className="text-md text-slate">
         Loading connectors…
       </p>
     ) : (
@@ -39,8 +39,8 @@ export function ConnectorsTab() {
   const admin = isAdminView(view.github);
   return (
     <div className="space-y-4" data-testid="connectors-tab">
-      <p className="flex items-start gap-2 rounded-card border border-line bg-warm/60 px-4 py-3 text-[13.5px] text-ink">
-        <Info size={16} className="mt-0.5 shrink-0 text-purple" aria-hidden />
+      <p className="flex items-start gap-2 rounded-card border border-line bg-sunken/60 px-4 py-3 text-md text-ink">
+        <Info size={16} className="mt-0.5 shrink-0 text-accent-ink" aria-hidden />
         <span>
           Connectors reach only the hosts the install allows, and every one is off until both the install and Settings turn
           it on. Credentials are mounted from Key Vault; this page shows whether each one is present, never its value.

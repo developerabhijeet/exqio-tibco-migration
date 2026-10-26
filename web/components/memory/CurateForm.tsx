@@ -104,7 +104,7 @@ function SubmissionState({ projectId, s, onShowKnowledge }: { projectId: string;
     void lookup.refetch();
   };
   const checking = status.isFetching || job.isFetching || lookup.isFetching;
-  const tone = applied ? "bg-gate-bg ring-gate/20" : failed ? "bg-error-bg ring-error/20" : waiting ? "bg-decision-bg ring-decision/20" : "bg-warm/80 ring-line";
+  const tone = applied ? "bg-gate-bg ring-gate/20" : failed ? "bg-error-bg ring-error/20" : waiting ? "bg-decision-bg ring-decision/20" : "bg-sunken/80 ring-line";
   const title = applied
     ? `Applied in revision ${applied}`
     : failed
@@ -128,23 +128,23 @@ function SubmissionState({ projectId, s, onShowKnowledge }: { projectId: string;
       <div className="min-w-0 flex-1">
         <p
           data-testid="curate-state"
-          className={`text-[14px] font-semibold ${applied ? "text-gate" : failed ? "text-error" : waiting ? "text-decision" : "text-plum"}`}
+          className={`text-md font-semibold ${applied ? "text-gate" : failed ? "text-error" : waiting ? "text-decision" : "text-heading"}`}
         >
           {title}
         </p>
-        <div className="mt-0.5 text-[12.5px] leading-relaxed text-slate">
+        <div className="mt-0.5 text-sm leading-relaxed text-slate">
           {applied ? (
             <>
               {APPLIED_TEXT[s.action]}{" "}
               {s.action === "note" ? (
-                <button type="button" className="font-medium text-purple hover:underline" onClick={onShowKnowledge}>
+                <button type="button" className="font-medium text-accent-ink hover:underline" onClick={onShowKnowledge}>
                   See it under Knowledge
                 </button>
               ) : null}
             </>
           ) : failed ? (
             <>
-              <p className="break-words font-mono text-[12px] text-error">{job.data?.error || "No reason recorded."}</p>
+              <p className="break-words font-mono text-xs text-error">{job.data?.error || "No reason recorded."}</p>
               <p className="mt-1">The curation is stored: an admin re-ingest of the project applies it.</p>
             </>
           ) : waiting ? (
@@ -161,7 +161,7 @@ function SubmissionState({ projectId, s, onShowKnowledge }: { projectId: string;
           {!applied && (failed || waiting) ? (
             <button
               type="button"
-              className="mt-2 inline-flex items-center gap-1.5 font-medium text-purple hover:underline disabled:opacity-60"
+              className="mt-2 inline-flex items-center gap-1.5 font-medium text-accent-ink hover:underline disabled:opacity-60"
               onClick={refresh}
               disabled={checking}
             >
@@ -202,12 +202,12 @@ function ReplacementPicker({
   const hits = useMemorySearch(projectId, debounced, { labels: ["Method", "Class"], side: null, phase: null, asOf: null });
   if (value) {
     return (
-      <div className="flex items-center gap-2 rounded-btn border border-purple/40 bg-purple-lt/40 px-3 py-2">
+      <div className="flex items-center gap-2 rounded-btn border border-accent/40 bg-accent-soft/40 px-3 py-2">
         <LabelChip label="Method" side="new" />
-        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink" title={value.uid}>
+        <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink" title={value.uid}>
           {value.name}
         </span>
-        <button type="button" className="text-[12.5px] font-medium text-purple hover:underline" onClick={() => onChange(null)}>
+        <button type="button" className="text-sm font-medium text-accent-ink hover:underline" onClick={() => onChange(null)}>
           Change
         </button>
       </div>
@@ -230,19 +230,19 @@ function ReplacementPicker({
       {debounced.trim() ? (
         <ul className="mt-1.5 max-h-44 overflow-y-auto rounded-btn border border-line/80" aria-label="Replacement candidates">
           {hits.isFetching && !hits.data ? (
-            <li className="px-3 py-2 text-[13px] text-slate">Searching…</li>
+            <li className="px-3 py-2 text-sm text-slate">Searching…</li>
           ) : (hits.data ?? []).length === 0 ? (
-            <li className="px-3 py-2 text-[13px] text-slate">No method or class matches.</li>
+            <li className="px-3 py-2 text-sm text-slate">No method or class matches.</li>
           ) : (
             (hits.data ?? []).slice(0, 8).map((h) => (
               <li key={h.uid}>
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-warm/70"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sunken/70"
                   onClick={() => onChange({ uid: h.uid, name: hitTitle(h) })}
                 >
                   <LabelChip label={h.label} side="new" />
-                  <span className="min-w-0 truncate text-[13px] text-plum">{hitTitle(h)}</span>
+                  <span className="min-w-0 truncate text-sm text-heading">{hitTitle(h)}</span>
                 </button>
               </li>
             ))
@@ -295,7 +295,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
 
   if (asOf !== null) {
     return (
-      <div className="rounded-btn bg-decision-bg px-4 py-3.5 text-[13.5px] leading-relaxed text-decision ring-1 ring-inset ring-decision/20">
+      <div className="rounded-btn bg-decision-bg px-4 py-3.5 text-md leading-relaxed text-decision ring-1 ring-inset ring-decision/20">
         You are viewing revision {asOf}. Curation applies to the current memory.
         {onBackToCurrent ? (
           <button type="button" className="ml-1 font-semibold underline" onClick={onBackToCurrent}>
@@ -363,21 +363,21 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
                   aria-pressed={on}
                   onClick={() => setAction(a)}
                   className={`rounded-btn border px-3 py-2.5 text-left transition-all ${
-                    on ? "border-purple bg-purple-lt/50 shadow-card" : "border-line/80 hover:border-line-dk hover:bg-warm/50"
+                    on ? "border-accent bg-accent-soft/50 shadow-card" : "border-line/80 hover:border-line-strong hover:bg-sunken/50"
                   }`}
                 >
-                  <span className={`flex items-center gap-1.5 text-[13.5px] font-semibold ${on ? "text-purple-dk" : "text-plum"}`}>
+                  <span className={`flex items-center gap-1.5 text-md font-semibold ${on ? "text-accent-ink" : "text-heading"}`}>
                     <A.icon size={14} aria-hidden />
                     {A.title}
                   </span>
-                  <span className="mt-0.5 block text-[12px] leading-snug text-slate">{A.blurb}</span>
+                  <span className="mt-0.5 block text-xs leading-snug text-slate">{A.blurb}</span>
                 </button>
               );
             })}
           </div>
         ) : (
-          <p className="text-[13.5px] leading-relaxed text-slate">
-            Pin context to <span className="font-medium text-plum">{displayName(node)}</span> that agents and reviewers read with it.
+          <p className="text-md leading-relaxed text-slate">
+            Pin context to <span className="font-medium text-heading">{displayName(node)}</span> that agents and reviewers read with it.
           </p>
         )}
 
@@ -392,14 +392,14 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
                     aria-pressed={chosenMapping === m.edge.uid}
                     onClick={() => setMapping(m.edge.uid)}
                     disabled={mappings.length === 1}
-                    className={`flex w-full items-center gap-2 rounded-btn border px-3 py-2 text-left text-[13px] disabled:cursor-default ${
-                      chosenMapping === m.edge.uid ? "border-purple/50 bg-purple-lt/30" : "border-line/80 hover:bg-warm/50"
+                    className={`flex w-full items-center gap-2 rounded-btn border px-3 py-2 text-left text-sm disabled:cursor-default ${
+                      chosenMapping === m.edge.uid ? "border-accent/50 bg-accent-soft/30" : "border-line/80 hover:bg-sunken/50"
                     }`}
                   >
-                    <span className="min-w-0 truncate text-plum">{displayName(node)}</span>
-                    <ArrowRight size={13} className="shrink-0 text-purple" aria-hidden />
+                    <span className="min-w-0 truncate text-heading">{displayName(node)}</span>
+                    <ArrowRight size={13} className="shrink-0 text-accent-ink" aria-hidden />
                     <LabelChip label={m.other.label} side={m.other.side} />
-                    <span className="min-w-0 truncate font-medium text-plum">{displayName(m.other)}</span>
+                    <span className="min-w-0 truncate font-medium text-heading">{displayName(m.other)}</span>
                   </button>
                 </li>
               ))}
@@ -413,7 +413,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
               Replacement
             </label>
             <ReplacementPicker projectId={projectId} value={replacement} onChange={setReplacement} />
-            {tried && missing.replacement ? <p className="mt-1 text-[12.5px] text-error">Pick the method or class that implements it.</p> : null}
+            {tried && missing.replacement ? <p className="mt-1 text-sm text-error">Pick the method or class that implements it.</p> : null}
           </div>
         ) : null}
 
@@ -432,7 +432,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
               placeholder="What should anyone working on this know?"
               aria-invalid={tried && missing.text}
             />
-            {tried && missing.text ? <p className="mt-1 text-[12.5px] text-error">Write the note.</p> : null}
+            {tried && missing.text ? <p className="mt-1 text-sm text-error">Write the note.</p> : null}
           </div>
         ) : null}
 
@@ -441,7 +441,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
             <label htmlFor="curate-reason" className="label block">
               Reason
             </label>
-            <span className="tnum text-[11.5px] text-slate/80">
+            <span className="tnum text-xs text-slate/80">
               {reason.length}/{REASON_MAX.toLocaleString("en-US")}
             </span>
           </div>
@@ -457,7 +457,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
             aria-invalid={tried && missing.reason}
             aria-describedby="curate-reason-hint"
           />
-          <p id="curate-reason-hint" className={`mt-1 text-[12.5px] ${tried && missing.reason ? "text-error" : "text-slate"}`}>
+          <p id="curate-reason-hint" className={`mt-1 text-sm ${tried && missing.reason ? "text-error" : "text-slate"}`}>
             {tried && missing.reason ? "A reason is required." : "Every curation needs a reason."}
           </p>
         </div>

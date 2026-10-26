@@ -248,7 +248,7 @@ function ReingestButton({ projectId }: { projectId: string }) {
       <button
         ref={trigger}
         type="button"
-        className="btn-secondary py-1.5 text-[13.5px]"
+        className="btn-secondary py-1.5 text-md"
         onClick={toggle}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -267,12 +267,12 @@ function ReingestButton({ projectId }: { projectId: string }) {
           aria-modal="true"
           aria-labelledby="reingest-title"
           aria-describedby="reingest-body"
-          className="mem-slide-in absolute right-0 top-full z-30 mt-2 w-[320px] rounded-card bg-white p-4 shadow-pop ring-1 ring-line"
+          className="mem-slide-in absolute right-0 top-full z-30 mt-2 w-[320px] rounded-card bg-surface p-4 shadow-pop ring-1 ring-line"
         >
-          <p id="reingest-title" className="text-[14px] font-semibold text-plum">
+          <p id="reingest-title" className="text-md font-semibold text-heading">
             Re-ingest this project?
           </p>
-          <p id="reingest-body" className="mt-1 text-[13px] leading-relaxed text-slate">
+          <p id="reingest-body" className="mt-1 text-sm leading-relaxed text-slate">
             Every phase it has run is projected into memory again, as new revisions. Nothing already recorded is lost.
           </p>
           {reingest.error ? (
@@ -286,7 +286,7 @@ function ReingestButton({ projectId }: { projectId: string }) {
             </button>
             <button
               type="button"
-              className="btn-primary py-1.5 text-[13.5px]"
+              className="btn-primary py-1.5 text-md"
               disabled={reingest.isPending}
               onClick={() =>
                 reingest.mutate(undefined, {
@@ -583,21 +583,21 @@ export function MemoryExplorer() {
                 {missing ? (
                   <div className="flex h-full items-center justify-center p-6" data-testid="memory-node-missing">
                     <div className="max-w-sm text-center">
-                      <p className="text-[15.5px] font-semibold text-plum">
+                      <p className="text-base font-semibold text-heading">
                         {view.rev !== null ? `Not in the memory at revision ${view.rev}` : "Not in this project's memory"}
                       </p>
-                      <p className="mt-1.5 text-[13.5px] leading-relaxed text-slate">
+                      <p className="mt-1.5 text-md leading-relaxed text-slate">
                         {view.rev !== null
                           ? "This node was recorded after that revision, or removed before it."
                           : "It may have been removed by a later revision."}
                       </p>
                       <div className="mt-4 flex justify-center gap-2">
                         {view.rev !== null ? (
-                          <button type="button" className="btn-secondary py-1.5 text-[13.5px]" onClick={() => set({ rev: null })}>
+                          <button type="button" className="btn-secondary py-1.5 text-md" onClick={() => set({ rev: null })}>
                             See the current memory
                           </button>
                         ) : null}
-                        <button type="button" className="btn-ghost text-[13.5px]" onClick={overview}>
+                        <button type="button" className="btn-ghost text-md" onClick={overview}>
                           Project overview
                         </button>
                       </div>
