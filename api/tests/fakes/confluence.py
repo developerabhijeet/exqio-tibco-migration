@@ -1,0 +1,156 @@
+"""Fake Confluence: the v1 content API (``/rest/api/content``, also under ``/wiki`` for Cloud) and
+the Cloud v2 pages API. An update must carry ``version.number == current + 1``, else 409."""
+from __future__ import annotations
+
+from email import policy
+from email.parser import BytesParser
+
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
+
+from api.tests.fakes.atlassian import authorized
+from api.tests.fakes.server import FakeService, json_response
+
+
+class FakeConfluence(FakeService):
+    def __init__(self, flavor: str = "datacenter", token: str = "atlassian-fake-token",
+                 user: str = "bot@example.org") -> None:
+        self.flavor, self.token, self.user = flavor, token, user
+        self.pages: dict[str, dict] = {}
+        self.attachments: dict[str, list[dict]] = {}
+        self._next = 1000
+        routes = []
+        for prefix in ("", "/wiki"):
+            routes += [
+                Route(f"{prefix}/rest/api/user/current", self._guard(self._current)),
+                Route(f"{prefix}/rest/api/content", self._guard(self._v1_collection), methods=["GET", "POST"]),
+                Route(f"{prefix}/rest/api/content/{{pid}}", self._guard(self._v1_page), methods=["GET", "PUT"]),
+                Route(f"{prefix}/rest/api/content/{{pid}}/child/attachment",
+                      self._guard(self._attachments), methods=["GET", "POST"]),
+            ]
+        routes += [
+            Route("/wiki/api/v2/pages", self._guard(self._v2_collection), methods=["GET", "POST"]),
+            Route("/wiki/api/v2/pages/{pid}", self._guard(self._v2_page), methods=["GET", "PUT"]),
+            Route("/wiki/api/v2/spaces", self._guard(self._v2_spaces)),
+        ]
+        self._serve(Starlette(routes=routes))
+
+    def _guard(self, handler):
+        async def run(request: Request) -> Response:
+            if not authorized(request, self.flavor, self.token, self.user):
+                return json_response({"message": "Unauthorized"}, 401)
+            return await handler(request)
+
+        return run
+
+    def _view(self, page: dict, *, v2: bool = False) -> dict:
+        webui = f"/spaces/{page['space']}/pages/{page['id']}"
+        base = {"id": page["id"], "type": "page", "status": "current", "title": page["title"],
+                "version": {"number": page["version"]},
+                "_links": {"webui": webui, "base": self.url + ("/wiki" if v2 else "")}}
+        if v2:
+            base["spaceId"] = page["space"]
+            base["parentId"] = page["parent"]
+            base["body"] = {"storage": {"value": page["body"], "representation": "storage"}}
+        else:
+            base["space"] = {"key": page["space"]}
+            base["ancestors"] = [{"id": page["parent"]}] if page["parent"] else []
+            base["body"] = {"storage": {"value": page["body"], "representation": "storage"}}
+        return base
+
+    def _new(self, space: str, title: str, body: str, parent: str = "") -> dict:
+        self._next += 1
+        page = {"id": str(self._next), "space": space, "title": title, "body": body, "parent": parent,
+                "version": 1}
+        self.pages[page["id"]] = page
+        return page
+
+    async def _current(self, request: Request) -> Response:
+        return json_response({"type": "known", "username": "exiqo-bot", "displayName": "ExiQO bot",
+                              "accountId": "5b10ac8d82e05b22cc7d4ef5"})
+
+    # ---- v1
+    async def _v1_collection(self, request: Request) -> Response:
+        if request.method == "GET":
+            title, space = request.query_params.get("title"), request.query_params.get("spaceKey")
+            rows = [self._view(p) for p in self.pages.values()
+                    if (not title or p["title"] == title) and (not space or p["space"] == space)]
+            return json_response({"results": rows, "size": len(rows)})
+        body = await request.json()
+        space = (body.get("space") or {}).get("key", "")
+        if not space or not body.get("title"):
+            return json_response({"message": "space and title are required"}, 400)
+        ancestors = body.get("ancestors") or []
+        value = ((body.get("body") or {}).get("storage") or {}).get("value", "")
+        return json_response(self._view(self._new(space, body["title"], value,
+                                                  str(ancestors[-1]["id"]) if ancestors else "")))
+
+    async def _v1_page(self, request: Request) -> Response:
+        page = self.pages.get(request.path_params["pid"])
+        if page is None:
+            return json_response({"message": "No content found"}, 404)
+        if request.method == "GET":
+            return json_response(self._view(page))
+        body = await request.json()
+        return self._update(page, body, ((body.get("body") or {}).get("storage") or {}).get("value"))
+
+    def _update(self, page: dict, body: dict, value: str | None, *, v2: bool = False) -> Response:
+        number = (body.get("version") or {}).get("number")
+        if number != page["version"] + 1:
+            return json_response({"statusCode": 409, "message":
+                                  f"Version must be {page['version'] + 1}, got {number}"}, 409)
+        page["version"] = number
+        page["title"] = body.get("title", page["title"])
+        if value is not None:
+            page["body"] = value
+        return json_response(self._view(page, v2=v2))
+
+    async def _attachments(self, request: Request) -> Response:
+        pid = request.path_params["pid"]
+        if pid not in self.pages:
+            return json_response({"message": "No content found"}, 404)
+        rows = self.attachments.setdefault(pid, [])
+        if request.method == "POST":
+            ctype = request.headers.get("content-type", "")
+            message = BytesParser(policy=policy.default).parsebytes(
+                b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + await request.body())
+            for part in message.iter_parts():
+                if part.get_filename():
+                    rows.append({"id": f"att{len(rows) + 1}", "type": "attachment",
+                                 "title": part.get_filename(), "size": len(part.get_content())})
+        return json_response({"results": rows, "size": len(rows)})
+
+    # ---- v2
+    async def _v2_collection(self, request: Request) -> Response:
+        if request.method == "GET":
+            title = request.query_params.get("title")
+            rows = [self._view(p, v2=True) for p in self.pages.values() if not title or p["title"] == title]
+            return json_response({"results": rows})
+        body = await request.json()
+        if not body.get("spaceId") or not body.get("title"):
+            return json_response({"message": "spaceId and title are required"}, 400)
+        return json_response(self._view(self._new(str(body["spaceId"]), body["title"],
+                                                  (body.get("body") or {}).get("value", ""),
+                                                  str(body.get("parentId") or "")), v2=True))
+
+    async def _v2_page(self, request: Request) -> Response:
+        page = self.pages.get(request.path_params["pid"])
+        if page is None:
+            return json_response({"message": "Not Found"}, 404)
+        if request.method == "GET":
+            return json_response(self._view(page, v2=True))
+        body = await request.json()
+        return self._update(page, body, (body.get("body") or {}).get("value"), v2=True)
+
+    async def _v2_spaces(self, request: Request) -> Response:
+        keys = [k for k in request.query_params.get("keys", "").split(",") if k]
+        return json_response({"results": [{"id": k, "key": k, "name": k} for k in keys]})
+
+    # ---- test helpers
+    def create_page(self, space: str, title: str, body: str, parent: str = "") -> str:
+        return self._new(space, title, body, parent)["id"]
+
+    def bump_version(self, page_id: str, by: int = 1) -> None:
+        self.pages[page_id]["version"] += by

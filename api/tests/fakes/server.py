@@ -142,3 +142,44 @@ def responder(handler):
         await send({"type": "http.response.body", "body": body})
 
     return app
+
+
+class FakeService:
+    """A fake remote service: a Starlette app owned by a ``FakeServer``. Subclasses build ``app``
+    in ``__init__`` and call ``self._serve(app)``; the context manager starts and stops it."""
+
+    server: FakeServer
+
+    def _serve(self, app: ASGIApp, port: int = 0) -> None:
+        self.server = FakeServer(app, port=port)
+
+    @property
+    def url(self) -> str:
+        return self.server.url
+
+    @property
+    def host(self) -> str:
+        return self.server.host
+
+    @property
+    def requests(self) -> list[RecordedRequest]:
+        return self.server.requests
+
+    def start(self) -> Self:
+        self.server.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.stop()
+
+    def __enter__(self) -> Self:
+        return self.start()
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()
+
+
+def json_response(data: Any, status: int = 200):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(data, status_code=status)

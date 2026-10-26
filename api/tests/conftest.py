@@ -5,6 +5,7 @@ app's lifespan runs inside the test's event loop so the job workers run there to
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import AsyncIterator
@@ -20,6 +21,10 @@ if str(REPO_ROOT) not in sys.path:
 from api.app.config import Settings
 from api.app.db import asyncpg_url, make_engine, reset_schema
 from api.app.main import create_app
+from api.tests.fakes.confluence import FakeConfluence
+from api.tests.fakes.figma import FakeFigma, images_server
+from api.tests.fakes.github import FakeGitHub
+from api.tests.fakes.jira import FakeJira
 
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localhost:5432/exiqo_test")
 
@@ -169,3 +174,123 @@ async def neo4j_down(memory_app):
     finally:
         handle.restore()
         await driver.close()
+
+
+# ------------------------------------------------------------------ connector fakes
+
+
+@pytest.fixture
+def fake_github():
+    with FakeGitHub() as srv:
+        yield srv
+
+
+@pytest.fixture
+def token(fake_github: FakeGitHub) -> str:
+    """The bearer token the fake GitHub accepts."""
+    return fake_github.token
+
+
+@pytest.fixture
+def fake_confluence_dc():
+    with FakeConfluence("datacenter") as srv:
+        yield srv
+
+
+@pytest.fixture
+def fake_confluence_cloud():
+    with FakeConfluence("cloud") as srv:
+        yield srv
+
+
+@pytest.fixture
+def fake_confluence(fake_confluence_dc: FakeConfluence) -> FakeConfluence:
+    return fake_confluence_dc
+
+
+@pytest.fixture
+def fake_jira():
+    with FakeJira("datacenter") as srv:
+        yield srv
+
+
+@pytest.fixture
+def fake_jira_cloud():
+    with FakeJira("cloud") as srv:
+        yield srv
+
+
+@pytest.fixture
+def fake_figma_images():
+    with images_server() as srv:
+        yield srv
+
+
+@pytest.fixture
+def fake_figma(fake_figma_images):
+    with FakeFigma(fake_figma_images) as srv:
+        yield srv
+
+
+@pytest.fixture
+def connectors_settings(settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """``connectors_settings(github=, confluence=, jira=, figma=)``: ``settings`` with ``CONNECTORS``
+    pointing at the fakes given (install layer on, loopback flag on); each token is written to a
+    file in ``tmp_path`` and named by ``<FIELD>_FILE`` (read on every call). The admin layer
+    (``connectors`` in the settings table) is still off: a test turns it on through the API."""
+
+    def secret_file(field: str, value: str) -> None:
+        path = tmp_path / f"{field}.secret"
+        path.write_text(value, encoding="utf-8")
+        monkeypatch.setenv(f"{field.upper()}_FILE", str(path))
+
+    def build(*, github: FakeGitHub | None = None, confluence: FakeConfluence | None = None,
+              jira: FakeJira | None = None, figma: FakeFigma | None = None) -> Settings:
+        install: dict[str, dict] = {}
+        if github is not None:
+            install["github"] = {"enabled": True, "baseUrl": github.url, "apiUrl": f"{github.url}/api/v3",
+                                 "allowedHosts": [github.host], "commitEmail": "exiqo-bot@example.org"}
+            secret_file("github_token", github.token)
+        atlassian = [s for s in (confluence, jira) if s is not None]
+        if atlassian:
+            first = atlassian[0]
+            install["atlassian"] = {
+                "enabled": True, "flavor": first.flavor,
+                "confluenceUrl": confluence.url if confluence else "",
+                "jiraUrl": jira.url if jira else "", "allowedHosts": [s.host for s in atlassian]}
+            secret_file("atlassian_token", first.token)
+            if first.flavor == "cloud":
+                secret_file("atlassian_user", first.user)
+        if figma is not None:
+            install["figma"] = {"enabled": True, "apiUrl": figma.url, "webUrl": "https://www.figma.example",
+                                "allowedHosts": [figma.host], "imageHosts": [figma.images.host]}
+            secret_file("figma_token", figma.token)
+        return settings.model_copy(update={"connectors": json.dumps(install),
+                                           "connectors_allow_insecure_loopback": True})
+
+    return build
+
+
+@pytest.fixture
+async def client_github_disabled(settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
+    """A client of an app with every connector off (the install default)."""
+    github_disabled = settings.model_copy(update={"connectors": ""})
+    engine = make_engine(github_disabled.database_url)
+    try:
+        await reset_schema(engine)
+    except Exception as exc:  # noqa: BLE001  no database: skip, do not fail the suite
+        await engine.dispose()
+        pytest.skip(f"Postgres is not available: {exc}")
+    await engine.dispose()
+    application = create_app(github_disabled)
+    async with application.router.lifespan_context(application):
+        transport = httpx.ASGITransport(app=application)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
+            c.app = application  # type: ignore[attr-defined]
+            yield c
+
+
+@pytest.fixture
+def github_disabled(client_github_disabled: httpx.AsyncClient) -> httpx.AsyncClient:
+    """The name sub-project 6 uses for ``client_github_disabled``."""
+    return client_github_disabled
