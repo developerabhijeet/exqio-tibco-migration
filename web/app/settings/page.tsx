@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Play, Save, Trash2 } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
+import { ConnectorsTab } from "@/components/settings/ConnectorsTab";
 import { IdentityPanel } from "@/components/settings/IdentityPanel";
+import { SettingsTabs } from "@/components/settings/SettingsTabs";
 import { Panel, errorText } from "@/components/tabs/build/Panel";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
@@ -513,7 +515,8 @@ function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView)
   );
 }
 
-export default function Page() {
+/** The General tab: the panels Settings had before it had tabs. */
+function GeneralSettings() {
   const qc = useQueryClient();
   const settings = useSettingsView();
   const [saved, setSaved] = useState<string | null>(null);
@@ -528,10 +531,7 @@ export default function Page() {
   };
   const s = settings.data;
   return (
-    <SecondaryScreen
-      title="Settings"
-      description="Authentication, providers, models per tier and stage, routing bands, evaluations and toolchains."
-    >
+    <div className="space-y-6">
       {settings.error ? <ErrorNote error={settings.error} /> : null}
       {saved ? (
         <p role="status" className="rounded-card border border-gate/30 bg-gate-bg px-4 py-2 text-[14px] text-gate">
@@ -553,6 +553,20 @@ export default function Page() {
           <Toolchains s={s} />
         </div>
       )}
+    </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <SecondaryScreen
+      title="Settings"
+      description="Authentication, providers, models per tier and stage, routing bands, evaluations, toolchains and connectors."
+    >
+      {/* The tab is read from the query string (useSearchParams), which needs a Suspense boundary. */}
+      <Suspense fallback={null}>
+        <SettingsTabs panels={{ general: <GeneralSettings />, connectors: <ConnectorsTab /> }} />
+      </Suspense>
     </SecondaryScreen>
   );
 }

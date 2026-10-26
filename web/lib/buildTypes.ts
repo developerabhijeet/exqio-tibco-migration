@@ -556,3 +556,68 @@ export interface ReadinessView {
   rows: ReadinessRow[];
   summary: { met: number; partial: number; missing: number };
 }
+
+/** The connectors of Settings → Connectors (api/app/connectors/base.py KINDS). */
+export type ConnectorKind = "github" | "atlassian" | "figma";
+
+/** POST /connectors/{kind}/test; the message is redacted by the API. */
+export interface ConnectionTest {
+  ok: boolean;
+  account: string | null;
+  site: string | null;
+  scopes: string[];
+  latency_ms: number;
+  message: string;
+}
+
+/** The last connection test of a connector, kept by the API. */
+export interface ConnectorLastTest {
+  result: ConnectionTest;
+  at: string;
+  actor: string;
+}
+
+/**
+ * One connector of GET /settings/connectors. Everyone gets the two flags; an admin also gets the
+ * effective URLs (the admin's override, else the install's), the overrides themselves, the
+ * install layer, the allowlist, the defaults, the secret names, whether each secret is mounted
+ * (never its value) and the last test.
+ */
+export interface ConnectorSettings {
+  install_enabled: boolean;
+  enabled: boolean;
+  app_enabled?: boolean;
+  overrides?: Record<string, string>;
+  install?: Record<string, unknown>;
+  allowed_hosts?: string[];
+  secret_names?: Record<string, string>;
+  secrets_present?: Record<string, boolean>;
+  last_test?: ConnectorLastTest | null;
+  // effective URLs
+  base_url?: string;
+  api_url?: string;
+  web_url?: string;
+  confluence_url?: string;
+  jira_url?: string;
+  // defaults
+  default_owner?: string;
+  space_key?: string;
+  parent_page_id?: string;
+  project_key?: string;
+  issue_type?: string;
+  labels?: string[];
+  file_keys?: string[];
+}
+
+export type ConnectorSettingsView = Record<ConnectorKind, ConnectorSettings>;
+
+/** GET /connectors: which connectors are on, for any signed-in user. */
+export interface ConnectorFlags {
+  github: { enabled: boolean };
+  atlassian: { enabled: boolean; confluence: boolean; jira: boolean };
+  figma: { enabled: boolean };
+}
+
+/** PUT /settings/connectors: a partial update of the admin's layer (there are no secret fields). */
+export type ConnectorPatch = Partial<Record<string, string | string[] | boolean>>;
+export type ConnectorSettingsPatch = Partial<Record<ConnectorKind, ConnectorPatch>>;

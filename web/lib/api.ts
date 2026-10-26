@@ -28,6 +28,11 @@ import type {
   BuildFiles,
   BuildSummary,
   BuildView,
+  ConnectionTest,
+  ConnectorFlags,
+  ConnectorKind,
+  ConnectorSettingsPatch,
+  ConnectorSettingsView,
   EvalView,
   HistoryView,
   InfraView,
@@ -299,6 +304,12 @@ export const api = {
 
   settingsView: () => json<SettingsView>("/settings"),
   putSettings: (body: SettingsPatch) => json<SettingsView>("/settings", { method: "PUT", body: JSON.stringify(body) }),
+  /** Settings → Connectors; what comes back depends on whether the caller is an admin. */
+  connectorSettings: () => json<ConnectorSettingsView>("/settings/connectors"),
+  putConnectorSettings: (body: ConnectorSettingsPatch) =>
+    json<ConnectorSettingsView>("/settings/connectors", { method: "PUT", body: JSON.stringify(body) }),
+  connectors: () => json<ConnectorFlags>("/connectors"),
+  testConnector: (kind: ConnectorKind) => json<ConnectionTest>(`/connectors/${kind}/test`, post()),
   startEval: (processIds: string[]) =>
     json<{ job_id: string; eval_id: string }>("/providers/eval", post({ process_ids: processIds })),
   evalView: (evalId: string) => json<EvalView>(`/providers/eval/${evalId}`),

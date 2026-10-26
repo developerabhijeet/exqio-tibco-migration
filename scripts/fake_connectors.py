@@ -3,6 +3,9 @@ run and manual tries. Writes the token files to a temp directory and prints the 
 (``CONNECTORS`` plus the ``*_FILE`` variables). Stops on Ctrl-C.
 
     python scripts/fake_connectors.py --repo gmf/svc=samples/synthetic-gmf --ports github=9711,confluence=9712,jira=9713,figma=9714,figma-images=9715
+
+``--token-dir`` writes the token files to a fixed directory (``github``, ``atlassian``, ``figma``),
+which is how ``web/playwright.config.ts`` hands them to the e2e API.
 """
 from __future__ import annotations
 
@@ -39,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", action="append", default=[], metavar="OWNER/NAME[=DIR]",
                         help="seed a GitHub repository (main branch from DIR, else empty); repeatable")
     parser.add_argument("--space", default="GMF", help="the Confluence space key to seed")
+    parser.add_argument("--token-dir", type=Path, default=None,
+                        help="where to write the token files (default: a new temp directory)")
     args = parser.parse_args(argv)
     ports = parse_ports(args.ports)
 
@@ -49,6 +54,18 @@ def main(argv: list[str] | None = None) -> int:
     for service, name in ((github, "github"), (confluence, "confluence"), (jira, "jira"), (figma, "figma")):
         if name in ports:
             service.server.port = ports[name]
+    # The token files first: a caller that waits for a port (the e2e run) finds them in place.
+    tokens = args.token_dir or Path(tempfile.mkdtemp(prefix="fake-connectors-"))
+    tokens.mkdir(parents=True, exist_ok=True)
+    files = {"GITHUB_TOKEN_FILE": ("github", github.token), "ATLASSIAN_TOKEN_FILE": ("atlassian", confluence.token),
+             "FIGMA_TOKEN_FILE": ("figma", figma.token)}
+    if args.flavor == "cloud":
+        files["ATLASSIAN_USER_FILE"] = ("atlassian-user", confluence.user)
+    env = {}
+    for var, (name, value) in files.items():
+        (tokens / name).write_text(value, encoding="utf-8")
+        env[var] = str(tokens / name)
+
     servers = [images, github.server, confluence.server, jira.server, figma.server]
     for srv in servers:
         srv.start()
@@ -58,15 +75,6 @@ def main(argv: list[str] | None = None) -> int:
         github.add_repo(name, tree=Path(tree) if tree else None)
     parent = confluence.create_page(args.space, "ExiQO", "<p>ExiQO pages live under this page.</p>")
 
-    tokens = Path(tempfile.mkdtemp(prefix="fake-connectors-"))
-    files = {"GITHUB_TOKEN_FILE": ("github", github.token), "ATLASSIAN_TOKEN_FILE": ("atlassian", confluence.token),
-             "FIGMA_TOKEN_FILE": ("figma", figma.token)}
-    if args.flavor == "cloud":
-        files["ATLASSIAN_USER_FILE"] = ("atlassian-user", confluence.user)
-    env = {}
-    for var, (name, value) in files.items():
-        (tokens / name).write_text(value, encoding="utf-8")
-        env[var] = str(tokens / name)
     connectors = {
         "github": {"enabled": True, "baseUrl": github.url, "apiUrl": f"{github.url}/api/v3",
                    "allowedHosts": [github.host], "commitEmail": "exiqo-bot@example.org"},
