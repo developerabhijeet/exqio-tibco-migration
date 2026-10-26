@@ -40,12 +40,13 @@ MIGRATION_VOCABULARY: frozenset[str] = frozenset({
     "scenario", "test", "migration", "modernized", "lineage", "revision", "phase", "estate", "exiqoian",
     # target stacks, iterations and connectors (SP5 to SP7)
     "java", "go", "golang", "python", "spring", "fastapi", "stack", "iteration", "jira", "confluence",
-    "github", "figma", "connector",
+    "github", "figma", "connector", "maven", "pytest", "aspnet",
 })
 
 # Vocabulary words that are also everyday words or generic coding topics: they keep a short question
 # from being "too vague" but cannot override the off-topic filter ("write a python script ...").
-AMBIGUOUS_VOCABULARY: frozenset[str] = frozenset({"java", "go", "golang", "python", "spring", "stack", "iteration", "connector"})
+AMBIGUOUS_VOCABULARY: frozenset[str] = frozenset({"java", "go", "golang", "python", "spring", "stack", "iteration", "connector", "maven",
+                                                  "pytest"})
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
 _DOT_NET = re.compile(r"(?<![a-z0-9_])\.net\b")  # ".net" would otherwise tokenise to "net"

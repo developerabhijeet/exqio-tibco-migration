@@ -32,9 +32,10 @@ from engine.exiqoian.lexicon import Lexicon
 from engine.exiqoian.personas import PERSONA_ORDER, PersonaKey, SuggestionNames, default_persona
 from engine.exiqoian.pipeline import Reply, Turn, respond
 from engine.exiqoian.replies import NOT_CONFIGURED_REPLY, UNAVAILABLE_REPLY
-from engine.exiqoian.sources import DEFAULT_STACK, HISTORY_CHARS, HISTORY_MESSAGES, strip_markers
+from engine.exiqoian.sources import HISTORY_CHARS, HISTORY_MESSAGES, strip_markers
 from engine.memory.graph import MemoryUnavailable
 from engine.memory.search import MemoryRetriever
+from engine.stacks import get_stack
 
 log = logging.getLogger("api.exiqoian")
 
@@ -46,8 +47,6 @@ TITLE_CHARS = 80
 AUDIT_QUESTION_CHARS = 500
 CONVERSATION_LIST = 50
 NOT_CONFIGURED = "memory not configured"
-# SP5 adds Project.target_stack; until then every project targets .NET. The seam is `_stack_label`.
-STACK_LABELS = {"dotnet": DEFAULT_STACK, "java": "Java (Spring Boot)", "go": "Go", "python": "Python (FastAPI)"}
 LOCK_NAMESPACE = 0x45584951  # "EXIQ": the first key of the two-int advisory lock, so owners cannot collide with other users of hashtext
 
 ProjectLexicon = tuple[Lexicon, dict[str, str], SuggestionNames]
@@ -209,10 +208,13 @@ def history_turns(messages: list[ChatMessage]) -> list[Turn]:
 
 
 async def _stack_label(session: AsyncSession, project_id: str) -> str:
-    """The project's target stack for the prompt: `Project.target_stack` when the model has it (SP5)."""
+    """The project's target stack for the prompt: the stack registry's label for `Project.target_stack`."""
     project = await session.get(Project, project_id)
-    key = getattr(project, "target_stack", None) or "dotnet"
-    return STACK_LABELS.get(key, str(key))
+    key = (project.target_stack if project is not None else None) or "dotnet"
+    try:
+        return get_stack(key).label
+    except KeyError:
+        return key
 
 
 def _unavailable(exc: Exception) -> Reply:

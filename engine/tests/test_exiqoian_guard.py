@@ -189,6 +189,7 @@ def test_weak_name_parts_still_save_a_short_question_from_too_vague():
 
 def test_stack_and_connector_vocabulary_is_project_vocabulary():
     for word in ("java", "go", "golang", "python", "spring", "fastapi", "stack", "iteration", "jira", "confluence",
-                 "github", "figma", "connector"):
+                 "github", "figma", "connector", "maven", "pytest", "aspnet"):
         assert word in MIGRATION_VOCABULARY
     assert check("Is it Java?", REAL).verdict is None and check("What is in Confluence?", REAL).verdict is None
+    assert check("Is it Maven?", REAL).verdict is None

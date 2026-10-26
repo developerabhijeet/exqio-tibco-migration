@@ -265,10 +265,18 @@ async def test_deleting_the_project_removes_its_conversations_and_messages(sessi
         assert (await session.execute(select(func.count()).select_from(model))).scalar_one() == 0
 
 
-async def test_the_prompt_names_the_projects_target_stack(session, project_id):
-    """The seam for SP5: the label follows Project.target_stack (.NET until that column exists)."""
+@pytest.mark.parametrize("key,label", [
+    ("dotnet", "C# · .NET 10 · ASP.NET Core"),
+    ("java", "Java 21 · Spring Boot 3.5 · Maven"),
+    ("go", "Go · net/http · go modules"),
+    ("python", "Python 3.12 · FastAPI · pytest"),
+])
+async def test_the_prompt_names_the_projects_target_stack(session, project_id, key, label):
+    """The prompt's stack is the registry's label for Project.target_stack."""
     from api.app.services.exiqoian import _stack_label
-    assert await _stack_label(session, project_id) == ".NET (C#)"
+    from engine.stacks import get_stack
+    assert get_stack(key).label == label
     project = await session.get(Project, project_id)
-    project.target_stack = "java"  # not a column yet: a plain attribute is what getattr reads
-    assert await _stack_label(session, project_id) == "Java (Spring Boot)"
+    project.target_stack = key
+    await session.commit()
+    assert await _stack_label(session, project_id) == label
