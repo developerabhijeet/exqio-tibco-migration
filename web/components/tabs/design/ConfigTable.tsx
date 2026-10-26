@@ -1,5 +1,6 @@
 import { Lock } from "lucide-react";
 import type { DesignRecord } from "@/lib/types";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 
 /** TIBCO substitution variables and the .NET configuration keys they become; secrets go to Key Vault. */
 export function ConfigTable({ config, ignored }: { config: DesignRecord["config"]; ignored: DesignRecord["config_ignored"] }) {
@@ -9,7 +10,7 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
       {config.length === 0 ? (
         <p className="text-md text-slate">This process reads no substitution variables.</p>
       ) : (
-        <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+        <ScrollRegion label="Configuration keys">
         <table className="table min-w-[640px]" data-testid="config-table">
           <thead>
             <tr className="table-head">
@@ -36,7 +37,7 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
             ))}
           </tbody>
         </table>
-        </div>
+        </ScrollRegion>
       )}
       {secrets > 0 ? (
         <p className="flex items-start gap-2 rounded-btn bg-sunken px-3 py-2 text-sm text-slate">

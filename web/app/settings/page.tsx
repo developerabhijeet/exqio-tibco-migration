@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Play, Save, Trash2 } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
@@ -99,7 +100,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
     >
       {error ? <ErrorNote error={error} /> : null}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-        <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+        <ScrollRegion label="Model assignments">
           <table className="table">
             <thead>
               <tr className="table-head">
@@ -133,9 +134,9 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
         <div>
-          <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+          <ScrollRegion label="Model pricing">
             <table className="table text-sm">
               <thead>
                 <tr className="table-head">
@@ -156,7 +157,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollRegion>
           <p className="mt-1.5 text-xs text-slate">
             A stage takes the tier its task complexity falls in; the model is the tier&apos;s model for the active provider. The
             API has no per-stage override.
@@ -333,7 +334,7 @@ function Evaluation() {
             Evaluation {v.id.slice(0, 8)}: {v.status}
           </p>
           {v.rows.length > 0 ? (
-            <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll rounded-btn border border-line">
+            <ScrollRegion label="Per-provider evaluation results" className="rounded-btn border border-line">
               <table className="table min-w-[860px] text-sm">
                 <thead>
                   <tr className="table-head">
@@ -364,7 +365,7 @@ function Evaluation() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollRegion>
           ) : running ? null : (
             <p className="text-sm text-slate">No result rows.</p>
           )}
@@ -379,7 +380,7 @@ function Toolchains({ s }: { s: SettingsView }) {
   const names = [...order.filter((n) => s.toolchains[n]), ...Object.keys(s.toolchains).filter((n) => !order.includes(n))];
   return (
     <Panel title="Toolchains" eyebrow="Detected on the API host" testId="toolchains">
-      <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+      <ScrollRegion label="Detected toolchains">
         <table className="table">
           <thead>
             <tr className="table-head">
@@ -405,7 +406,7 @@ function Toolchains({ s }: { s: SettingsView }) {
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollRegion>
       <p className="mt-2 text-sm text-slate">
         APP_SECRET <Presence ok={s.app_secret_configured} yes="set" no="not set" /> · Scenario database: {s.scenario_database}
       </p>

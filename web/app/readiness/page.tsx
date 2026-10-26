@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
@@ -112,7 +113,7 @@ export default function Page() {
             <Pill tone="error">{r.summary.missing} missing</Pill>
             <span className="text-sm text-slate">Status is computed from stored evidence; select a link to open it.</span>
           </div>
-          <section tabIndex={0} role="region" aria-label="Scrollable table" className="card table-scroll p-0">
+          <ScrollRegion label="Readiness expectations" as="section" className="card  p-0">
             <table className="table min-w-[900px]">
               <thead>
                 <tr className="table-head">
@@ -128,7 +129,7 @@ export default function Page() {
                 ))}
               </tbody>
             </table>
-          </section>
+          </ScrollRegion>
         </div>
       )}
     </SecondaryScreen>

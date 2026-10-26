@@ -5,6 +5,7 @@
 // another provider; this screen is that table rolled up two ways — by agent across the project, and
 // per session, a session being one job (or the Ask calls made outside any job).
 import { useMemo, useState } from "react";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { Bot, ChevronRight, Coins, Gauge, Layers, RotateCcw, TriangleAlert } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
 import { Panel } from "@/components/tabs/build/Panel";
@@ -74,7 +75,7 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
   return (
-    <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+    <ScrollRegion label="Token spend">
       <table className="table" data-testid="agent-costs">
         <thead className="border-b border-line text-left text-slate">
           <tr>
@@ -122,7 +123,7 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
           ))}
         </tbody>
       </table>
-    </div>
+    </ScrollRegion>
   );
 }
 

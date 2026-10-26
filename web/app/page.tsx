@@ -75,7 +75,18 @@ export default function Home() {
     apply();
     const observer = new ResizeObserver(apply);
     observer.observe(node);
-    return () => observer.disconnect();
+    // A window resize while compact can change the expanded height (the title may wrap). The expanded
+    // height is only measurable expanded, so keep the larger of the known value and the current one
+    // and let the next expanded measurement correct it.
+    const onResize = () => {
+      if (node.dataset.compact === "true") expanded.current = Math.max(expanded.current, node.offsetHeight);
+      apply();
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", onResize);
+    };
   }, [compact]);
 
   // Compact once the top 48 px of the page have scrolled away. An IntersectionObserver on a

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { useQuery } from "@tanstack/react-query";
 import { FileDown, History, Loader2, Wand2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
@@ -259,7 +260,7 @@ export function DesignTab() {
                   {rec.messaging.length === 0 ? (
                     <p className="text-md text-slate">No queues or topics.</p>
                   ) : (
-                    <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
+                    <ScrollRegion label="Messaging entities">
                       <table className="table">
                         <thead>
                           <tr className="table-head">
@@ -278,7 +279,7 @@ export function DesignTab() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </ScrollRegion>
                   )}
                 </Panel>
                 <Panel title="Resilience" eyebrow="Timeouts, retries and breakers">

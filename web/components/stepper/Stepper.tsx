@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   Check,
+  CheckCheck,
   CheckCircle2,
   ChevronDown,
   Eye,
@@ -35,7 +36,7 @@ const STATUS_LABEL: Record<Status, string> = {
 
 /** The 8 px dot is the colour cue; the glyph beside the label and the text carry the same status. */
 const DOT: Record<Status, string> = {
-  not_started: "bg-line",
+  not_started: "bg-slate",
   running: "bg-accent",
   needs_review: "bg-decision",
   complete: "bg-det",
@@ -58,7 +59,8 @@ const STEP_ICON: Record<string, LucideIcon> = {
 
 function Glyph({ status }: { status: Status }) {
   const common = { size: 13, "aria-hidden": true, className: "shrink-0" } as const;
-  if (status === "approved" || status === "complete") return <Check {...common} strokeWidth={3} />;
+  if (status === "approved") return <CheckCheck {...common} strokeWidth={3} />;
+  if (status === "complete") return <Check {...common} strokeWidth={3} />;
   if (status === "failed") return <X {...common} strokeWidth={3} />;
   if (status === "needs_review") return <AlertTriangle {...common} />;
   if (status === "running") return <Loader2 {...common} className="shrink-0 motion-safe:animate-spin" />;
@@ -100,11 +102,8 @@ export function Stepper({
 
   return (
     <div className="flex items-stretch gap-3">
-      <div
-        role="tablist"
-        aria-label="Migration steps"
-        className={`card hidden min-w-0 flex-1 items-stretch shadow-card lg:flex ${compact ? "p-1" : "p-2"}`}
-      >
+      <nav aria-label="Migration steps" className="hidden min-w-0 flex-1 lg:block">
+      <ol className={`card flex min-w-0 items-stretch shadow-card ${compact ? "p-1" : "p-2"}`}>
         {steps.map((s, i) => {
           const isActive = i === active;
           const mine = canActOn(persona, s.key as StepKey);
@@ -112,16 +111,13 @@ export function Stepper({
           const Icon = STEP_ICON[s.key];
           const title = `${s.label}: ${STATUS_LABEL[s.status]}${reason ? `. ${reason}` : ""}`;
           return (
-            <div key={s.key} className="flex min-w-0 flex-1 items-center">
+            <li key={s.key} className="flex min-w-0 flex-1 items-center">
               <button
                 ref={(el) => {
                   tabs.current[i] = el;
                 }}
                 type="button"
-                role="tab"
-                aria-selected={isActive}
                 aria-current={isActive ? "step" : undefined}
-                tabIndex={isActive ? 0 : -1}
                 data-testid={`step-${s.key}`}
                 data-status={s.status}
                 data-view-only={mine ? undefined : "true"}
@@ -157,10 +153,11 @@ export function Stepper({
                   className={`mx-0.5 h-0.5 w-3 shrink-0 rounded-full ${i + 1 <= lastFinished ? "bg-gate" : "bg-line"}`}
                 />
               ) : null}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
+      </nav>
       <CompactStepper steps={steps} active={active} onSelect={onSelect} compact={compact} />
       {trailing ? <div className="flex shrink-0 items-center" data-testid="stepper-trailing">{trailing}</div> : null}
     </div>
@@ -197,12 +194,6 @@ function CompactStepper({
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>, i: number) => {
     const last = steps.length - 1;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setOpen(false);
-      button.current?.focus();
-      return;
-    }
     const to =
       e.key === "ArrowDown" ? Math.min(i + 1, last) : e.key === "ArrowUp" ? Math.max(i - 1, 0)
       : e.key === "Home" ? 0 : e.key === "End" ? last : null;
@@ -210,17 +201,31 @@ function CompactStepper({
     e.preventDefault();
     options.current[to]?.focus();
   };
+  // Escape anywhere inside closes it and returns focus to the button; so does focus leaving.
+  const onRootKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key !== "Escape" || !open) return;
+    e.preventDefault();
+    setOpen(false);
+    button.current?.focus();
+  };
 
   if (!cur) return null;
   return (
-    <div ref={root} className="relative min-w-0 flex-1 lg:hidden">
+    <div
+      ref={root}
+      className="relative min-w-0 flex-1 lg:hidden"
+      onKeyDown={onRootKeyDown}
+      onBlur={(e) => {
+        if (open && !e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
       <button
         ref={button}
         type="button"
         data-testid="stepper-compact"
         data-status={cur.status}
-        aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? "stepper-compact-list" : undefined}
         onClick={() => setOpen((o) => !o)}
         className={`card flex w-full items-center gap-2 px-3 text-left shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
           compact ? "py-1.5" : "py-2.5"
@@ -235,21 +240,19 @@ function CompactStepper({
       </button>
       {open ? (
         <ul
-          role="listbox"
-          aria-label="Migration steps"
+          id="stepper-compact-list"
           className="card absolute left-0 right-0 top-full z-30 mt-1 space-y-0.5 p-1 shadow-card"
         >
           {steps.map((s, i) => {
             const Icon = STEP_ICON[s.key];
             return (
-              <li key={s.key} role="presentation">
+              <li key={s.key}>
                 <button
                   ref={(el) => {
                     options.current[i] = el;
                   }}
                   type="button"
-                  role="option"
-                  aria-selected={i === active}
+                  aria-current={i === active ? "step" : undefined}
                   data-testid={`step-option-${s.key}`}
                   data-status={s.status}
                   onKeyDown={(e) => onKeyDown(e, i)}

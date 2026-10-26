@@ -76,4 +76,16 @@ test.describe("app shell", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${width}px: no horizontal scroll`).toBe(true);
     }
   });
+
+  test("link labels and the brand subtitle appear from 1760 px, not before", async ({ page }) => {
+    await page.goto("/");
+    const subtitle = page.getByText("TIBCO BusinessWorks to .NET");
+    const label = page.getByRole("navigation", { name: "Secondary" }).getByText("Tokenomics", { exact: true });
+    await page.setViewportSize({ width: 1759, height: 900 });
+    await expect(subtitle).toBeHidden();
+    expect((await label.boundingBox())?.width ?? 0).toBeLessThanOrEqual(1);
+    await page.setViewportSize({ width: 1760, height: 900 });
+    await expect(subtitle).toBeVisible();
+    await expect(label).toBeVisible();
+  });
 });

@@ -24,7 +24,7 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   await expect(page.getByTestId("parse-report").getByRole("row")).toHaveCount(12); // header + 11
 
   // Discover tab: domain, process, step.
-  await page.getByRole("tab", { name: /^Discover/ }).click();
+  await page.getByTestId("step-discover").click();
   await page.getByTestId("domain-select").click();
   await page.getByRole("option", { name: /Dealer Funding/ }).click();
   await expect(page.getByTestId("domain-select")).toContainText("Dealer Funding");
@@ -70,7 +70,7 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.getByRole("button", { name: "Scan" }).click();
   await expect(page.getByTestId("counter-processes")).toHaveText("11");
 
-  await page.getByRole("tab", { name: /^Discover/ }).click();
+  await page.getByTestId("step-discover").click();
   await page.getByTestId("domain-select").click();
   await page.getByRole("option", { name: /Dealer Funding/ }).click();
   await page.getByTestId("process-list").getByRole("button", { name: /DealerFundingRequest/ }).click();

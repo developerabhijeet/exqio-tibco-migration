@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Bot, Cog, Gavel } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
@@ -157,7 +158,7 @@ export default function Page() {
                   </ResponsiveContainer>
                 ) : null}
               </div>
-              <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll mt-4">
+              <ScrollRegion label="History by phase" className="mt-4">
                 <table className="table text-sm">
                   <thead>
                     <tr className="text-left text-2xs uppercase tracking-wide text-slate">
@@ -183,7 +184,7 @@ export default function Page() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </ScrollRegion>
             </Panel>
 
             <Panel title="By workflow" eyebrow="Complexity band" testId="history-workflows">
@@ -194,7 +195,7 @@ export default function Page() {
                   </span>
                 ))}
               </div>
-              <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll max-h-[360px] overflow-auto rounded-btn border border-line">
+              <ScrollRegion label="History by workflow" className="max-h-[360px] overflow-auto rounded-btn border border-line">
                 <table className="table min-w-[560px] text-sm">
                   <thead className="sticky top-0">
                     <tr className="table-head">
@@ -229,7 +230,7 @@ export default function Page() {
                       ))}
                   </tbody>
                 </table>
-              </div>
+              </ScrollRegion>
             </Panel>
           </div>
 
