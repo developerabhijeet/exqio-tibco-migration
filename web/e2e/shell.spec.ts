@@ -24,7 +24,7 @@ test.describe("app shell", () => {
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "true");
     const menu = page.locator("#topbar-more-menu");
-    for (const name of ["Settings", "History", "Memory", "Tokenomics", "Readiness", "Help & Support"]) {
+    for (const name of ["Settings", "History", "Memory", "Rules", "Tokenomics", "Readiness", "Help & Support"]) {
       await expect(menu.getByRole("link", { name })).toBeVisible();
     }
     // Escape closes it and hands focus back to the button.
