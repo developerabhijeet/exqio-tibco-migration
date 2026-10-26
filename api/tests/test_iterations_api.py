@@ -369,14 +369,41 @@ async def test_validation_errors_do_not_echo_the_input(client, built_and_failed,
     assert r.status_code == 422 and "hunter2" not in r.text
 
 
-async def test_a_failed_queue_leaves_no_open_iteration(client, app, built_and_failed, architect, monkeypatch):  # M5
+async def test_a_failed_queue_stores_nothing(client, app, built_and_failed, architect, monkeypatch):  # M5, N3
     pid, proc = built_and_failed
+    first = (await client.post(f"/processes/{proc}/iterations", json={"requirements": "a"}, headers=architect)).json()
+    await wait_design(client, proc)
+    assert (await client.post(f"/gates/{proc}/G3", json={"state": "approved", "note": ""}, headers=architect)).status_code == 200
+    from api.app.routers import iterations as router_module
 
     async def broken(*args, **kwargs):
         raise RuntimeError("queue down")
 
-    monkeypatch.setattr(app.state.runner, "submit", broken)
-    r = await client.post(f"/processes/{proc}/iterations", json={"requirements": "r"}, headers=architect)
-    assert r.status_code == 503
+    monkeypatch.setattr(router_module, "insert_job", broken)
+    r = await client.post(f"/processes/{proc}/iterations", json={"requirements": "b"}, headers=architect)
+    assert r.status_code == 503 and r.json()["detail"] == "the design job could not be queued: nothing was opened, try again"
     listed = (await client.get(f"/projects/{pid}/iterations")).json()
-    assert listed[-1]["n"] == 2 and listed[-1]["status"] == "abandoned"
+    assert [i["n"] for i in listed] == [1, 2]
+    assert listed[1]["id"] == first["id"] and listed[1]["status"] != "abandoned"  # the superseded one is kept
+    assert await gate_state(client, proc, "G3") == "approved"  # no gate reset either
+
+
+async def test_a_no_model_reanalysis_keeps_the_gates(client, built_and_failed, architect, sme, settings,
+                                                     provider_proposing_one_rule):  # T4 review N1
+    _, proc = built_and_failed
+    await client.post(f"/processes/{proc}/iterations", json={"requirements": "Reject dealers on watch list."},
+                      headers=architect)
+    await wait_design(client, proc)
+    rule = await _iteration_rule(client, proc)
+    assert (await client.patch(f"/rules/{rule['id']}", json={"status": "approved"}, headers=sme)).status_code == 200
+    for gate in ("G1", "G2"):
+        r = await client.post(f"/gates/{proc}/{gate}", json={"state": "approved", "note": ""}, headers=sme)
+        assert r.status_code == 200, r.text
+    settings.provider = "auto"
+    settings.claude_code_oauth_token = settings.azure_openai_endpoint = settings.azure_openai_api_key = ""
+    spec = (await client.get(f"/processes/{proc}/analysis")).json()["spec_hash"]
+    await _reanalyse(client, proc)
+    view = (await client.get(f"/processes/{proc}/analysis")).json()
+    assert view["ai_available"] is False and view["spec_hash"] == spec
+    assert await gate_state(client, proc, "G1") == "approved" and await gate_state(client, proc, "G2") == "approved"
+    assert next(r for r in view["rules"] if r["id"] == rule["id"])["status"] == "approved"

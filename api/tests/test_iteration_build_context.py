@@ -183,3 +183,23 @@ async def test_follow_job_leaves_iteration_1_and_ended_ones(app, iteration2_desi
         await s.flush()
         assert (await follow_job(s, "plan", proc, {"iteration": row.n})) is None
         await s.rollback()
+
+
+async def test_verify_of_an_older_build_leaves_the_new_iteration_alone(client, app, iteration2_designed_and_approved,
+                                                                       wait_build):  # T4 review I1
+    proc = iteration2_designed_and_approved
+    build = (await wait_build(proc))["result"]
+    build_id = build.get("build_id") or build.get("id")
+    async with app.state.sessionmaker() as s:
+        process = await s.get(Process, proc)
+        assert (await s.get(it_api.Build, build_id)).iteration == 2
+        it3 = await open_iteration(s, process.project_id, [proc], "reentry", actor="architect.lee")
+        await s.commit()
+    job_id = await app.state.runner.submit("verify", {"build_id": build_id}, project_id=process.project_id,
+                                           process_id=proc)
+    await _wait_job(client, job_id)  # it fails (no running service): it did start
+    async with app.state.sessionmaker() as s:
+        job = await s.get(it_api.Job, job_id)
+        assert job.payload["iteration"] == 2 and job.started_at is not None
+        assert (await s.get(Iteration, it3.id)).status == "open"
+        assert (await follow_job(s, "plan", proc, {"build_id": build_id})) is None  # unstamped: the build's

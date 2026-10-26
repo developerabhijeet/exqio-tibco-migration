@@ -15,7 +15,7 @@ from sqlalchemy import cast, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app.models import Gate, Iteration, IterationInput, Job, Process, Project
+from api.app.models import Build, Gate, Iteration, IterationInput, Job, Process, Project
 from api.app.services import gates as gate_svc
 from engine.agents.designer import IterationContext, IterationItem
 from engine.agents.provider import mask_sensitive
@@ -236,8 +236,8 @@ def status_for_job(kind: str) -> str | None:
 
 
 async def follow_job(session: AsyncSession, kind: str, process_id: str | None, payload: dict) -> Iteration | None:
-    """A phase job of ``process_id`` started: its iteration (the one stamped on the job, else the
-    process's current one) takes the job's status. Iteration 1 and ended iterations stay as they
+    """A phase job of ``process_id`` started: its iteration (the one stamped on the job, else its
+    build's for a verify or plan, else the process's current one) takes the job's status. Iteration 1 and ended iterations stay as they
     are, as does an iteration that no longer names the process. Flushes; the caller commits."""
     status = status_for_job(kind)
     if status is None or process_id is None:
@@ -245,13 +245,19 @@ async def follow_job(session: AsyncSession, kind: str, process_id: str | None, p
     process = await session.get(Process, process_id)
     if process is None:
         return None
-    n = await job_iteration(session, payload, process_id)
+    n = None
+    if "iteration" not in payload and payload.get("build_id"):  # a verify or plan queued unstamped
+        n = await session.scalar(select(Build.iteration).where(Build.id == payload["build_id"]))
+    if n is None:
+        n = await job_iteration(session, payload, process_id)
     row = await session.scalar(select(Iteration).where(Iteration.project_id == process.project_id,
-                                                       Iteration.n == n))
+                                                       Iteration.n == n).with_for_update())
     if (row is None or row.n == 1 or row.status not in ACTIVE_STATUSES or row.status == status
             or process_id not in (row.process_ids or [])):
         return None
-    return await set_status(session, row.id, status)
+    row.status = status  # under the row lock, so a G6 close in flight cannot be overwritten
+    await session.flush()
+    return row
 
 
 async def close_when_deployed(session: AsyncSession, process_id: str) -> list[Iteration]:

@@ -8,6 +8,7 @@ and handed to the designer inside ``<source>``.
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -19,7 +20,8 @@ from starlette.datastructures import UploadFile
 from starlette.requests import ClientDisconnect
 
 from api.app.auth.roles import Principal
-from api.app.deps import RunnerDep, SessionDep, SettingsDep, require_roles
+from api.app.deps import SessionDep, SettingsDep, require_roles
+from api.app.jobs.runner import insert_job, wake_local_workers
 from api.app.models import AuditLog, Build, DesignRecord, Iteration, IterationInput, Process
 from api.app.schemas.iteration import (
     InputText,
@@ -49,13 +51,14 @@ from api.app.services.uploads import UploadError
 from engine.memory.model import KnowledgeError, guard_text
 
 router = APIRouter(tags=["iterations"])
+log = logging.getLogger(__name__)
 
 MAX_LOGS = 10
 JSON_BODY_LIMIT = 256 * 1024
 #: ten logs of 5 MB, the ``body`` field and the multipart framing
 MULTIPART_BODY_LIMIT = MAX_LOGS * MAX_UPLOAD_BYTES + 1024 * 1024
 SME_ONLY = "an SME may open an iteration with requirements only"
-QUEUE_FAILED = "the design job could not be queued: the iteration was abandoned, open it again"
+QUEUE_FAILED = "the design job could not be queued: nothing was opened, try again"
 TOO_LARGE = "the request is larger than {mb} MB"
 OPENERS = ("architect", "admin", "sme")
 FULL_OPENERS = frozenset({"architect", "admin"})
@@ -180,7 +183,7 @@ async def preview(process_id: str, session: SessionDep) -> IterationPreview:
                      "body": {"type": "string", "description": "IterationOpen as JSON"},
                      "logs": {"type": "array", "items": {"type": "string", "format": "binary"}}}}}}}})
 async def open_iteration(process_id: str, request: Request, principal: OpenerDep, session: SessionDep,
-                         runner: RunnerDep, settings: SettingsDep) -> IterationOut:
+                         settings: SettingsDep) -> IterationOut:
     """Re-enter Design: a new iteration with the chosen failures, uploaded logs and requirements;
     G3-G6 reset; the design job queued. An SME may give requirements only."""
     sme_only = not principal.roles & FULL_OPENERS
@@ -226,17 +229,19 @@ async def open_iteration(process_id: str, request: Request, principal: OpenerDep
     rows = await gate_svc.gate_rows(session, process_id)
     await gate_svc.reset_gates(session, process, rows, "G3", f"iteration {row.n} re-entered design",
                                principal.actor, "user", {"iteration": row.n, "iteration_id": row.id})
-    await session.commit()
     try:
-        job_id = await runner.submit("design", {"process_id": process_id, "provider": settings.resolved_provider(),
-                                                "iteration": row.n},
-                                     project_id=process.project_id, process_id=process_id)
-    except Exception as exc:
-        # No open iteration without its design job: it is abandoned (the gate reset stands, audited).
-        await session.rollback()
-        await iteration_svc.abandon(session, row.id, iteration_svc.INITIAL_ACTOR, QUEUE_FAILED)
+        # the design job is queued in the same transaction: the iteration, its inputs, the gate
+        # reset, a superseded iteration's change and the job are stored together or not at all
+        job_id = await insert_job(session, "design", {"process_id": process_id,
+                                                      "provider": settings.resolved_provider(),
+                                                      "iteration": row.n},
+                                  project_id=process.project_id, process_id=process_id)
         await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        log.exception("opening an iteration of %s failed", process_id)
         raise HTTPException(status_code=503, detail=QUEUE_FAILED) from exc
+    wake_local_workers(request.app.state.sessionmaker)
     # what the iteration brought in, as one memory revision of that iteration (no-op without Neo4j)
     await memory_ingest.enqueue_ingest(
         request.app.state.sessionmaker, settings, project_id=process.project_id, phase="iteration",

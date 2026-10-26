@@ -90,6 +90,9 @@ CANCELLED_REASON = "cancelled"
 REAP_SECONDS = 30.0
 #: Job kinds stamped with the process's current iteration on submit (sub-project 6).
 ITERATION_STAMPED = frozenset({"design", "build"})
+#: Job kinds stamped with their build's iteration on submit (``payload["build_id"]``): a verify or a
+#: plan belongs to the iteration of the build it runs on, not to the process's current one.
+BUILD_STAMPED = frozenset({"verify", "plan"})
 POLL_SECONDS = 0.5  # how often an idle worker looks for jobs queued by another process
 
 _JOBS = Job.__table__.fullname
@@ -658,11 +661,21 @@ class JobRunner:
         process is stamped with the process's current iteration (``payload["iteration"]``)."""
         if kind in ITERATION_STAMPED and process_id is not None and "iteration" not in payload:
             payload = {**payload, "iteration": await self._iteration(process_id)}
+        elif kind in BUILD_STAMPED and payload.get("build_id") and "iteration" not in payload:
+            n = await self._build_iteration(payload["build_id"])
+            if n is not None:
+                payload = {**payload, "iteration": n}
         job_id = await enqueue(self.sessionmaker, kind, payload, project_id=project_id,
                                process_id=process_id, affinity=affinity)
         if self.worker is not None:
             self.worker.wake()
         return job_id
+
+    async def _build_iteration(self, build_id: str) -> int | None:
+        from api.app.models import Build
+
+        async with self.sessionmaker() as s:
+            return await s.scalar(select(Build.iteration).where(Build.id == build_id))
 
     async def _iteration(self, process_id: str) -> int:
         from api.app.services.iterations import current_iteration  # services import this module
