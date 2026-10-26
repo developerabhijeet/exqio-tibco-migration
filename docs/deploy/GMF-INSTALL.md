@@ -393,10 +393,26 @@ Secrets User on the vault. The object names below are the defaults of `keyVault.
 | `AZURE_OPENAI_API_KEY` | (`keyVault.secrets.azureOpenaiApiKey`), omit with `providers.azureOpenAI.auth: managed_identity` | Azure OpenAI owner | api, worker | regenerate the key in Azure, new Key Vault version, restart |
 | `CLAUDE_CODE_OAUTH_TOKEN` | (`keyVault.secrets.claudeCodeOauthToken`), only with `providers.claude.enabled` | platform team | api, worker | new version, restart |
 | `LANGFUSE_SECRET_KEY` | (`keyVault.secrets.langfuseSecretKey`), only with `langfuse.enabled` | platform team | api, worker | new version, restart |
-| `GITHUB_TOKEN` | named in the chart's connector secret values, only when the GitHub connector is enabled | GitHub org owner | api, worker | new version; read on every call, so the CSI driver's rotation needs no restart |
-| `ATLASSIAN_TOKEN` | same, only when the Atlassian connector is enabled | Atlassian admin | api, worker | same |
-| `ATLASSIAN_USER` | same, Atlassian cloud only: the account email | Atlassian admin | api, worker | with the token |
-| `FIGMA_TOKEN` | same, only when the Figma connector is enabled | Figma org admin | api, worker | same as `GITHUB_TOKEN` |
+| `GITHUB_TOKEN` | (`keyVault.secrets.githubToken`), only with `connectors.github.enabled` | GitHub org owner | api, worker | new version; read on every call, so the CSI driver's rotation needs no restart |
+| `ATLASSIAN_TOKEN` | (`keyVault.secrets.atlassianToken`), only with `connectors.atlassian.enabled` | Atlassian admin | api, worker | same |
+| `ATLASSIAN_USER` | (`keyVault.secrets.atlassianUser`), Atlassian `flavor: cloud` only: the account email | Atlassian admin | api, worker | with the token |
+| `FIGMA_TOKEN` | (`keyVault.secrets.figmaToken`), only with `connectors.figma.enabled` | Figma org admin | api, worker | same as `GITHUB_TOKEN` |
+| GMF private CA bundle | (`keyVault.secrets.connectorsCaBundle`), optional PEM; or `connectors.caBundle` as PEM text | platform team | api, worker (file `/mnt/secrets/connectors_ca_bundle`, `CONNECTORS_CA_BUNDLE`) | new version, restart (the bundle is read when a connector client is built) |
+
+Connectors are off. Enabling one in `connectors.<kind>` needs: its secret name above, `allowedHosts`
+(the hosts the client may reach; they join `EGRESS_ALLOWLIST` in the About panel), HTTPS URLs, and
+`cidrs` (the chart renders NetworkPolicy `exiqo-connectors-egress`, api and worker to those
+addresses on 443) or a non-empty `egress.allowCidrs` that already covers them. The chart refuses
+(schema) an enabled connector missing any of these, an `http://` URL, or Atlassian cloud without
+`atlassianUser`. `values.gmf.example.yaml` has a commented example (GitHub Enterprise Server,
+Confluence and Jira Data Center). Figma's rendered-image host is a separate optional entry,
+`connectors.figma.imageHosts`; leave it empty to show frame names without thumbnails.
+
+If GMF's servers use a certificate from a private CA, give the connectors its PEM bundle (root and
+intermediates), by one of: `connectors.caBundle` in the values (a ConfigMap `exiqo-connectors-ca`
+mounted at `/etc/exiqo-connectors-ca/ca.pem` in api and worker), or a Key Vault object named by
+`keyVault.secrets.connectorsCaBundle`. Setting both is refused. The bundle is only a trust anchor
+for the connectors' TLS (verification is never turned off); it holds no secret.
 
 Terraform creates the two database URLs. Create the rest in the same vault, using the names in
 `keyVault.secrets` (commands in `deploy/azure/README.md`, "Not created here"). Generated with

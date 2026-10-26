@@ -97,6 +97,14 @@ keyVault:
     azureOpenaiApiKey: ""                    # AZURE_OPENAI_API_KEY, empty with managed identity
     claudeCodeOauthToken: ""                 # only with providers.claude.enabled
     langfuseSecretKey: ""                    # only with langfuse.enabled
+    # Connector credentials, each required by (and mounted only with) its enabled connector.
+    githubToken: ""                          # GITHUB_TOKEN (PAT or GitHub App installation token source)
+    atlassianToken: ""                       # ATLASSIAN_TOKEN (Data Center PAT, or cloud API token)
+    atlassianUser: ""                        # ATLASSIAN_USER (cloud only: the account email for basic auth)
+    figmaToken: ""                           # FIGMA_TOKEN (personal access token of a GMF service account)
+    # PEM bundle of GMF's private CA(s) the connectors verify TLS against, mounted at
+    # /mnt/secrets/connectors_ca_bundle (CONNECTORS_CA_BUNDLE). Alternative: connectors.caBundle.
+    connectorsCaBundle: ""
 
 ingress:
   enabled: true
@@ -223,6 +231,37 @@ mirrors:
   nuget: ""            # NUGET_SOURCE, written into generated nuget.config
   npm: ""              # NPM_CONFIG_REGISTRY
   terraformConfig: ""  # a Terraform CLI config (provider_installation network_mirror), as text
+
+# Connectors (GitHub Enterprise, Confluence/Jira, Figma): all off. The install layer is the ceiling
+# for Settings -> Connectors. Hosts and addresses are GMF's own; the chart names no public host.
+# An enabled connector needs its keyVault.secrets.* token, allowedHosts (the hosts the client may
+# reach; also added to the About panel's egress list) and cidrs (NetworkPolicy, port 443) or a
+# non-empty egress.allowCidrs. Every URL is https://.
+connectors:
+  # GMF's private CA, as PEM text (a ConfigMap mounted in api and worker) -- or keyVault.secrets.
+  # connectorsCaBundle for a Key Vault object. Not both. Empty: the image's trust store.
+  caBundle: ""
+  github:
+    enabled: false
+    baseUrl: ""          # e.g. https://github.gmf.example.com (GHES) or https://api.<sub>.ghe.com
+    apiUrl: ""           # optional; default <baseUrl>/api/v3 for GHES
+    allowedHosts: []     # hosts the client may reach, e.g. [github.gmf.example.com]
+    cidrs: []            # NetworkPolicy egress (private endpoint / firewall subnet), port 443
+    commitEmail: ""      # commit author email; empty -> exiqo-migrate@invalid
+  atlassian:
+    enabled: false
+    flavor: datacenter   # or cloud (then keyVault.secrets.atlassianUser is required)
+    confluenceUrl: ""    # GMF's Data Center or cloud Confluence base URL
+    jiraUrl: ""          # GMF's Jira base URL
+    allowedHosts: []
+    cidrs: []
+  figma:
+    enabled: false
+    apiUrl: ""           # Figma's REST base URL, when GMF allows its Figma organisation
+    webUrl: ""           # base for frame links shown to people; empty -> names without links
+    imageHosts: []       # optional: hosts of rendered images (off when empty)
+    allowedHosts: []
+    cidrs: []
 
 langfuse:
   enabled: false

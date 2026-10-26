@@ -76,6 +76,9 @@ objectAlias, or the CI Secret's key) and the variable the app reads it from (<NA
 neo4jAuth is not here: only the Neo4j server reads it, from the Secret the CSI driver syncs.
 "roles" limits a secret to those pods: the worker runs generated code (dotnet test, terraform) as
 its own UID, so it gets only what its jobs use; sign-in secrets stay on the api.
+"when" ties a row to a feature (claude, langfuse, or a connector that is enabled; atlassianCloud is
+Atlassian enabled with flavor cloud). "noEnv" is a file the app reads by a path setting
+(CONNECTORS_CA_BUNDLE in the ConfigMap), not through <NAME>_FILE: GMF's private CA certificates.
 */}}
 {{- define "exiqo.secretTable" -}}
 - {key: databaseUrl, file: database_url, env: DATABASE_URL}
@@ -88,6 +91,11 @@ its own UID, so it gets only what its jobs use; sign-in secrets stay on the api.
 - {key: azureOpenaiApiKey, file: azure_openai_api_key, env: AZURE_OPENAI_API_KEY}
 - {key: claudeCodeOauthToken, file: claude_code_oauth_token, env: CLAUDE_CODE_OAUTH_TOKEN, when: claude}
 - {key: langfuseSecretKey, file: langfuse_secret_key, env: LANGFUSE_SECRET_KEY, when: langfuse}
+- {key: githubToken, file: github_token, env: GITHUB_TOKEN, when: github}
+- {key: atlassianToken, file: atlassian_token, env: ATLASSIAN_TOKEN, when: atlassian}
+- {key: atlassianUser, file: atlassian_user, env: ATLASSIAN_USER, when: atlassianCloud}
+- {key: figmaToken, file: figma_token, env: FIGMA_TOKEN, when: figma}
+- {key: connectorsCaBundle, file: connectors_ca_bundle, noEnv: true}
 {{- end -}}
 
 {{/*
@@ -103,6 +111,10 @@ The secrets this install gives one role, as a YAML list of the table's rows plus
 {{- $on := true -}}
 {{- if eq (.when | default "") "claude" }}{{ $on = $v.providers.claude.enabled }}{{ end -}}
 {{- if eq (.when | default "") "langfuse" }}{{ $on = $v.langfuse.enabled }}{{ end -}}
+{{- if eq (.when | default "") "github" }}{{ $on = $v.connectors.github.enabled }}{{ end -}}
+{{- if eq (.when | default "") "atlassian" }}{{ $on = $v.connectors.atlassian.enabled }}{{ end -}}
+{{- if eq (.when | default "") "atlassianCloud" }}{{ $on = and $v.connectors.atlassian.enabled (eq $v.connectors.atlassian.flavor "cloud") }}{{ end -}}
+{{- if eq (.when | default "") "figma" }}{{ $on = $v.connectors.figma.enabled }}{{ end -}}
 {{- if and .roles (not (has $role .roles)) }}{{ $on = false }}{{ end -}}
 {{- if and $on $object -}}
 {{- $rows = append $rows (merge (dict "object" $object) .) -}}
@@ -123,7 +135,7 @@ with "only" (list "databaseUrl").
 {{- define "exiqo.secretFileEnv" -}}
 {{- $only := .only | default list -}}
 {{- range (include "exiqo.platformSecrets" (dict "ctx" .ctx "role" .role) | fromYamlArray) }}
-{{- if or (not $only) (has .key $only) }}
+{{- if and (not .noEnv) (or (not $only) (has .key $only)) }}
 - name: {{ .env }}_FILE
   value: /mnt/secrets/{{ .file }}
 {{- end }}
@@ -209,6 +221,32 @@ which would otherwise win over the entries above it.
   mountPath: /etc/exiqo
   readOnly: true
 {{- end }}
+{{- if include "exiqo.connectorsCaConfigMap" . }}
+- name: connectors-ca
+  mountPath: /etc/exiqo-connectors-ca
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
+GMF's private CA for the connectors (CONNECTORS_CA_BUNDLE, a PEM path): either the Key Vault object
+keyVault.secrets.connectorsCaBundle (mounted under /mnt/secrets) or the PEM text connectors.caBundle
+(ConfigMap exiqo-connectors-ca). Not both. Public certificates, so no secret handling is needed.
+"exiqo.connectorsCaConfigMap" is "true" when the ConfigMap is used, empty otherwise.
+*/}}
+{{- define "exiqo.connectorsCaConfigMap" -}}
+{{- if and .Values.connectors.caBundle .Values.keyVault.secrets.connectorsCaBundle -}}
+{{- fail "set connectors.caBundle or keyVault.secrets.connectorsCaBundle, not both" -}}
+{{- end -}}
+{{- if .Values.connectors.caBundle }}true{{ end -}}
+{{- end -}}
+
+{{- define "exiqo.connectorsCaPath" -}}
+{{- if include "exiqo.connectorsCaConfigMap" . -}}
+/etc/exiqo-connectors-ca/ca.pem
+{{- else if .Values.keyVault.secrets.connectorsCaBundle -}}
+/mnt/secrets/connectors_ca_bundle
+{{- end -}}
 {{- end -}}
 
 {{/* The api and worker pod volumes: (dict "ctx" $ "role" "api" "tmpSize" "1Gi") */}}
@@ -226,6 +264,12 @@ which would otherwise win over the entries above it.
 - name: terraform-config
   configMap:
     name: exiqo-terraform
+    defaultMode: 0444
+{{- end }}
+{{- if include "exiqo.connectorsCaConfigMap" .ctx }}
+- name: connectors-ca
+  configMap:
+    name: exiqo-connectors-ca
     defaultMode: 0444
 {{- end }}
 {{- end -}}

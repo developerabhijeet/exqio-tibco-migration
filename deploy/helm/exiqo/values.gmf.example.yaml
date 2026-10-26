@@ -111,3 +111,26 @@ neo4jBackup:
   enabled: true
   storageAccount: stgmfexiqobackup
   container: neo4j-backups
+
+# Connectors are off. To enable one (hosts and addresses are GMF's own; example.com names below are
+# placeholders), uncomment its block, name its Key Vault secret under keyVault.secrets
+# (githubToken, atlassianToken, atlassianUser for cloud, figmaToken) and give cidrs (or a
+# non-empty egress.allowCidrs covering it). GMF's private CA goes in connectors.caBundle (PEM text)
+# or keyVault.secrets.connectorsCaBundle (a Key Vault object); not both.
+#connectors:
+#  caBundle: |
+#    -----BEGIN CERTIFICATE-----
+#    ...
+#    -----END CERTIFICATE-----
+#  github:
+#    enabled: true
+#    baseUrl: https://github.gmf.example.com
+#    allowedHosts: [github.gmf.example.com]
+#    cidrs: [10.20.0.0/24]
+#  atlassian:
+#    enabled: true
+#    flavor: datacenter
+#    confluenceUrl: https://confluence.gmf.example.com
+#    jiraUrl: https://jira.gmf.example.com
+#    allowedHosts: [confluence.gmf.example.com, jira.gmf.example.com]
+#    cidrs: [10.20.1.0/24]

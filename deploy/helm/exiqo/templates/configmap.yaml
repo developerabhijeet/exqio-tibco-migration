@@ -23,6 +23,22 @@ ConfigMap: hooks run before release resources exist.
 {{- end -}}
 {{- $egress := $v.egress.fqdns | default list -}}
 {{- if $v.postgres.host }}{{ $egress = append $egress $v.postgres.host }}{{ end -}}
+{{- $conn := $v.connectors -}}
+{{- $connectors := dict -}}
+{{- $connectorSecrets := dict -}}
+{{- range $kind := list "github" "atlassian" "figma" -}}
+{{- $c := index $conn $kind -}}
+{{- if not $c.enabled -}}
+{{- $_ := set $connectors $kind (dict "enabled" false) -}}
+{{- else -}}
+{{- $_ := set $connectors $kind (pick $c "enabled" "flavor" "baseUrl" "apiUrl" "confluenceUrl" "jiraUrl" "webUrl" "allowedHosts" "imageHosts" "commitEmail") -}}
+{{- $egress = concat $egress ($c.allowedHosts | default list) ($c.imageHosts | default list) -}}
+{{- $names := dict -}}
+{{- $_ := set $names "token" (index $v.keyVault.secrets (printf "%sToken" $kind)) -}}
+{{- if and (eq $kind "atlassian") (eq $c.flavor "cloud") }}{{ $_ := set $names "user" $v.keyVault.secrets.atlassianUser }}{{ end -}}
+{{- $_ := set $connectorSecrets $kind $names -}}
+{{- end -}}
+{{- end -}}
 {{- $aoai := $v.providers.azureOpenAI -}}
 apiVersion: v1
 kind: ConfigMap
@@ -45,6 +61,11 @@ data:
   DEPLOY_ENVIRONMENTS: {{ $envs | toJson | quote }}
   IMAGE_DIGESTS: {{ $digests | toJson | quote }}
   EGRESS_ALLOWLIST: {{ $egress | uniq | toJson | quote }}
+  CONNECTORS: {{ $connectors | toJson | quote }}
+  CONNECTOR_SECRET_NAMES: {{ $connectorSecrets | toJson | quote }}
+  {{- with include "exiqo.connectorsCaPath" . }}
+  CONNECTORS_CA_BUNDLE: {{ . | quote }}
+  {{- end }}
   NEO4J_URI: {{ include "exiqo.neo4jUri" . | quote }}
   NEO4J_USER: neo4j
   NEO4J_DATABASE: neo4j
@@ -79,6 +100,18 @@ data:
   INTERNAL_PORT: "9100"
   NEXT_TELEMETRY_DISABLED: "1"
   HF_HUB_OFFLINE: "1"
+{{- if include "exiqo.connectorsCaConfigMap" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exiqo-connectors-ca
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+data:
+  ca.pem: |
+    {{- $v.connectors.caBundle | nindent 4 }}
+{{- end }}
 {{- if $v.mirrors.terraformConfig }}
 ---
 apiVersion: v1

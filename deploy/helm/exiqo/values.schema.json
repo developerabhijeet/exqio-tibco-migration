@@ -423,6 +423,21 @@
             },
             "langfuseSecretKey": {
               "type": "string"
+            },
+            "githubToken": {
+              "type": "string"
+            },
+            "atlassianToken": {
+              "type": "string"
+            },
+            "atlassianUser": {
+              "type": "string"
+            },
+            "figmaToken": {
+              "type": "string"
+            },
+            "connectorsCaBundle": {
+              "type": "string"
             }
           }
         }
@@ -901,6 +916,126 @@
           }
         }
       }
+    },
+    "connectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caBundle": {
+          "type": "string",
+          "pattern": "^(\\s*-----BEGIN CERTIFICATE-----[\\s\\S]*)?$"
+        },
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "baseUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "apiUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "commitEmail": {
+              "type": "string"
+            }
+          }
+        },
+        "atlassian": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "flavor": {
+              "enum": [
+                "datacenter",
+                "cloud"
+              ]
+            },
+            "confluenceUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "jiraUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            }
+          }
+        },
+        "figma": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "apiUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "webUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "imageHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "if": {
@@ -951,5 +1086,447 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "github": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "github"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "githubToken"
+                    ],
+                    "properties": {
+                      "githubToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "connectors": {
+                    "properties": {
+                      "github": {
+                        "properties": {
+                          "cidrs": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "cidrs"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "github"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "egress": {
+                    "properties": {
+                      "allowCidrs": {
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "allowCidrs"
+                    ]
+                  }
+                },
+                "required": [
+                  "egress"
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "github": {
+                    "required": [
+                      "allowedHosts"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "github": {
+                    "properties": {
+                      "baseUrl": {
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "baseUrl"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "figma": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "figma"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "figmaToken"
+                    ],
+                    "properties": {
+                      "figmaToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "connectors": {
+                    "properties": {
+                      "figma": {
+                        "properties": {
+                          "cidrs": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "cidrs"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "figma"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "egress": {
+                    "properties": {
+                      "allowCidrs": {
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "allowCidrs"
+                    ]
+                  }
+                },
+                "required": [
+                  "egress"
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "figma": {
+                    "required": [
+                      "allowedHosts"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "figma": {
+                    "properties": {
+                      "apiUrl": {
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "apiUrl"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "atlassian": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "atlassian"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "atlassianToken"
+                    ],
+                    "properties": {
+                      "atlassianToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "connectors": {
+                    "properties": {
+                      "atlassian": {
+                        "properties": {
+                          "cidrs": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "cidrs"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "atlassian"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "egress": {
+                    "properties": {
+                      "allowCidrs": {
+                        "minItems": 1
+                      }
+                    },
+                    "required": [
+                      "allowCidrs"
+                    ]
+                  }
+                },
+                "required": [
+                  "egress"
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "atlassian": {
+                    "required": [
+                      "allowedHosts"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "atlassian": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "confluenceUrl": {
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "confluenceUrl"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "jiraUrl": {
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "jiraUrl"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "atlassian": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  },
+                  "flavor": {
+                    "const": "cloud"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "flavor"
+                ]
+              }
+            },
+            "required": [
+              "atlassian"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "properties": {
+          "keyVault": {
+            "properties": {
+              "secrets": {
+                "required": [
+                  "atlassianUser"
+                ],
+                "properties": {
+                  "atlassianUser": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

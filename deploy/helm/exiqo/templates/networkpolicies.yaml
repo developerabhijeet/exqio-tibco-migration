@@ -208,6 +208,38 @@ spec:
         {{- end }}
     {{- end }}
   {{- end }}
+{{- /* Connectors: one rule per enabled connector with cidrs, port 443; nothing rendered otherwise. */ -}}
+{{- $connRules := list -}}
+{{- range $kind := list "github" "atlassian" "figma" -}}
+{{- $c := index $.Values.connectors $kind -}}
+{{- if and $c.enabled $c.cidrs }}{{ $connRules = append $connRules $c.cidrs }}{{ end -}}
+{{- end }}
+{{- if $connRules }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exiqo-connectors-egress
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: exiqo
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [api, worker]}
+  policyTypes: [Egress]
+  egress:
+    {{- range $connRules }}
+    - to:
+        {{- range . }}
+        - ipBlock: {cidr: {{ . }}}
+        {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+{{- end }}
 {{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
