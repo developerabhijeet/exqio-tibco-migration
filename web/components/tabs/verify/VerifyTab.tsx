@@ -107,7 +107,7 @@ export function VerifyTab() {
               <DevTokenHelper run={svc.run} running={svc.state === "running"} />
             </div>
           ) : null}
-          {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} /> : null}
+          {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} stack={recordStack} /> : null}
           <ScenarioRunner processId={processId} buildId={buildId} running={svc.state === "running"} stream={stream} onRun={runVerify} />
           <ParityTable buildId={buildId} />
           <TestDataPanel processId={processId} />

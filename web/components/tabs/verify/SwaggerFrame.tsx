@@ -155,8 +155,38 @@ function serviceUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, "")}/${path}`;
 }
 
-/** Swagger UI of the running service, or why it is not available. */
-export function SwaggerFrame({ run, state, reason }: { run: RunState | null; state: ServiceState; reason: string | null }) {
+/**
+ * Swagger UI of the running service, or why it is not available. A stack whose service serves no
+ * Swagger UI (Java, Go, Python) gets the dev-token usage instead: get a token, call with it.
+ */
+export function SwaggerFrame({
+  run,
+  state,
+  reason,
+  stack = "dotnet",
+}: {
+  run: RunState | null;
+  state: ServiceState;
+  reason: string | null;
+  stack?: string;
+}) {
+  if (state === "running" && !run?.swagger_url && stack !== "dotnet") {
+    const base = run?.url ?? "<service URL>/";
+    const tokenUrl = serviceUrl(base, "auth/dev-token");
+    return (
+      <div data-testid="swagger-placeholder" data-reason="no-swagger" className="rounded-card border border-line bg-surface p-4">
+        <p className="font-medium text-heading">This service has no Swagger UI: call it with a development token</p>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-md text-slate">
+          <li>Get a token with Get dev token above, or with the first command below.</li>
+          <li>Send it as a Bearer token on every call; the parity table compares the same call field by field.</li>
+        </ol>
+        <code data-testid="dev-token-usage" className="mt-2 block overflow-x-auto whitespace-pre rounded-btn bg-page p-2 font-mono text-xs text-ink">
+          {`TOKEN=$(curl -s -X POST ${tokenUrl} -H 'content-type: application/json' -d '{"subject":"exiqo-verifier"}' | jq -r .access_token)\n` +
+            `curl -s ${serviceUrl(base, "<endpoint>")} -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d @input.json`}
+        </code>
+      </div>
+    );
+  }
   if (state === "running" && run?.swagger_url) {
     return (
       <div className="overflow-hidden rounded-card border border-line bg-surface">
@@ -201,7 +231,9 @@ export function SwaggerFrame({ run, state, reason }: { run: RunState | null; sta
           ? "Starting the service and waiting for /health."
           : reason
             ? `Swagger is shown here once the service runs. Last start: ${reason}`
-            : "Start the service to call it from Swagger with the same inputs the scenarios use. It needs a build whose packages restored (a machine with NuGet access)."}
+            : stack === "dotnet"
+              ? "Start the service to call it from Swagger with the same inputs the scenarios use. It needs a build whose packages restored (a machine with NuGet access)."
+              : "Start the service to call it with a development token and the same inputs the scenarios use. It needs a build whose packages restored from GMF's mirror."}
       </p>
     </div>
   );
