@@ -1,7 +1,5 @@
 "use client";
 
-import { StackBadge } from "@/components/ui/StackBadge";
-import { useProjectStack } from "@/lib/stacks";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Hammer, History, Loader2 } from "lucide-react";
@@ -29,6 +27,8 @@ import { errorText, OutcomePill, shortHash, useScrollToHash } from "./Panel";
 import { ReviewPanel } from "./ReviewPanel";
 import { SourceTargetExplorer } from "./SourceTargetExplorer";
 import { TestResults } from "./TestResults";
+import { StackBadge, StackNote } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
 
 /** Queries that change when a build finishes. */
 export const BUILD_QUERIES = ["build", "build-files", "build-tests", "build-reviews", "infra", "run", "plan", "parity"];
@@ -52,6 +52,7 @@ export function BuildTab() {
   const proc = processes.data?.find((p) => p.id === processId) ?? null;
   const buildId = (started?.processId === processId ? started.buildId : null) ?? builds.data?.[0]?.id ?? null;
   const build = useBuild(buildId);
+  const recordStack = build.data?.stack ?? design.data?.record.stack ?? projectStack;
   const files = useBuildFiles(build.data?.finished_at ? buildId : null);
   const gateList = gates.data ?? [];
   const g3 = gateList.find((g) => g.gate === "G3");
@@ -109,14 +110,18 @@ export function BuildTab() {
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 5</p>
-          <h2 className="panel-title flex items-center gap-2">Build
-          <StackBadge stack={projectStack} />
+          <h2 className="panel-title flex items-center gap-2">
+            Build
+            <StackBadge stack={recordStack} />
           </h2>
           <p className="mt-1 max-w-[760px] text-md text-slate">
             Code writes the solution and its tests from the approved design record before any body, the Code Builder fills
             what is left, then dotnet restores, builds, formats and tests. Infrastructure is generated and validated in the
             same job. An engineer approves the build (G4).
           </p>
+          <div className="mt-2 max-w-[720px]">
+            <StackNote recordStack={recordStack} kind="build" />
+          </div>
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <ProcessPicker />

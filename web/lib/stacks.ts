@@ -4,28 +4,35 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { useProjects } from "./queries";
 import { useAppState } from "./state";
-import { useActingPersona } from "./personas";
 
-/** The stacks the API reports (GET /stacks): which are implemented and enabled is the server's call. */
-export const useStacks = () => useQuery({ queryKey: ["stacks"], queryFn: api.stacks });
+const NEEDS_ROLE = "changing the target stack needs the architect or admin role";
+const NEEDS_ADMIN = "the default stack is set by an admin";
 
-/** Roles that may change a project's target stack (the API's PATCH /projects/{id} rule). */
-const STACK_ROLES = ["architect", "admin"];
-
-/** Whether the acting user may change the target stack, and the tooltip when they may not. */
-export function useStackPermission(): { canChange: boolean; reason: string | undefined } {
-  const { auth, user } = useAppState();
-  const persona = useActingPersona();
-  const roles = auth.mode === "oidc" ? (auth.me?.roles ?? []) : [persona.roleKey, ...(user === "ops.sam" ? ["admin"] : [])];
-  const canChange = roles.some((r) => STACK_ROLES.includes(r));
-  return { canChange, reason: canChange ? undefined : "changing the target stack needs the architect or admin role" };
+/** The stacks the API reports (GET /stacks) and what the acting user may do with them (the server's call). */
+export function useStacks() {
+  const { user } = useAppState();
+  return useQuery({ queryKey: ["stacks", user], queryFn: api.stacks });
 }
 
-/** The open project's target stack key ("dotnet" until the project list arrives). */
-export function useProjectStack(): string {
+/** Whether the acting user may change a project's target stack, and the tooltip when they may not. */
+export function useStackPermission(): { canChange: boolean; reason: string | undefined } {
+  const stacks = useStacks();
+  const canChange = stacks.data?.can_change_stack ?? false;
+  return { canChange, reason: canChange ? undefined : NEEDS_ROLE };
+}
+
+/** Whether the acting user may set the install's default stack, and the tooltip when they may not. */
+export function useDefaultStackPermission(): { canSet: boolean; reason: string | undefined } {
+  const stacks = useStacks();
+  const canSet = stacks.data?.can_set_default ?? false;
+  return { canSet, reason: canSet ? undefined : NEEDS_ADMIN };
+}
+
+/** The open project's target stack key; undefined until the project list has arrived. */
+export function useProjectStack(): string | undefined {
   const { projectId } = useAppState();
   const projects = useProjects();
-  return projects.data?.find((p) => p.id === projectId)?.target_stack ?? "dotnet";
+  return projects.data?.find((p) => p.id === projectId)?.target_stack;
 }
 
 /** The short name of a stack label: its first segment ("Java 21 · Spring Boot 3.5 · Maven" is "Java 21"). */

@@ -3,11 +3,13 @@
 import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Panel, errorText } from "@/components/tabs/build/Panel";
+import { useDefaultStackPermission } from "@/lib/stacks";
 import { Pill } from "@/components/ui/Pill";
 import type { SettingsView } from "@/lib/buildTypes";
 
 /** The install's target stacks and the default for new projects. */
 export function StackPanel({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) => void }) {
+  const may = useDefaultStackPermission();
   const save = useMutation({
     mutationFn: (key: string) => api.putSettings({ default_stack: key }),
     onSuccess: onSaved,
@@ -22,7 +24,8 @@ export function StackPanel({ s, onSaved }: { s: SettingsView; onSaved: (v: Setti
         data-testid="default-stack"
         className="input mt-1 max-w-[320px]"
         value={s.default_stack}
-        disabled={save.isPending}
+        disabled={save.isPending || !may.canSet}
+        title={may.reason}
         onChange={(e) => save.mutate(e.target.value)}
       >
         {s.stacks.map((st) => (
@@ -32,6 +35,7 @@ export function StackPanel({ s, onSaved }: { s: SettingsView; onSaved: (v: Setti
           </option>
         ))}
       </select>
+      {may.reason ? <p className="mt-1 text-[13px] text-slate">{may.reason}</p> : null}
       {save.error ? <p role="alert" className="mt-2 text-[13px] text-error">{errorText(save.error)}</p> : null}
       <ul className="mt-3 divide-y divide-line text-[13.5px]">
         {s.stacks.map((st) => (

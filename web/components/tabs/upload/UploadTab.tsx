@@ -30,7 +30,9 @@ export function UploadTab() {
   const stackPermission = useStackPermission();
   const changeStack = useMutation({
     mutationFn: (key: string) => api.patchProject(projectId!, { target_stack: key }),
-    onSuccess: (p) => qc.invalidateQueries({ queryKey: ["projects"], exact: true }).then(() => p),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["projects"], exact: true });
+    },
   });
 
   const upload = useMutation({
@@ -66,9 +68,15 @@ export function UploadTab() {
       <StackPicker
         value={stack}
         onChange={(key) => changeStack.mutate(key)}
-        disabledReason={projectId ? stackPermission.reason : "create a project first"}
+        disabledReason={projectId ? stackPermission.reason : "Create a project first."}
+        pending={changeStack.isPending}
       />
       {changeStack.error ? <ErrorNote error={changeStack.error} /> : null}
+      {changeStack.isSuccess && (processes.data?.length ?? 0) > 0 ? (
+        <p role="status" data-testid="stack-change-note" className="text-[13.5px] text-slate">
+          Designs and builds already made keep their old stack. Re-run Design for each process you want on the new one.
+        </p>
+      ) : null}
       <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
       {upload.isPending ? (
         <p className="flex items-center gap-2 text-md text-slate">

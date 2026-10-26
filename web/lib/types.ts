@@ -404,6 +404,8 @@ export interface DesignProject {
 }
 
 export interface DesignRecord {
+  /** The target stack the record is for (engine DesignRecord.stack). */
+  stack?: string;
   process_id?: string;
   spec_hash?: string;
   solution: { name?: string; projects: DesignProject[] };

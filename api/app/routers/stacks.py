@@ -4,10 +4,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from api.app.config import Settings
-from api.app.deps import SettingsDep
+from api.app.deps import SettingsDep, require_user
 from api.app.services import settings as settings_svc
 from engine.stacks import STACK_KEYS, stack_status
 
@@ -47,6 +47,12 @@ def require_available(key: str, settings: Settings) -> None:
 
 
 @router.get("/stacks")
-async def list_stacks(settings: SettingsDep) -> dict[str, Any]:
+async def list_stacks(request: Request, settings: SettingsDep) -> dict[str, Any]:
+    """The stacks, plus what the caller may do with them (so the screen derives no role from a name)."""
     toolchains = await asyncio.to_thread(settings_svc.detect_toolchains)
-    return {"default": settings.default_stack, "stacks": stack_views(settings, toolchains)}
+    try:
+        roles = (await require_user(request, request.headers.get("x-user"), request.headers.get("x-agent"))).roles
+    except HTTPException:
+        roles = frozenset()
+    return {"default": settings.default_stack, "stacks": stack_views(settings, toolchains),
+            "can_change_stack": bool(roles & {"architect", "admin"}), "can_set_default": "admin" in roles}

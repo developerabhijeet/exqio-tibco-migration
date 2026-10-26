@@ -61,6 +61,7 @@ async def test_build_refused_for_a_stack_this_install_cannot_build(client, app, 
 async def test_dotnet_build_records_stack(client, app, monkeypatch):
     _, proc_id, build_id, build = await _built(client, monkeypatch)
     assert build["stack"] == "dotnet"
+    assert (await client.get(f"/processes/{proc_id}/design")).json()["stack"] == "dotnet"  # the badge's source
     assert [b["stack"] for b in (await client.get(f"/processes/{proc_id}/builds")).json()] == ["dotnet"]
     restore = build["steps"][0]
     assert restore["ok"] is False and restore["log"] == build_svc.NO_DOTNET  # the .NET message, unchanged

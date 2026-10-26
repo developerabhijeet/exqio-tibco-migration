@@ -186,7 +186,8 @@ export const api = {
     json<Project>("/projects", post(targetStack ? { name, target_stack: targetStack } : { name })),
   patchProject: (projectId: string, body: { target_stack: string }) =>
     json<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(body) }),
-  stacks: () => json<{ default: string; stacks: StackStatus[] }>("/stacks"),
+  stacks: () =>
+    json<{ default: string; stacks: StackStatus[]; can_change_stack: boolean; can_set_default: boolean }>("/stacks"),
 
   uploadZip: (projectId: string, file: Blob, filename: string) => {
     const form = new FormData();
@@ -375,6 +376,7 @@ function toDesignView(body: Record<string, unknown>): DesignView {
     expected_differences: raw.expected_differences ?? [],
     narrative: raw.narrative ?? null,
     design_hash: raw.design_hash ?? "",
+    stack: typeof raw.stack === "string" ? raw.stack : undefined,
   };
   return {
     record,

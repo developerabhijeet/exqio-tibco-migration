@@ -61,6 +61,12 @@ async def test_toolchain_presence_is_not_checked_on_the_api(client, monkeypatch)
     assert go["selectable"] is False  # not implemented: refused whatever the tools
 
 
+async def test_stacks_report_what_the_caller_may_do(client):
+    for user, change, default in [("architect.lee", True, False), ("ops.sam", True, True), ("viewer.val", False, False)]:
+        body = (await client.get("/stacks", headers={"X-User": user})).json()
+        assert (body["can_change_stack"], body["can_set_default"]) == (change, default), user
+
+
 async def test_patch_stack_needs_architect_or_admin(client, project_id):
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "dotnet"},
                            headers={"X-User": "sme.vicky"})

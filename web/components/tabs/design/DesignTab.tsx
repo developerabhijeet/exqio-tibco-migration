@@ -1,7 +1,5 @@
 "use client";
 
-import { StackBadge } from "@/components/ui/StackBadge";
-import { useProjectStack } from "@/lib/stacks";
 import { useState } from "react";
 import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { useQuery } from "@tanstack/react-query";
@@ -29,6 +27,8 @@ import { MappingTable } from "./MappingTable";
 import { ArchitectureViews } from "./ArchitectureViews";
 import { SequenceDiagram } from "./SequenceDiagram";
 import { SolutionTree } from "./SolutionTree";
+import { StackBadge, StackNote } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
 
 const STAGES = ["skeleton", "memory", "designer", "persist"];
 
@@ -74,6 +74,7 @@ export function DesignTab() {
   const analysis = useAnalysis(processId);
   const gates = useGates(processId);
   const design = useDesign(processId);
+  const recordStack = design.data?.record.stack ?? projectStack;
   const { stream, watch } = useJob("design", processId);
   const [runError, setRunError] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -108,13 +109,17 @@ export function DesignTab() {
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 4</p>
-          <h2 className="panel-title flex items-center gap-2">Design
-          <StackBadge stack={projectStack} />
+          <h2 className="panel-title flex items-center gap-2">
+            Design
+            <StackBadge stack={recordStack} />
           </h2>
           <p className="mt-1 max-w-[720px] text-md text-slate">
             Code maps every TIBCO step to a C# file, class and method from the pattern catalog. The designer model writes
             the narrative. An architect approves the record (G3).
           </p>
+          <div className="mt-2 max-w-[720px]">
+            <StackNote recordStack={recordStack} kind="design" />
+          </div>
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 print:hidden">
           <ProcessPicker />
