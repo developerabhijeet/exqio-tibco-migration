@@ -519,3 +519,12 @@ def test_atlassian_connector_auth_by_flavor(connectors_settings, fake_confluence
     conn = get_connector("atlassian", settings=s, stored={"connectors": {"atlassian": {"enabled": True}}})
     assert isinstance(conn, AtlassianConnector)
     assert conn.auth_header()["Authorization"].startswith("Basic ")
+
+
+@pytest.mark.parametrize("stack, line", [("dotnet", ".sln"), ("java", "Build file: <code>pom.xml</code>"),
+                                         ("go", "Build file: <code>go.mod</code>"),
+                                         ("python", "Build file: <code>pyproject.toml</code>")])
+def test_layout_names_the_stacks_build_file(page_ctx_dfr, stack, line):
+    page = render_architecture_page(page_ctx_dfr.model_copy(update={"stack": stack}))
+    assert line in page
+    assert (".sln" in page) == (stack == "dotnet")

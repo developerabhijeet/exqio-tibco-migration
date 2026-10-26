@@ -18,6 +18,7 @@ from xml.sax.saxutils import escape
 from pydantic import BaseModel, Field
 
 from engine.agents.provider import mask_sensitive
+from engine.stacks import get_stack
 
 #: Field names masked on the page on top of ``SENSITIVE_FIELDS`` (connection strings, keys).
 PAGE_MASKED_FIELDS = ("password", "pwd", "secret", "token", "api_key", "access_key")
@@ -99,9 +100,19 @@ def _overview(ctx: PageContext) -> str:
     return note + (_paragraphs(narrative) or "<p><em>No narrative yet.</em></p>")
 
 
+def _build_file(stack: str, name: str) -> str:
+    """The stack's top build file, from its layout hook: ``Solution: <name>.sln`` for .NET,
+    ``Build file: pom.xml`` (``go.mod``, ``pyproject.toml``) for the others."""
+    try:
+        file = get_stack(stack).layout(name).solution_file
+    except KeyError:
+        return f"Build file: {_code('not recorded')}"
+    return f"{'Solution' if file.endswith('.sln') else 'Build file'}: {_code(file)}"
+
+
 def _layout(ctx: PageContext) -> str:
     solution = ctx.design.get("solution") or {}
-    head = f"<p>Target stack: {_code(ctx.stack)}. Solution: {_code(str(solution.get('name') or '') + '.sln')}</p>"
+    head = f"<p>Target stack: {_code(ctx.stack)}. {_build_file(ctx.stack, str(solution.get('name') or ''))}</p>"
     rows = [(_text(p.get("name")), _text(p.get("kind")), _lines(p.get("files") or []))
             for p in solution.get("projects") or [] if isinstance(p, dict)]
     return head + _table(("Project", "Kind", "Files"), rows)
