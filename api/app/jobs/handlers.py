@@ -23,6 +23,7 @@ from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
 from api.app.services import github_push as github_push_svc
 from api.app.services import infra as infra_svc
+from api.app.services import jira_issues as jira_svc
 from api.app.services import memory_ingest as memory_ingest_svc
 from api.app.services import memory_migrate as memory_migrate_svc
 from api.app.services import providers as provider_svc
@@ -145,3 +146,10 @@ async def confluence_publish(ctx: JobContext, w: WorkerServices) -> dict[str, An
     """Create or update the process's architecture page in Confluence (``services.confluence_publish``);
     the Atlassian credential is read from its mounted file now, never stored."""
     return await confluence_svc.publish_job(ctx, w)
+
+
+@job(jira_svc.ISSUES_KIND)
+async def jira_issues(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Create or update the selected items' Jira issues (``services.jira_issues``); the credential
+    is read from its mounted file now, never stored."""
+    return await jira_svc.issues_job(ctx, w)

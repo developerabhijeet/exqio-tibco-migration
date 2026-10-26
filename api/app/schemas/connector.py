@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.app.connectors.jira import IssueItem
+
 
 class _Patch(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -74,6 +76,16 @@ class GithubPushIn(BaseModel):
     branch: str | None = None
     open_pr: bool = True
     base: str | None = None
+
+
+class JiraIssuesIn(BaseModel):
+    """``POST /processes/{id}/jira/issues``: 1 to 50 items; ``create_again`` replaces the issues of
+    stale links (deleted in Jira) instead of skipping them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[IssueItem] = Field(min_length=1, max_length=50)
+    create_again: bool = False
 
 
 class JobAccepted(BaseModel):

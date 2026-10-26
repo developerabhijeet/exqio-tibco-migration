@@ -43,7 +43,13 @@ from api.app.deps import (
     require_roles,
 )
 from api.app.models import AuditLog, Build, Process, Setting
-from api.app.schemas.connector import ConnectorsPatch, GithubPushIn, JobAccepted, LinkOut
+from api.app.schemas.connector import (
+    ConnectorsPatch,
+    GithubPushIn,
+    JiraIssuesIn,
+    JobAccepted,
+    LinkOut,
+)
 from api.app.services.confluence_publish import (
     LOCK_PREFIX,
     NO_DESIGN,
@@ -54,6 +60,15 @@ from api.app.services.confluence_publish import (
 )
 from api.app.services.evidence import latest_design
 from api.app.services.github_push import PUSH_KIND
+from api.app.services.jira_issues import (
+    ISSUES_KIND,
+    NO_PROJECT,
+    check_item,
+    dedupe_key,
+    issue_source,
+    unique_items,
+)
+from api.app.services.jira_issues import NO_URL as NO_JIRA_URL
 from api.app.services.settings import load_stored
 
 log = logging.getLogger(__name__)
@@ -259,3 +274,45 @@ async def confluence_page(process_id: str, session: SessionDep) -> LinkOut:
     if link is None:
         raise HTTPException(status_code=404, detail="not published to Confluence yet")
     return LinkOut.model_validate(link)
+
+
+IssueRoles = Annotated[Principal, Depends(require_roles("architect", "sme", "qa", "admin"))]
+
+
+@router.post("/processes/{process_id}/jira/issues", status_code=202)
+async def jira_issues(process_id: str, body: JiraIssuesIn, session: SessionDep, settings: SettingsDep,
+                      runner: RunnerDep, principal: IssueRoles) -> JobAccepted:
+    """Queue ``connector.jira.issues``: 422 for an item that does not exist or has nothing to track
+    (a finding decided ``keep`` or ``ask``, an answered question, an explained difference); 409
+    when Atlassian is off, has no credential, no Jira URL or project key (no request is made), or
+    the same request is already queued."""
+    proc = await session.get(Process, process_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail=f"process {process_id} not found")
+    items = unique_items(body.items)
+    src = await issue_source(session, proc)
+    for item in items:
+        try:
+            check_item(src, item)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    connector = await connector_for(session, settings, "atlassian")
+    try:
+        connector.ready()
+    except (ConnectorDisabled, ConnectorNotConfigured) as exc:
+        await audit_connector(session, principal.actor, "jira", "create", project_id=proc.project_id,
+                              process_id=proc.id, target=proc.ir_id, outcome="refused",
+                              detail={"items": [i.local_ref for i in items], "message": str(exc)})
+        await session.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not connector.config.url("jira_url"):
+        raise HTTPException(status_code=409, detail=NO_JIRA_URL)
+    if not getattr(connector.config.app, "project_key", ""):
+        raise HTTPException(status_code=409, detail=NO_PROJECT)
+    job_id = await runner.submit(ISSUES_KIND, {
+        "process_id": proc.id, "items": [i.model_dump() for i in items], "create_again": body.create_again,
+        "actor": principal.actor, "dedupe_key": dedupe_key(proc.id, items, body.create_again)},
+        project_id=proc.project_id, process_id=proc.id)
+    if job_id is None:
+        raise HTTPException(status_code=409, detail="the same issues are already queued for this process")
+    return JobAccepted(job_id=job_id)

@@ -35,6 +35,7 @@ from api.app.services.settings import load_stored
 if TYPE_CHECKING:
     from api.app.config import Settings
     from api.app.connectors.confluence import ConfluencePublisher
+    from api.app.connectors.jira import JiraConnector
 
 
 class BaseConnector:
@@ -107,10 +108,33 @@ class AtlassianConnector(BaseConnector):
 
         return ConfluencePublisher(self)
 
+    @property
+    def jira(self) -> JiraConnector:
+        from api.app.connectors.jira import JiraConnector  # imports this module
+
+        return JiraConnector(self)
+
     async def test(self) -> ConnectionTest:
+        """Confluence and Jira, each that has a URL: ok when every one answered; the account is the
+        first one's, the message names both."""
+        products: list[tuple[str, Callable[[], Any]]] = []
         if self.config.url("confluence_url"):
-            return await self.confluence.test()
-        raise ConnectorError("the Atlassian connector has no Confluence URL (connectors.atlassian.confluenceUrl)")
+            products.append(("Confluence", lambda: self.confluence.test()))
+        if self.config.url("jira_url"):
+            products.append(("Jira", lambda: self.jira.test()))
+        if not products:
+            raise ConnectorError("the Atlassian connector has no Confluence or Jira URL "
+                                 "(connectors.atlassian.confluenceUrl, jiraUrl)")
+        results: list[ConnectionTest] = []
+        for name, run in products:
+            try:
+                results.append(await run())
+            except ConnectorError as exc:
+                results.append(ConnectionTest(ok=False, message=f"{name}: {exc.message}"))
+        return ConnectionTest(ok=all(r.ok for r in results),
+                              account=next((r.account for r in results if r.account), None),
+                              site=next((r.site for r in results if r.site), None),
+                              message="; ".join(r.message for r in results if r.message))
 
 
 class _Pending(BaseConnector):
