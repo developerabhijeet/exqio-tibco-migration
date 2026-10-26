@@ -129,6 +129,11 @@ class Settings(BaseSettings):
     deploy_environments: list[DeployEnvironment] = Field(default_factory=list)  # JSON
     image_digests: dict[str, str] = Field(default_factory=dict)
     egress_allowlist: list[str] = Field(default_factory=list)
+    # Field names masked wherever the API shows text or values to a client (cited text, parity
+    # values, Deploy evidence lines), on top of ssn and account and card numbers: JSON list, e.g.
+    # SENSITIVE_FIELDS='["dealer_pin"]'. A name matches as whole words in any key style
+    # (dealer_pin, dealerPin, x.dealer-pin).
+    sensitive_fields: list[str] = Field(default_factory=list)
 
     # Build toolchain. Off skips restore, build, format and test, and with them the compile repair
     # loop: the solution is still generated, filled, reviewed and stored, and the three toolchain

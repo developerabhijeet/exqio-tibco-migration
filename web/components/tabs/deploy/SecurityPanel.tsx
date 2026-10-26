@@ -26,7 +26,7 @@ import {
   useParity,
 } from "@/lib/buildQueries";
 import { useIdentity } from "@/lib/identity";
-import { cut, maskSensitive, PREVIEW_MAX, tail, type CiteRef, type CiteTarget } from "@/lib/citations";
+import { cut, PREVIEW_MAX, tail, type CiteRef, type CiteTarget } from "@/lib/citations";
 import { CitedText } from "@/components/citations/CitedText";
 
 type State = "met" | "unmet" | "unknown";
@@ -49,10 +49,13 @@ interface Check {
 const TONE: Record<State, "gate" | "error" | "det"> = { met: "gate", unmet: "error", unknown: "det" };
 const LABEL: Record<State, string> = { met: "in place", unmet: "not in place", unknown: "" };
 
-/** The first line of `text` that holds `needle`, trimmed, for the evidence line. */
-function lineWith(text: string | undefined, needle: string): string | null {
-  if (!text) return null;
-  const line = text.split("\n").find((l) => l.includes(needle));
+/** The first line of `code` that holds `needle`, as the API masked it (`shown`, line for line),
+ * trimmed: the evidence quoted in a preview. The browser never masks; without the API's masked
+ * lines there is no quote (null), never the raw line. */
+function lineWith(code: string | undefined, shown: string | undefined, needle: string): string | null {
+  if (!code || shown === undefined) return null;
+  const i = code.split("\n").findIndex((l) => l.includes(needle));
+  const line = i >= 0 ? shown.split("\n")[i] : undefined;
   return line ? line.trim() : null;
 }
 
@@ -65,11 +68,12 @@ function lineNo(text: string | undefined, needle: string): number | null {
 
 /** The check's sentence with its evidence as one chip at the end; plain without evidence. Evidence
  * with no place of its own (no Program.cs in the file list, say) still gets its chip, on Build. The
- * preview is masked and cut like every server-built ref's. */
+ * preview is cut like every server-built ref's; its text was masked by the API (a file's
+ * content_masked lines, a review finding's cited text) or holds no data (paths, counts). */
 function citedCheck(check: Check, processId: string | null) {
   const at = check.at ?? { label: "Build", target: { kind: "step" as const, step: "build", process_id: processId } };
   const refs: CiteRef[] = check.evidence
-    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: cut(maskSensitive(check.evidence), PREVIEW_MAX), target: at.target }]
+    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: cut(check.evidence, PREVIEW_MAX), target: at.target }]
     : [];
   return tail(check.title, refs);
 }
@@ -264,6 +268,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
   const parity = useParity(buildId);
 
   const code = source.data?.content;
+  const codeShown = source.data?.content_masked;
   const infraPaths = infra.data?.files.map((f) => f.path) ?? null;
   const unit = (name: string): State =>
     infraPaths === null ? "unknown" : infraPaths.some((p) => p.includes(`/${name}/`)) ? "met" : "unmet";
@@ -294,7 +299,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
       what: "The controllers are mapped with an authorization requirement, so an unauthenticated call is refused before it reaches any rule.",
       state: has(code, "MapControllers().RequireAuthorization()"),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
-      evidence: lineWith(code, "MapControllers().RequireAuthorization()"),
+      evidence: lineWith(code, codeShown, "MapControllers().RequireAuthorization()"),
       at: inProgram("MapControllers().RequireAuthorization()"),
     },
     {
@@ -304,7 +309,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
       what: "Health probes answer without a token; nothing else does.",
       state: has(code, 'MapHealthChecks("/health").AllowAnonymous()'),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
-      evidence: lineWith(code, "MapHealthChecks"),
+      evidence: lineWith(code, codeShown, "MapHealthChecks"),
       at: inProgram("MapHealthChecks"),
     },
     {
@@ -315,8 +320,8 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
       state: code === undefined ? "unknown" : code.includes("AddJwtBearer") ? "met" : "unmet",
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
       evidence: authority
-        ? `${lineWith(code, "AddJwtBearer") ?? "AddJwtBearer"}\n${config.instance}  ·  audience ${config.audience}`
-        : lineWith(code, "AddJwtBearer"),
+        ? `${lineWith(code, codeShown, "AddJwtBearer") ?? "AddJwtBearer"}\n${config.instance}  ·  audience ${config.audience}`
+        : lineWith(code, codeShown, "AddJwtBearer"),
       at: inProgram("AddJwtBearer"),
     },
     {
@@ -328,7 +333,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
         ? "unknown"
         : code.includes("AddAzureKeyVault") && unit("key_vault") === "met" ? "met" : "unmet",
       source: "the generated service and the key_vault unit of the generated infrastructure",
-      evidence: lineWith(code, "AddAzureKeyVault"),
+      evidence: lineWith(code, codeShown, "AddAzureKeyVault"),
       at: inProgram("AddAzureKeyVault"),
     },
     {
@@ -364,7 +369,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
         ? null
         : openSecurity.length === 0
           ? "no open finding from the security reviewer"
-          : `${openSecurity.length} open finding(s): ${openSecurity.map((r) => r.text).slice(0, 3).join(" · ")}`,
+          : `${openSecurity.length} open finding(s): ${openSecurity.map((r) => r.cited?.text ?? "").slice(0, 3).join(" · ")}`,
       at: panel("review panel", "build", "#review"),
     },
     {

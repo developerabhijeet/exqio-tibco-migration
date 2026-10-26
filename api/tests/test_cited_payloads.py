@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from api.app.models import Finding, Rule
 from api.app.services.citations import (
@@ -453,6 +454,55 @@ async def test_cited_text_on_reviews_and_parity_is_masked(client, built, verifie
     assert [ct.text[s.start:s.end] for s in ct.spans] == ['output.body.ssn: expected "***", got null']
     _slices_cleanly(ct)
 
+
+
+@pytest.fixture
+def settings(settings):
+    """This module's app also masks a field GMF configures as sensitive (``dealer_pin``), the way
+    a deployment adds its own names to the defaults (ssn, account and card numbers)."""
+    return settings.model_copy(update={"sensitive_fields": ["dealer_pin"]})
+
+
+async def test_deploy_evidence_and_parity_values_are_masked_by_the_api(client, app, analysed,
+                                                                        verified_with_defect, tmp_path):
+    """The browser never masks: a generated file comes with ``content_masked`` (its lines, each
+    masked, line for line) for the Deploy evidence previews, and every parity difference with
+    ``expected_display``/``actual_display`` for the value columns, both masked with the configured
+    fields as ``cited.text`` is."""
+    from api.app.models import Build, BuildFile
+
+    out = tmp_path / "build"
+    (out / "src").mkdir(parents=True)
+    program = "var pin = cfg[\"x\"];\nlog(\"dealer_pin=4242\");\nlog(\"ssn 123-45-6789\");\napp.Run();"
+    (out / "src" / "Program.cs").write_text(program)
+    async with app.state.sessionmaker() as s:
+        build = Build(process_id=analysed.proc, status="passed", output_dir=str(out))
+        s.add(build)
+        await s.flush()
+        s.add(BuildFile(build_id=build.id, path="src/Program.cs", origin="code", sha256="0" * 64))
+        await s.commit()
+        build_id = build.id
+    f = (await client.get(f"/builds/{build_id}/files/src/Program.cs")).json()
+    assert f["content"] == program  # the code viewer keeps the raw file
+    assert f["content_masked"].split("\n") == [
+        'var pin = cfg["x"];', 'log("dealer_pin=***");', 'log("ssn ***-**-****");', "app.Run();"]
+
+    async with app.state.sessionmaker() as s:
+        from api.app.models import ScenarioRun
+        run = await s.scalar(select(ScenarioRun).where(ScenarioRun.build_id == verified_with_defect.build))
+        run.report = {**run.report, "fields": [*run.report["fields"],
+            {"path": "output.body.dealerPin", "expected": "4242", "actual": "4243", "status": "defect"},
+            {"path": "output.body.memo", "expected": "dealer_pin=4242", "actual": None, "status": "defect"}]}
+        await s.commit()
+    view = (await client.get(f"/builds/{verified_with_defect.build}/parity")).json()
+    shown = {d["path"]: (d["expected_display"], d["actual_display"]) for d in all_field_diffs(view)}
+    assert shown["output.body.dealerPin"] == ("***", "***")
+    assert shown["output.body.memo"] == ("dealer_pin=***", "null")
+    assert shown["output.body.ssn"] == ("***", "null")
+    assert shown["output.body.dealId"] == ("DL-1", "DL-1")  # a match is shown too
+    assert shown["output.body.amount"] == ("10.5", "10.0")
+    pin = next(d for d in all_field_diffs(view) if d["path"] == "output.body.dealerPin")
+    assert "4242" not in pin["cited"]["text"]  # cited.text uses the configured fields too
 
 # ------------------------------------------------------------------ Task 4 builders
 DPROC = SimpleNamespace(id="p1", ir_id="dealer.Funding", ir={

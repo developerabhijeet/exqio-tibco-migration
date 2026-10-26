@@ -52,6 +52,7 @@ from api.app.routers import (
 )
 from api.app.routers import memory as memory_router
 from api.app.routers import settings as settings_router
+from api.app.services.citations import configure_masking
 from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
@@ -197,6 +198,7 @@ def _create_api(settings: Settings) -> FastAPI:
     docs = {} if settings.auth_mode == "dev" else {"docs_url": None, "redoc_url": None, "openapi_url": None}
     app = FastAPI(title="ExiQO Migrate API", version="0.1.0", lifespan=lifespan, **docs)
     app.state.settings = settings
+    configure_masking(settings.sensitive_fields)
     app.state.oidc = Oidc(settings) if settings.auth_mode == "oidc" else None
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])

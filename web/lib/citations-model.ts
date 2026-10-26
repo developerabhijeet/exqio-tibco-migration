@@ -97,37 +97,6 @@ export function cut(text: string, limit: number): string {
   return cps.length <= limit ? text : cps.slice(0, limit - 1).join("").trimEnd() + "…";
 }
 
-// The web twin of engine/agents/provider.mask_sensitive, for text the client builds refs from
-// itself (Deploy evidence): SSNs, and the values of ssn / account number / card number fields as
-// `key: value`, `key=value`, JSON `"key": "value"` or `<key>value</key>`. A key holds the field name
-// as whole words (borrower_ssn, customerSsn, ns:accountNumber; not classname).
-const FIELD = "(?:[Ss][Ss][Nn]|[Aa]ccount[_\\-.]?[Nn]umber|ACCOUNT[_\\-.]?NUMBER|[Cc]ard[_\\-.]?[Nn]umber|CARD[_\\-.]?NUMBER)";
-const KEY = `(?:[A-Za-z0-9]*[_\\-.])*(?:[a-z0-9]+(?=[A-Z]))?${FIELD}(?:[_\\-.][A-Za-z0-9_\\-.]*|[A-Z][A-Za-z0-9]*)?`;
-const PAIR = new RegExp(`(["']?)(?<![A-Za-z0-9])(${KEY})\\1(\\s*[:=]\\s*)("[^"]*"|'[^']*'|[^\\s,;}\\]&<"']+)`, "g");
-const ELEMENT = new RegExp(`(<((?:[A-Za-z0-9_.\\-]+:)?${KEY})(?:\\s[^<>]*)?>)[^<]*(</\\2\\s*>)`, "g");
-const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
-const MASK = "***";
-
-/** Whether a parity path's leaf names a sensitive field (`output.body.borrowerSsn`), as the API
- * decides it: such a value shows as the mask whole, whatever its shape. */
-export function sensitiveField(path: string): boolean {
-  const trimmed = path.replace(/^[./[\]@]+|[./[\]@]+$/g, "");
-  const leaf = trimmed ? trimmed.split(/[./[\]@]+/).pop() ?? "" : "";
-  return !!leaf && maskSensitive(`${leaf}: x`) !== `${leaf}: x`;
-}
-
-/** `text` with SSNs and sensitive field values masked, as the server masks `cited.text`. */
-export function maskSensitive(text: string): string {
-  if (!text) return text;
-  return text
-    .replace(ELEMENT, (_m, open: string, _name: string, close: string) => `${open}${MASK}${close}`)
-    .replace(PAIR, (_m, q: string, key: string, sep: string, val: string) => {
-      const quoted = (val[0] === '"' || val[0] === "'") && val.length >= 2;
-      return `${q}${key}${q}${sep}${quoted ? `${val[0]}${MASK}${val[0]}` : MASK}`;
-    })
-    .replace(SSN, "***-**-****");
-}
-
 /**
  * `text` from code point `start` up to, not including, code point `end`: the JS equivalent of
  * Python's `text[start:end]`, so a server span lands on the same characters after an emoji or any

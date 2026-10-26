@@ -38,35 +38,45 @@
           "expected": 200,
           "actual": 200,
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "200",
+          "actual_display": "200"
         },
         {
           "path": "output.body.dealId",
           "expected": "DL-50001",
           "actual": "DL-50001",
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "DL-50001",
+          "actual_display": "DL-50001"
         },
         {
           "path": "output.body.amount",
           "expected": "31500.00",
           "actual": "31500.00",
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "31500.00",
+          "actual_display": "31500.00"
         },
         {
           "path": "output.body.dealerName",
           "expected": "Lakeside Motors",
           "actual": "Lakeside Motors",
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "Lakeside Motors",
+          "actual_display": "Lakeside Motors"
         },
         {
           "path": "output.body.currency",
           "expected": "USD",
           "actual": "USD",
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "USD",
+          "actual_display": "USD"
         },
         {
           "path": "output.body.status",
@@ -74,6 +84,8 @@
           "actual": "PENDING",
           "status": "defect",
           "finding_id": null,
+          "expected_display": "FUNDED",
+          "actual_display": "PENDING",
           "cited": {
             "text": "output.body.status: expected \"FUNDED\", got \"PENDING\".",
             "spans": [
@@ -117,6 +129,8 @@
           "status": "intended",
           "finding_id": "S2-trim-dealer",
           "confirmed": false,
+          "expected_display": "d10021",
+          "actual_display": "D10021",
           "cited": {
             "text": "output.body.dealerId: expected \"d10021\", got \"D10021\".",
             "spans": [
@@ -182,6 +196,8 @@
           "status": "defect",
           "finding_id": "S2-trim-dealer",
           "via": "control",
+          "expected_display": "MIDWEST",
+          "actual_display": "UNKNOWN",
           "cited": {
             "text": "output.body.dealerRegion: expected \"MIDWEST\", got \"UNKNOWN\".",
             "spans": [
@@ -246,6 +262,8 @@
           "actual": "2026-09-02T10:00:01Z",
           "status": "noise",
           "finding_id": null,
+          "expected_display": "2026-09-02T10:00:00Z",
+          "actual_display": "2026-09-02T10:00:01Z",
           "cited": {
             "text": "output.body.fundedAt: expected \"2026-09-02T10:00:00Z\", got \"2026-09-02T10:00:01Z\".",
             "spans": [
@@ -289,7 +307,9 @@
           "expected": "DL-50001",
           "actual": "DL-50001",
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "DL-50001",
+          "actual_display": "DL-50001"
         }
       ]
     },
@@ -307,7 +327,9 @@
           "expected": 404,
           "actual": 404,
           "status": "match",
-          "finding_id": null
+          "finding_id": null,
+          "expected_display": "404",
+          "actual_display": "404"
         }
       ],
       "side_effects": []

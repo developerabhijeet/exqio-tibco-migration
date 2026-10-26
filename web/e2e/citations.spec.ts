@@ -215,6 +215,11 @@ const SOURCES: Record<string, string> = {
   [MASKING]: "namespace GmfCredit.Core;\n\npublic static class Masking\n{\n}\n",
   [SERVICE]: Array.from({ length: 300 }, (_, i) => `// FundingStatusLookupService line ${i + 1}`).join("\n"),
 };
+// What the API's content_masked would carry: a marker on the authorization line proves the Deploy
+// preview quotes the API's masked lines, never the raw file (the browser does not mask).
+const MASKED: Record<string, string> = {
+  [PROGRAM]: PROGRAM_CS.replace("app.MapControllers().RequireAuthorization();", "app.MapControllers().RequireAuthorization(); // masked"),
+};
 const fixture = (name: string) => readFileSync(join(__dirname, "fixtures", name), "utf8");
 
 /**
@@ -259,7 +264,7 @@ async function routeFixtureBuild(page: Page): Promise<() => string> {
     const path = decodeURIComponent(new URL(route.request().url()).pathname.split(`/builds/${FIXTURE_BUILD}/files/`)[1]);
     return SOURCES[path] === undefined
       ? route.fulfill({ status: 404, body: "{}" })
-      : json(route, { ...entry(path), content: SOURCES[path], language: "csharp" });
+      : json(route, { ...entry(path), content: SOURCES[path], content_masked: MASKED[path] ?? SOURCES[path], language: "csharp" });
   });
   await page.route(`**/builds/${FIXTURE_BUILD}/reviews`, (route) =>
     route.request().method() === "GET" ? json(route, fixture("reviews.json").replaceAll("__PROCESS__", processId)) : route.continue(),
@@ -401,7 +406,15 @@ test("a review finding's chip opens the file at its line", async ({ page }) => {
 
 test("a parity difference's chip opens its finding", async ({ page }) => {
   test.setTimeout(240_000);
+  // The value columns show the API's masked expected_display / actual_display, not the raw values.
+  const parity = JSON.parse(fixture("parity.json"));
+  for (const rep of parity.reports) {
+    for (const d of rep.fields) if (d.path === "output.body.dealerRegion") d.expected_display = "***";
+  }
   await openOnFixtureBuild(page);
+  await page.route(`**/builds/${FIXTURE_BUILD}/parity`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(parity) }),
+  );
   await actAs(page, "qa.priya");
   await page.getByTestId("step-verify").click();
 
@@ -410,6 +423,8 @@ test("a parity difference's chip opens its finding", async ({ page }) => {
   // The finding link column is gone: the finding is a chip in the difference's note.
   await expect(page.getByTestId("finding-pill")).toHaveCount(0);
   const row = rows.filter({ hasText: "output.body.dealerRegion" });
+  await expect(row.locator("td").nth(1)).toHaveText("***");
+  await expect(row.locator("td").nth(2)).toHaveText("UNKNOWN");
   const note = row.getByTestId("parity-note");
   await expect(note).toContainText('output.body.dealerRegion: expected "MIDWEST", got "UNKNOWN"');
   await expect(note.getByTestId("cited-segment")).toHaveText('output.body.dealerRegion: expected "MIDWEST", got "UNKNOWN"');
@@ -450,7 +465,7 @@ test("Deploy and Readiness show no evidence blocks", async ({ page }) => {
   await chip.hover();
   const preview = page.getByTestId("cite-preview");
   await expect(preview).toContainText("Program.cs:14");
-  await expect(preview.getByTestId("cite-preview-text")).toHaveText("app.MapControllers().RequireAuthorization();");
+  await expect(preview.getByTestId("cite-preview-text")).toHaveText("app.MapControllers().RequireAuthorization(); // masked");
   await expect(preview.getByTestId("cite-preview-text")).toHaveClass(/font-mono/);
   await page.mouse.move(0, 0);
   await expect(preview).toHaveCount(0);

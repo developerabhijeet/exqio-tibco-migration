@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Any
 
-from engine.agents.provider import mask_sensitive
+from engine.agents.provider import MASK, mask_sensitive
 from engine.citations.claims import HintedRef, anchor, link_entities, tail
 from engine.citations.model import (
     LABEL_MAX,
@@ -31,6 +32,32 @@ from engine.citations.model import (
 from engine.citations.uids import activity_uid, finding_chunk_uid, rule_chunk_uid
 from engine.domains.discover import activity_messages, activity_sql, sql_tables
 from engine.ir.models import Activity
+
+# The field names a deployment adds to the default sensitive ones (Settings.sensitive_fields, set
+# at app start). Every text a client shows from these builders, and every value the API shows on
+# their behalf (parity values, Deploy evidence lines), is masked with them here; the browser never
+# masks anything itself.
+_EXTRA_SENSITIVE: tuple[str, ...] = ()
+
+
+def configure_masking(fields: Iterable[str]) -> None:
+    """Use ``fields`` as the configured sensitive field names from now on (the app calls it at
+    start with ``Settings.sensitive_fields``)."""
+    global _EXTRA_SENSITIVE
+    _EXTRA_SENSITIVE = tuple(f for f in fields if f)
+
+
+def mask(text: str) -> str:
+    """``text`` masked for display: SSNs and the values of the default and configured sensitive
+    fields (``engine.agents.provider.mask_sensitive``)."""
+    return mask_sensitive(text, _EXTRA_SENSITIVE)
+
+
+def mask_lines(text: str) -> str:
+    """``text`` masked line by line, so line ``n`` of the result is line ``n`` of ``text`` masked
+    (an element spanning lines is not collapsed): for evidence read from a line of a file."""
+    return "\n".join(mask(line) for line in text.split("\n"))
+
 
 _WORD = re.compile(r"[A-Za-z_][\w]*")
 # An identifier, not a common word: snake case, a digit, or a capital after the first letter.
@@ -66,8 +93,8 @@ def activity_ref(ref_id: str, process_id: str, ir_id: str, activity_id: str, act
                  phase: UiPhase) -> CiteRef:
     return CiteRef(
         id=ref_id, phase=phase, kind="activity",
-        label=cut(mask_sensitive(activity_name or activity_id or "activity"), LABEL_MAX),
-        preview=cut(mask_sensitive(quote or ""), PREVIEW_MAX),
+        label=cut(mask(activity_name or activity_id or "activity"), LABEL_MAX),
+        preview=cut(mask(quote or ""), PREVIEW_MAX),
         memory_uid=activity_uid(ir_id, activity_id) if activity_id else None,
         verified=verified, reason=reason,
         target=CiteTarget(kind="activity", process_id=process_id, activity_id=activity_id or None))
@@ -90,7 +117,7 @@ def _cite_claim(key: str, text: str | None, citations: list[Any], process: Any,
         ref = activity_ref(f"c{i + 1}", process.id, process.ir_id, aid, name, c.get("text") or "",
                            verified=c.get("verified"), reason=c.get("reason"), phase="validate")
         hinted.append(HintedRef(ref=ref, hints=hints_for(aid, name, c.get("text"))))
-    text = mask_sensitive(text or "")
+    text = mask(text or "")
     if not text.strip():
         return tail(key, [h.ref for h in hinted])
     return anchor(text, hinted)
@@ -113,7 +140,7 @@ def cite_domain(domain: Any) -> CitedText:
     appearance; one ref per evidence item, hinted by its masked text: it anchors on the first
     sentence that names that text (its own kind's, unless an earlier sentence also holds it),
     else on the last sentence."""
-    items = [(str(e.get("kind") or ""), mask_sensitive(str(e.get("text") or "")))
+    items = [(str(e.get("kind") or ""), mask(str(e.get("text") or "")))
              for e in domain.evidence or []]
     by_kind: dict[str, list[str]] = {}
     for kind, text in items:
@@ -202,8 +229,8 @@ def design_entities(process: Any, design: dict[str, Any], rules: list[Any],
             if not key:
                 continue
             add(key, CiteRef(
-                id="c1", phase="validate", kind=kind, label=cut(mask_sensitive(key), LABEL_MAX),
-                preview=cut(mask_sensitive(text or ""), PREVIEW_MAX),
+                id="c1", phase="validate", kind=kind, label=cut(mask(key), LABEL_MAX),
+                preview=cut(mask(text or ""), PREVIEW_MAX),
                 memory_uid=uid_of(process.ir_id, key),
                 target=CiteTarget(kind="step", step="validate", process_id=process.id)))
     tables, queues = _ir_resources(process)
@@ -216,7 +243,7 @@ def design_entities(process: Any, design: dict[str, Any], rules: list[Any],
 
 
 def _cite_prose(text: str, entities: dict[str, CiteRef]) -> CitedText:
-    text = mask_sensitive(text or "")
+    text = mask(text or "")
     hinted = _unique(link_entities(text, entities)) if text.strip() else []
     return anchor(text, hinted) if hinted else CitedText.plain(text)
 
@@ -253,7 +280,7 @@ def cite_review(finding: dict[str, Any], build_id: str, process: Any,
     its stem and the class and method names its design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise. A
     finding with no text has no sentence to carry the ref: ``None`` (no ``cited``), and clients
     show ``text``, ``file`` and ``line`` as before."""
-    text = mask_sensitive(str(finding.get("text") or ""))
+    text = mask(str(finding.get("text") or ""))
     if not text.strip():
         return None
     path = str(finding.get("file") or "")
@@ -299,7 +326,7 @@ VALUE_MAX = 120  # a parity value is cut to this many code points in the sentenc
 
 def _sensitive_field(path: str) -> bool:
     leaf = re.split(r"[./\[\]@]+", path.strip("./[]@"))[-1] if path.strip("./[]@") else ""
-    return bool(leaf) and mask_sensitive(f"{leaf}: x") != f"{leaf}: x"
+    return bool(leaf) and mask(f"{leaf}: x") != f"{leaf}: x"
 
 
 def _show(path: str, value: Any) -> str:
@@ -312,7 +339,7 @@ def _show(path: str, value: Any) -> str:
         return "null"
     if _sensitive_field(path):
         return '"***"'
-    return cut(mask_sensitive(json.dumps(value, ensure_ascii=False, default=str)), VALUE_MAX)
+    return cut(mask(json.dumps(value, ensure_ascii=False, default=str)), VALUE_MAX)
 
 
 def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = None) -> CitedText:
@@ -323,13 +350,13 @@ def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = N
     path = str(diff.get("path") or "")
     text = f"{path}: expected {_show(path, diff.get('expected'))}, got {_show(path, diff.get('actual'))}."
     if diff.get("note"):
-        text += f" {mask_sensitive(str(diff['note']))}"
+        text += f" {mask(str(diff['note']))}"
     pid = getattr(process, "id", None)
     scenario = run.get("scenario_name") or run.get("scenario_key") or run.get("scenario_id") or "scenario"
     parity = run.get("parity")
     hinted = [HintedRef(ref=CiteRef(
-        id="c1", phase="verify", kind="test", label=cut(mask_sensitive(str(scenario)), LABEL_MAX),
-        preview=cut(mask_sensitive(f"Scenario run {scenario}: {run.get('status') or 'run'}"
+        id="c1", phase="verify", kind="test", label=cut(mask(str(scenario)), LABEL_MAX),
+        preview=cut(mask(f"Scenario run {scenario}: {run.get('status') or 'run'}"
                                    + (f", parity {parity:.0%}" if isinstance(parity, int | float)
                                       else "")), PREVIEW_MAX),
         target=CiteTarget(kind="step", step="verify", process_id=pid)), hints=[path])]
@@ -345,17 +372,38 @@ def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = N
     return anchor(text, hinted)
 
 
+def _display(path: str, diff: dict[str, Any], key: str) -> str:
+    """A compared value as the value columns show it, masked like the cited sentence: ``absent``
+    when the side has no value, a sensitive field's value as ``***`` whole, any other value as
+    JSON (a string as itself) with its sensitive parts masked. Not cut: the column wraps."""
+    if key not in diff:
+        return "absent"
+    value = diff[key]
+    if value is None:
+        return "null"
+    if _sensitive_field(path):
+        return MASK
+    return mask(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str))
+
+
 def cite_parity(view: dict[str, Any], process: Any) -> dict[str, Any]:
-    """``view`` with a ``cited`` on every field and side-effect difference of every run; a
-    ``match`` that no finding explains has nothing to cite and gets none."""
+    """``view`` with ``expected_display``/``actual_display`` (masked, see ``_display``) on every
+    field and side-effect difference of every run, and a ``cited`` on each but a ``match`` that no
+    finding explains, which has nothing to cite."""
     reports = []
     for rep in view.get("reports") or []:
         rep = dict(rep)
         for key in ("fields", "side_effects"):
             if isinstance(rep.get(key), list):
-                rep[key] = [d if d.get("status") == "match" and not d.get("finding_id") else
-                            {**d, "cited": cite_diff(d, rep, process).model_dump(mode="json")}
-                            for d in rep[key]]
+                rows = []
+                for d in rep[key]:
+                    path = str(d.get("path") or "")
+                    d = {**d, "expected_display": _display(path, d, "expected"),
+                         "actual_display": _display(path, d, "actual")}
+                    if not (d.get("status") == "match" and not d.get("finding_id")):
+                        d["cited"] = cite_diff(d, rep, process).model_dump(mode="json")
+                    rows.append(d)
+                rep[key] = rows
         reports.append(rep)
     return {**view, "reports": reports}
 
@@ -397,13 +445,13 @@ def cite_readiness_row(row: dict[str, Any], build_process: dict[str, str] | None
     """``"{expectation}: {status}."`` (with the gap) and one ref per evidence item on its last
     sentence. ``build_process`` maps a build id to its API process id for build links."""
     gap = row.get("gap")
-    text = mask_sensitive(f"{row.get('expectation')}: {row.get('status')}" + (f"; {gap}" if gap else "")
+    text = mask(f"{row.get('expectation')}: {row.get('status')}" + (f"; {gap}" if gap else "")
                           + ".")
     refs = []
     for i, ev in enumerate(row.get("evidence") or []):
         phase, target = _readiness_target(str(ev.get("kind") or ""), str(ev.get("ref") or ""),
                                           build_process or {})
-        label = mask_sensitive(str(ev.get("label") or ev.get("kind") or "evidence"))
+        label = mask(str(ev.get("label") or ev.get("kind") or "evidence"))
         refs.append(CiteRef(id=f"c{i + 1}", phase=phase, kind="evidence", label=cut(label, LABEL_MAX),
                             preview=cut(label, PREVIEW_MAX), target=target))
     return tail(text, refs)

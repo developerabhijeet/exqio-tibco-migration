@@ -41,7 +41,7 @@ from api.app.models import (
     Rule,
 )
 from api.app.services import gates as gate_svc
-from api.app.services.citations import activity_names, cite_finding, cite_rule
+from api.app.services.citations import activity_names, cite_finding, cite_rule, mask
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import (
     CODE_ONLY_NOTICE,
@@ -52,7 +52,7 @@ from api.app.services.providers import (
 from engine.agents.analyst import analyse
 from engine.agents.challenger import challenge
 from engine.agents.jsonout import JsonOutputError
-from engine.agents.provider import ProviderError, mask_sensitive
+from engine.agents.provider import ProviderError
 from engine.agents.risk import review_risk
 from engine.agents.routing import ModelCallRecord
 from engine.analysis.coverage import coverage_matrix
@@ -652,7 +652,7 @@ def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process,
         cits.append({"activity_id": c.get("activity_id"), "kind": c.get("kind"), "text": c.get("text"),
                      "verified": fail is None, "reason": fail.get("reason") if fail else None})
     return {"id": r.id, "rule_key": r.rule_key, "text": r.text, "original_text": r.original_text,
-            "original_text_masked": mask_sensitive(r.original_text) if r.original_text else None,
+            "original_text_masked": mask(r.original_text) if r.original_text else None,
             "citations": cits, "confidence": r.confidence, "status": r.status, "owner": r.owner,
             "memory_refs": r.memory_refs or [], "challenge": r.challenge, "updated_by": r.updated_by,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,

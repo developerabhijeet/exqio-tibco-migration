@@ -22,7 +22,7 @@ from api.app.services import build as svc
 from api.app.services import hosting
 from api.app.services import verify as verify_svc
 from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files, export_note
-from api.app.services.citations import cite_review
+from api.app.services.citations import cite_review, mask_lines
 from api.app.services.context import active_job
 
 router = APIRouter(tags=["build"])
@@ -124,7 +124,9 @@ async def get_file(build_id: str, path: str, session: SessionDep) -> dict[str, A
         raise HTTPException(status_code=404, detail="file not found")
     content = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
     suffix = target.suffix if target.suffix else target.name
-    return {**svc.file_out(row), "content": content,
+    # content_masked: the same lines, each masked with the configured sensitive fields, for text
+    # quoted from the file elsewhere (the Deploy evidence previews); the viewer shows content.
+    return {**svc.file_out(row), "content": content, "content_masked": mask_lines(content),
             "language": LANGUAGES.get(suffix, "dockerfile" if target.name == "Dockerfile" else "plaintext")}
 
 

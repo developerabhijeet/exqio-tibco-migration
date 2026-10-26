@@ -144,6 +144,9 @@ export interface BuildFiles {
 
 export interface BuildFileContent extends BuildFileEntry {
   content: string;
+  /** `content` with each line masked by the API (configured sensitive fields), line for line: the
+   * text to quote from the file anywhere but the code viewer. */
+  content_masked?: string;
   language: string;
 }
 
@@ -233,8 +236,12 @@ export interface ScenarioList {
 
 export interface FieldDiff {
   path: string;
+  /** RAW values: render `expected_display` / `actual_display` (masked by the API) instead. */
   expected: unknown;
   actual: unknown;
+  /** The value as shown, MASKED by the API: "absent", "null", "***" for a sensitive field, else JSON. */
+  expected_display?: string;
+  actual_display?: string;
   status: "match" | "defect" | "intended" | "noise" | string;
   finding_id: string | null;
   /** false on an intended difference no TIBCO sandbox run has confirmed (newer API). */
