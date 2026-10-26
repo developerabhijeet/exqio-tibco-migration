@@ -27,7 +27,7 @@ from api.app.auth.oidc import Oidc
 from api.app.config import Settings
 from api.app.connectors.config import install_problems, load_install, secret_names
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
-from api.app.deps import require_admin_writes, require_signed_in
+from api.app.deps import require_admin_writes, require_chat_user, require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
@@ -39,6 +39,7 @@ from api.app.routers import (
     connectors,
     design,
     domains,
+    exiqoian,
     gates,
     history,
     infra,
@@ -207,6 +208,8 @@ def _create_api(settings: Settings) -> FastAPI:
     guarded = [Depends(require_signed_in)]
     for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build, memory_router, stacks):
         app.include_router(module.router, dependencies=guarded)
+    # ExiQoian: its own guard, so a viewer may POST here (and only here)
+    app.include_router(exiqoian.router, dependencies=[Depends(require_chat_user)])
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
     for module in (verify, infra, readiness, connectors):  # connectors: AdminDep on its writes
         app.include_router(module.router, dependencies=guarded)

@@ -132,6 +132,27 @@ async def require_user(request: Request, x_user: Annotated[str | None, Header()]
     return dev_principal(user)
 
 
+async def require_chat_user(request: Request, x_user: Annotated[str | None, Header()] = None,
+                            x_agent: Annotated[str | None, Header()] = None) -> Principal:
+    """The guard of the ExiQoian routes: any signed-in principal holding a role may use every
+    method there (a ``viewer`` included: a chat question writes only the caller's own
+    conversation and an audit row). ``dev``: the ``X-User`` persona, 401 without it. Agents
+    never act."""
+    if x_agent is not None:
+        raise HTTPException(status_code=403, detail="agents cannot perform this action")
+    if request.app.state.settings.auth_mode == "oidc":
+        principal = await current_principal(request)
+        if principal is None:
+            raise unauthorized()
+        if not principal.roles:
+            raise HTTPException(status_code=403, detail=NO_ROLE)
+        return principal
+    user = (x_user or "").strip()
+    if not user:
+        raise HTTPException(status_code=401, detail="X-User header required")
+    return dev_principal(user)
+
+
 async def require_actor(principal: Annotated[Principal, Depends(require_user)]) -> str:
     """The name gate rows and audit lines record: the persona id in dev, the UPN in oidc."""
     return principal.actor
@@ -187,6 +208,7 @@ RunnerDep = Annotated[JobRunner, Depends(get_runner)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 UserDep = Annotated[str, Depends(require_actor)]
 PrincipalDep = Annotated[Principal, Depends(require_user)]
+ChatUserDep = Annotated[Principal, Depends(require_chat_user)]
 AdminDep = Annotated[Principal, Depends(require_admin)]
 CuratorDep = Annotated[Principal, Depends(require_curator)]
 BrowserUserDep = Annotated[str, Depends(require_browser_user)]

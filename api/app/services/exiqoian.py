@@ -194,7 +194,8 @@ def _unavailable(exc: Exception) -> Reply:
 
 async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: RoutedProvider | None,
               project_id: str, conversation_id: str, owner: str, persona: PersonaKey, text: str,
-              on_stage: Callable[[str], Awaitable[None]] | None) -> tuple[ChatMessage, ChatMessage]:
+              on_stage: Callable[[str], Awaitable[None]] | None,
+              on_event: Callable[[str, dict], Awaitable[None]] | None = None) -> tuple[ChatMessage, ChatMessage]:
     """One question: store the masked user message, answer, store the assistant message and the
     audit row, bump the conversation, commit once."""
     conv = await get_conversation(session, project_id, owner, conversation_id)
@@ -207,6 +208,8 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
     user = ChatMessage(conversation_id=conv.id, role="user", text=masked, persona=persona)
     session.add(user)
     await session.commit()
+    if on_event is not None:
+        await on_event("meta", {"user_message_id": user.id, "persona": persona})
     lexicon, process_ids, _ = await project_lexicon(session, project_id)
     try:
         reply = await respond(
@@ -214,6 +217,9 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
             process_ids=process_ids, history=history_turns(prior), provider=provider, on_stage=on_stage)
     except (MemoryUnavailable, KnowledgeUnavailable) as exc:
         reply = _unavailable(exc)
+        if on_event is not None:
+            detail = str(exc) if isinstance(exc, KnowledgeUnavailable) else f"memory unavailable: {exc}"
+            await on_event("error", {"detail": detail})
     except Exception:
         log.exception("exiqoian answer failed: project=%s", project_id)
         reply = Reply(verdict="unavailable", cited=CitedText.plain(UNAVAILABLE_REPLY), rule="error")
