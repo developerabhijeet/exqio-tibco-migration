@@ -19,6 +19,7 @@ class Build(IdMixin, CreatedMixin, Base):
     job_id: Mapped[str | None]
     # must be one of engine.infra_gen.generator's runtimes; "container_apps" (plural) is rejected
     runtime: Mapped[str] = mapped_column(default="container_app")
+    stack: Mapped[str] = mapped_column(server_default="dotnet")  # the target stack this build generated
     status: Mapped[str] = mapped_column(default="queued")  # queued|running|passed|failed
     spec_hash: Mapped[str | None]
     design_hash: Mapped[str | None]

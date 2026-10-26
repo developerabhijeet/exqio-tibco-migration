@@ -6,9 +6,16 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from engine.stacks import StackKey
+
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    target_stack: StackKey | None = None  # None: the Settings default
+
+
+class ProjectPatch(BaseModel):
+    target_stack: StackKey
 
 
 class ProjectOut(BaseModel):
@@ -16,6 +23,7 @@ class ProjectOut(BaseModel):
 
     id: str
     name: str
+    target_stack: str
     created_at: datetime
 
 

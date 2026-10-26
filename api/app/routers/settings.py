@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 
 from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.models import Eval, Process
+from api.app.routers.stacks import require_available
 from api.app.services import providers as provider_svc
 from api.app.services import settings as svc
+from engine.stacks import StackKey
 
 router = APIRouter(tags=["settings"])
 
@@ -30,6 +32,7 @@ class SettingsPatch(BaseModel):
     routing_bands: dict[str, list[int]] | None = None  # {strong: [8, 10], standard: [4, 7], efficient: [0, 3]}
     langfuse_enabled: bool | None = None
     azure: AzureKeys | None = None
+    default_stack: StackKey | None = None
 
 
 class EvalRequest(BaseModel):
@@ -47,6 +50,8 @@ async def get_settings(settings: SettingsDep, session: SessionDep) -> dict[str, 
 @router.put("/settings")
 async def put_settings(body: SettingsPatch, session: SessionDep, settings: SettingsDep,
                        user: UserDep) -> dict[str, Any]:
+    if body.default_stack is not None:
+        require_available(body.default_stack, settings)
     try:
         await svc.update(session, settings, body.model_dump(exclude_none=True), user)
     except (ValueError, TypeError) as exc:

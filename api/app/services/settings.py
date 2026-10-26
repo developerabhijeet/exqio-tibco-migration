@@ -63,6 +63,7 @@ async def load_stored(session: AsyncSession) -> dict[str, Any]:
 
 
 AZURE_KEY = "azure_openai"
+DEFAULT_STACK_KEY = "default_stack"
 
 
 def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
@@ -82,6 +83,8 @@ def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
         settings.routing_bands = {k: (int(v[0]), int(v[1])) for k, v in bands.items()}
     if "langfuse_enabled" in stored:
         settings.langfuse_enabled = bool(stored["langfuse_enabled"])
+    if stored.get(DEFAULT_STACK_KEY):
+        settings.default_stack = str(stored[DEFAULT_STACK_KEY])
     azure = stored.get(AZURE_KEY) or {}
     # A stored block is authoritative for the fields it carries, empty ones included: clearing the
     # key in the screen has to take it out of the live settings too, not just out of the row.
@@ -155,6 +158,10 @@ def validate_bands(bands: dict[str, Any]) -> dict[str, tuple[int, int]]:
 
 def settings_view(settings: Settings, toolchains: dict[str, Any],
                   stored_azure: dict[str, Any] | None = None) -> dict[str, Any]:
+    from api.app.routers.stacks import (
+        stack_views,  # deferred: the router imports deps, which imports this
+    )
+
     azure = settings.azure_openai_configured()
     bands = settings.routing_bands or RoutingTable().bands
     return {
@@ -192,6 +199,8 @@ def settings_view(settings: Settings, toolchains: dict[str, Any],
             "app_secret_configured": bool(settings.app_secret),
         },
         "toolchains": toolchains,
+        "stacks": stack_views(settings),
+        "default_stack": settings.default_stack,
         "langfuse": {"enabled": settings.langfuse_enabled, "host": settings.langfuse_host or None,
                      "keys_configured": bool(settings.langfuse_public_key and settings.langfuse_secret_key)},
         "app_secret_configured": bool(settings.app_secret),
@@ -239,6 +248,8 @@ async def update(session: AsyncSession, settings: Settings, body: dict[str, Any]
         changes["routing_bands"] = {k: list(v) for k, v in validate_bands(body["routing_bands"]).items()}
     if body.get("langfuse_enabled") is not None:
         changes["langfuse_enabled"] = bool(body["langfuse_enabled"])
+    if body.get("default_stack") is not None:
+        changes[DEFAULT_STACK_KEY] = str(body["default_stack"])
     if body.get("azure") is not None:
         changes[AZURE_KEY] = _azure_change(session, settings, body["azure"])
     for key, value in changes.items():

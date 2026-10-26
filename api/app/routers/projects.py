@@ -15,21 +15,23 @@ from starlette.datastructures import UploadFile
 
 from api.app.config import Settings
 from api.app.db import new_id
-from api.app.deps import RunnerDep, SessionDep, SettingsDep
+from api.app.deps import PrincipalDep, RunnerDep, SessionDep, SettingsDep
 from api.app.jobs.locks import advisory_lock
 from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
+from api.app.routers.stacks import require_available
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
 from api.app.schemas.project import (
     FileEntryOut,
     ProjectCreate,
     ProjectOut,
+    ProjectPatch,
     ReportOut,
     ScanIn,
     UploadOut,
     UploadPathIn,
 )
-from api.app.services import uploads
+from api.app.services import gates, uploads
 from api.app.services.memory_ingest import enqueue_ingest, seed_ingest_key
 
 router = APIRouter(tags=["projects"])
@@ -49,13 +51,32 @@ async def create_project(body: ProjectCreate, request: Request, session: Session
     """Create a project and seed its migration memory with the TIBCO-to-.NET seed patterns
     (``source: seed``): a ``memory.ingest`` of phase ``seed`` is queued (nothing without
     ``NEO4J_URI``)."""
-    project = Project(name=body.name.strip())
+    stack = body.target_stack or settings.default_stack
+    require_available(stack, settings)
+    project = Project(name=body.name.strip(), target_stack=stack)
     session.add(project)
     await session.commit()
     await session.refresh(project)
     await enqueue_ingest(request.app.state.sessionmaker, settings, project_id=project.id,
                          phase="seed", scope="seed", source={}, actor="system",
                          ingest_key=seed_ingest_key())
+    return project
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectOut)
+async def patch_project(project_id: str, body: ProjectPatch, principal: PrincipalDep, session: SessionDep,
+                        settings: SettingsDep) -> Project:
+    """Change the target stack; the architect or admin decides, in every auth mode."""
+    if not principal.roles & {"architect", "admin"}:
+        raise HTTPException(status_code=403, detail="changing the target stack needs the architect or admin role")
+    project = await _project(session, project_id)
+    if body.target_stack != project.target_stack:
+        require_available(body.target_stack, settings)
+        gates.audit(session, None, principal.actor, "project stack changed", project_id=project.id,
+                    detail={"old": project.target_stack, "new": body.target_stack})
+        project.target_stack = body.target_stack
+        await session.commit()
+        await session.refresh(project)
     return project
 
 

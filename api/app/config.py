@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
     # Target stacks this install may build (comma separated; the chart's stacks.enabled, default dotnet)
     enabled_stacks: str = "dotnet,java,go,python"
+    default_stack: str = "dotnet"  # new projects' target stack; Settings can override it
     tf_cli_config_file: str = ""  # Terraform CLI config (provider network mirror) for the validators
     # terraform init in the infra validation downloads providers. False skips init and module validate
     # (recorded as skipped, never as passed): for e2e and machines with no registry or mirror.

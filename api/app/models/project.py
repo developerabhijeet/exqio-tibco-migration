@@ -14,6 +14,7 @@ class Project(IdMixin, CreatedMixin, Base):
     __tablename__ = "projects"
 
     name: Mapped[str]
+    target_stack: Mapped[str] = mapped_column(server_default="dotnet")  # engine.stacks.STACK_KEYS
 
 
 class Upload(IdMixin, CreatedMixin, Base):

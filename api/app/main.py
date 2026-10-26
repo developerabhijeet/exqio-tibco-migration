@@ -47,6 +47,7 @@ from api.app.routers import (
     projects,
     readiness,
     run_proxy,
+    stacks,
     system,
     verify,
 )
@@ -204,7 +205,7 @@ def _create_api(settings: Settings) -> FastAPI:
                        allow_methods=["*"], allow_headers=["*"])
     # oidc: a signed-in user with a role for everything but the public routes (dev: a no-op)
     guarded = [Depends(require_signed_in)]
-    for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build, memory_router):
+    for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build, memory_router, stacks):
         app.include_router(module.router, dependencies=guarded)
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
     for module in (verify, infra, readiness, connectors):  # connectors: AdminDep on its writes
