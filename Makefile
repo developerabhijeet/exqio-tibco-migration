@@ -22,7 +22,7 @@ WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS
 
 .PHONY: setup db neo4j neo4j-test api worker web test test-all neo4j-test-reset e2e e2e-visual demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
-	azure-validate pipeline-lint kind-tools kind-e2e
+	azure-validate pipeline-lint kind-tools kind-e2e stack-locks
 
 setup:
 	python3 -m venv .venv
@@ -205,12 +205,12 @@ nuget-cache:
 # UV_INDEX_URL (the locks name no index; builds install them with --require-hashes):
 # requirements.lock (build and tests), requirements.runtime.lock (the service image: the same files,
 # without the dev tools) and uv-tool.lock (the uv the generated pipelines install).
-.PHONY: stack-locks stack-locks-python
+.PHONY: stack-locks stack-locks-python stack-locks-go
 UV ?= uv
 PY_LOCKS := engine/stacks/python
 UV_COMPILE = $(UV) pip compile --generate-hashes --universal --python-version 3.12 --index-url "$(UV_INDEX_URL)" \
 	--no-emit-index-url --no-annotate --custom-compile-command "make stack-locks"
-stack-locks: stack-locks-python
+stack-locks: stack-locks-python stack-locks-go
 
 stack-locks-python:
 	@test -n "$(UV_INDEX_URL)" || { echo "stack-locks-python: set UV_INDEX_URL to GMF's PyPI mirror (.../simple)"; exit 1; }
@@ -223,6 +223,21 @@ stack-locks-python:
 	$(UV_COMPILE) .tools/python-runtime.in -c .tools/python-pins.txt -o $(PY_LOCKS)/requirements.runtime.lock
 	$(UV_COMPILE) .tools/python-uv.in -o $(PY_LOCKS)/uv-tool.lock
 	rm -f .tools/python-all.in .tools/python-runtime.in .tools/python-uv.in .tools/python-pins.txt
+
+# ---------------------------------------------------------------- stack dependency locks
+# `make stack-locks` refreshes the checksums generated projects build with (GOFLAGS=-mod=readonly,
+# GOSUMDB=off): a scratch module requiring engine/stacks/go/versions.py's direct modules is tidied
+# against $$GOPROXY (GMF's module mirror) and its go.sum becomes engine/stacks/go/go.sum.lock.
+# Copy any changed indirect versions from the tidied go.mod (printed) into versions.py.
+GO ?= go
+STACK_LOCK_WORK := .tools/stack-locks
+stack-locks-go:
+	@test -n "$$GOPROXY" || { echo "set GOPROXY to the Go module mirror"; exit 1; }
+	rm -rf $(STACK_LOCK_WORK) && mkdir -p $(STACK_LOCK_WORK)/go
+	$(PY) -c 'from engine.stacks.go import versions as v; open("$(STACK_LOCK_WORK)/go/go.mod", "w").write("module stack-lock\n\ngo " + v.GO_MIN + "\n\nrequire (\n" + "".join(f"\t{m} {ver}\n" for m, ver in v.DIRECT) + ")\n"); open("$(STACK_LOCK_WORK)/go/main.go", "w").write("package main\n\nimport (\n" + "".join(f"\t_ \"{m}\"\n" for m, _ in v.DIRECT if not m.endswith("pgx/v5")) + "\t_ \"github.com/jackc/pgx/v5/stdlib\"\n)\n\nfunc main() {}\n")'
+	cd $(STACK_LOCK_WORK)/go && GOFLAGS=-mod=mod GOSUMDB=off GOTOOLCHAIN=local $(GO) mod tidy && cat go.mod
+	cp $(STACK_LOCK_WORK)/go/go.sum engine/stacks/go/go.sum.lock
+	rm -rf $(STACK_LOCK_WORK)
 
 # ---------------------------------------------------------------- container images (deploy/docker)
 # `make images` builds both images for this machine's architecture; the pipelines (deploy/pipelines)

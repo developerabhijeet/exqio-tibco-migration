@@ -1,0 +1,95 @@
+package platform
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Auth validates bearer tokens. AUTH_MODE=Development (Auth__Mode) accepts the HS256 development
+// tokens of DevToken, signed with AUTH_DEV_TOKEN_SIGNING_KEY, and is refused outside
+// ASPNETCORE_ENVIRONMENT=Development; any other mode validates Microsoft Entra ID tokens
+// (AUTH_ENTRA_ID_INSTANCE, AUTH_ENTRA_ID_TENANT_ID and AUTH_ENTRA_ID_AUDIENCE), with the signing
+// keys fetched on the first request.
+type Auth struct {
+	development bool
+	issuer      string
+	audience    string
+	key         []byte
+	jwks        string
+	once        sync.Once
+	keys        keyfunc.Keyfunc
+	keysErr     error
+}
+
+// NewAuth is the token validation config asks for.
+func NewAuth(config *Config) (*Auth, error) {
+	if !strings.EqualFold(config.Get("AUTH_MODE"), "Development") {
+		base := strings.TrimSuffix(config.Get("AUTH_ENTRA_ID_INSTANCE"), "/") + "/" + config.Get("AUTH_ENTRA_ID_TENANT_ID")
+		return &Auth{issuer: base + "/v2.0", audience: config.Get("AUTH_ENTRA_ID_AUDIENCE"),
+			jwks: base + "/discovery/v2.0/keys"}, nil
+	}
+	if !config.Development() {
+		return nil, fmt.Errorf("auth mode Development is allowed only with ASPNETCORE_ENVIRONMENT=Development")
+	}
+	key := []byte(config.Get("AUTH_DEV_TOKEN_SIGNING_KEY"))
+	if len(key) < 32 {
+		return nil, fmt.Errorf("AUTH_DEV_TOKEN_SIGNING_KEY (Auth__DevToken__SigningKey) must be at least 32 bytes")
+	}
+	return &Auth{development: true, issuer: or(config.Get("AUTH_DEV_TOKEN_ISSUER"), "exiqo-dev"),
+		audience: or(config.Get("AUTH_DEV_TOKEN_AUDIENCE"), "exiqo-api"), key: key}, nil
+}
+
+func or(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+// Development is true when development tokens are accepted (and issued, POST /auth/dev-token).
+func (a *Auth) Development() bool {
+	return a.development
+}
+
+// Require answers 401 to a request without a valid bearer token.
+func (a *Auth) Require(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		token, ok := strings.CutPrefix(header, "Bearer ")
+		if !ok || strings.TrimSpace(token) == "" {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			WriteProblem(w, http.StatusUnauthorized, "Unauthorized", "a bearer token is required")
+			return
+		}
+		if err := a.validate(r.Context(), strings.TrimSpace(token)); err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+			WriteProblem(w, http.StatusUnauthorized, "Unauthorized", "the bearer token is not valid")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *Auth) validate(ctx context.Context, token string) error {
+	options := []jwt.ParserOption{jwt.WithIssuer(a.issuer), jwt.WithAudience(a.audience), jwt.WithExpirationRequired()}
+	if a.development {
+		options = append(options, jwt.WithValidMethods([]string{"HS256"}))
+		_, err := jwt.Parse(token, func(*jwt.Token) (any, error) { return a.key, nil }, options...)
+		return err
+	}
+	a.once.Do(func() {
+		a.keys, a.keysErr = keyfunc.NewDefaultCtx(context.WithoutCancel(ctx), []string{a.jwks})
+	})
+	if a.keysErr != nil {
+		return a.keysErr
+	}
+	options = append(options, jwt.WithValidMethods([]string{"RS256"}))
+	_, err := jwt.Parse(token, a.keys.Keyfunc, options...)
+	return err
+}

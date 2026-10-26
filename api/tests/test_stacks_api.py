@@ -36,10 +36,10 @@ async def test_create_project_defaults_to_settings_default(client):
 
 
 async def test_unavailable_stack_is_refused_with_reason(client):
-    r = await client.post("/projects", json={"name": "a", "target_stack": "go"})
-    assert r.status_code == 422 and r.json()["detail"] == "go is not available: not implemented yet"
-    r = await client.put("/settings", json={"default_stack": "go"}, headers=ADMIN)
-    assert r.status_code == 422 and r.json()["detail"].startswith("go is not available: ")
+    r = await client.post("/projects", json={"name": "a", "target_stack": "python"})
+    assert r.status_code == 422 and r.json()["detail"] == "python is not available: not implemented yet"
+    r = await client.put("/settings", json={"default_stack": "python"}, headers=ADMIN)
+    assert r.status_code == 422 and r.json()["detail"].startswith("python is not available: ")
 
 
 async def test_not_enabled_stack_is_refused(client, app):
@@ -105,8 +105,8 @@ async def test_patch_stack_changes_it_and_audits_old_and_new(client, project_id,
 
 async def test_patch_stack_refuses_unavailable_and_unknown(client, project_id):
     lee = {"X-User": "architect.lee"}
-    r = await client.patch(f"/projects/{project_id}", json={"target_stack": "go"}, headers=lee)
-    assert r.status_code == 422 and r.json()["detail"] == "go is not available: not implemented yet"
+    r = await client.patch(f"/projects/{project_id}", json={"target_stack": "python"}, headers=lee)
+    assert r.status_code == 422 and r.json()["detail"] == "python is not available: not implemented yet"
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "cobol"}, headers=lee)
     assert r.status_code == 422
     assert (await client.patch("/projects/nope", json={"target_stack": "dotnet"}, headers=lee)).status_code == 404
@@ -133,7 +133,7 @@ async def test_stacks_endpoint_lists_four_with_status(client):
     assert [s["key"] for s in body["stacks"]] == ["dotnet", "java", "go", "python"]
     assert all({"available", "reason", "label", "required_tools", "default"} <= s.keys() for s in body["stacks"])
     assert [s["default"] for s in body["stacks"]] == [True, False, False, False]
-    assert next(s for s in body["stacks"] if s["key"] == "go")["reason"] == "not implemented yet"
+    assert next(s for s in body["stacks"] if s["key"] == "python")["reason"] == "not implemented yet"
 
 
 async def test_settings_view_carries_stacks(client):

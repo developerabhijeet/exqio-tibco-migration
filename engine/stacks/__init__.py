@@ -17,7 +17,6 @@ __all__ = ["STACK_KEYS", "StackKey", "all_stacks", "get_stack", "stack_status"]
 # their reason. An implemented stack's own object is the source: its entry here goes when it
 # registers in ``_FACTORIES``.
 _PENDING: dict[str, tuple[str, tuple[str, ...]]] = {
-    "go": ("Go 1.25 · net/http · pgx", ("go",)),
 }
 
 
@@ -36,8 +35,14 @@ def _python() -> StackGenerator:
     return PythonStack()
 
 
-# Implemented stacks, in STACK_KEYS order; Task 12 registers go.
-_FACTORIES: dict[str, Callable[[], StackGenerator]] = {"dotnet": _dotnet, "java": _java, "python": _python}
+def _go() -> StackGenerator:
+    from engine.stacks.go import GoStack
+    return GoStack()
+
+
+# Implemented stacks, in STACK_KEYS order.
+_FACTORIES: dict[str, Callable[[], StackGenerator]] = {
+    "dotnet": _dotnet, "java": _java, "go": _go, "python": _python}
 _INSTANCES: dict[str, StackGenerator] = {}
 
 

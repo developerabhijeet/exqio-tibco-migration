@@ -1,0 +1,123 @@
+package platform
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"{{ module }}/internal/tib"
+)
+
+// Property names the bus uses for request and reply, and the ones it stamps on a received message
+// (its id and when it was enqueued, ISO-8601). Every other property is an application (JMS) property.
+const (
+	ReplyTo       = "ReplyTo"
+	CorrelationID = "CorrelationId"
+	MessageID     = "MessageId"
+	EnqueuedTime  = "EnqueuedTime"
+)
+
+// Disposition is how a consumer settles a message.
+type Disposition string
+
+// The settlements: processed (remove the message), not processable as is (business fault,
+// selector mismatch, invalid body: keep it on the dead-letter queue), or a transient failure
+// (abandon it so the bus redelivers it).
+const (
+	Complete   Disposition = "complete"
+	DeadLetter Disposition = "dead_letter"
+	Abandon    Disposition = "abandon"
+)
+
+// Outcome is the settlement a consumer returns for one message.
+type Outcome struct {
+	Disposition Disposition
+	Reason      string
+	Description string
+}
+
+// Completed is the outcome of a processed message.
+var Completed = Outcome{Disposition: Complete}
+
+// DeadLettered is a dead-letter outcome with its reason.
+func DeadLettered(reason, description string) Outcome {
+	return Outcome{Disposition: DeadLetter, Reason: reason, Description: description}
+}
+
+// Abandoned is the outcome of a transient failure.
+func Abandoned(err error) Outcome {
+	return Outcome{Disposition: Abandon, Reason: fmt.Sprintf("%T", err), Description: tib.MaskText(err.Error())}
+}
+
+// Handler settles one message.
+type Handler func(ctx context.Context, message *tib.Message) Outcome
+
+// Bus is the messaging port of the JMS steps: Azure Service Bus in production, an in-memory bus
+// for tests and local runs (MESSAGING_MODE, Messaging__Mode). Entities are the TIBCO queue and
+// topic names, verbatim; message bodies are JSON.
+type Bus interface {
+	// Publish sends message to a queue or topic (JMS Send or Publish).
+	Publish(ctx context.Context, entity string, message tib.Value, properties map[string]string) error
+	// Subscribe receives on a queue, or on a topic as topic/subscription; the handler settles each
+	// message. Call the returned function to stop receiving.
+	Subscribe(entity string, handler Handler) (func(), error)
+	// Request sends with a reply-to entity and waits for the correlated reply (JMS Request Reply).
+	Request(ctx context.Context, entity string, message tib.Value, timeout time.Duration) (*tib.Message, error)
+	// Reply answers request on its reply-to entity with the same correlation id (JMS Reply).
+	Reply(ctx context.Context, request *tib.Message, message tib.Value) error
+	// Close releases the connections.
+	Close(ctx context.Context) error
+}
+
+// ApplicationProperties are the application properties of a message ($Start/JMSProperties).
+func ApplicationProperties(message *tib.Message) map[string]any {
+	out := map[string]any{}
+	for k, v := range message.Properties {
+		switch k {
+		case ReplyTo, CorrelationID, MessageID, EnqueuedTime:
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// JMSHeaders are the JMS headers of a received message as TIBCO reads them ($Start/JMSHeaders):
+// JMSDestination, JMSMessageID, JMSCorrelationID, JMSReplyTo and JMSTimestamp (milliseconds since
+// the epoch); a header the bus did not carry is absent.
+func JMSHeaders(message *tib.Message) map[string]any {
+	destination, _, _ := strings.Cut(message.Entity, "/") // a topic, not its subscription
+	headers := map[string]any{"JMSDestination": destination}
+	if v, ok := message.Properties[MessageID]; ok {
+		headers["JMSMessageID"] = v
+	}
+	if v, ok := message.Properties[CorrelationID]; ok {
+		headers["JMSCorrelationID"] = v
+	}
+	if v, ok := message.Properties[ReplyTo]; ok {
+		headers["JMSReplyTo"] = v
+	}
+	if v, ok := message.Properties[EnqueuedTime]; ok {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			headers["JMSTimestamp"] = tib.Of(t.UnixMilli())
+		}
+	}
+	return headers
+}
+
+// NewBus is the bus MESSAGING_MODE selects: InMemory (the default in development) or ServiceBus
+// at MESSAGING_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE; topics are the entities the design names as
+// topics. The in-memory bus is returned twice, so the development endpoints can read it.
+func NewBus(config *Config, topics []string) (Bus, *MemoryBus, error) {
+	switch mode := config.Get("MESSAGING_MODE"); {
+	case mode == "" || strings.EqualFold(mode, "InMemory"):
+		memory := NewMemoryBus()
+		return memory, memory, nil
+	case strings.EqualFold(mode, "ServiceBus"):
+		bus, err := NewServiceBus(config.Get("MESSAGING_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE"), topics)
+		return bus, nil, err
+	default:
+		return nil, nil, fmt.Errorf("unknown MESSAGING_MODE %q (Messaging__Mode): InMemory or ServiceBus", mode)
+	}
+}

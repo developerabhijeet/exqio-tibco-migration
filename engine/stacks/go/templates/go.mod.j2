@@ -1,0 +1,15 @@
+module {{ module }}
+
+go {{ go_min }}
+
+require (
+{% for m, v in direct %}
+	{{ m }} {{ v }}
+{% endfor %}
+)
+
+require (
+{% for m, v in indirect %}
+	{{ m }} {{ v }} // indirect
+{% endfor %}
+)

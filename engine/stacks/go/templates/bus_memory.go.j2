@@ -1,0 +1,194 @@
+package platform
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"{{ module }}/internal/tib"
+)
+
+// DeadLetterRecord is a message a consumer dead-lettered, with the reason and description it gave.
+type DeadLetterRecord struct {
+	Message     tib.Message `json:"message"`
+	Reason      string      `json:"reason"`
+	Description string      `json:"description"`
+}
+
+// MemoryBus is the in-memory bus for tests and local runs (MESSAGING_MODE=InMemory): delivery is
+// synchronous, every message is recorded, and dead-lettered messages are kept with their reason,
+// so tests and the verifier can read what a process published and how each message was settled.
+type MemoryBus struct {
+	mu        sync.Mutex
+	handlers  map[string][]*subscription
+	published []tib.Message
+	dead      []DeadLetterRecord
+	replies   map[string]chan tib.Message
+}
+
+type subscription struct {
+	handler Handler
+}
+
+// NewMemoryBus is an empty in-memory bus.
+func NewMemoryBus() *MemoryBus {
+	return &MemoryBus{handlers: map[string][]*subscription{}, replies: map[string]chan tib.Message{}}
+}
+
+// Published is every message published or delivered, in order.
+func (b *MemoryBus) Published() []tib.Message {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]tib.Message(nil), b.published...)
+}
+
+// PublishedTo is the messages published to one entity (a queue or a topic name).
+func (b *MemoryBus) PublishedTo(entity string) []tib.Message {
+	var out []tib.Message
+	for _, m := range b.Published() {
+		if m.Entity == entity {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// DeadLettered is the messages a consumer dead-lettered, with the reason (fault name,
+// SelectorMismatch, ...).
+func (b *MemoryBus) DeadLettered() []DeadLetterRecord {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]DeadLetterRecord(nil), b.dead...)
+}
+
+func newID() string {
+	data := make([]byte, 16)
+	_, _ = rand.Read(data)
+	return hex.EncodeToString(data)
+}
+
+// Publish records the message and hands it to the subscribers of its entity.
+func (b *MemoryBus) Publish(ctx context.Context, entity string, message tib.Value, properties map[string]string) error {
+	stamped := map[string]string{}
+	for k, v := range properties {
+		stamped[k] = v
+	}
+	if _, ok := stamped[MessageID]; !ok {
+		stamped[MessageID] = newID()
+	}
+	if _, ok := stamped[EnqueuedTime]; !ok {
+		stamped[EnqueuedTime] = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	b.Deliver(ctx, tib.Message{Entity: entity, Body: tib.JSON(message), Properties: stamped})
+	return nil
+}
+
+// Deliver records message, hands it to the subscribers of its entity and returns how each settled
+// it; a handler that panics (a step not filled yet) abandons the message.
+func (b *MemoryBus) Deliver(ctx context.Context, message tib.Message) []Outcome {
+	b.mu.Lock()
+	b.published = append(b.published, message)
+	if id, ok := message.Properties[CorrelationID]; ok {
+		key := message.Entity + "|" + id
+		if waiter, ok := b.replies[key]; ok {
+			delete(b.replies, key)
+			b.mu.Unlock()
+			waiter <- message
+			return nil
+		}
+	}
+	subscribers := append([]*subscription(nil), b.handlers[message.Entity]...)
+	b.mu.Unlock()
+	var outcomes []Outcome
+	for _, s := range subscribers {
+		outcome := settle(ctx, s.handler, &message)
+		if outcome.Disposition == DeadLetter {
+			reason := outcome.Reason
+			if reason == "" {
+				reason = "DeadLettered"
+			}
+			b.mu.Lock()
+			b.dead = append(b.dead, DeadLetterRecord{Message: message, Reason: reason, Description: outcome.Description})
+			b.mu.Unlock()
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
+}
+
+func settle(ctx context.Context, handler Handler, message *tib.Message) (outcome Outcome) {
+	defer func() {
+		if p := recover(); p != nil {
+			outcome = Abandoned(fmt.Errorf("%v", p))
+		}
+	}()
+	return handler(ctx, message)
+}
+
+// Subscribe adds a handler; topic/subscription receives every message of the topic.
+func (b *MemoryBus) Subscribe(entity string, handler Handler) (func(), error) {
+	key, _, _ := strings.Cut(entity, "/")
+	s := &subscription{handler: handler}
+	b.mu.Lock()
+	b.handlers[key] = append(b.handlers[key], s)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		list := b.handlers[key]
+		for i, item := range list {
+			if item == s {
+				b.handlers[key] = append(list[:i:i], list[i+1:]...)
+				return
+			}
+		}
+	}, nil
+}
+
+// Request publishes with a reply-to entity and waits for the correlated reply.
+func (b *MemoryBus) Request(ctx context.Context, entity string, message tib.Value, timeout time.Duration) (*tib.Message, error) {
+	id := newID()
+	replyTo := entity + ".reply"
+	waiter := make(chan tib.Message, 1)
+	b.mu.Lock()
+	b.replies[replyTo+"|"+id] = waiter
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.replies, replyTo+"|"+id)
+		b.mu.Unlock()
+	}()
+	if err := b.Publish(ctx, entity, message, map[string]string{ReplyTo: replyTo, CorrelationID: id}); err != nil {
+		return nil, err
+	}
+	select {
+	case reply := <-waiter:
+		return &reply, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("no reply on %s within %s", replyTo, timeout)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Reply answers request on its reply-to entity with the same correlation id.
+func (b *MemoryBus) Reply(ctx context.Context, request *tib.Message, message tib.Value) error {
+	replyTo, ok := request.Properties[ReplyTo]
+	if !ok {
+		return fmt.Errorf("message on %s has no %s property", request.Entity, ReplyTo)
+	}
+	properties := map[string]string{}
+	if id, ok := request.Properties[CorrelationID]; ok {
+		properties[CorrelationID] = id
+	}
+	return b.Publish(ctx, replyTo, message, properties)
+}
+
+// Close does nothing: the in-memory bus holds no connection.
+func (b *MemoryBus) Close(ctx context.Context) error {
+	return nil
+}

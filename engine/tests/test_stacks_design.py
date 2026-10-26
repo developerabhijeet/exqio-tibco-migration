@@ -284,7 +284,7 @@ def test_skeleton_takes_the_stack(gmf_app, gmf_processes, rules, findings, cards
                                 stack="dotnet")
     assert rec.stack == "dotnet"
     with pytest.raises(KeyError, match="not implemented yet"):
-        build_design_skeleton(gmf_processes[DFR], gmf_app, rules[DFR], findings[DFR], cards[DFR], stack="go")
+        build_design_skeleton(gmf_processes[DFR], gmf_app, rules[DFR], findings[DFR], cards[DFR], stack="python")
 
 
 # --------------------------------------------------------------------- contracts

@@ -1,0 +1,63 @@
+package jobs
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"time"
+
+	"{{ module }}/internal/tib"
+)
+
+// schedule runs tick every intervalMs milliseconds until ctx ends, first at the next local start
+// (HH:MM or HH:MM:SS) when one is set, else at once; a failed tick is logged and the next one runs.
+func schedule(ctx context.Context, intervalMs int, start string, tick func(context.Context) error) {
+	if intervalMs <= 0 {
+		intervalMs = 86_400_000
+	}
+	go func() {
+		if delay := InitialDelay(start, time.Now()); delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return
+			}
+		}
+		ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if err := tick(ctx); err != nil {
+				slog.WarnContext(ctx, "a timer job failed", "error", tib.MaskText(err.Error()))
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// InitialDelay is the time from now until the next local start (HH:MM or HH:MM:SS); 0 when none
+// is set or it is not a time of day.
+func InitialDelay(start string, now time.Time) time.Duration {
+	start = strings.TrimSpace(start)
+	if start == "" {
+		return 0
+	}
+	var at time.Time
+	var err error
+	if strings.Count(start, ":") == 2 {
+		at, err = time.Parse("15:04:05", start)
+	} else {
+		at, err = time.Parse("15:04", start)
+	}
+	if err != nil {
+		return 0
+	}
+	first := time.Date(now.Year(), now.Month(), now.Day(), at.Hour(), at.Minute(), at.Second(), 0, now.Location())
+	if !first.After(now) {
+		first = first.AddDate(0, 0, 1)
+	}
+	return first.Sub(now)
+}

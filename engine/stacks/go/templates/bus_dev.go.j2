@@ -1,0 +1,84 @@
+package platform
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"{{ module }}/internal/tib"
+)
+
+// RegisterBusRoutes adds the development endpoints of the in-memory bus, behind require: drive
+// JMS-started processes and read what they published (POST /_bus/publish, GET /_bus/messages,
+// GET /_bus/dead-letters).
+func RegisterBusRoutes(mux *http.ServeMux, bus *MemoryBus, require func(http.Handler) http.Handler) {
+	mux.Handle("POST /_bus/publish", require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Entity     string            `json:"entity"`
+			Payload    json.RawMessage   `json:"payload"`
+			Properties map[string]string `json:"properties"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
+			return
+		}
+		payload, err := tib.Parse(string(request.Payload))
+		if err != nil {
+			WriteProblem(w, http.StatusBadRequest, "Bad Request", err.Error())
+			return
+		}
+		properties := request.Properties
+		if properties == nil {
+			properties = map[string]string{}
+		}
+		before := len(bus.Published()) + 1 // the delivered message is recorded too
+		outcomes := bus.Deliver(r.Context(), tib.Message{Entity: request.Entity, Body: tib.JSON(payload), Properties: properties})
+		count := len(bus.Published()) - before
+		answer := func(disposition string, reason, description any) {
+			WriteJSON(w, http.StatusOK, map[string]any{"disposition": disposition, "reason": reason,
+				"description": description, "messages_published": count})
+		}
+		for _, outcome := range outcomes {
+			switch outcome.Disposition {
+			case DeadLetter:
+				answer("dead_lettered", outcome.Reason, outcome.Description)
+				return
+			case Abandon:
+				// A transient failure: Service Bus would abandon the message and redeliver it.
+				answer("abandoned", outcome.Reason, outcome.Description)
+				return
+			}
+		}
+		if len(outcomes) == 0 {
+			answer("completed", "no consumer subscribed to "+request.Entity, nil)
+			return
+		}
+		answer("completed", nil, nil)
+	})))
+	mux.Handle("GET /_bus/messages", require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		messages := bus.Published()
+		if entity := r.URL.Query().Get("entity"); r.URL.Query().Has("entity") {
+			messages = bus.PublishedTo(entity)
+		}
+		if messages == nil {
+			messages = []tib.Message{}
+		}
+		writeList(w, messages)
+	})))
+	mux.Handle("GET /_bus/dead-letters", require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dead := bus.DeadLettered()
+		if dead == nil {
+			dead = []DeadLetterRecord{}
+		}
+		writeList(w, dead)
+	})))
+}
+
+func writeList(w http.ResponseWriter, list any) {
+	data, err := json.Marshal(list)
+	if err != nil {
+		WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}

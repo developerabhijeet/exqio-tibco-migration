@@ -43,6 +43,14 @@ mock-sb.servicebus.windows.net
 app.kubernetes.io
 client.authentication.k8s.io
 
+# Go module paths in the generated go.mod / go.sum and engine/stacks/go (golang.org/x/...): module
+# identifiers, resolved only through GMF's GOPROXY mirror (GOSUMDB=off), never fetched from here.
+golang.org
+
+# The generated Go Dockerfile's documented runtime base (gcr.io/distroless/static-debian12): an
+# image name GMF mirrors and passes as BASE_IMAGE_RUNTIME; the Dockerfile has no default.
+gcr.io
+
 # Suffixes the static rules use to skip XML namespace hosts (engine/analysis/static_rules.py
 # _NAMESPACE_HOSTS): compared against namespace text, never connected to.
 w3.org

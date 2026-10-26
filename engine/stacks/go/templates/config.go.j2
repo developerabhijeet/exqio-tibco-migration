@@ -1,0 +1,207 @@
+// Package platform is what every generated service stands on: configuration, authentication,
+// the health endpoint, problem responses and the message buses.
+//
+// Configuration follows the runtime contract of every ExiQO stack: environment names such as
+// Auth__Mode, Messaging__Mode, ConnectionStrings__GMFFundingDB and Gmf__Dealerfunding__DbUrl (the
+// ASP.NET convention, __ separated) are read as AUTH_MODE, MESSAGING_MODE,
+// CONNECTION_STRINGS_GMF_FUNDING_DB and GMF_DEALERFUNDING_DB_URL; a name without __ is read as
+// it is (PORT, JOBS_ENABLED). When KeyVault__Uri is set, every Key Vault secret named with --
+// (Gmf--Dealerfunding--DbPassword) lands on the same key and wins over the environment, as Key
+// Vault does in the .NET services. ASPNETCORE_ENVIRONMENT=Development (what ExiQO's Verify sets)
+// selects the development defaults (settings.go).
+package platform
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
+)
+
+// Config is the service configuration: the environment (and Key Vault) over the generated defaults.
+type Config struct {
+	values      map[string]string
+	development bool
+}
+
+// Snake is the key of one name segment: GMFFundingDB is GMF_FUNDING_DB, DbUrl is DB_URL.
+func Snake(segment string) string {
+	words := Words(segment)
+	if len(words) == 0 {
+		return strings.ToUpper(segment)
+	}
+	return strings.ToUpper(strings.Join(words, "_"))
+}
+
+// Words are the words of an identifier: a run of capitals not followed by a lower-case letter
+// (GMF), a capital and the lower-case letters after it (Funding), or digits; anything else
+// separates words. ExiQO's generator splits names with the same rule.
+func Words(s string) []string {
+	var out []string
+	upper := func(c byte) bool { return c >= 'A' && c <= 'Z' }
+	lower := func(c byte) bool { return c >= 'a' && c <= 'z' }
+	digit := func(c byte) bool { return c >= '0' && c <= '9' }
+	run := func(i int, in func(byte) bool) int {
+		for i < len(s) && in(s[i]) {
+			i++
+		}
+		return i
+	}
+	for i := 0; i < len(s); {
+		switch {
+		case upper(s[i]):
+			j := run(i, upper)
+			if j < len(s) && lower(s[j]) {
+				if j-1 > i {
+					out = append(out, s[i:j-1])
+				}
+				k := run(j, lower)
+				out = append(out, s[j-1:k])
+				i = k
+			} else {
+				out = append(out, s[i:j])
+				i = j
+			}
+		case lower(s[i]):
+			j := run(i, lower)
+			out = append(out, s[i:j])
+			i = j
+		case digit(s[i]):
+			j := run(i, digit)
+			out = append(out, s[i:j])
+			i = j
+		default:
+			i++
+		}
+	}
+	return out
+}
+
+// Key is the configuration key of an environment or secret name: Cors__Origins__0 is
+// CORS_ORIGINS_0 (separator "__"), Gmf--Dealerfunding--DbUrl is GMF_DEALERFUNDING_DB_URL
+// (separator "--"); a name without the separator is itself.
+func Key(name, separator string) string {
+	if !strings.Contains(name, separator) {
+		return name
+	}
+	parts := strings.Split(name, separator)
+	for i, part := range parts {
+		if part == "" {
+			return name
+		}
+		parts[i] = Snake(part)
+	}
+	return strings.Join(parts, "_")
+}
+
+// NewConfig is the configuration of environ (KEY=value pairs, as os.Environ gives them) over the
+// generated defaults, without Key Vault.
+func NewConfig(environ []string) *Config {
+	env := map[string]string{}
+	for _, pair := range environ {
+		name, value, ok := strings.Cut(pair, "=")
+		if ok {
+			env[name] = value
+		}
+	}
+	development := strings.EqualFold(strings.TrimSpace(env["ASPNETCORE_ENVIRONMENT"]), "Development")
+	values := defaults()
+	if development {
+		for k, v := range developmentDefaults() {
+			values[k] = v
+		}
+	}
+	for name, value := range env {
+		values[Key(name, "__")] = value
+	}
+	return &Config{values: values, development: development}
+}
+
+// Load is the configuration of this process: its environment, then the Key Vault secrets when
+// KEY_VAULT_URI is set (read with DefaultAzureCredential, the workload's managed identity).
+func Load(ctx context.Context) (*Config, error) {
+	c := NewConfig(os.Environ())
+	if !c.Development() && c.Get("AUTH_MODE") == "Development" {
+		return nil, fmt.Errorf("auth mode Development (Auth__Mode) is allowed only with ASPNETCORE_ENVIRONMENT=Development")
+	}
+	vault := strings.TrimSpace(c.Get("KEY_VAULT_URI"))
+	if vault == "" {
+		return c, nil
+	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("key vault credential: %w", err)
+	}
+	client, err := azsecrets.NewClient(vault, credential, nil)
+	if err != nil {
+		return nil, fmt.Errorf("key vault %s: %w", vault, err)
+	}
+	pager := client.NewListSecretPropertiesPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing key vault secrets: %w", err)
+		}
+		for _, secret := range page.Value {
+			if secret.ID == nil || (secret.Attributes != nil && secret.Attributes.Enabled != nil && !*secret.Attributes.Enabled) {
+				continue
+			}
+			name := secret.ID.Name()
+			if !strings.Contains(name, "--") {
+				continue
+			}
+			value, err := client.GetSecret(ctx, name, "", nil)
+			if err != nil {
+				return nil, fmt.Errorf("reading key vault secret %s: %w", name, err)
+			}
+			if value.Value != nil {
+				c.values[Key(name, "--")] = *value.Value
+			}
+		}
+	}
+	return c, nil
+}
+
+// Development is true with ASPNETCORE_ENVIRONMENT=Development.
+func (c *Config) Development() bool {
+	return c.development
+}
+
+// Get is the value of a key ("" when it is not set).
+func (c *Config) Get(key string) string {
+	return c.values[key]
+}
+
+// Int is the value of a key as an integer, or fallback when it is not one.
+func (c *Config) Int(key string, fallback int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(c.Get(key)))
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+// Bool is the value of a key as a boolean, or fallback when it is not one.
+func (c *Config) Bool(key string, fallback bool) bool {
+	b, err := strconv.ParseBool(strings.TrimSpace(c.Get(key)))
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+// List is the values of PREFIX_0, PREFIX_1, ... up to the first one not set.
+func (c *Config) List(prefix string) []string {
+	var out []string
+	for i := 0; ; i++ {
+		v, ok := c.values[prefix+"_"+strconv.Itoa(i)]
+		if !ok {
+			return out
+		}
+		out = append(out, v)
+	}
+}

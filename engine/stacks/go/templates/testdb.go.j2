@@ -1,0 +1,156 @@
+package tests
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"{{ module }}/internal/infrastructure"
+)
+
+// testSchemas are the schemas the estate's SQL creates; dropped and recreated on every reset.
+var testSchemas = []string{ {%- for s in schemas %}{{ s | go_string }}{{ ", " if not loop.last else "" }}{% endfor -%} }
+
+// testSQLFiles are the estate's SQL files (tests/database), run in this order on every reset.
+var testSQLFiles = []string{ {%- for f in sql_files %}{{ f | go_string }}{{ ", " if not loop.last else "" }}{% endfor -%} }
+
+// connectionKeys are the connection-string keys the generated service reads; all point at the
+// test database.
+var connectionKeys = []string{ {%- for c in connections %}{{ c | go_string }}{{ ", " if not loop.last else "" }}{% endfor -%} }
+
+// testDatabase is the PostgreSQL database at TEST_DATABASE_URL (for example
+// postgresql://exiqo:exiqo@localhost:5432/exiqo_test) with the estate's own SQL. A test that
+// needs it is skipped when TEST_DATABASE_URL is not set. Every scenario resets the schemas, so
+// scenarios do not see each other's writes; a database whose name does not end with _test is
+// never reset.
+type testDatabase struct {
+	db *sql.DB
+}
+
+// openTestDatabase is the test database; the test is skipped when TEST_DATABASE_URL is not set.
+func openTestDatabase(t *testing.T) *testDatabase {
+	t.Helper()
+	url := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", infrastructure.DSN(url))
+	if err != nil {
+		t.Fatalf("opening the test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return &testDatabase{db: db}
+}
+
+// reset recreates the schemas, runs the estate SQL, then inserts the scenario's seed rows.
+func (d *testDatabase) reset(t *testing.T, fx *fixture) {
+	t.Helper()
+	ctx := context.Background()
+	var name string
+	if err := d.db.QueryRowContext(ctx, "select current_database()").Scan(&name); err != nil {
+		t.Fatalf("reading the test database name: %v", err)
+	}
+	if !strings.HasSuffix(name, "_test") {
+		t.Fatalf("refusing to reset database %q: the name must end with _test", name)
+	}
+	for _, schema := range testSchemas {
+		statement := fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE; CREATE SCHEMA %s;", quote(schema), quote(schema))
+		if _, err := d.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("resetting schema %s: %v", schema, err)
+		}
+	}
+	for _, file := range testSQLFiles {
+		text, err := os.ReadFile(filepath.Join("database", file))
+		if err != nil {
+			t.Fatalf("reading %s: %v", file, err)
+		}
+		if _, err := d.db.ExecContext(ctx, string(text)); err != nil {
+			t.Fatalf("running %s: %v", file, err)
+		}
+	}
+	if fx == nil {
+		return
+	}
+	for _, seed := range fx.seedRows() {
+		if _, err := d.db.ExecContext(ctx, insert(seed.table, seed.row)); err != nil {
+			t.Fatalf("seeding %s: %v", seed.table, err)
+		}
+	}
+}
+
+// query is every row of a table (schema-qualified, or in the first schema), lower-case column name
+// to value.
+func (d *testDatabase) query(t *testing.T, table string) []map[string]any {
+	t.Helper()
+	rows, err := d.db.QueryContext(context.Background(), "SELECT * FROM "+quoteTable(table))
+	if err != nil {
+		t.Fatalf("reading %s: %v", table, err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("reading %s: %v", table, err)
+	}
+	var out []map[string]any
+	for rows.Next() {
+		cells := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range cells {
+			targets[i] = &cells[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			t.Fatalf("reading %s: %v", table, err)
+		}
+		row := map[string]any{}
+		for i, c := range columns {
+			row[strings.ToLower(c)] = cells[i]
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading %s: %v", table, err)
+	}
+	return out
+}
+
+// insert is an INSERT of the seed row with its values as SQL literals: PostgreSQL reads an
+// untyped literal as the column's type.
+func insert(table string, row map[string]*string) string {
+	columns := make([]string, 0, len(row))
+	for c := range row {
+		columns = append(columns, c)
+	}
+	sort.Strings(columns)
+	quoted := make([]string, len(columns))
+	values := make([]string, len(columns))
+	for i, c := range columns {
+		quoted[i] = quote(c)
+		if v := row[c]; v == nil {
+			values[i] = "NULL"
+		} else {
+			values[i] = "'" + strings.ReplaceAll(*v, "'", "''") + "'"
+		}
+	}
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", quoteTable(table), strings.Join(quoted, ", "),
+		strings.Join(values, ", "))
+}
+
+func quoteTable(table string) string {
+	parts := strings.Split(table, ".")
+	if len(parts) == 1 && len(testSchemas) > 0 {
+		return quote(testSchemas[0]) + "." + quote(parts[0])
+	}
+	for i, p := range parts {
+		parts[i] = quote(p)
+	}
+	return strings.Join(parts, ".")
+}
+
+func quote(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}

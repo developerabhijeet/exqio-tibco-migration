@@ -58,8 +58,8 @@ def test_dotnet_layout_derives_from_solution_layout():
 
 
 def test_get_stack_names_a_known_stack_that_is_not_implemented():
-    with pytest.raises(KeyError, match="stack 'go' is not implemented yet"):
-        get_stack("go")
+    with pytest.raises(KeyError, match="stack 'python' is not implemented yet"):
+        get_stack("python")
 
 
 _RUNNER_METHODS = ("restore", "build", "format_write", "format_check", "test", "run_service", "env")

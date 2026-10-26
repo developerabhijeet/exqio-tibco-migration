@@ -1,0 +1,38 @@
+package platform
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// DevToken issues development JWTs (POST /auth/dev-token, development auth only): HMAC-SHA256
+// signed with AUTH_DEV_TOKEN_SIGNING_KEY. Production validates Microsoft Entra ID tokens (Auth).
+func DevToken(a *Auth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Subject string `json:"subject"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&request)
+		}
+		subject := strings.TrimSpace(request.Subject)
+		if subject == "" {
+			subject = "exiqo-verifier"
+		}
+		now := time.Now().UTC()
+		expires := now.Add(8 * time.Hour)
+		claims := jwt.MapClaims{"iss": a.issuer, "aud": []string{a.audience}, "sub": subject, "name": subject,
+			"iat": now.Unix(), "exp": expires.Unix()}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(a.key)
+		if err != nil {
+			WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", "the development token could not be signed")
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"access_token": token, "token_type": "Bearer",
+			"expires_at": expires.Format(time.RFC3339)})
+	}
+}

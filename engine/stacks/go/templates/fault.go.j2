@@ -1,0 +1,60 @@
+package tib
+
+import "errors"
+
+// Faulted is a TIBCO fault: its name and its data (the fault element as JSON). Every throw
+// activity has an error type that embeds *Fault; an uncaught one answers
+// application/problem+json with the fault name as title and the masked data as "fault", and a
+// JMS consumer dead-letters the message with the fault name as reason.
+type Faulted interface {
+	error
+	FaultName() string
+	FaultData() Value
+}
+
+// Fault is the data every fault type carries.
+type Fault struct {
+	name string
+	data Value
+}
+
+// NewFault is the fault name with its data; nil data is an empty object.
+func NewFault(name string, data Value) *Fault {
+	if Absent(data) {
+		data = Object()
+	}
+	return &Fault{name: name, data: data}
+}
+
+// Error is the fault name, with the fault data's message when it has one.
+func (f *Fault) Error() string {
+	if text := Text(Path(f.data, "message")); text != "" {
+		return f.name + ": " + text
+	}
+	return f.name
+}
+
+// FaultName is the TIBCO fault name.
+func (f *Fault) FaultName() string {
+	return f.name
+}
+
+// FaultData is the fault element as JSON.
+func (f *Fault) FaultData() Value {
+	return f.data
+}
+
+// AsFault is the TIBCO fault err is or wraps.
+func AsFault(err error) (Faulted, bool) {
+	var fault Faulted
+	if errors.As(err, &fault) {
+		return fault, true
+	}
+	return nil, false
+}
+
+// FaultNamed is true when err is the TIBCO fault name (a catch of that fault handles it).
+func FaultNamed(err error, name string) bool {
+	fault, ok := AsFault(err)
+	return ok && fault.FaultName() == name
+}

@@ -1,0 +1,36 @@
+package core
+
+import (
+	"context"
+	"time"
+
+	"{{ module }}/internal/platform"
+	"{{ module }}/internal/tib"
+)
+
+// MessageBus is the messaging port of the JMS steps (TIBCO JMS Send, Publish, Request Reply and
+// Reply): the bus behind it is Azure Service Bus in production and the in-memory bus in
+// development and tests (platform.NewBus). Entities are the TIBCO queue and topic names, verbatim.
+type MessageBus struct {
+	bus platform.Bus
+}
+
+// NewMessageBus is the port over bus.
+func NewMessageBus(bus platform.Bus) *MessageBus {
+	return &MessageBus{bus: bus}
+}
+
+// Publish sends message to a queue or topic (JMS Send or Publish).
+func (s *MessageBus) Publish(ctx context.Context, entity string, message tib.Value) error {
+	return s.bus.Publish(ctx, entity, message, nil)
+}
+
+// Request sends message with a reply-to entity and waits for the correlated reply (JMS Request Reply).
+func (s *MessageBus) Request(ctx context.Context, entity string, message tib.Value, timeout time.Duration) (*tib.Message, error) {
+	return s.bus.Request(ctx, entity, message, timeout)
+}
+
+// Reply answers the message that started the run on its reply-to entity (JMS Reply).
+func (s *MessageBus) Reply(ctx context.Context, request *tib.Message, message tib.Value) error {
+	return s.bus.Reply(ctx, request, message)
+}

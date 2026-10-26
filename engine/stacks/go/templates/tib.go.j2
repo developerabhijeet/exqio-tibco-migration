@@ -1,0 +1,603 @@
+// Package tib holds TIBCO values as JSON and the XPath semantics the generated services read
+// them with.
+//
+// Every process variable ($LookupDealer, $ReceiveFundingRequest) is a JSON tree: nil (null), bool,
+// string, json.Number, []any, map[string]any, or Missing. A path step selects a child by its local
+// name (an exact match first, then ignoring case), an index is 1-based, a step over a list reads
+// its first item, and an absent value is Missing, never nil. Values convert like XSLT value-of:
+// the string value first, then the number or boolean a comparison needs.
+package tib
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/big"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// numeric is the text XPath number() reads as a number (decimal notation, an optional exponent).
+var numeric = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+
+// Value is a TIBCO value as JSON.
+type Value = any
+
+type missing struct{}
+
+// Missing is what a path selects when nothing is there (XPath: the empty node-set).
+var Missing Value = missing{}
+
+// Object is a new JSON object.
+func Object() map[string]any {
+	return map[string]any{}
+}
+
+// Num is a JSON number from its decimal text (a literal of the TIBCO expression).
+func Num(text string) Value {
+	return json.Number(text)
+}
+
+// Absent is true when the path selected nothing (XPath: an empty node-set) or the value is null.
+func Absent(v Value) bool {
+	if v == nil {
+		return true
+	}
+	_, ok := v.(missing)
+	return ok
+}
+
+// Of is a Go value (a database column, a literal, a collection) as a JSON value.
+func Of(v any) Value {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case missing, string, bool, json.Number:
+		return x
+	case int:
+		return json.Number(strconv.FormatInt(int64(x), 10))
+	case int8:
+		return json.Number(strconv.FormatInt(int64(x), 10))
+	case int16:
+		return json.Number(strconv.FormatInt(int64(x), 10))
+	case int32:
+		return json.Number(strconv.FormatInt(int64(x), 10))
+	case int64:
+		return json.Number(strconv.FormatInt(x, 10))
+	case uint:
+		return json.Number(strconv.FormatUint(uint64(x), 10))
+	case uint8:
+		return json.Number(strconv.FormatUint(uint64(x), 10))
+	case uint16:
+		return json.Number(strconv.FormatUint(uint64(x), 10))
+	case uint32:
+		return json.Number(strconv.FormatUint(uint64(x), 10))
+	case uint64:
+		return json.Number(strconv.FormatUint(x, 10))
+	case float32:
+		return float(float64(x))
+	case float64:
+		return float(x)
+	case *big.Rat:
+		if x == nil {
+			return nil
+		}
+		return json.Number(decimal(x))
+	case time.Time:
+		return DateTime(x)
+	case []byte:
+		return base64.StdEncoding.EncodeToString(x)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, item := range x {
+			out[k] = Of(item)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]any, len(x))
+		for k, item := range x {
+			out[k] = item
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = Of(item)
+		}
+		return out
+	case fmt.Stringer:
+		return x.String()
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	parsed, err := Parse(string(data))
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return parsed
+}
+
+func float(f float64) Value {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil
+	}
+	return json.Number(strconv.FormatFloat(f, 'f', -1, 64))
+}
+
+// DateTime is XSD dateTime text: ISO-8601 with the offset.
+func DateTime(t time.Time) string {
+	return t.Format(time.RFC3339Nano)
+}
+
+// Path is the value a TIBCO path selects: a string step is a local name, an int a 1-based index.
+func Path(root Value, steps ...any) Value {
+	current := root
+	if current == nil {
+		current = Missing
+	}
+	for _, step := range steps {
+		if index, ok := step.(int); ok {
+			current = indexOf(current, index)
+		} else {
+			current = child(current, fmt.Sprint(step))
+		}
+		if _, gone := current.(missing); gone {
+			return current
+		}
+	}
+	return current
+}
+
+func child(v Value, name string) Value {
+	item := v
+	if list, ok := v.([]any); ok {
+		if len(list) == 0 {
+			return Missing
+		}
+		item = list[0]
+	}
+	obj, ok := item.(map[string]any)
+	if !ok {
+		return Missing
+	}
+	if exact, ok := obj[name]; ok {
+		return exact
+	}
+	for _, k := range sortedKeys(obj) {
+		if strings.EqualFold(k, name) {
+			return obj[k]
+		}
+	}
+	return Missing
+}
+
+func indexOf(v Value, index int) Value {
+	if list, ok := v.([]any); ok {
+		if index >= 1 && index <= len(list) {
+			return list[index-1]
+		}
+		return Missing
+	}
+	if index == 1 && !Absent(v) {
+		return v
+	}
+	return Missing
+}
+
+func sortedKeys(obj map[string]any) []string {
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Text is the XPath string value: "" for nothing, numbers without trailing zeros.
+func Text(v Value) string {
+	switch x := v.(type) {
+	case nil, missing:
+		return ""
+	case string:
+		return x
+	case json.Number:
+		if r, ok := new(big.Rat).SetString(string(x)); ok {
+			return decimal(r)
+		}
+		return string(x)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case []any:
+		if len(x) == 0 {
+			return ""
+		}
+		return Text(x[0])
+	case map[string]any:
+		var out strings.Builder
+		for _, k := range sortedKeys(x) {
+			out.WriteString(Text(x[k]))
+		}
+		return out.String()
+	}
+	return fmt.Sprint(v)
+}
+
+// decimal is a number in plain notation without trailing zeros (100.50 is 100.5, 1E+2 is 100).
+func decimal(r *big.Rat) string {
+	if r.IsInt() {
+		return r.Num().String()
+	}
+	text := r.FloatString(40)
+	text = strings.TrimRight(text, "0")
+	return strings.TrimSuffix(text, ".")
+}
+
+// Number is the XPath number value; false where XPath has NaN.
+func Number(v Value) (*big.Rat, bool) {
+	switch x := v.(type) {
+	case nil, missing:
+		return nil, false
+	case json.Number:
+		return new(big.Rat).SetString(string(x))
+	case bool:
+		if x {
+			return big.NewRat(1, 1), true
+		}
+		return new(big.Rat), true
+	case []any:
+		if len(x) == 0 {
+			return nil, false
+		}
+		return Number(x[0])
+	}
+	text := strings.TrimSpace(Text(v))
+	if !numeric.MatchString(text) {
+		return nil, false
+	}
+	return new(big.Rat).SetString(text)
+}
+
+// Bool is the XPath boolean value.
+func Bool(v Value) bool {
+	switch x := v.(type) {
+	case nil, missing:
+		return false
+	case bool:
+		return x
+	case json.Number:
+		r, ok := Number(x)
+		return ok && r.Sign() != 0
+	case string:
+		return x != ""
+	case []any:
+		return len(x) > 0
+	}
+	return true
+}
+
+// Count is count(): how many values the path selected.
+func Count(v Value) int {
+	if Absent(v) {
+		return 0
+	}
+	if list, ok := v.([]any); ok {
+		return len(list)
+	}
+	return 1
+}
+
+// Integer is the number as an int (a loop counter's start or end), or fallback when it is not one.
+func Integer(v Value, fallback int) int {
+	r, ok := Number(v)
+	if !ok {
+		return fallback
+	}
+	n := new(big.Int).Quo(r.Num(), r.Denom())
+	return int(n.Int64())
+}
+
+// Items are the values an iterate group walks: a list's elements, one value, or nothing.
+func Items(v Value) []Value {
+	if Absent(v) {
+		return nil
+	}
+	if list, ok := v.([]any); ok {
+		return list
+	}
+	return []Value{v}
+}
+
+// Compare is an XPath general comparison ("==" for "="): false when either side selected nothing;
+// true when any item of a list side compares true; numbers compare by value, booleans as
+// booleans, anything else by string value. Order operators always compare numbers.
+func Compare(left Value, op string, right Value) bool {
+	if Absent(left) || Absent(right) {
+		return false
+	}
+	if list, ok := left.([]any); ok {
+		for _, item := range list {
+			if Compare(item, op, right) {
+				return true
+			}
+		}
+		return false
+	}
+	if list, ok := right.([]any); ok {
+		for _, item := range list {
+			if Compare(left, op, item) {
+				return true
+			}
+		}
+		return false
+	}
+	equality := op == "==" || op == "!="
+	_, lb := left.(bool)
+	_, rb := right.(bool)
+	if equality && (lb || rb) {
+		return (Bool(left) == Bool(right)) == (op == "==")
+	}
+	_, ln := left.(json.Number)
+	_, rn := right.(json.Number)
+	if equality && !ln && !rn {
+		return (Text(left) == Text(right)) == (op == "==")
+	}
+	a, aok := Number(left)
+	b, bok := Number(right)
+	if !aok || !bok {
+		return op == "!="
+	}
+	c := a.Cmp(b)
+	switch op {
+	case "==":
+		return c == 0
+	case "!=":
+		return c != 0
+	case "<":
+		return c < 0
+	case "<=":
+		return c <= 0
+	case ">":
+		return c > 0
+	case ">=":
+		return c >= 0
+	}
+	panic("unknown comparison " + op)
+}
+
+// Put sets value at the element path segments under target, creating the parents.
+func Put(target map[string]any, value Value, segments ...string) map[string]any {
+	current := target
+	for _, segment := range segments[:len(segments)-1] {
+		next, ok := current[segment].(map[string]any)
+		if !ok {
+			next = Object()
+			current[segment] = next
+		}
+		current = next
+	}
+	if Absent(value) {
+		value = nil
+	}
+	current[segments[len(segments)-1]] = value
+	return target
+}
+
+// JDBC is a database parameter from a mapped value, typed like the TIBCO parameter declaration:
+// string, int, long, decimal, double, bool, datetime, date or time; nil when nothing was mapped.
+func JDBC(v Value, typ string) any {
+	if Absent(v) {
+		return nil
+	}
+	switch typ {
+	case "int", "long":
+		r, ok := Number(v)
+		if !ok {
+			return nil
+		}
+		return new(big.Int).Quo(r.Num(), r.Denom()).Int64()
+	case "decimal":
+		r, ok := Number(v)
+		if !ok {
+			return nil
+		}
+		return decimal(r)
+	case "double":
+		r, ok := Number(v)
+		if !ok {
+			return nil
+		}
+		f, _ := r.Float64()
+		return f
+	case "bool":
+		return Bool(v)
+	case "datetime":
+		text := Text(v)
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"} {
+			if t, err := time.Parse(layout, text); err == nil {
+				return t
+			}
+		}
+		return text
+	case "date":
+		text := Text(v)
+		if len(text) > 10 {
+			text = text[:10]
+		}
+		return text
+	}
+	return Text(v)
+}
+
+// Records is the output of a JDBC query activity: {"Record": [{column: value}]}, at most maxRows
+// rows when maxRows is positive (TIBCO maxRows).
+func Records(rows *sql.Rows, maxRows int) (Value, error) {
+	defer rows.Close()
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, err
+	}
+	columns := make([]string, len(types))
+	for i, t := range types {
+		columns[i] = t.Name()
+	}
+	records := []any{}
+	for rows.Next() {
+		if maxRows > 0 && len(records) >= maxRows {
+			break
+		}
+		cells := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range cells {
+			targets[i] = &cells[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, err
+		}
+		record := Object()
+		for i, name := range columns {
+			record[name] = column(cells[i], types[i].DatabaseTypeName())
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return map[string]any{"Record": records}, nil
+}
+
+// column is a database value as JSON: numerics as numbers, dates as XSD date text, timestamps
+// as XSD dateTime text.
+func column(v any, databaseType string) Value {
+	switch x := v.(type) {
+	case string:
+		if databaseType == "NUMERIC" || databaseType == "DECIMAL" {
+			if numeric.MatchString(x) {
+				return json.Number(x)
+			}
+		}
+	case time.Time:
+		if databaseType == "DATE" {
+			return x.Format("2006-01-02")
+		}
+	}
+	return Of(v)
+}
+
+// Updated is the output of a JDBC update activity: {"noOfUpdates": n}.
+func Updated(result sql.Result) (Value, error) {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"noOfUpdates": Of(n)}, nil
+}
+
+// JSON is the JSON text of a value; null fields are left out (message bodies).
+func JSON(v Value) string {
+	return encode(WithoutNulls(v))
+}
+
+// Raw is the JSON text of a value with its null fields (reply bodies); Missing is null.
+func Raw(v Value) string {
+	return encode(present(v))
+}
+
+func encode(v Value) string {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		panic(fmt.Sprintf("value cannot be written as JSON: %v", err))
+	}
+	return strings.TrimSuffix(out.String(), "\n")
+}
+
+// present is a deep copy with Missing as null.
+func present(v Value) Value {
+	switch x := v.(type) {
+	case missing:
+		return nil
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, item := range x {
+			out[k] = present(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = present(item)
+		}
+		return out
+	}
+	return v
+}
+
+// Parse reads JSON text (a request or message body); an empty text is Missing.
+func Parse(text string) (Value, error) {
+	if strings.TrimSpace(text) == "" {
+		return Missing, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	var out any
+	if err := decoder.Decode(&out); err != nil {
+		return nil, fmt.Errorf("not JSON: %w", err)
+	}
+	if decoder.More() {
+		return nil, fmt.Errorf("not JSON: text after the value")
+	}
+	return out, nil
+}
+
+// WithoutNulls is a deep copy without null fields (Missing is null).
+func WithoutNulls(v Value) Value {
+	switch x := v.(type) {
+	case missing:
+		return nil
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, item := range x {
+			if !Absent(item) {
+				out[k] = WithoutNulls(item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = WithoutNulls(item)
+		}
+		return out
+	}
+	return v
+}
+
+// Invalid is why body does not read as the contract record target points at (a field of the
+// wrong type, a malformed value), or "" when it does; an absent body is not checked. The process
+// still runs on the JSON tree.
+func Invalid(body Value, target any) string {
+	if Absent(body) {
+		return ""
+	}
+	if err := json.Unmarshal([]byte(JSON(body)), target); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// Problem is an application/problem+json body.
+func Problem(status int, title, detail string) map[string]any {
+	return map[string]any{"type": "about:blank", "title": title, "status": status, "detail": detail}
+}

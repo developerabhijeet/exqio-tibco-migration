@@ -1,0 +1,69 @@
+// Package api holds the HTTP starters of the TIBCO processes, the runtime contract's routes and
+// the wiring of the service.
+package api
+
+import (
+	"context"
+	"net/http"
+
+	"{{ module }}/internal/core"
+	"{{ module }}/internal/infrastructure"
+	"{{ module }}/internal/platform"
+)
+
+// topics are the bus entities the design names as topics; every other entity is a queue.
+var topics = []string{ {%- for t in topics %}{{ t | go_string }}{{ ", " if not loop.last else "" }}{% endfor -%} }
+
+// Deps is everything the routes, the consumers and the jobs run on.
+type Deps struct {
+	Config   *platform.Config
+	Auth     *platform.Auth
+	Bus      platform.Bus
+	Memory   *platform.MemoryBus
+	DB       *infrastructure.DataSources
+	Services *core.Services
+}
+
+// NewDeps wires the service from its configuration: the token validation, the bus, the data
+// sources and the process services.
+func NewDeps(config *platform.Config) (*Deps, error) {
+	auth, err := platform.NewAuth(config)
+	if err != nil {
+		return nil, err
+	}
+	bus, memory, err := platform.NewBus(config, topics)
+	if err != nil {
+		return nil, err
+	}
+	db := infrastructure.NewDataSources(config)
+	return &Deps{Config: config, Auth: auth, Bus: bus, Memory: memory, DB: db,
+		Services: core.NewServices(config, db, bus)}, nil
+}
+
+// Close releases the bus and the data sources.
+func (d *Deps) Close() {
+	_ = d.Bus.Close(context.Background())
+	d.DB.Close()
+}
+
+// NewRouter is the service's HTTP surface: GET /health (anonymous), POST /auth/dev-token
+// (development auth only), the in-memory bus endpoints (development, in-memory bus only), and the
+// starter routes of the TIBCO processes; everything but the health check and the development
+// token needs a bearer token.
+func NewRouter(deps *Deps) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", platform.Health)
+	if deps.Auth.Development() {
+		mux.Handle("POST /auth/dev-token", platform.DevToken(deps.Auth))
+	}
+	if deps.Memory != nil && deps.Config.Development() {
+		platform.RegisterBusRoutes(mux, deps.Memory, deps.Auth.Require)
+	}
+{% for h in handlers %}
+	{{ h.var }} := &{{ h.type }}{service: deps.Services.{{ h.field }}}
+{% for r in h.routes %}
+	mux.Handle({{ r.pattern | go_string }}, deps.Auth.Require(http.HandlerFunc({{ h.var }}.{{ r.method }})))
+{% endfor %}
+{% endfor %}
+	return platform.Recover(platform.CORS(deps.Config, mux))
+}

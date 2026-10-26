@@ -1,0 +1,137 @@
+package infrastructure
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // the "pgx" database/sql driver
+
+	"{{ module }}/internal/platform"
+	"{{ module }}/internal/tib"
+)
+
+// DataSources holds one connection pool per TIBCO JDBC resource, from its connection string
+// (CONNECTION_STRINGS_<RESOURCE>, ConnectionStrings__<Resource> in the environment). The string
+// is the runtime contract's Npgsql form (Host=..;Port=..;Database=..;Username=..;Password=..), a
+// jdbc:postgresql: URL, or a postgresql:// URL.
+type DataSources struct {
+	config *platform.Config
+	mu     sync.Mutex
+	pools  map[string]*sql.DB
+}
+
+// NewDataSources reads the connection strings from config when a pool is first needed.
+func NewDataSources(config *platform.Config) *DataSources {
+	return &DataSources{config: config, pools: map[string]*sql.DB{}}
+}
+
+// DB is the pool of a resource: key is its connection-string key, name its contract name.
+func (d *DataSources) DB(name, key string) (*sql.DB, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if db, ok := d.pools[name]; ok {
+		return db, nil
+	}
+	value := strings.TrimSpace(d.config.Get(key))
+	if value == "" {
+		return nil, fmt.Errorf("connection string ConnectionStrings__%s (%s) is not set", name, key)
+	}
+	db, err := sql.Open("pgx", DSN(value))
+	if err != nil {
+		return nil, fmt.Errorf("connection string ConnectionStrings__%s: %w", name, err)
+	}
+	db.SetMaxOpenConns(10)
+	d.pools[name] = db
+	return db, nil
+}
+
+// Query runs a TIBCO JDBC query activity: its SQL verbatim with the parameters bound in order,
+// the activity's timeout (seconds) and maxRows; 0 means none.
+func (d *DataSources) Query(ctx context.Context, name, key string, timeout, maxRows int, query string, args ...any) (tib.Value, error) {
+	db, err := d.DB(name, key)
+	if err != nil {
+		return nil, err
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return tib.Records(rows, maxRows)
+}
+
+// Exec runs a TIBCO JDBC update activity: its SQL verbatim with the parameters bound in order.
+func (d *DataSources) Exec(ctx context.Context, name, key string, timeout int, statement string, args ...any) (tib.Value, error) {
+	db, err := d.DB(name, key)
+	if err != nil {
+		return nil, err
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+	}
+	result, err := db.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	return tib.Updated(result)
+}
+
+// Close closes every pool.
+func (d *DataSources) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, db := range d.pools {
+		_ = db.Close()
+	}
+	d.pools = map[string]*sql.DB{}
+}
+
+// DSN is a connection string in a form pgx reads: a postgres URL as it is, a jdbc: URL without
+// its prefix, the Npgsql key=value form as a URL.
+func DSN(value string) string {
+	if strings.HasPrefix(value, "jdbc:") {
+		return strings.TrimPrefix(value, "jdbc:")
+	}
+	if strings.HasPrefix(value, "postgresql://") || strings.HasPrefix(value, "postgres://") {
+		return value
+	}
+	parts := map[string]string{}
+	for _, pair := range strings.Split(value, ";") {
+		k, v, ok := strings.Cut(pair, "=")
+		if ok {
+			parts[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v)
+		}
+	}
+	host := first(parts["host"], parts["server"], "localhost")
+	port := first(parts["port"], "5432")
+	u := url.URL{Scheme: "postgres", Host: host + ":" + port, Path: "/" + parts["database"]}
+	user := first(parts["username"], parts["user id"], parts["user"])
+	if user != "" {
+		if password, ok := parts["password"]; ok {
+			u.User = url.UserPassword(user, password)
+		} else {
+			u.User = url.User(user)
+		}
+	}
+	return u.String()
+}
+
+func first(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
