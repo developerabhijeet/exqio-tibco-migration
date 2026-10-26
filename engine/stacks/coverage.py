@@ -3,10 +3,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from engine.dotnet_gen.coverage import in_scope, merge_cobertura
+from engine.dotnet_gen.coverage import in_scope
 from engine.stacks.xmlsafe import MAX_REPORT_BYTES, parse_xml
 
-__all__ = ["merge_cobertura", "parse_go_cover", "parse_jacoco"]
+__all__ = ["parse_cobertura_xml", "parse_go_cover", "parse_jacoco"]
+
+
+def parse_cobertura_xml(paths: list[Path], scope: set[str] | None = None) -> float | None:
+    """coverage.py / Cobertura line coverage over several reports, parsed with the safe XML loader."""
+    want = {s.replace("\\", "/").lstrip("./") for s in scope} if scope else None
+    covered = valid = 0
+    seen = False
+    for p in paths:
+        for cls in parse_xml(p).iter("class"):
+            if want is not None and not in_scope(cls.get("filename") or "", want):
+                continue
+            seen = True
+            for line in cls.iter("line"):
+                valid += 1
+                covered += (line.get("hits") or "0") != "0"
+    if not seen:
+        return None
+    return covered / valid if valid else 0.0
 
 
 def parse_jacoco(path: Path, scope: set[str] | None = None) -> float | None:

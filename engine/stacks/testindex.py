@@ -6,6 +6,8 @@ test name, giving the same neutral ``trx.TestCase`` the .NET path produces.
 from __future__ import annotations
 
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 from engine.dotnet_gen.generator import GenFile
 from engine.dotnet_gen.trx import TestCase
 
+log = logging.getLogger(__name__)
 INDEX_PATH = ".exiqo/test-index.json"
 
 
@@ -44,19 +47,27 @@ def read_index(root: Path) -> list[IndexEntry]:
     return read_index_file(p) if p.is_file() else []
 
 
+_PARAMS = re.compile(r"\[[^\]]*\]$")
+
+
 def _lookup(index: list[IndexEntry]):
-    exact = {e.name: e for e in index}
+    exact: dict[str, IndexEntry] = {}
+    for e in index:
+        if e.name in exact:
+            log.warning("duplicate test index name %s; first entry wins", e.name)
+            continue
+        exact[e.name] = e
 
     def find(name: str) -> IndexEntry | None:
+        name = _PARAMS.sub("", name)  # pytest parametrize / JUnit display suffix
         if name in exact:
             return exact[name]
-        # tools report a different package/class prefix than the index (go package path, pytest module)
-        tail = [e for e in index if name.endswith("." + e.name) or e.name.endswith("." + name)]
-        if len(tail) == 1:
-            return tail[0]
-        short = name.rsplit(".", 1)[-1]
-        same = [e for e in index if e.name.rsplit(".", 1)[-1] == short]
-        return same[0] if len(same) == 1 else None
+        # the tool may add or drop a package prefix; accept it only on a dotted boundary and
+        # only when the shared tail still names the class as well as the method
+        hits = [e for e in exact.values()
+                if (name.endswith("." + e.name) and e.name.count(".") >= 1)
+                or (e.name.endswith("." + name) and name.count(".") >= 1)]
+        return hits[0] if len(hits) == 1 else None
 
     return find
 
@@ -67,7 +78,7 @@ def join(cases: list[tuple[str, str, float, str]], index: list[IndexEntry]) -> l
     for name, outcome, duration_ms, message in cases:
         e = find(name)
         out.append(TestCase(
-            name=name,
+            name=e.name if e else name,  # the index name, so results merge with the inventory
             display_name=(e.display_name if e and e.display_name else name),
             outcome=outcome,  # type: ignore[arg-type]
             message=message,

@@ -8,6 +8,17 @@ from engine.dotnet_gen.trx import Outcome
 from engine.stacks.xmlsafe import MAX_REPORT_BYTES, parse_xml
 
 Case = tuple[str, Outcome, float, str]
+_RANK = {"passed": 0, "skipped": 1, "failed": 2}
+
+
+def _dedupe(cases: list[Case]) -> list[Case]:
+    """One case per name, keeping the worst outcome (a retried or repeated test is not green)."""
+    best: dict[str, Case] = {}
+    for c in cases:
+        cur = best.get(c[0])
+        if cur is None or _RANK[c[1]] > _RANK[cur[1]]:
+            best[c[0]] = c
+    return list(best.values())
 
 
 def parse_junit(paths: list[Path]) -> list[Case]:
@@ -34,7 +45,7 @@ def parse_junit(paths: list[Path]) -> list[Case]:
             except ValueError:
                 ms = 0.0
             out.append((full, outcome, ms, message))
-    return out
+    return _dedupe(out)
 
 
 def parse_test2json(path: Path) -> list[Case]:
@@ -50,8 +61,10 @@ def parse_test2json(path: Path) -> list[Case]:
                 ev = json.loads(line)
             except ValueError:
                 continue  # build output interleaved with the JSON stream
+            if not isinstance(ev, dict):
+                continue
             test = ev.get("Test")
-            if not isinstance(ev, dict) or not test or "/" in test:
+            if not isinstance(test, str) or not test or "/" in test:
                 continue
             key = f"{ev.get('Package', '')}.{test}"
             action = ev.get("Action")
@@ -60,5 +73,6 @@ def parse_test2json(path: Path) -> list[Case]:
             elif action in ("pass", "fail", "skip"):
                 outcome: Outcome = {"pass": "passed", "fail": "failed", "skip": "skipped"}[action]
                 msg = "" if outcome == "passed" else "".join(output.get(key, [])).strip()
+                output.pop(key, None)
                 out.append((key, outcome, round(float(ev.get("Elapsed") or 0) * 1000.0, 6), msg))
-    return out
+    return _dedupe(out)
