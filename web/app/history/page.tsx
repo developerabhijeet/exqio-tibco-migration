@@ -8,6 +8,7 @@ import { Panel } from "@/components/tabs/build/Panel";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { BandPill, Pill } from "@/components/ui/Pill";
 import { useHistory } from "@/lib/buildQueries";
+import { chartColors, useThemed } from "@/lib/theme";
 import { useAppState } from "@/lib/state";
 import type { TimelineEntry, Totals } from "@/lib/buildTypes";
 
@@ -26,8 +27,8 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
   return (
     <div className="card px-5 py-4">
       <p className="label">{label}</p>
-      <p className="mt-1 text-[26px] font-semibold text-plum">{value}</p>
-      {sub ? <p className="text-[12.5px] text-slate">{sub}</p> : null}
+      <p className="mt-1 text-3xl font-semibold text-heading">{value}</p>
+      {sub ? <p className="text-sm text-slate">{sub}</p> : null}
     </div>
   );
 }
@@ -42,7 +43,7 @@ function ErrorText({ text }: { text: string }) {
         {open ? text : oneLine}
       </span>
       {oneLine.length > 90 || text.includes("\n") ? (
-        <button type="button" className="shrink-0 text-[12px] font-medium text-purple hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button type="button" className="shrink-0 text-xs font-medium text-accent-ink hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? "hide" : "show"}
         </button>
       ) : null}
@@ -89,6 +90,8 @@ export default function Page() {
   const [phase, setPhase] = useState<string>("all");
   const [measure, setMeasure] = useState<Measure>("tokens");
   const h = history.data;
+  // Null until mounted: the chart is drawn once the theme's colours are known.
+  const colors = useThemed(chartColors);
 
   const timeline = useMemo(
     () =>
@@ -125,7 +128,7 @@ export default function Page() {
               actions={
                 <select
                   aria-label="Measure"
-                  className="select py-1 text-[13px]"
+                  className="select py-1 text-sm"
                   value={measure}
                   onChange={(e) => setMeasure(e.target.value as Measure)}
                 >
@@ -138,23 +141,25 @@ export default function Page() {
               }
             >
               <div className="h-[240px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={bars} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
-                    <CartesianGrid vertical={false} stroke="#E2DFD6" />
-                    <XAxis dataKey="phase" tick={{ fontSize: 12, fill: "#425466" }} axisLine={{ stroke: "#E2DFD6" }} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: "#425466" }} axisLine={false} tickLine={false} width={64} tickFormatter={(n: number) => MEASURES[measure].show(n)} />
-                    <Tooltip
-                      cursor={{ fill: "#F1E9FC" }}
-                      formatter={(v: number) => [MEASURES[measure].show(v), MEASURES[measure].label]}
-                      contentStyle={{ borderRadius: 6, borderColor: "#E2DFD6", fontSize: 12 }}
-                    />
-                    <Bar dataKey="value" fill="#9B5DE5" radius={[4, 4, 0, 0]} maxBarSize={48} />
-                  </BarChart>
-                </ResponsiveContainer>
+                {colors ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={bars} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+                      <CartesianGrid vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="phase" tick={{ fontSize: 12, fill: colors.axis }} axisLine={{ stroke: colors.grid }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 11, fill: colors.axis }} axisLine={false} tickLine={false} width={64} tickFormatter={(n: number) => MEASURES[measure].show(n)} />
+                      <Tooltip
+                        cursor={{ fill: colors.cursor }}
+                        formatter={(v: number) => [MEASURES[measure].show(v), MEASURES[measure].label]}
+                        contentStyle={colors.tooltip}
+                      />
+                      <Bar dataKey="value" fill={colors.series} radius={[4, 4, 0, 0]} maxBarSize={48} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : null}
               </div>
-              <table className="mt-2 w-full text-[12.5px]">
+              <table className="mt-2 w-full text-sm">
                 <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wide text-slate">
+                  <tr className="text-left text-2xs uppercase tracking-wide text-slate">
                     <th className="py-1">Phase</th>
                     <th className="py-1 text-right">Jobs</th>
                     <th className="py-1 text-right">Calls</th>
@@ -167,7 +172,7 @@ export default function Page() {
                     const t = h.totals.by_phase[p];
                     return t ? (
                       <tr key={p}>
-                        <td className="py-1 font-medium text-plum">{p}</td>
+                        <td className="py-1 font-medium text-heading">{p}</td>
                         <td className="py-1 text-right">{t.jobs}</td>
                         <td className="py-1 text-right">{t.model_calls}</td>
                         <td className="py-1 text-right">{fmt.format(t.tokens_in + t.tokens_out)}</td>
@@ -180,7 +185,7 @@ export default function Page() {
             </Panel>
 
             <Panel title="By workflow" eyebrow="Complexity band" testId="history-workflows">
-              <div className="mb-3 flex flex-wrap gap-2 text-[12.5px]">
+              <div className="mb-3 flex flex-wrap gap-2 text-sm">
                 {Object.entries(h.totals.by_band).map(([band, t]) => (
                   <span key={band} className="flex items-center gap-1.5 rounded-btn border border-line px-2 py-1">
                     <BandPill band={band} /> {t.workflows ?? 0} workflows · {fmt.format(t.tokens_in + t.tokens_out)} tokens · {usd(t.cost_usd)}
@@ -188,7 +193,7 @@ export default function Page() {
                 ))}
               </div>
               <div className="max-h-[360px] overflow-auto rounded-btn border border-line">
-                <table className="w-full min-w-[560px] text-[12.5px]">
+                <table className="w-full min-w-[560px] text-sm">
                   <thead className="sticky top-0">
                     <tr className="table-head">
                       <th className="px-3 py-2">Workflow</th>
@@ -204,7 +209,7 @@ export default function Page() {
                       .sort((a, b) => (b.complexity_score ?? 0) - (a.complexity_score ?? 0))
                       .map((w) => (
                         <tr key={w.process_id}>
-                          <td className="px-3 py-1.5 font-medium text-plum">{w.name}</td>
+                          <td className="px-3 py-1.5 font-medium text-heading">{w.name}</td>
                           <td className="px-3 py-1.5">
                             <BandPill band={w.complexity_band} />{" "}
                             <span className="text-slate">{w.complexity_score?.toFixed(1) ?? ""}</span>
@@ -245,12 +250,12 @@ export default function Page() {
                         return n;
                       })
                     }
-                    className={`rounded-full border px-2.5 py-0.5 text-[12.5px] ${kinds.has(k) ? "border-purple bg-purple-lt text-plum" : "border-line text-slate"}`}
+                    className={`rounded-full border px-2.5 py-0.5 text-sm ${kinds.has(k) ? "border-accent bg-accent-soft text-heading" : "border-line text-slate"}`}
                   >
                     {KIND_LABEL[k]}
                   </button>
                 ))}
-                <select aria-label="Phase" className="select py-1 text-[13px]" value={phase} onChange={(e) => setPhase(e.target.value)}>
+                <select aria-label="Phase" className="select py-1 text-sm" value={phase} onChange={(e) => setPhase(e.target.value)}>
                   <option value="all">all phases</option>
                   {h.phases.map((p) => (
                     <option key={p} value={p}>
@@ -262,14 +267,14 @@ export default function Page() {
             }
           >
             {timeline.length === 0 ? (
-              <p className="text-[14px] text-slate">Nothing matches the filters.</p>
+              <p className="text-md text-slate">Nothing matches the filters.</p>
             ) : (
               <ol className="max-h-[560px] divide-y divide-line overflow-y-auto">
                 {timeline.map((e) => {
                   const Icon = KIND_ICON[e.kind];
                   const t = entryText(e);
                   return (
-                    <li key={`${e.kind}:${e.id}`} className="flex gap-3 py-2 text-[13px]">
+                    <li key={`${e.kind}:${e.id}`} className="flex gap-3 py-2 text-sm">
                       <Icon size={15} className={`mt-0.5 shrink-0 ${e.kind === "model_call" ? "text-ai" : e.kind === "decision" ? "text-gate" : "text-slate"}`} aria-hidden />
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-ink">
@@ -283,7 +288,7 @@ export default function Page() {
                         {t.detail ? <p className="break-words text-slate">{t.detail}</p> : null}
                         {t.error ? <ErrorText text={t.error} /> : null}
                       </div>
-                      <time className="shrink-0 text-[12px] text-slate">{new Date(e.ts).toLocaleString()}</time>
+                      <time className="shrink-0 text-xs text-slate">{new Date(e.ts).toLocaleString()}</time>
                     </li>
                   );
                 })}

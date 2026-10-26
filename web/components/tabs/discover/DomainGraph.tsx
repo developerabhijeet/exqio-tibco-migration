@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Core, ElementDefinition } from "cytoscape";
 import type { EstateGraph, ProcessSummary } from "@/lib/types";
+import { cssColor, useThemeChange } from "@/lib/theme";
 
 const SHOWN_EDGES = new Set(["calls", "reads", "writes", "publishes", "consumes", "exposes"]);
 
@@ -57,78 +58,83 @@ export function graphElements(
   return [...nodes.values(), ...edges];
 }
 
-const STYLE = [
-  {
-    selector: "node",
-    style: {
-      label: "data(label)",
-      "font-family": "Poppins, ui-sans-serif, sans-serif",
-      "font-size": 12,
-      color: "#425466",
-      "text-valign": "bottom",
-      "text-margin-y": 4,
-      "background-color": "#F4F3EE",
-      "border-width": 1,
-      "border-color": "#B8B3A7",
-      width: 18,
-      height: 18,
+/** The graph's styles from the current theme's tokens; re-applied on every theme change. */
+function graphStyle() {
+  const c = cssColor;
+  return [
+    {
+      selector: "node",
+      style: {
+        label: "data(label)",
+        "font-family": "Poppins, ui-sans-serif, sans-serif",
+        "font-size": 12,
+        color: c("ink"),
+        "text-valign": "bottom",
+        "text-margin-y": 4,
+        "background-color": c("sunken"),
+        "border-width": 1,
+        "border-color": c("line-strong"),
+        width: 18,
+        height: 18,
+      },
     },
-  },
-  {
-    selector: 'node[kind = "process"]',
-    style: {
-      shape: "round-rectangle",
-      "background-color": "#9B5DE5",
-      "border-color": "#7E3FCB",
-      color: "#FFFFFF",
-      "font-size": 13,
-      "font-weight": 600,
-      "text-valign": "center",
-      "text-margin-y": 0,
-      width: (ele: { data: (k: string) => string }) => Math.max(70, ele.data("label").length * 7.6 + 24),
-      height: 30,
+    {
+      selector: 'node[kind = "process"]',
+      style: {
+        shape: "round-rectangle",
+        // The primary-button fill: white labels on it pass AA in both themes.
+        "background-color": c("accent-strong"),
+        "border-color": c("accent-strong"),
+        color: "rgb(255, 255, 255)",
+        "font-size": 13,
+        "font-weight": 600,
+        "text-valign": "center",
+        "text-margin-y": 0,
+        width: (ele: { data: (k: string) => string }) => Math.max(70, ele.data("label").length * 7.6 + 24),
+        height: 30,
+      },
     },
-  },
-  {
-    selector: 'node[kind = "process-ext"]',
-    style: {
-      shape: "round-rectangle",
-      "background-color": "#F1E9FC",
-      "border-color": "#9B5DE5",
-      color: "#20063B",
-      "text-valign": "center",
-      "text-margin-y": 0,
-      "font-size": 12,
-      width: (ele: { data: (k: string) => string }) => Math.max(60, ele.data("label").length * 6.8 + 18),
-      height: 26,
+    {
+      selector: 'node[kind = "process-ext"]',
+      style: {
+        shape: "round-rectangle",
+        "background-color": c("accent-soft"),
+        "border-color": c("accent"),
+        color: c("heading"),
+        "text-valign": "center",
+        "text-margin-y": 0,
+        "font-size": 12,
+        width: (ele: { data: (k: string) => string }) => Math.max(60, ele.data("label").length * 6.8 + 18),
+        height: 26,
+      },
     },
-  },
-  { selector: 'node[kind = "table"]', style: { shape: "barrel", width: 30, height: 34, "background-color": "#E9E6DE" } },
-  { selector: 'node[kind = "queue"]', style: { shape: "round-tag", width: 22, height: 22 } },
-  { selector: 'node[kind = "topic"]', style: { shape: "diamond", width: 24, height: 24 } },
-  { selector: 'node[kind = "endpoint"]', style: { shape: "ellipse", width: 18, height: 18 } },
-  {
-    selector: "edge",
-    style: {
-      width: 1.3,
-      "line-color": "#C9C4B8",
-      "target-arrow-color": "#C9C4B8",
-      "target-arrow-shape": "triangle",
-      "arrow-scale": 0.8,
-      "curve-style": "bezier",
-      label: "data(label)",
-      "font-size": 10,
-      color: "#425466",
-      "text-background-color": "#FFFFFF",
-      "text-background-opacity": 0.9,
-      "text-background-padding": "1px",
-      "text-rotation": "autorotate",
+    { selector: 'node[kind = "table"]', style: { shape: "barrel", width: 30, height: 34, "background-color": c("line") } },
+    { selector: 'node[kind = "queue"]', style: { shape: "round-tag", width: 22, height: 22 } },
+    { selector: 'node[kind = "topic"]', style: { shape: "diamond", width: 24, height: 24 } },
+    { selector: 'node[kind = "endpoint"]', style: { shape: "ellipse", width: 18, height: 18 } },
+    {
+      selector: "edge",
+      style: {
+        width: 1.3,
+        "line-color": c("line-strong"),
+        "target-arrow-color": c("line-strong"),
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 0.8,
+        "curve-style": "bezier",
+        label: "data(label)",
+        "font-size": 10,
+        color: c("slate"),
+        "text-background-color": c("surface"),
+        "text-background-opacity": 0.9,
+        "text-background-padding": "1px",
+        "text-rotation": "autorotate",
+      },
     },
-  },
-  { selector: 'edge[kind = "calls"]', style: { "line-color": "#9B5DE5", "target-arrow-color": "#9B5DE5" } },
-  { selector: 'edge[kind = "writes"], edge[kind = "publishes"]', style: { "line-color": "#8C8676", "target-arrow-color": "#8C8676" } },
-  { selector: "node:selected", style: { "border-width": 3, "border-color": "#20063B" } },
-];
+    { selector: 'edge[kind = "calls"]', style: { "line-color": c("accent"), "target-arrow-color": c("accent") } },
+    { selector: 'edge[kind = "writes"], edge[kind = "publishes"]', style: { "line-color": c("slate"), "target-arrow-color": c("slate") } },
+    { selector: "node:selected", style: { "border-width": 3, "border-color": c("heading") } },
+  ];
+}
 
 export default function DomainGraph({
   elements,
@@ -153,7 +159,7 @@ export default function DomainGraph({
       const inst = cytoscape({
         container: box.current,
         elements,
-        style: STYLE as never,
+        style: graphStyle() as never,
         layout: { name: "preset" },
         wheelSensitivity: 0.2,
         minZoom: 0.3,
@@ -185,6 +191,8 @@ export default function DomainGraph({
         if (pid) openRef.current(pid);
       });
       cy.current = inst;
+      // Test hook (development only): the e2e suite reads the canvas styles through it.
+      if (process.env.NODE_ENV !== "production") (window as unknown as { __cy?: Core }).__cy = inst;
     });
     return () => {
       live = false;
@@ -192,6 +200,7 @@ export default function DomainGraph({
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => cy.current?.destroy(), []);
+  useThemeChange(() => cy.current?.style(graphStyle() as never));
 
   useEffect(() => {
     const inst = cy.current;

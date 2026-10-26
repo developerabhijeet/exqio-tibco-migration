@@ -9,7 +9,7 @@ export function ProcessPicker() {
   const processes = useProcesses(projectId);
   const list = [...(processes.data ?? [])].sort((a, b) => a.name.localeCompare(b.name));
   return (
-    <label className="flex items-center gap-2 text-[13.5px] text-slate">
+    <label className="flex items-center gap-2 text-md text-slate">
       Process
       <select
         data-testid="process-picker"

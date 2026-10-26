@@ -16,7 +16,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   return (
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5">
       <dt className="label w-44 shrink-0">{label}</dt>
-      <dd className="min-w-0 break-words text-[14px] text-ink">{children}</dd>
+      <dd className="min-w-0 break-words text-md text-ink">{children}</dd>
     </div>
   );
 }
@@ -40,8 +40,8 @@ export function AboutInstall() {
       <Panel title="Dependency checks" eyebrow="GET /readyz">
         <ul className="divide-y divide-line">
           {Object.entries(s.checks).map(([name, value]) => (
-            <li key={name} className="flex items-center gap-4 py-2.5 text-[14px]">
-              <span className="w-44 font-medium text-plum">{name}</span>
+            <li key={name} className="flex items-center gap-4 py-2.5 text-md">
+              <span className="w-44 font-medium text-heading">{name}</span>
               <CheckPill name={name} value={value} />
             </li>
           ))}
@@ -49,12 +49,12 @@ export function AboutInstall() {
       </Panel>
       <Panel title="Image digests" eyebrow="What is running">
         {digests.length === 0 ? (
-          <p className="text-[14px] text-slate">None recorded. The chart sets these on a pipeline install.</p>
+          <p className="text-md text-slate">None recorded. The chart sets these on a pipeline install.</p>
         ) : (
           <dl className="divide-y divide-line">
             {digests.map(([name, digest]) => (
               <Row key={name} label={name}>
-                <code className="break-all font-mono text-[12.5px]">{digest}</code>
+                <code className="break-all font-mono text-sm">{digest}</code>
               </Row>
             ))}
           </dl>
@@ -62,11 +62,11 @@ export function AboutInstall() {
       </Panel>
       <Panel title="Egress allowlist" eyebrow="The only hosts this install may call">
         {s.egress_allowlist.length === 0 ? (
-          <p className="text-[14px] text-slate">None declared.</p>
+          <p className="text-md text-slate">None declared.</p>
         ) : (
           <ul className="space-y-1">
             {s.egress_allowlist.map((host) => (
-              <li key={host}><code className="font-mono text-[13px]">{host}</code></li>
+              <li key={host}><code className="font-mono text-sm">{host}</code></li>
             ))}
           </ul>
         )}

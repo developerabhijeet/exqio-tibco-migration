@@ -113,7 +113,7 @@ export function ServiceControl({ svc, blocked = null }: { svc: ServiceHandle; bl
         </>
       }
     >
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13.5px]">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-md">
         <span data-testid="service-status" data-state={state} className="flex items-center gap-1.5">
           <span className="label">Status</span>
           <Pill tone={state === "running" ? "gate" : state === "starting" ? "purple" : state === "stopped" ? "error" : "det"}>
@@ -123,7 +123,7 @@ export function ServiceControl({ svc, blocked = null }: { svc: ServiceHandle; bl
         {r?.url && state === "running" ? (
           <span>
             <span className="label mr-1.5">URL</span>
-            <a href={r.url} target="_blank" rel="noreferrer" className="font-mono text-purple hover:underline">
+            <a href={r.url} target="_blank" rel="noreferrer" className="font-mono text-accent-ink hover:underline">
               {r.url}
             </a>
           </span>
@@ -134,14 +134,14 @@ export function ServiceControl({ svc, blocked = null }: { svc: ServiceHandle; bl
         {r?.pid && state === "running" ? <span className="text-slate">pid {r.pid}</span> : null}
       </div>
       {reason ? (
-        <p data-testid="service-reason" className="mt-2 whitespace-pre-wrap break-words rounded-btn bg-error-bg px-3 py-2 text-[13px] text-error">
+        <p data-testid="service-reason" className="mt-2 whitespace-pre-wrap break-words rounded-btn bg-error-bg px-3 py-2 text-sm text-error">
           {reason}
         </p>
       ) : null}
       {r?.log_tail ? (
         <details className="mt-3">
-          <summary className="cursor-pointer text-[13px] font-medium text-plum">Log tail</summary>
-          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-[11.5px] leading-5 text-ink">
+          <summary className="cursor-pointer text-sm font-medium text-heading">Log tail</summary>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-xs leading-5 text-ink">
             {r.log_tail}
           </pre>
         </details>
@@ -159,19 +159,19 @@ function serviceUrl(base: string, path: string): string {
 export function SwaggerFrame({ run, state, reason }: { run: RunState | null; state: ServiceState; reason: string | null }) {
   if (state === "running" && run?.swagger_url) {
     return (
-      <div className="overflow-hidden rounded-card border border-line bg-white">
-        <div className="flex items-center gap-2 border-b border-line bg-page px-4 py-2 text-[13px]">
+      <div className="overflow-hidden rounded-card border border-line bg-surface">
+        <div className="flex items-center gap-2 border-b border-line bg-page px-4 py-2 text-sm">
           <span className="label">Swagger</span>
           <span className="font-mono text-slate">{run.swagger_url}</span>
-          <a href={run.swagger_url} target="_blank" rel="noreferrer" className="ml-auto text-purple hover:underline">
+          <a href={run.swagger_url} target="_blank" rel="noreferrer" className="ml-auto text-accent-ink hover:underline">
             Open in a new tab
           </a>
         </div>
-        <p className="border-b border-line px-4 py-1.5 text-[12px] text-slate">
+        <p className="border-b border-line px-4 py-1.5 text-xs text-slate">
           An empty frame means the service answered without the Swagger UI (for example a 404 on /swagger); open it in a new tab
           to see the answer.
         </p>
-        <iframe data-testid="swagger-frame" title="Swagger UI of the generated service" src={run.swagger_url} className="h-[640px] w-full bg-white" />
+        <iframe data-testid="swagger-frame" title="Swagger UI of the generated service" src={run.swagger_url} className="h-[640px] w-full bg-surface" />
       </div>
     );
   }
@@ -180,10 +180,10 @@ export function SwaggerFrame({ run, state, reason }: { run: RunState | null; sta
       <div
         data-testid="swagger-placeholder"
         data-reason="no-swagger-url"
-        className="flex min-h-[160px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-warm/60 px-6 py-8 text-center"
+        className="flex min-h-[160px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-sunken/60 px-6 py-8 text-center"
       >
-        <p className="font-medium text-plum">Service running, Swagger URL not reported</p>
-        <p className="mt-1 max-w-[640px] text-[14px] text-slate">
+        <p className="font-medium text-heading">Service running, Swagger URL not reported</p>
+        <p className="mt-1 max-w-[640px] text-md text-slate">
           The API reports the service as running but gave no Swagger address.
           {run?.url ? ` Try ${serviceUrl(run.url, "swagger/index.html")} in a new tab.` : ""}
         </p>
@@ -193,10 +193,10 @@ export function SwaggerFrame({ run, state, reason }: { run: RunState | null; sta
   return (
     <div
       data-testid="swagger-placeholder"
-      className="flex min-h-[220px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-warm/60 px-6 py-8 text-center"
+      className="flex min-h-[220px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-sunken/60 px-6 py-8 text-center"
     >
-      <p className="font-medium text-plum">Service not running</p>
-      <p className="mt-1 max-w-[640px] text-[14px] text-slate">
+      <p className="font-medium text-heading">Service not running</p>
+      <p className="mt-1 max-w-[640px] text-md text-slate">
         {state === "starting"
           ? "Starting the service and waiting for /health."
           : reason
@@ -242,23 +242,23 @@ export function DevTokenHelper({ run, running }: { run: RunState | null; running
   };
 
   return (
-    <div className="rounded-card border border-line bg-white p-4" data-testid="dev-token">
+    <div className="rounded-card border border-line bg-surface p-4" data-testid="dev-token">
       <div className="flex flex-wrap items-center gap-2">
-        <KeyRound size={16} className="text-purple" aria-hidden />
-        <span className="font-semibold text-plum">Development token</span>
-        <button type="button" className="btn-secondary ml-auto px-3 py-1.5 text-[14px]" onClick={get} disabled={!running || busy}>
+        <KeyRound size={16} className="text-accent-ink" aria-hidden />
+        <span className="font-semibold text-heading">Development token</span>
+        <button type="button" className="btn-secondary ml-auto px-3 py-1.5 text-md" onClick={get} disabled={!running || busy}>
           {busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
           Get dev token
         </button>
       </div>
-      <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px] text-slate">
+      <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate">
         <li>Get a token (Development auth only; production validates Microsoft Entra ID tokens).</li>
         <li>In Swagger, select Authorize, paste the token into the Bearer field and select Authorize again.</li>
         <li>Call the endpoint with a scenario&apos;s input; the parity table compares the same call field by field.</li>
       </ol>
       {token ? (
         <div className="mt-2 flex items-start gap-2">
-          <code data-testid="dev-token-value" className="block max-h-20 flex-1 overflow-auto break-all rounded-btn bg-page p-2 font-mono text-[11.5px]">
+          <code data-testid="dev-token-value" className="block max-h-20 flex-1 overflow-auto break-all rounded-btn bg-page p-2 font-mono text-xs">
             {token}
           </code>
           <button type="button" className="btn-ghost" aria-label="Copy token" onClick={() => navigator.clipboard?.writeText(token)}>
@@ -266,9 +266,9 @@ export function DevTokenHelper({ run, running }: { run: RunState | null; running
           </button>
         </div>
       ) : null}
-      {error ? <p className="mt-2 text-[13px] text-error">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-error">{error}</p> : null}
       {error || !running ? (
-        <code className="mt-2 block overflow-x-auto whitespace-pre rounded-btn bg-page p-2 font-mono text-[11.5px] text-ink">{curl}</code>
+        <code className="mt-2 block overflow-x-auto whitespace-pre rounded-btn bg-page p-2 font-mono text-xs text-ink">{curl}</code>
       ) : null}
     </div>
   );

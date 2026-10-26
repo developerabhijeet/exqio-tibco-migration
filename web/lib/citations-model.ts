@@ -65,14 +65,14 @@ export const PHASE_LABEL: Record<UiPhase, string> = {
 
 /** Chip colours per phase: a tinted background, the phase colour for text and a faint ring. */
 export const PHASE_TONE: Record<UiPhase, string> = {
-  upload: "bg-warm text-slate ring-slate/20",
+  upload: "bg-sunken text-slate ring-slate/20",
   discover: "bg-coral/[0.07] text-coral-dk ring-coral-dk/20",
   validate: "bg-ai-bg text-ai ring-ai/20",
-  design: "bg-purple-lt text-purple-dk ring-purple/25",
+  design: "bg-accent-soft text-accent-ink ring-accent/25",
   build: "bg-det-bg text-det ring-det/20",
   verify: "bg-gate-bg text-gate ring-gate/20",
   deploy: "bg-decision-bg text-decision ring-decision/20",
-  memory: "bg-plum/[0.06] text-plum ring-plum/20",
+  memory: "bg-heading/[0.06] text-heading ring-heading/20",
 };
 
 /** An unverified ref, whatever its phase. */

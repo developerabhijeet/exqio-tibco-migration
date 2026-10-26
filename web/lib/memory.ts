@@ -150,14 +150,12 @@ export const LABEL_GROUPS = {
 
 export const GROUP_LABEL: Record<Side, string> = { old: "Old code", new: "New code", knowledge: "Knowledge" };
 
-/** Tailwind colour tokens per group (tailwind.config.ts). */
-export const GROUP_COLOR: Record<Side, "plum" | "teal" | "amber"> = { old: "plum", new: "teal", knowledge: "amber" };
-
-/** The same colours as hex, for the canvas (cytoscape styles are not Tailwind). */
-export const GROUP_HEX: Record<Side, { fill: string; border: string; strong: string }> = {
-  old: { fill: "#F1E9FC", border: "#7E3FCB", strong: "#20063B" },
-  new: { fill: "#DDF2EF", border: "#0F766E", strong: "#0B5A54" },
-  knowledge: { fill: "#FCEFD9", border: "#B45309", strong: "#8A3F06" },
+/** The colour tokens (lib/theme.css) per group: old code the accent, new code the AI tone,
+ * knowledge the decision tone; `strong` is the picked node's fill and a chip's text. */
+export const GROUP_TOKEN: Record<Side, { fill: string; border: string; strong: string }> = {
+  old: { fill: "accent-soft", border: "accent-ink", strong: "heading" },
+  new: { fill: "ai-bg", border: "ai", strong: "ai" },
+  knowledge: { fill: "decision-bg", border: "decision", strong: "decision" },
 };
 
 /** A curation (POST /memory/{p}/curations): `reason` is always required (1 to 2000 characters);
@@ -179,6 +177,12 @@ export interface CurationOut {
 
 /** The ingest scope a curation lands under: the revision whose scopes hold it applied it. */
 export const curationScope = (eventId: string) => `curation:${eventId}`;
+
+/** A group colour as a CSS colour over its token, for inline styles (follows the theme). */
+export function groupCss(side: Side, part: "fill" | "border" | "strong", alpha?: number): string {
+  const v = `var(--c-${GROUP_TOKEN[side][part]})`;
+  return alpha === undefined ? `rgb(${v})` : `rgb(${v} / ${alpha})`;
+}
 
 export const PHASES = ["discover", "analysis", "design", "build", "verify", "deploy", "gate", "curation"] as const;
 

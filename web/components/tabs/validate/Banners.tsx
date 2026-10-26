@@ -23,7 +23,7 @@ function Banner({
         {ok ? <CheckCircle2 size={18} aria-hidden /> : <XCircle size={18} aria-hidden />}
         {title}
       </p>
-      {children ? <div className="mt-1.5 pl-[26px] text-[13.5px]">{children}</div> : null}
+      {children ? <div className="mt-1.5 pl-[26px] text-md">{children}</div> : null}
     </div>
   );
 }
@@ -40,7 +40,7 @@ export function CitationsBanner({ verification }: { verification: Verification }
           {verification.failures.map((f, i) => (
             <li key={i}>
               <span className="font-mono font-semibold">{f.rule_id}</span>: {f.citation.activity_id} {f.citation.kind}{" "}
-              <span className="font-mono text-[12px]">{f.citation.text}</span>. {f.reason}
+              <span className="font-mono text-xs">{f.citation.text}</span>. {f.reason}
             </li>
           ))}
         </ul>
@@ -61,7 +61,7 @@ export function CoverageBanner({ coverage }: { coverage: Coverage }) {
         <ul className="space-y-0.5">
           {gaps.slice(0, 12).map((g) => (
             <li key={`${g.kind}:${g.ref}`}>
-              Not covered: {g.kind} <span className="font-mono text-[12px]">{g.ref}</span>
+              Not covered: {g.kind} <span className="font-mono text-xs">{g.ref}</span>
             </li>
           ))}
           {gaps.length > 12 ? <li>and {gaps.length - 12} more</li> : null}
@@ -77,14 +77,14 @@ export function AiBanner({ reason }: { reason: string | null | undefined }) {
       <p className="flex items-center gap-2 font-semibold">
         <CircleSlash size={18} aria-hidden /> Code-only analysis: no model configured
       </p>
-      {reason ? <p className="mt-1 pl-[26px] text-[13.5px]">{reason}</p> : null}
+      {reason ? <p className="mt-1 pl-[26px] text-md">{reason}</p> : null}
     </div>
   );
 }
 
 export function NoticeBanner({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-card border border-decision/30 bg-decision-bg px-4 py-3 text-[14px] text-decision">
+    <div className="flex items-center gap-2 rounded-card border border-decision/30 bg-decision-bg px-4 py-3 text-md text-decision">
       <AlertTriangle size={18} aria-hidden /> {text}
     </div>
   );

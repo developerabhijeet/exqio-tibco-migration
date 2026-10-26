@@ -119,11 +119,11 @@ export function DomainSelect({
               aria-haspopup="listbox"
               aria-expanded={open}
               onClick={() => setOpen((v) => !v)}
-              className="flex min-w-[320px] items-center justify-between gap-3 rounded-btn border border-line bg-white px-4 py-2 text-left hover:border-purple"
+              className="flex min-w-[320px] items-center justify-between gap-3 rounded-btn border border-line bg-surface px-4 py-2 text-left hover:border-accent"
             >
               <span>
-                <span className="block text-[16px] font-semibold text-plum">{current ? current.name : "All domains"}</span>
-                <span className="block text-[12.5px] text-slate">
+                <span className="block text-lg font-semibold text-heading">{current ? current.name : "All domains"}</span>
+                <span className="block text-sm text-slate">
                   {current ? `${current.process_ids.length} processes` : `${domains.length} domains, ${total} processes`}
                 </span>
               </span>
@@ -153,17 +153,17 @@ export function DomainSelect({
                         setOpen(false);
                       }
                     }}
-                    className={`flex cursor-pointer items-center justify-between px-4 py-2 hover:bg-warm ${
-                      d.id === value ? "bg-purple-lt" : ""
+                    className={`flex cursor-pointer items-center justify-between px-4 py-2 hover:bg-sunken ${
+                      d.id === value ? "bg-accent-soft" : ""
                     }`}
                   >
                     <span>
-                      <span className={`block text-[14.5px] ${d.id === value ? "font-semibold text-purple" : "text-ink"}`}>
+                      <span className={`block text-base ${d.id === value ? "font-semibold text-accent-ink" : "text-ink"}`}>
                         {d.name}
                       </span>
-                      {d.suggested ? <span className="block text-[12px] text-slate">suggested: {d.suggested}</span> : null}
+                      {d.suggested ? <span className="block text-xs text-slate">suggested: {d.suggested}</span> : null}
                     </span>
-                    <span className="rounded-full bg-warm px-2 text-[12px] text-slate">{d.count}</span>
+                    <span className="rounded-full bg-sunken px-2 text-xs text-slate">{d.count}</span>
                   </li>
                 ))}
               </ul>
@@ -210,13 +210,13 @@ export function DomainSelect({
             Suggest names
           </button>
         ) : null}
-        {current?.renamed_by ? <span className="text-[12.5px] text-slate">Renamed by {current.renamed_by}</span> : null}
-        {namingNote ? <span className={`text-[12.5px] ${naming === "failed" ? "text-error" : "text-slate"}`}>{namingNote}</span> : null}
+        {current?.renamed_by ? <span className="text-sm text-slate">Renamed by {current.renamed_by}</span> : null}
+        {namingNote ? <span className={`text-sm ${naming === "failed" ? "text-error" : "text-slate"}`}>{namingNote}</span> : null}
       </div>
       {rename.error ? <ErrorNote error={rename.error} /> : null}
       {merging && current ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-plum/25" role="presentation">
-          <div role="dialog" aria-modal="true" aria-label="Merge domain" className="card w-[440px] p-6 shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-label="Merge domain" className="card w-[440px] p-6 shadow-e3">
             <div className="flex items-start justify-between">
               <div>
                 <p className="eyebrow">Merge domain</p>
@@ -238,7 +238,7 @@ export function DomainSelect({
                   </option>
                 ))}
             </select>
-            <p className="mt-3 text-[14px] text-slate">
+            <p className="mt-3 text-md text-slate">
               The {current.process_ids.length} processes of {current.name} move to the chosen domain and {current.name} is
               removed. The decision is recorded.
             </p>

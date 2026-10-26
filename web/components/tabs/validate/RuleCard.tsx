@@ -51,10 +51,10 @@ export function RuleCard({
       className={`card p-4 ${status === "rejected" ? "opacity-70" : ""}`}
     >
       <header className="flex flex-wrap items-center gap-2">
-        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-[12px] font-semibold text-white">{key}</span>
+        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-xs font-semibold text-white">{key}</span>
         <Pill tone={s.tone}>{s.label}</Pill>
         {typeof rule.confidence === "number" ? (
-          <span className="text-[12.5px] text-slate" title="Analyst confidence">
+          <span className="text-sm text-slate" title="Analyst confidence">
             confidence {Math.round(rule.confidence * 100)}%
           </span>
         ) : null}
@@ -67,25 +67,25 @@ export function RuleCard({
         <div className="mt-3 space-y-2">
           <textarea
             aria-label={`Text of rule ${key}`}
-            className="input min-h-[96px] text-[14.5px]"
+            className="input min-h-[96px] text-base"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <p className="text-[12.5px] text-slate">
+          <p className="text-sm text-slate">
             Saving re-verifies the citations against the parsed model and reopens G1.
           </p>
         </div>
       ) : (
-        <p className="mt-2 text-[15px] leading-relaxed text-ink">{rule.text}</p>
+        <p className="mt-2 text-base leading-relaxed text-ink">{rule.text}</p>
       )}
       {rule.original_text && rule.original_text !== rule.text && !editing ? (
-        <p className="mt-1 text-[12.5px] text-slate">
+        <p className="mt-1 text-sm text-slate">
           Drafted as: <span className="italic">{rule.original_text}</span>
         </p>
       ) : null}
 
       {rule.challenge?.verdict && rule.challenge.verdict !== "agree" ? (
-        <p className="mt-2 rounded-btn bg-decision-bg px-3 py-2 text-[13.5px] text-decision">{rule.challenge.reason}</p>
+        <p className="mt-2 rounded-btn bg-decision-bg px-3 py-2 text-md text-decision">{rule.challenge.reason}</p>
       ) : null}
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -93,7 +93,7 @@ export function RuleCard({
         {(rule.citations ?? []).map((c, i) => (
           <CitationChip key={`${c.activity_id}-${i}`} citation={c} />
         ))}
-        {rule.owner ? <span className="ml-2 text-[12.5px] text-slate">owner: {rule.owner}</span> : null}
+        {rule.owner ? <span className="ml-2 text-sm text-slate">owner: {rule.owner}</span> : null}
         {rule.memory_refs && rule.memory_refs.length > 0 ? (
           <Pill tone="purple" title="Earlier decisions retrieved from migration memory">
             {rule.memory_refs.length} earlier decision{rule.memory_refs.length > 1 ? "s" : ""}
@@ -106,7 +106,7 @@ export function RuleCard({
           <>
             <button
               type="button"
-              className="btn-primary px-3 py-1.5 text-[14px]"
+              className="btn-primary px-3 py-1.5 text-md"
               disabled={!!busy || text.trim() === "" || text.trim() === rule.text}
               onClick={() => act("save", { text: text.trim() })}
             >
@@ -115,7 +115,7 @@ export function RuleCard({
             </button>
             <button
               type="button"
-              className="btn-secondary px-3 py-1.5 text-[14px]"
+              className="btn-secondary px-3 py-1.5 text-md"
               onClick={() => {
                 setEditing(false);
                 setText(rule.text);
@@ -127,13 +127,13 @@ export function RuleCard({
         ) : (
           <>
             {status === "approved" ? (
-              <span className="inline-flex items-center gap-1.5 rounded-btn border border-gate/30 bg-gate-bg px-3 py-1.5 text-[14px] font-medium text-gate">
+              <span className="inline-flex items-center gap-1.5 rounded-btn border border-gate/30 bg-gate-bg px-3 py-1.5 text-md font-medium text-gate">
                 <Check size={14} aria-hidden /> Approved
               </span>
             ) : (
               <button
                 type="button"
-                className="btn bg-gate px-3 py-1.5 text-[14px] text-white hover:bg-gate/90"
+                className="btn bg-gate px-3 py-1.5 text-md text-surface hover:bg-gate/90"
                 disabled={!!busy || status === "unverified"}
                 title={status === "unverified" ? "A rule with an unverified citation cannot be approved" : undefined}
                 onClick={() => act("approve", { status: "approved" })}
@@ -144,7 +144,7 @@ export function RuleCard({
             )}
             <button
               type="button"
-              className="btn-secondary px-3 py-1.5 text-[14px]"
+              className="btn-secondary px-3 py-1.5 text-md"
               disabled={!!busy}
               onClick={() => {
                 setText(rule.text);
@@ -155,7 +155,7 @@ export function RuleCard({
             </button>
             <button
               type="button"
-              className="btn-secondary px-3 py-1.5 text-[14px] text-error"
+              className="btn-secondary px-3 py-1.5 text-md text-error"
               disabled={!!busy || status === "rejected"}
               onClick={() => act("reject", { status: "rejected" })}
             >
@@ -165,13 +165,13 @@ export function RuleCard({
           </>
         )}
         {rule.updated_by ? (
-          <span className="ml-auto text-[12px] text-slate">
+          <span className="ml-auto text-xs text-slate">
             {status} by {rule.updated_by}
           </span>
         ) : null}
       </footer>
       {error ? (
-        <p role="alert" className="mt-2 text-[13px] text-error">
+        <p role="alert" className="mt-2 text-sm text-error">
           {error}
         </p>
       ) : null}

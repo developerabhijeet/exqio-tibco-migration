@@ -138,7 +138,7 @@ export function AzureConnectForm({
     >
       {error ? <ErrorNote error={error} /> : null}
       {conn?.connected ? (
-        <div className="mb-4 grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-[13px] md:grid-cols-2">
+        <div className="mb-4 grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-sm md:grid-cols-2">
           <p>
             <span className="label mr-1.5">Tenant</span>
             <span className="font-mono">{conn.tenant}</span>
@@ -200,11 +200,11 @@ export function AzureConnectForm({
           }}
         >
           {FIELDS.map((f) => (
-            <label key={f.key} className="text-[13px] text-slate">
+            <label key={f.key} className="text-sm text-slate">
               {f.label}
               {f.required ? <span className="text-coral"> *</span> : null}
               <input
-                className="input mt-1 font-mono text-[13px]"
+                className="input mt-1 font-mono text-sm"
                 value={(form[f.key] as string) ?? ""}
                 required={f.required}
                 placeholder={f.placeholder}
@@ -212,7 +212,7 @@ export function AzureConnectForm({
               />
             </label>
           ))}
-          <label className="text-[13px] text-slate">
+          <label className="text-sm text-slate">
             Runtime
             <select className="input select mt-1" value={form.runtime} onChange={(e) => set("runtime", e.target.value)}>
               <option value="container_app">Azure Container Apps</option>
@@ -220,22 +220,22 @@ export function AzureConnectForm({
             </select>
           </label>
           <fieldset className="grid gap-3 rounded-btn border border-line p-3 md:col-span-2 md:grid-cols-2 xl:col-span-3">
-            <legend className="px-1 text-[13px] font-semibold text-plum">Service principal</legend>
-            <label className="text-[13px] text-slate">
+            <legend className="px-1 text-sm font-semibold text-heading">Service principal</legend>
+            <label className="text-sm text-slate">
               Client ID
-              <input className="input mt-1 font-mono text-[13px]" value={form.client_id ?? ""} onChange={(e) => set("client_id", e.target.value)} autoComplete="off" />
+              <input className="input mt-1 font-mono text-sm" value={form.client_id ?? ""} onChange={(e) => set("client_id", e.target.value)} autoComplete="off" />
             </label>
-            <label className="text-[13px] text-slate">
+            <label className="text-sm text-slate">
               Client secret
               <input
                 type="password"
-                className="input mt-1 font-mono text-[13px]"
+                className="input mt-1 font-mono text-sm"
                 value={form.client_secret ?? ""}
                 onChange={(e) => set("client_secret", e.target.value)}
                 autoComplete="new-password"
               />
             </label>
-            <p className="text-[12px] text-slate md:col-span-2">
+            <p className="text-xs text-slate md:col-span-2">
               Posted once over the API, stored encrypted, never displayed again. Leave both empty to plan with an existing az login.
             </p>
           </fieldset>
@@ -257,7 +257,7 @@ export function AzureConnectForm({
           }}
         >
           {envs.error ? <ErrorNote error={errorText(envs.error)} /> : null}
-          <label className="text-[13px] text-slate">
+          <label className="text-sm text-slate">
             Environment
             <select
               className="input select mt-1"
@@ -274,7 +274,7 @@ export function AzureConnectForm({
             </select>
           </label>
           {chosen ? (
-            <div className="grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-[13px] md:col-span-2 md:grid-cols-2 xl:col-span-3">
+            <div className="grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-sm md:col-span-2 md:grid-cols-2 xl:col-span-3">
               <p>
                 <span className="label mr-1.5">Tenant</span>
                 <span className="font-mono">{chosen.tenant}</span>
@@ -289,11 +289,11 @@ export function AzureConnectForm({
               </p>
             </div>
           ) : (
-            <p className="text-[13px] text-slate md:col-span-2 xl:col-span-3">
+            <p className="text-sm text-slate md:col-span-2 xl:col-span-3">
               No deploy environment is declared for this install (DEPLOY_ENVIRONMENTS).
             </p>
           )}
-          <p className="text-[12px] text-slate md:col-span-2 xl:col-span-4">
+          <p className="text-xs text-slate md:col-span-2 xl:col-span-4">
             No secret is entered here: the plan signs in with the environment&apos;s Workload Identity, or reads the service
             principal secret from Key Vault when it runs.
           </p>
@@ -306,13 +306,13 @@ export function AzureConnectForm({
         </form>
       )}
       <div className="mt-5 border-t border-line pt-4">
-        <p className="text-[14px] font-semibold text-plum">Connect later</p>
-        <p className="mt-0.5 text-[13px] text-slate">
+        <p className="text-md font-semibold text-heading">Connect later</p>
+        <p className="mt-0.5 text-sm text-slate">
           An operations user records why Azure is not connected yet. The generated assets and their last validation stay the
-          evidence for G6 until a plan runs. Recorded as <span className="font-medium text-plum">{user}</span>.
+          evidence for G6 until a plan runs. Recorded as <span className="font-medium text-heading">{user}</span>.
         </p>
         <div className="mt-2 flex flex-wrap items-end gap-2">
-          <label className="min-w-[320px] flex-1 text-[13px] text-slate">
+          <label className="min-w-[320px] flex-1 text-sm text-slate">
             Connect-later note
             <input className="input mt-1" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Subscription access requested from the platform team" />
           </label>
@@ -323,7 +323,7 @@ export function AzureConnectForm({
             </button>
           </span>
         </div>
-        {canConnectLater ? <p className="mt-1 text-[12.5px] text-slate">{canConnectLater}</p> : null}
+        {canConnectLater ? <p className="mt-1 text-sm text-slate">{canConnectLater}</p> : null}
       </div>
     </Panel>
   );

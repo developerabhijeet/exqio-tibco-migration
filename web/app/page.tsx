@@ -77,7 +77,7 @@ export default function Home() {
             <h1 className="screen-title">{project?.name ?? "No project selected"}</h1>
           </div>
           {report.data ? (
-            <p className="text-[14px] text-slate">
+            <p className="text-md text-slate">
               Last scan {new Date(report.data.created_at).toLocaleString()} · {report.data.files_parsed} of{" "}
               {report.data.files_found} files parsed
             </p>

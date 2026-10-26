@@ -29,13 +29,13 @@ export function MemoryUnavailable({ state, onRetry, retrying }: { state: MemoryS
   const Icon = state === "empty" ? Sprout : DatabaseZap;
   return (
     <section data-testid="memory-unavailable" data-state={state} className="card mx-auto mt-10 max-w-xl px-10 py-12 text-center">
-      <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-purple-lt text-purple-dk">
+      <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent-ink">
         <Icon size={22} aria-hidden />
       </span>
-      <p className="mt-5 text-[17px] font-semibold text-plum">
+      <p className="mt-5 text-lg font-semibold text-heading">
         {title}
         {body ? " " : null}
-        {body ? <span className="mt-2 block text-[15px] font-normal leading-relaxed text-slate">{body}</span> : null}
+        {body ? <span className="mt-2 block text-base font-normal leading-relaxed text-slate">{body}</span> : null}
       </p>
       {state === "unavailable" && onRetry ? (
         <button type="button" className="btn-secondary mt-6" onClick={onRetry} disabled={retrying}>

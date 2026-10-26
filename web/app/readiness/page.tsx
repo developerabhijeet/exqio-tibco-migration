@@ -65,7 +65,7 @@ function Row({ row }: { row: ReadinessRow }) {
   };
   return (
     <tr data-testid="readiness-row" data-status={row.status} data-key={row.key} className="align-top">
-      <td className="px-4 py-3 font-medium text-plum">{row.expectation}</td>
+      <td className="px-4 py-3 font-medium text-heading">{row.expectation}</td>
       <td className="px-4 py-3">
         <Pill tone={s.tone}>{s.text}</Pill>
       </td>
@@ -77,7 +77,7 @@ function Row({ row }: { row: ReadinessRow }) {
                 type="button"
                 data-testid="evidence-link"
                 onClick={() => open(i)}
-                className="flex items-start gap-1 text-left text-[13px] text-purple hover:underline"
+                className="flex items-start gap-1 text-left text-sm text-accent-ink hover:underline"
                 title={e.ref}
               >
                 {busy === i ? <Loader2 size={12} className="mt-1 shrink-0 animate-spin" aria-hidden /> : <ArrowUpRight size={12} className="mt-1 shrink-0" aria-hidden />}
@@ -85,11 +85,11 @@ function Row({ row }: { row: ReadinessRow }) {
               </button>
             </li>
           ))}
-          {row.evidence.length === 0 ? <li className="text-[13px] text-slate">no evidence yet</li> : null}
+          {row.evidence.length === 0 ? <li className="text-sm text-slate">no evidence yet</li> : null}
         </ul>
-        {error ? <p className="mt-1 text-[12px] text-error">{error}</p> : null}
+        {error ? <p className="mt-1 text-xs text-error">{error}</p> : null}
       </td>
-      <td className="px-4 py-3 text-[13px] text-slate">{row.gap ?? ""}</td>
+      <td className="px-4 py-3 text-sm text-slate">{row.gap ?? ""}</td>
     </tr>
   );
 }
@@ -110,10 +110,10 @@ export default function Page() {
             <Pill tone="gate">{r.summary.met} met</Pill>
             <Pill tone="decision">{r.summary.partial} partial</Pill>
             <Pill tone="error">{r.summary.missing} missing</Pill>
-            <span className="text-[13px] text-slate">Status is computed from stored evidence; select a link to open it.</span>
+            <span className="text-sm text-slate">Status is computed from stored evidence; select a link to open it.</span>
           </div>
           <section className="card overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[14px]">
+            <table className="w-full min-w-[900px] text-md">
               <thead>
                 <tr className="table-head">
                   <th className="w-[220px] px-4 py-2.5">Expectation</th>

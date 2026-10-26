@@ -11,7 +11,7 @@ import type { BuildFileEntry } from "@/lib/buildTypes";
 
 const CodeView = dynamic(() => import("@/components/canvas/CodeView"), {
   ssr: false,
-  loading: () => <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-[13px] text-slate">Loading editor</div>,
+  loading: () => <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-sm text-slate">Loading editor</div>,
 });
 
 const ORIGIN: Record<string, { tone: "det" | "ai" | "decision" | "purple"; title: string }> = {
@@ -61,7 +61,7 @@ export function CodeViewer({
       <div
         data-testid={`${testId}-empty`}
         style={{ minHeight: height }}
-        className="flex h-full items-center justify-center rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[14px] text-slate"
+        className="flex h-full items-center justify-center rounded-btn border border-dashed border-line bg-sunken/60 p-6 text-center text-md text-slate"
       >
         {empty}
       </div>
@@ -72,15 +72,15 @@ export function CodeViewer({
     <div className="flex min-w-0 flex-col gap-2" data-testid={testId}>
       <div className="flex min-h-[28px] flex-wrap items-center gap-2">
         <FileCode2 size={15} className="text-slate" aria-hidden />
-        <span data-testid="code-path" className="min-w-0 truncate font-mono text-[12.5px] font-semibold text-plum">
+        <span data-testid="code-path" className="min-w-0 truncate font-mono text-sm font-semibold text-heading">
           {entry.path}
         </span>
         <OriginPill origin={entry.origin} testId="origin-pill" />
-        {file.data ? <span className="text-[12px] text-slate">{file.data.language}</span> : null}
-        <span className="ml-auto text-[12px] text-slate">{formatBytes(entry.size)}</span>
+        {file.data ? <span className="text-xs text-slate">{file.data.language}</span> : null}
+        <span className="ml-auto text-xs text-slate">{formatBytes(entry.size)}</span>
       </div>
       {showRef ? (
-        <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-[12.5px]">
+        <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-sm">
           {ref ? (
             <>
               <p>
@@ -94,7 +94,7 @@ export function CodeViewer({
                       type="button"
                       title={`Line ${ref.source_lines[r.activity_id] ?? "?"} of the process; open it on the canvas`}
                       onClick={() => jumpToStep(r.activity_id, processId)}
-                      className="inline-flex max-w-full flex-wrap items-center gap-x-1 rounded-full border border-line bg-white px-2 py-0.5 text-left hover:border-purple hover:text-purple"
+                      className="inline-flex max-w-full flex-wrap items-center gap-x-1 rounded-full border border-line bg-surface px-2 py-0.5 text-left hover:border-accent hover:text-accent-ink"
                     >
                       <Crosshair size={11} aria-hidden />
                       <span className="font-medium">{r.activity_name}</span>
@@ -126,7 +126,7 @@ export function CodeViewer({
           testId={`${testId}-editor`}
         />
       ) : file.isLoading ? (
-        <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-[13px] text-slate">
+        <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-sm text-slate">
           Loading file
         </div>
       ) : null}

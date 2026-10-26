@@ -22,26 +22,26 @@ const ROLE_TONE: Record<string, "gate" | "decision" | "det"> = {
 
 /** UML-style class boxes: name, stereotype, then the methods the mapping gives the class. */
 function ClassDiagram({ classes }: { classes: Views["classes"] }) {
-  if (classes.length === 0) return <p className="text-[14px] text-slate">No classes in this design.</p>;
+  if (classes.length === 0) return <p className="text-md text-slate">No classes in this design.</p>;
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="class-diagram">
       {classes.map((c) => (
-        <figure key={c.name} className="overflow-hidden rounded-btn border border-plum/25 bg-white">
-          <figcaption className="border-b border-plum/20 bg-warm px-3 py-2">
-            {c.stereotype ? <p className="text-[11.5px] text-slate">{`«${c.stereotype}»`}</p> : null}
-            <p className="font-semibold text-plum">{c.name}</p>
-            <p className="truncate font-mono text-[11px] text-slate" title={`${c.project}/${c.file}`}>
+        <figure key={c.name} className="overflow-hidden rounded-btn border border-heading/25 bg-surface">
+          <figcaption className="border-b border-heading/20 bg-sunken px-3 py-2">
+            {c.stereotype ? <p className="text-xs text-slate">{`«${c.stereotype}»`}</p> : null}
+            <p className="font-semibold text-heading">{c.name}</p>
+            <p className="truncate font-mono text-2xs text-slate" title={`${c.project}/${c.file}`}>
               {c.project}
             </p>
           </figcaption>
           <ul className="divide-y divide-line/60">
             {c.methods.map((m) => (
-              <li key={m} className="px-3 py-1.5 font-mono text-[12px] text-ink">
+              <li key={m} className="px-3 py-1.5 font-mono text-xs text-ink">
                 + {m}()
               </li>
             ))}
             {c.methods.length === 0 ? (
-              <li className="px-3 py-1.5 text-[12.5px] text-slate">no methods</li>
+              <li className="px-3 py-1.5 text-sm text-slate">no methods</li>
             ) : null}
           </ul>
           {c.rule_ids.length > 0 ? (
@@ -61,14 +61,14 @@ function ClassDiagram({ classes }: { classes: Views["classes"] }) {
 
 /** The database shape the process implies: one box per table, columns with how they are used. */
 function TableDiagram({ tables }: { tables: Views["tables"] }) {
-  if (tables.length === 0) return <p className="text-[14px] text-slate">This process touches no tables.</p>;
+  if (tables.length === 0) return <p className="text-md text-slate">This process touches no tables.</p>;
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="er-diagram">
       {tables.map((t) => (
-        <figure key={t.name} className="overflow-hidden rounded-btn border border-purple/30 bg-white">
-          <figcaption className="flex flex-wrap items-center gap-2 border-b border-purple/20 bg-purple-lt px-3 py-2">
-            <Table2 size={15} className="text-purple" aria-hidden />
-            <span className="font-mono font-semibold text-plum">{t.name}</span>
+        <figure key={t.name} className="overflow-hidden rounded-btn border border-accent/30 bg-surface">
+          <figcaption className="flex flex-wrap items-center gap-2 border-b border-accent/20 bg-accent-soft px-3 py-2">
+            <Table2 size={15} className="text-accent-ink" aria-hidden />
+            <span className="font-mono font-semibold text-heading">{t.name}</span>
             <span className="ml-auto flex gap-1">
               {t.verbs.map((v) => (
                 <Pill key={v} tone="det">
@@ -77,7 +77,7 @@ function TableDiagram({ tables }: { tables: Views["tables"] }) {
               ))}
             </span>
           </figcaption>
-          <table className="w-full text-[12.5px]">
+          <table className="w-full text-sm">
             <tbody>
               {t.columns.map((c) => (
                 <tr key={c.name} className="border-b border-line/50 last:border-0">
@@ -91,7 +91,7 @@ function TableDiagram({ tables }: { tables: Views["tables"] }) {
             </tbody>
           </table>
           {t.columns.length === 0 ? (
-            <p className="px-3 py-2 text-[12.5px] text-slate">no columns named in the SQL</p>
+            <p className="px-3 py-2 text-sm text-slate">no columns named in the SQL</p>
           ) : null}
         </figure>
       ))}
@@ -101,24 +101,24 @@ function TableDiagram({ tables }: { tables: Views["tables"] }) {
 
 /** Every statement the service will run, with the parameters it binds. */
 function SqlList({ sql }: { sql: Views["sql"] }) {
-  if (sql.length === 0) return <p className="text-[14px] text-slate">This process runs no SQL.</p>;
+  if (sql.length === 0) return <p className="text-md text-slate">This process runs no SQL.</p>;
   return (
     <ul className="space-y-3" data-testid="sql-list">
       {sql.map((q) => (
         <li key={q.activity_id} className="rounded-btn border border-line">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-warm px-3 py-2 text-[13px]">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-sunken px-3 py-2 text-sm">
             <Pill tone="purple">{q.verb}</Pill>
-            <span className="font-semibold text-plum">{q.activity_name}</span>
+            <span className="font-semibold text-heading">{q.activity_name}</span>
             <span className="text-slate">
               {q.tables.length > 0 ? `on ${q.tables.join(", ")}` : "no table resolved"}
             </span>
             {q.parameters.length > 0 ? (
-              <span className="ml-auto font-mono text-[11.5px] text-slate">
+              <span className="ml-auto font-mono text-xs text-slate">
                 {q.parameters.map((p) => `@${p}`).join(", ")}
               </span>
             ) : null}
           </div>
-          <pre className="overflow-x-auto px-3 py-2 font-mono text-[12px] leading-5 text-ink">{q.statement}</pre>
+          <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-5 text-ink">{q.statement}</pre>
         </li>
       ))}
     </ul>
@@ -127,7 +127,7 @@ function SqlList({ sql }: { sql: Views["sql"] }) {
 
 /** Projects, the database and the queues, with the direction of every connection. */
 function ComponentDiagram({ components }: { components: Views["components"] }) {
-  if (components.length === 0) return <p className="text-[14px] text-slate">No components to draw.</p>;
+  if (components.length === 0) return <p className="text-md text-slate">No components to draw.</p>;
   const KIND_TONE: Record<string, "det" | "gate" | "decision" | "purple"> = {
     project: "purple",
     database: "det",
@@ -139,12 +139,12 @@ function ComponentDiagram({ components }: { components: Views["components"] }) {
   return (
     <ul className="space-y-2" data-testid="component-diagram">
       {components.map((e, i) => (
-        <li key={i} className="flex flex-wrap items-center gap-2 rounded-btn border border-line px-3 py-2 text-[13px]">
-          <span className="font-mono font-medium text-plum">{e.source}</span>
+        <li key={i} className="flex flex-wrap items-center gap-2 rounded-btn border border-line px-3 py-2 text-sm">
+          <span className="font-mono font-medium text-heading">{e.source}</span>
           <span aria-hidden className="text-slate">
             →
           </span>
-          <span className="font-mono font-medium text-plum">{e.target}</span>
+          <span className="font-mono font-medium text-heading">{e.target}</span>
           <span className="text-slate">{e.label}</span>
           <Pill tone={KIND_TONE[e.kind] ?? "det"} className="ml-auto">
             {e.kind}
@@ -166,7 +166,7 @@ export function ArchitectureViews({ views }: { views: DesignRecord["views"] }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("classes");
   if (!views) {
     return (
-      <p className="text-[14px] text-slate">
+      <p className="text-md text-slate">
         This design record was generated before the diagrams were added. Run the design again to draw them.
       </p>
     );
@@ -187,13 +187,13 @@ export function ArchitectureViews({ views }: { views: DesignRecord["views"] }) {
             role="tab"
             aria-selected={tab === key}
             data-testid={`view-${key}`}
-            className={`flex items-center gap-1.5 rounded-btn px-3 py-1.5 text-[13.5px] font-medium ${
-              tab === key ? "bg-purple-lt text-purple" : "text-slate hover:bg-warm"
+            className={`flex items-center gap-1.5 rounded-btn px-3 py-1.5 text-md font-medium ${
+              tab === key ? "bg-accent-soft text-accent-ink" : "text-slate hover:bg-sunken"
             }`}
             onClick={() => setTab(key)}
           >
             <Icon size={15} aria-hidden /> {label}
-            <span className="text-[12px] text-slate">{counts[key]}</span>
+            <span className="text-xs text-slate">{counts[key]}</span>
           </button>
         ))}
       </div>

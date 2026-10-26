@@ -44,7 +44,7 @@ function tree(files: BuildFileEntry[]): Dir {
   return root;
 }
 
-const DOT: Record<string, string> = { code: "bg-det", ai: "bg-ai", agent: "bg-decision", infra: "bg-purple" };
+const DOT: Record<string, string> = { code: "bg-det", ai: "bg-ai", agent: "bg-decision", infra: "bg-accent" };
 
 function TargetDir({
   dir,
@@ -60,10 +60,10 @@ function TargetDir({
   const startOpen = /^(src|tests)(\/|$)/.test(dir.path) || (!!selected && selected.startsWith(`${dir.path}/`));
   return (
     <details open={startOpen}>
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-0.5 text-[13px] hover:bg-warm">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-0.5 text-sm hover:bg-sunken">
         <ChevronRight size={13} className="shrink-0 text-slate transition-transform [details[open]>summary>&]:rotate-90" aria-hidden />
-        <Folder size={13} className="shrink-0 text-purple" aria-hidden />
-        <span className="truncate font-medium text-plum">{dir.name}</span>
+        <Folder size={13} className="shrink-0 text-accent-ink" aria-hidden />
+        <span className="truncate font-medium text-heading">{dir.name}</span>
       </summary>
       <div className="ml-3 border-l border-line pl-1.5">
         <Entries dir={dir} selected={selected} onSelect={onSelect} mine={mine} />
@@ -88,8 +88,8 @@ function Entries({ dir, selected, onSelect, mine }: { dir: Dir; selected: string
             onClick={() => onSelect(f.path)}
             title={`${f.path} (${f.origin})`}
             aria-current={active ? "true" : undefined}
-            className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[12.5px] ${
-              active ? "bg-purple-lt font-semibold text-purple-dk" : mine.has(f.path) ? "text-ink hover:bg-warm" : "text-slate hover:bg-warm"
+            className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-sm ${
+              active ? "bg-accent-soft font-semibold text-accent-ink" : mine.has(f.path) ? "text-ink hover:bg-sunken" : "text-slate hover:bg-sunken"
             }`}
           >
             <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[f.origin] ?? "bg-line"}`} />
@@ -155,7 +155,7 @@ function StepChips({
 }) {
   const ref: TibcoRef | null = entry?.tibco_ref ?? null;
   return (
-    <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-[12.5px]">
+    <div data-testid="tibco-ref" className="rounded-btn border border-line bg-page px-3 py-2 text-sm">
       {!entry ? (
         <p className="text-slate">Select a generated file to see the TIBCO steps it implements.</p>
       ) : ref ? (
@@ -179,7 +179,7 @@ function StepChips({
                     title={line ? `Highlight line ${line} of the TIBCO source` : "The process has no source line for this step"}
                     onClick={() => onPick(r.activity_id)}
                     className={`inline-flex max-w-full flex-wrap items-center gap-x-1 rounded-full border px-2 py-0.5 text-left ${
-                      active ? "border-purple bg-purple-lt text-purple-dk" : "border-line bg-white hover:border-purple hover:text-purple"
+                      active ? "border-accent bg-accent-soft text-accent-ink" : "border-line bg-surface hover:border-accent hover:text-accent-ink"
                     }`}
                   >
                     <Crosshair size={11} aria-hidden />
@@ -333,9 +333,9 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="label">Source and target</p>
-          <h3 className="text-[18px] font-semibold text-plum">TIBCO estate and the generated solution</h3>
+          <h3 className="text-xl font-semibold text-heading">TIBCO estate and the generated solution</h3>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]" role="group" aria-label="Filter generated files by origin">
+        <div className="flex flex-wrap items-center gap-1.5 text-sm" role="group" aria-label="Filter generated files by origin">
           {ORIGINS.map((o) => (
             <button
               key={o}
@@ -350,7 +350,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
                 })
               }
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 ${
-                hidden.has(o) ? "border-line bg-white text-slate line-through" : "border-purple-lt bg-purple-lt text-plum"
+                hidden.has(o) ? "border-line bg-surface text-slate line-through" : "border-accent-soft bg-accent-soft text-heading"
               }`}
             >
               <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${DOT[o]}`} />
@@ -362,7 +362,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
 
       <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
         <div className="min-w-0" data-testid="source-tree">
-          <div className="mb-2 flex gap-1 rounded-btn bg-warm p-1 text-[13px]" role="tablist" aria-label="TIBCO view">
+          <div className="mb-2 flex gap-1 rounded-btn bg-sunken p-1 text-sm" role="tablist" aria-label="TIBCO view">
             {(
               [
                 ["files", "TIBCO files", FolderTree],
@@ -376,7 +376,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
                 aria-selected={left === k}
                 onClick={() => setLeft(k)}
                 className={`flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1 ${
-                  left === k ? "bg-white font-medium text-plum shadow-sm" : "text-slate"
+                  left === k ? "bg-surface font-medium text-heading shadow-sm" : "text-slate"
                 }`}
               >
                 <Icon size={14} aria-hidden /> {label}
@@ -392,7 +392,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
                   canOpen={(f) => procByPath.has(f.path)}
                   selected={sourceProc?.source_path ?? null}
                 />
-                <p className="mt-1 text-[12px] text-slate">
+                <p className="mt-1 text-xs text-slate">
                   Select a process file to open its source below, beside the service generated from it. Other files have no
                   content view here.
                 </p>
@@ -403,13 +403,13 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
           ) : canvas.data ? (
             <div>
               <ProcessCanvas canvas={canvas.data} loading={canvas.isLoading} selected={nodeId} onSelect={selectNode} />
-              <p className="mt-1 text-[12px] text-slate">Select a step to open the generated file that implements it.</p>
+              <p className="mt-1 text-xs text-slate">Select a step to open the generated file that implements it.</p>
             </div>
           ) : null}
         </div>
 
-        <div className="min-w-0 rounded-btn border border-line bg-white p-2" data-testid="target-tree">
-          <p className="px-1 pb-1 text-[12px] font-semibold uppercase tracking-wide text-slate">Generated solution</p>
+        <div className="min-w-0 rounded-btn border border-line bg-surface p-2" data-testid="target-tree">
+          <p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-slate">Generated solution</p>
           {files.error ? <ErrorNote error={files.error} /> : null}
           <div className="max-h-[480px] overflow-y-auto pr-1">
             <Entries dir={root} selected={selected} onSelect={openGenerated} mine={mine} />
@@ -419,7 +419,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
 
       <div className="mt-4 space-y-2">
         {note ? (
-          <p role="status" className="rounded-btn bg-decision-bg px-3 py-1.5 text-[12.5px] text-decision">
+          <p role="status" className="rounded-btn bg-decision-bg px-3 py-1.5 text-sm text-decision">
             {note}
           </p>
         ) : null}

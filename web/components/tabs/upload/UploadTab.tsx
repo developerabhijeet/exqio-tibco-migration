@@ -57,7 +57,7 @@ export function UploadTab() {
       </div>
       <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
       {upload.isPending ? (
-        <p className="flex items-center gap-2 text-[14px] text-slate">
+        <p className="flex items-center gap-2 text-md text-slate">
           <Loader2 size={16} className="animate-spin" aria-hidden /> Uploading
         </p>
       ) : null}
@@ -70,7 +70,7 @@ export function UploadTab() {
             <div className="space-y-4">
               <ValidationPanel files={fileList} report={lastUpload && report.data?.upload_id !== lastUpload ? null : (report.data ?? null)} />
               <div className="card p-5">
-                <p className="text-[14px] text-slate">
+                <p className="text-md text-slate">
                   The scan parses every process, resource, schema and SQL file, builds the neutral model, groups
                   processes into domains and writes the parse report.
                 </p>

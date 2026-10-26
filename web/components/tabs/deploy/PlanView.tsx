@@ -73,7 +73,7 @@ export function PlanView({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="label">terragrunt run --all -- plan</p>
-          <h3 className="text-[18px] font-semibold text-plum">Plan</h3>
+          <h3 className="text-xl font-semibold text-heading">Plan</h3>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {st ? <Pill tone={st.tone}>{st.text}</Pill> : null}
@@ -96,8 +96,8 @@ export function PlanView({
           </span>
         </div>
       </div>
-      <p className="mt-2 text-[13px] text-slate">
-        <span className="font-medium text-plum">{APPLY_REASON}.</span>{" "}
+      <p className="mt-2 text-sm text-slate">
+        <span className="font-medium text-heading">{APPLY_REASON}.</span>{" "}
         {sentence(p?.apply?.reason?.replace(/^apply is not in this build:\s*/i, "") ?? "The pipelines apply after review.")}
       </p>
       {error ? (
@@ -112,12 +112,12 @@ export function PlanView({
       ) : null}
 
       {!p ? (
-        <p className="mt-3 text-[14px] text-slate">
+        <p className="mt-3 text-md text-slate">
           {plan.isLoading ? "Loading." : "No plan yet. Run plan records the connect-later state when Azure is not connected."}
         </p>
       ) : (
         <div className="mt-4 space-y-4">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
             <span>
               <span className="label mr-1.5">Plan hash</span>
               <span className="font-mono">{shortHash(p.plan_hash, 16)}</span>
@@ -126,12 +126,12 @@ export function PlanView({
             {p.decided_by ? (
               <span>
                 <span className="label mr-1.5">Acknowledged by</span>
-                <span className="font-medium text-plum">{p.decided_by}</span>
+                <span className="font-medium text-heading">{p.decided_by}</span>
               </span>
             ) : null}
           </div>
           {offline ? (
-            <div className="rounded-card border border-decision/30 bg-decision-bg px-4 py-3 text-[14px] text-decision">
+            <div className="rounded-card border border-decision/30 bg-decision-bg px-4 py-3 text-md text-decision">
               <p className="font-semibold">{p.status === "acknowledged" ? "Connect later recorded" : "Not planned"}</p>
               {p.note ? <p className="mt-0.5">{p.status === "acknowledged" ? `Note: ${p.note}` : p.note}</p> : null}
             </div>
@@ -139,7 +139,7 @@ export function PlanView({
 
           {p.summary ? (
             <div className="overflow-x-auto rounded-btn border border-line">
-              <table className="w-full text-[13px]">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="table-head">
                     <th className="px-3 py-2">Unit</th>
@@ -151,7 +151,7 @@ export function PlanView({
                 <tbody className="divide-y divide-line">
                   {p.summary.units.map((u) => (
                     <tr key={u.unit} data-testid="plan-unit">
-                      <td className="px-3 py-1.5 font-mono text-[12px]">{u.unit}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs">{u.unit}</td>
                       <td className="px-3 py-1.5 text-right text-gate">{u.add}</td>
                       <td className="px-3 py-1.5 text-right text-decision">{u.change}</td>
                       <td className="px-3 py-1.5 text-right text-error">{u.destroy}</td>
@@ -172,21 +172,21 @@ export function PlanView({
           {offline ? (
             <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
               <div data-testid="last-validation">
-                <p className="mb-2 text-[14px] font-semibold text-plum">Last validation</p>
+                <p className="mb-2 text-md font-semibold text-heading">Last validation</p>
                 <ValidationRows validation={p.last_validation} />
               </div>
               <div>
-                <p className="mb-2 text-[14px] font-semibold text-plum">Generated assets</p>
-                <ul className="divide-y divide-line rounded-btn border border-line text-[13px]">
+                <p className="mb-2 text-md font-semibold text-heading">Generated assets</p>
+                <ul className="divide-y divide-line rounded-btn border border-line text-sm">
                   {[...kinds.entries()].map(([k, n]) => (
                     <li key={k} className="flex justify-between px-3 py-1.5">
                       <span>{k}</span>
-                      <span className="font-semibold text-plum">{n}</span>
+                      <span className="font-semibold text-heading">{n}</span>
                     </li>
                   ))}
                   {kinds.size === 0 ? <li className="px-3 py-1.5 text-slate">No infrastructure files.</li> : null}
                 </ul>
-                <p className="mt-1.5 text-[12.5px] text-slate">The files themselves are in Build, under Infrastructure.</p>
+                <p className="mt-1.5 text-sm text-slate">The files themselves are in Build, under Infrastructure.</p>
               </div>
             </div>
           ) : null}

@@ -47,8 +47,8 @@ function Tile({ label: name, value, sub, icon: Icon }: {
       <p className="label flex items-center gap-1.5">
         <Icon size={14} aria-hidden /> {name}
       </p>
-      <p className="mt-1 text-[26px] font-semibold text-plum">{value}</p>
-      {sub ? <p className="text-[12.5px] text-slate">{sub}</p> : null}
+      <p className="mt-1 text-3xl font-semibold text-heading">{value}</p>
+      {sub ? <p className="text-sm text-slate">{sub}</p> : null}
     </div>
   );
 }
@@ -58,16 +58,16 @@ function Share({ value, of }: { value: number; of: number }) {
   const pct = of > 0 ? (value / of) * 100 : 0;
   return (
     <span className="flex items-center gap-2">
-      <span aria-hidden className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-warm">
-        <span className="block h-full rounded-full bg-purple" style={{ width: `${Math.max(pct, 1.5)}%` }} />
+      <span aria-hidden className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-sunken">
+        <span className="block h-full rounded-full bg-accent" style={{ width: `${Math.max(pct, 1.5)}%` }} />
       </span>
-      <span className="tabular-nums text-[12.5px] text-slate">{pct.toFixed(0)}%</span>
+      <span className="tabular-nums text-sm text-slate">{pct.toFixed(0)}%</span>
     </span>
   );
 }
 
 function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: number }) {
-  if (rows.length === 0) return <p className="px-4 py-3 text-[14px] text-slate">No model calls yet.</p>;
+  if (rows.length === 0) return <p className="px-4 py-3 text-md text-slate">No model calls yet.</p>;
   const ordered = [...rows].sort((a, b) => {
     const ia = AGENT_ORDER.indexOf(a.agent);
     const ib = AGENT_ORDER.indexOf(b.agent);
@@ -75,7 +75,7 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
   });
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-[13.5px]" data-testid="agent-costs">
+      <table className="w-full text-md" data-testid="agent-costs">
         <thead className="border-b border-line text-left text-slate">
           <tr>
             <th className="px-3 py-2">Agent</th>
@@ -92,9 +92,9 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
         <tbody>
           {ordered.map((r) => (
             <tr key={r.agent} className="border-b border-line/60 last:border-0" data-agent={r.agent}>
-              <td className="px-3 py-2 font-medium text-plum">
+              <td className="px-3 py-2 font-medium text-heading">
                 <span className="flex items-center gap-2">
-                  <Bot size={15} className="text-purple" aria-hidden />
+                  <Bot size={15} className="text-accent-ink" aria-hidden />
                   {label(r.agent)}
                   {r.failed_calls > 0 ? (
                     <span title={`${r.failed_calls} failed call(s)`}>
@@ -109,7 +109,7 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
               <td className="px-3 py-2 text-right tabular-nums text-slate">
                 {r.tokens_cached > 0 ? fmt.format(r.tokens_cached) : "n/a"}
               </td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums text-plum">{usd(r.cost_usd)}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums text-heading">{usd(r.cost_usd)}</td>
               <td className="px-3 py-2"><Share value={r.cost_usd} of={totalCost} /></td>
               <td className="px-3 py-2 text-right tabular-nums text-slate">{secs(r.latency_ms_avg)}</td>
               <td className="px-3 py-2 text-slate">
@@ -135,24 +135,24 @@ function SessionRow({ session, totalCost }: { session: AgentSession; totalCost: 
     <li className="border-b border-line/60 last:border-0" data-testid="session-row">
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-warm"
+        className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
         <ChevronRight size={15} className={`shrink-0 text-slate transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
-        <span className="w-24 shrink-0 font-medium text-plum">{session.job_kind}</span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] text-slate">
+        <span className="w-24 shrink-0 font-medium text-heading">{session.job_kind}</span>
+        <span className="min-w-0 flex-1 truncate text-md text-slate">
           {session.process_name ?? "whole project"} · {when}
           {session.status && session.status !== "done" ? ` · ${session.status}` : ""}
         </span>
-        <span className="shrink-0 text-[13px] tabular-nums text-slate">{fmt.format(t.model_calls)} calls</span>
-        <span className="w-20 shrink-0 text-right text-[13px] tabular-nums text-slate">
+        <span className="shrink-0 text-sm tabular-nums text-slate">{fmt.format(t.model_calls)} calls</span>
+        <span className="w-20 shrink-0 text-right text-sm tabular-nums text-slate">
           {fmt.format(t.tokens_in + t.tokens_out)} tok
         </span>
-        <span className="w-20 shrink-0 text-right font-semibold tabular-nums text-plum">{usd(t.cost_usd)}</span>
+        <span className="w-20 shrink-0 text-right font-semibold tabular-nums text-heading">{usd(t.cost_usd)}</span>
       </button>
       {open ? (
-        <div className="bg-warm/40 px-4 pb-3 pt-1">
+        <div className="bg-sunken/40 px-4 pb-3 pt-1">
           <AgentTable rows={session.by_agent} totalCost={t.cost_usd || totalCost} />
         </div>
       ) : null}
@@ -166,11 +166,11 @@ function ResetMeter({ projectId, calls }: { projectId: string; calls: number }) 
   const [confirming, setConfirming] = useState(false);
   if (confirming) {
     return (
-      <span className="flex items-center gap-2 text-[13.5px]">
+      <span className="flex items-center gap-2 text-md">
         <span className="text-slate">Clear {fmt.format(calls)} model calls?</span>
         <button
           type="button"
-          className="btn border border-line bg-white px-3 py-1 text-error hover:bg-error-bg"
+          className="btn border border-line bg-surface px-3 py-1 text-error hover:bg-error-bg"
           data-testid="tokenomics-reset-confirm"
           disabled={reset.isPending}
           onClick={() => reset.mutate(undefined, { onSettled: () => setConfirming(false) })}
@@ -226,7 +226,7 @@ export default function TokenomicsPage() {
       ) : (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <p className="text-[13.5px] text-slate">
+            <p className="text-md text-slate">
               Counting since the project was created. Resetting clears the model calls only; the runs,
               gates and builds stay, and the reset goes on the audit trail.
             </p>
@@ -274,7 +274,7 @@ export default function TokenomicsPage() {
             testId="sessions"
           >
             {sessions.length === 0 ? (
-              <p className="px-4 py-3 text-[14px] text-slate">No sessions yet.</p>
+              <p className="px-4 py-3 text-md text-slate">No sessions yet.</p>
             ) : (
               <ul>
                 {sessions.map((s) => (

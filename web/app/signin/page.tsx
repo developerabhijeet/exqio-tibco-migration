@@ -68,19 +68,19 @@ export default function SignInPage() {
         <div className="flex items-center justify-center gap-3">
           <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
           <span className="leading-tight">
-            <span className="block font-display text-[19px] font-semibold tracking-[-0.01em] text-white">
+            <span className="block font-display text-xl font-semibold tracking-[-0.01em] text-white">
               {brand_name} Migrate
             </span>
-            <span className="block text-[12px] text-lilac">TIBCO BusinessWorks to .NET</span>
+            <span className="block text-xs text-lilac">TIBCO BusinessWorks to .NET</span>
           </span>
         </div>
 
         <div
           data-testid="signin-card"
           data-stage={stage}
-          className="mt-7 overflow-hidden rounded-card bg-white shadow-pop"
+          className="mt-7 overflow-hidden rounded-card bg-surface shadow-pop"
         >
-          <div className="flex items-center justify-between gap-3 border-b border-line bg-warm px-5 py-2.5">
+          <div className="flex items-center justify-between gap-3 border-b border-line bg-sunken px-5 py-2.5">
             <span className="flex items-center gap-2 text-eyebrow uppercase text-slate">
               <ShieldCheck size={14} aria-hidden />
               {stage === "provider" ? "Sign in" : stage === "done" ? "Signed in" : provider}
@@ -134,11 +134,11 @@ function Provider({
 }) {
   return (
     <>
-      <h1 className="font-display text-[24px] font-semibold tracking-[-0.01em] text-plum">Sign in</h1>
+      <h1 className="font-display text-3xl font-semibold tracking-[-0.01em] text-heading">Sign in</h1>
 
       <button
         type="button"
-        className="btn-primary mt-5 w-full justify-center py-2.5 text-[14.5px]"
+        className="btn-primary mt-5 w-full justify-center py-2.5 text-base"
         data-testid="signin-continue"
         onClick={onContinue}
       >
@@ -146,7 +146,7 @@ function Provider({
       </button>
 
       {session ? (
-        <p className="mt-5 rounded-btn bg-gate-bg px-3 py-2 text-[12.5px] text-ink" data-testid="signin-existing">
+        <p className="mt-5 rounded-btn bg-gate-bg px-3 py-2 text-sm text-ink" data-testid="signin-existing">
           <Check size={13} className="mr-1 inline align-[-2px] text-gate" aria-hidden />
           Last signed in on this browser as <span className="font-medium">{session.email}</span>.
         </p>
@@ -159,7 +159,7 @@ function Chooser({ onChoose }: { onChoose: (a: Account) => void }) {
   return (
     <>
       {/* The provider's name is in the card's header bar, which is where its own screens put it. */}
-      <h1 className="font-display text-[22px] font-semibold text-plum">Choose an account</h1>
+      <h1 className="font-display text-2xl font-semibold text-heading">Choose an account</h1>
 
       <ul className="mt-5 divide-y divide-line overflow-hidden rounded-btn border border-line" data-testid="signin-accounts">
         {ACCOUNTS.map((a) => (
@@ -168,14 +168,14 @@ function Chooser({ onChoose }: { onChoose: (a: Account) => void }) {
               type="button"
               data-testid={`signin-account-${a.user}`}
               onClick={() => onChoose(a)}
-              className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-warm"
+              className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-sunken"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-lt text-[13.5px] font-semibold text-purple">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-md font-semibold text-accent-ink">
                 {a.initial}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[14px] font-medium text-ink">{a.email}</span>
-                <span className="block truncate text-[12px] text-slate">
+                <span className="block truncate text-md font-medium text-ink">{a.email}</span>
+                <span className="block truncate text-xs text-slate">
                   {a.role} · gates {personaOf(a.user).gates.join(", ")}
                 </span>
               </span>
@@ -192,9 +192,9 @@ function Chooser({ onChoose }: { onChoose: (a: Account) => void }) {
 function Signing({ provider, account }: { provider: string; account: Account | null }) {
   return (
     <div className="flex min-h-[248px] flex-col items-center justify-center text-center">
-      <Loader2 size={30} className="animate-spin text-purple" aria-hidden />
-      <p className="mt-4 text-[14px] text-ink">Redirecting to {provider}</p>
-      <p className="mt-1 text-[12.5px] text-slate">{account?.email}</p>
+      <Loader2 size={30} className="animate-spin text-accent-ink" aria-hidden />
+      <p className="mt-4 text-md text-ink">Redirecting to {provider}</p>
+      <p className="mt-1 text-sm text-slate">{account?.email}</p>
     </div>
   );
 }
@@ -203,10 +203,10 @@ function Done({ account, onEnter }: { account: Account; onEnter: () => void }) {
   const persona = personaOf(account.user);
   return (
     <div data-testid="signin-done">
-      <p className="flex items-center gap-2 text-[15px] font-semibold text-gate">
+      <p className="flex items-center gap-2 text-base font-semibold text-gate">
         <Check size={18} aria-hidden /> Signed in as {account.email}
       </p>
-      <p className="mt-1.5 text-[13px] text-slate">
+      <p className="mt-1.5 text-sm text-slate">
         Acting as <span className="font-medium text-ink">{persona.role}</span>. {persona.responsibility}
       </p>
       <button type="button" className="btn-primary mt-6 w-full justify-center py-2.5" data-testid="signin-enter" onClick={onEnter}>

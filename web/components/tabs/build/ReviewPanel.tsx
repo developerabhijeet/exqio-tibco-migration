@@ -19,19 +19,19 @@ function Rejections({ rejections }: { rejections: BuildRejection[] }) {
   if (rejections.length === 0) return null;
   return (
     <details className="mb-3" data-testid="builder-rejections">
-      <summary className="cursor-pointer text-[13px] font-medium text-plum">
+      <summary className="cursor-pointer text-sm font-medium text-heading">
         What the checks refused ({rejections.length})
       </summary>
       <ul className="mt-2 space-y-2">
         {rejections.map((r, i) => (
-          <li key={`${r.path}-${r.attempt ?? 0}-${i}`} className="rounded-btn border border-line p-2.5 text-[12.5px]">
+          <li key={`${r.path}-${r.attempt ?? 0}-${i}`} className="rounded-btn border border-line p-2.5 text-sm">
             <div className="flex flex-wrap items-baseline gap-2">
-              <span className="break-all font-mono text-[11.5px] text-slate">{r.path}</span>
+              <span className="break-all font-mono text-xs text-slate">{r.path}</span>
               {r.attempt ? <Pill tone="det">attempt {r.attempt}</Pill> : null}
             </div>
             <p className="mt-1 text-ink">{r.reason}</p>
             {r.body ? (
-              <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-page p-2 font-mono text-[11px] leading-5 text-slate">
+              <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-page p-2 font-mono text-2xs leading-5 text-slate">
                 {r.body}
               </pre>
             ) : null}
@@ -68,7 +68,7 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
       actions={
         list.length > 0 ? (
           <span className="flex flex-wrap items-center gap-2">
-            <span className="text-[13px] text-slate" data-testid="review-decision-summary">
+            <span className="text-sm text-slate" data-testid="review-decision-summary">
               {kept} kept · {list.length - kept - undecided} rejected · {undecided} undecided
             </span>
             {undecided > 0 ? (
@@ -102,7 +102,7 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
       {reviews.error ? <ErrorNote error={reviews.error} /> : null}
       {builder ? (
         <>
-          <p className="mb-3 text-[13px] text-slate">
+          <p className="mb-3 text-sm text-slate">
             Code Builder ({builder.provider ?? "no provider"}): {builder.filled.length} file(s) filled,{" "}
             {builder.rejections.length} reply(ies) rejected by the code checks.
             {builder.filled.length === 0 ? " The reviewers only read agent-written code, so there was nothing to review." : ""}
@@ -113,18 +113,18 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
         </>
       ) : null}
       {list.length === 0 ? (
-        <p className="text-[14px] text-slate">No review findings.</p>
+        <p className="text-md text-slate">No review findings.</p>
       ) : (
         <ul className="space-y-2">
           {list.map((r, i) => {
             const t = TRIAGE[r.triage] ?? { tone: "det" as const, text: r.triage };
             return (
-              <li key={i} data-testid="review-finding" className="rounded-btn border border-line p-3 text-[13.5px]">
+              <li key={i} data-testid="review-finding" className="rounded-btn border border-line p-3 text-md">
                 <div className="flex flex-wrap items-center gap-2">
                   <Pill tone="ai">{r.reviewer}</Pill>
                   <Pill tone={t.tone}>{t.text}</Pill>
                   {r.file ? (
-                    <span className="font-mono text-[12px] text-slate">
+                    <span className="font-mono text-xs text-slate">
                       {r.file}
                       {r.line ? `:${r.line}` : ""}
                     </span>
@@ -153,7 +153,7 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
                     <X size={15} aria-hidden /> Reject
                   </button>
                   {r.decision ? (
-                    <span className="flex items-center gap-1.5 text-[12.5px] text-slate">
+                    <span className="flex items-center gap-1.5 text-sm text-slate">
                       {r.applied_in ? (
                         <>
                           <Check size={13} className="text-gate" aria-hidden /> applied in a later build

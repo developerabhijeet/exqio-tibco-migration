@@ -36,10 +36,10 @@ function SignInPreview({ config, onClose }: { config: IdentityConfig; onClose: (
         aria-modal="true"
         aria-label={`${provider.name} sign-in preview`}
         data-testid="sso-preview"
-        className="relative w-[440px] max-w-full overflow-hidden rounded-card bg-white shadow-pop"
+        className="relative w-[440px] max-w-full overflow-hidden rounded-card bg-surface shadow-pop"
       >
-        <div className="flex items-center justify-between border-b border-line bg-warm px-5 py-2.5">
-          <span className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-slate">
+        <div className="flex items-center justify-between border-b border-line bg-sunken px-5 py-2.5">
+          <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.06em] text-slate">
             <ShieldCheck size={14} aria-hidden /> Sign-in preview
           </span>
           <button type="button" className="btn-ghost" aria-label="Close" onClick={onClose}>
@@ -48,12 +48,12 @@ function SignInPreview({ config, onClose }: { config: IdentityConfig; onClose: (
         </div>
 
         <div className="px-7 py-7">
-          <p className="text-[13px] font-semibold uppercase tracking-[0.06em] text-slate">{provider.name}</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.06em] text-slate">{provider.name}</p>
           {stage === "account" ? (
             <>
-              <h3 className="mt-3 font-display text-[22px] font-semibold text-plum">Sign in</h3>
-              <p className="mt-1 text-[13px] text-slate">to continue to {config.audience || "the migrated service"}</p>
-              <div className="mt-5 rounded-btn border border-line px-3 py-2.5 text-[14px] text-ink">{account}</div>
+              <h3 className="mt-3 font-display text-2xl font-semibold text-heading">Sign in</h3>
+              <p className="mt-1 text-sm text-slate">to continue to {config.audience || "the migrated service"}</p>
+              <div className="mt-5 rounded-btn border border-line px-3 py-2.5 text-md text-ink">{account}</div>
               <button
                 type="button"
                 className="btn-primary mt-4 w-full"
@@ -65,21 +65,21 @@ function SignInPreview({ config, onClose }: { config: IdentityConfig; onClose: (
               >
                 Continue
               </button>
-              <p className="mt-3 text-[12px] text-slate">
+              <p className="mt-3 text-xs text-slate">
                 {config.instance || "No authority endpoint is configured yet"}
               </p>
             </>
           ) : stage === "signing" ? (
             <div className="flex min-h-[200px] flex-col items-center justify-center text-center">
-              <Loader2 size={28} className="animate-spin text-purple" aria-hidden />
-              <p className="mt-3 text-[14px] text-slate">Redirecting to {provider.name}</p>
+              <Loader2 size={28} className="animate-spin text-accent-ink" aria-hidden />
+              <p className="mt-3 text-md text-slate">Redirecting to {provider.name}</p>
             </div>
           ) : (
             <div className="min-h-[200px]">
-              <p className="flex items-center gap-2 text-[15px] font-semibold text-gate">
+              <p className="flex items-center gap-2 text-base font-semibold text-gate">
                 <Check size={18} aria-hidden /> Signed in
               </p>
-              <dl className="mt-4 space-y-2 text-[13px]">
+              <dl className="mt-4 space-y-2 text-sm">
                 {[
                   ["Account", account],
                   ["Issuer", config.instance || "not configured"],
@@ -88,18 +88,18 @@ function SignInPreview({ config, onClose }: { config: IdentityConfig; onClose: (
                 ].map(([k, v]) => (
                   <div key={k} className="flex gap-3">
                     <dt className="w-20 shrink-0 text-slate">{k}</dt>
-                    <dd className="min-w-0 flex-1 break-all font-mono text-[12px] text-ink">{v}</dd>
+                    <dd className="min-w-0 flex-1 break-all font-mono text-xs text-ink">{v}</dd>
                   </div>
                 ))}
               </dl>
-              <p className="mt-4 rounded-btn bg-page px-3 py-2 font-mono text-[11px] text-slate">
+              <p className="mt-4 rounded-btn bg-page px-3 py-2 font-mono text-2xs text-slate">
                 Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6…
               </p>
             </div>
           )}
         </div>
 
-        <p className="border-t border-line bg-page px-5 py-2.5 text-[11.5px] leading-snug text-slate">
+        <p className="border-t border-line bg-page px-5 py-2.5 text-xs leading-snug text-slate">
           The sign-in your callers see, drawn from the values above. Nothing leaves this page and no credential is
           held here.
         </p>
@@ -164,15 +164,15 @@ export function IdentityPanel() {
               data-testid={`identity-provider-${p.key}`}
               onClick={() => set("provider", p.key as ProviderKey)}
               className={`flex min-w-[230px] flex-1 flex-col items-start gap-0.5 rounded-card border px-4 py-3 text-left transition-colors ${
-                on ? "border-purple bg-purple-lt" : "border-line bg-white hover:bg-warm"
+                on ? "border-accent bg-accent-soft" : "border-line bg-surface hover:bg-sunken"
               }`}
             >
               <span className="flex w-full items-center gap-2">
                 {p.key === "entra" ? <MicrosoftIcon size={16} /> : <ShieldCheck size={16} className="text-slate" aria-hidden />}
-                <span className={`text-[14.5px] font-semibold ${on ? "text-purple" : "text-plum"}`}>{p.name}</span>
-                {on ? <Check size={15} className="ml-auto text-purple" aria-hidden /> : null}
+                <span className={`text-base font-semibold ${on ? "text-accent-ink" : "text-heading"}`}>{p.name}</span>
+                {on ? <Check size={15} className="ml-auto text-accent-ink" aria-hidden /> : null}
               </span>
-              <span className="text-[12px] text-slate">
+              <span className="text-xs text-slate">
                 {p.also} · {p.docs}
               </span>
             </button>
@@ -186,11 +186,11 @@ export function IdentityPanel() {
             const value = String(config[f.key] ?? "");
             const open = reveal === f.key;
             return (
-              <label key={f.key} className="block text-[13px]">
+              <label key={f.key} className="block text-sm">
                 <span className="flex flex-wrap items-baseline gap-2">
                   <span className="label">{f.label}</span>
-                  {f.optional ? <span className="text-[11px] text-slate">optional</span> : null}
-                  <code className="ml-auto rounded bg-page px-1.5 py-0.5 font-mono text-[11px] text-slate">
+                  {f.optional ? <span className="text-2xs text-slate">optional</span> : null}
+                  <code className="ml-auto rounded bg-page px-1.5 py-0.5 font-mono text-2xs text-slate">
                     {f.setting(provider.section)}
                   </code>
                 </span>
@@ -216,23 +216,23 @@ export function IdentityPanel() {
                     </button>
                   ) : null}
                 </span>
-                <span className="mt-0.5 block text-[12px] text-slate">{f.hint}</span>
+                <span className="mt-0.5 block text-xs text-slate">{f.hint}</span>
               </label>
             );
           })}
 
           <div className="flex flex-wrap items-end gap-4 pt-1">
-            <label className="flex items-center gap-2 text-[13px] text-ink">
+            <label className="flex items-center gap-2 text-sm text-ink">
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-[color:var(--purple)]"
+                className="h-4 w-4 accent-[color:rgb(var(--c-accent))]"
                 data-testid="identity-https"
                 checked={config.requireHttps}
                 onChange={(e) => set("requireHttps", e.target.checked)}
               />
               Require HTTPS for provider metadata
             </label>
-            <label className="text-[13px]">
+            <label className="text-sm">
               <span className="label">Clock skew (minutes)</span>
               <input
                 className="input mt-1 w-28"
@@ -252,31 +252,31 @@ export function IdentityPanel() {
           <p className="label">Generated appsettings section</p>
           <pre
             data-testid="identity-appsettings"
-            className="mt-1 max-h-[340px] overflow-auto rounded-btn border border-line bg-page p-3 font-mono text-[11.5px] leading-5 text-ink"
+            className="mt-1 max-h-[340px] overflow-auto rounded-btn border border-line bg-page p-3 font-mono text-xs leading-5 text-ink"
           >
             {appsettings(config)}
           </pre>
           {gaps.length > 0 ? (
-            <p className="mt-2 rounded-btn bg-decision-bg px-3 py-2 text-[12.5px] text-ink" data-testid="identity-gaps">
+            <p className="mt-2 rounded-btn bg-decision-bg px-3 py-2 text-sm text-ink" data-testid="identity-gaps">
               Still to fill: {gaps.map((f) => f.label).join(", ")}.
             </p>
           ) : null}
         </div>
       </div>
 
-      <div className="mt-5 grid gap-3 text-[12.5px] leading-relaxed text-slate md:grid-cols-2">
+      <div className="mt-5 grid gap-3 text-sm leading-relaxed text-slate md:grid-cols-2">
         <p className="rounded-btn border border-line bg-page px-3 py-2">
-          <span className="font-semibold text-plum">Secrets are not stored here.</span> A client secret or API token
+          <span className="font-semibold text-heading">Secrets are not stored here.</span> A client secret or API token
           typed above stays in this form while the page is open and is never written to storage. The generated
           application reads its secrets from Azure Key Vault with its managed identity, so no secret is carried in its
           configuration, its container environment or its image.
         </p>
         <p className="rounded-btn border border-line bg-page px-3 py-2">
-          <span className="font-semibold text-plum">Where these values go.</span> Each field names the key the generated
+          <span className="font-semibold text-heading">Where these values go.</span> Each field names the key the generated
           service reads. In Development the service issues its own token for Swagger and the verifier; in every other
           environment it validates provider tokens against this section. Saving records the configuration against your
           user ({user}); it is not yet written into a build, so change it freely while the design is being reviewed.
-          The sign-in screen at <code className="font-mono text-[11.5px]">/signin</code> walks the flow these values
+          The sign-in screen at <code className="font-mono text-xs">/signin</code> walks the flow these values
           describe; it contacts no provider, and no screen of this application requires it.
         </p>
       </div>

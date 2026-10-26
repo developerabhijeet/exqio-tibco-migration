@@ -14,8 +14,8 @@ export function MemoryStatusPill({ status }: { status: MemoryStatus | undefined 
   }, []);
 
   let text = "Checking memory";
-  let tone = "bg-white text-slate ring-line";
-  let dot = "bg-line-dk";
+  let tone = "bg-surface text-slate ring-line";
+  let dot = "bg-line-strong";
   if (status) {
     if (!status.configured) text = "Not configured";
     else if (!status.available) {
@@ -25,7 +25,7 @@ export function MemoryStatusPill({ status }: { status: MemoryStatus | undefined 
     } else if (status.revision === null) text = "No revisions yet";
     else {
       text = [`Revision ${status.revision}`, status.phase, relativeTime(status.at)].filter(Boolean).join(" · ");
-      tone = "bg-white text-plum ring-line";
+      tone = "bg-surface text-heading ring-line";
       dot = "bg-gate";
     }
   }
@@ -34,13 +34,13 @@ export function MemoryStatusPill({ status }: { status: MemoryStatus | undefined 
     <div className="flex items-center gap-3">
       <span
         data-testid="memory-status"
-        className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium shadow-card ring-1 ring-inset ${tone}`}
+        className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-md font-medium shadow-card ring-1 ring-inset ${tone}`}
       >
         <span className={`h-2 w-2 rounded-full ${dot}`} aria-hidden />
         {text}
       </span>
       {pending > 0 ? (
-        <span className="inline-flex items-center gap-1.5 text-[13px] text-slate" data-testid="memory-pending">
+        <span className="inline-flex items-center gap-1.5 text-sm text-slate" data-testid="memory-pending">
           <Loader2 size={14} className="animate-spin" aria-hidden />
           {pending} {pending === 1 ? "ingest" : "ingests"} pending
         </span>

@@ -3,6 +3,7 @@
 // Read-only Monaco, loaded from this app's public/monaco (copied at install), never a CDN.
 import { useEffect, useRef, useState } from "react";
 import Editor, { loader, type OnMount } from "@monaco-editor/react";
+import { cssColor, isDarkNow, useThemed } from "@/lib/theme";
 import type { XmlHighlight } from "@/lib/xmlspan";
 
 // Monaco loads its language services into web workers it creates from a blob. A blob worker has no
@@ -51,6 +52,8 @@ export default function CodeView({
   const monacoRef = useRef<Monaco | null>(null);
   const decorations = useRef<string[]>([]);
   const [missing, setMissing] = useState(false);
+  // Monaco's own theme follows the page; null until mounted so it never opens in the wrong one.
+  const dark = useThemed(isDarkNow);
 
   // The editor files are copied into public/monaco by scripts/copy-monaco.mjs; say so if they are not there.
   useEffect(() => {
@@ -79,7 +82,7 @@ export default function CodeView({
     decorations.current = editor.deltaDecorations(decorations.current, [
       ...band.map(([a, b]) => ({
         range: new monaco.Range(a, 1, b, 1),
-        options: { isWholeLine: true, className: "xml-hl-line", overviewRuler: { color: "#FFE27A", position: 4 } },
+        options: { isWholeLine: true, className: "xml-hl-line", overviewRuler: { color: cssColor("highlight-strong"), position: 4 } },
       })),
       {
         range: new monaco.Range(highlight.focus, 1, highlight.focus, 1),
@@ -89,11 +92,11 @@ export default function CodeView({
     editor.revealLineInCenter(highlight.focus);
   };
 
-  useEffect(apply, [highlight, value]);
+  useEffect(apply, [highlight, value, dark]);
 
   if (missing) {
     return (
-      <div role="alert" className="rounded-btn border border-error/30 bg-error-bg p-4 text-[14px] text-error">
+      <div role="alert" className="rounded-btn border border-error/30 bg-error-bg p-4 text-md text-error">
         The code viewer files are missing from public/monaco. Run npm install (or npm run dev) in web/ to copy them.
       </div>
     );
@@ -108,31 +111,37 @@ export default function CodeView({
       data-hl-focus-text={highlight ? (value.split(/\r\n|\n|\r/)[highlight.focus - 1] ?? "").trim() : undefined}
       className="overflow-hidden rounded-btn border border-line"
     >
-      <Editor
-        height={height}
-        language={language}
-        value={value}
-        theme="vs"
-        loading={<div className="p-4 text-[13px] text-slate">Loading editor</div>}
-        options={{
-          readOnly: true,
-          domReadOnly: true,
-          minimap: { enabled: false },
-          fontSize: 12.5,
-          lineHeight: 19,
-          scrollBeyondLastLine: false,
-          wordWrap: wrap ? "on" : "off",
-          renderLineHighlight: "none",
-          folding: true,
-          stickyScroll: { enabled: false },
-          automaticLayout: true,
-        }}
-        onMount={(editor, monaco) => {
-          editorRef.current = editor;
-          monacoRef.current = monaco;
-          apply();
-        }}
-      />
+      {dark === null ? (
+        <div className="p-4 text-sm text-slate" style={{ height }}>
+          Loading editor
+        </div>
+      ) : (
+        <Editor
+          height={height}
+          language={language}
+          value={value}
+          theme={dark ? "vs-dark" : "vs"}
+          loading={<div className="p-4 text-sm text-slate">Loading editor</div>}
+          options={{
+            readOnly: true,
+            domReadOnly: true,
+            minimap: { enabled: false },
+            fontSize: 12.5,
+            lineHeight: 19,
+            scrollBeyondLastLine: false,
+            wordWrap: wrap ? "on" : "off",
+            renderLineHighlight: "none",
+            folding: true,
+            stickyScroll: { enabled: false },
+            automaticLayout: true,
+          }}
+          onMount={(editor, monaco) => {
+            editorRef.current = editor;
+            monacoRef.current = monaco;
+            apply();
+          }}
+        />
+      )}
     </div>
   );
 }

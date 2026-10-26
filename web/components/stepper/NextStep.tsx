@@ -46,15 +46,15 @@ export function NextStep({
 
   if (!next) {
     return (
-      <div className="card flex items-center gap-2 px-4 py-3 text-[14px]">
+      <div className="card flex items-center gap-2 px-4 py-3 text-md">
         {done ? (
           <>
             <CheckCircle2 size={18} className="text-gate" aria-hidden />
-            <span className="font-semibold text-plum">{step.label} is the last step, and it is done.</span>
+            <span className="font-semibold text-heading">{step.label} is the last step, and it is done.</span>
           </>
         ) : (
           <span className="text-slate">
-            <span className="font-semibold text-plum">{step.label}</span> is the last step. {blockedReason(step)}
+            <span className="font-semibold text-heading">{step.label}</span> is the last step. {blockedReason(step)}
           </span>
         )}
       </div>
@@ -67,15 +67,15 @@ export function NextStep({
       data-ready={done ? "yes" : "no"}
       className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3"
     >
-      <p className="text-[14px] text-slate">
+      <p className="text-md text-slate">
         {done ? (
           <>
             <CheckCircle2 size={16} className="mr-1.5 inline align-text-bottom text-gate" aria-hidden />
-            <span className="font-semibold text-plum">{step.label}</span> is done. Next is {next.label}.
+            <span className="font-semibold text-heading">{step.label}</span> is done. Next is {next.label}.
           </>
         ) : (
           <>
-            <span className="font-semibold text-plum">{step.label}</span> is not finished yet.{" "}
+            <span className="font-semibold text-heading">{step.label}</span> is not finished yet.{" "}
             <span data-testid="next-step-reason">{blockedReason(step)}</span>
           </>
         )}

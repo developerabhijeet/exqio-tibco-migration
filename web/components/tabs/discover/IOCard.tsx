@@ -22,10 +22,10 @@ function Fields({ node, depth = 0 }: { node: FieldNode; depth?: number }) {
     <ul className={depth ? "ml-4 border-l border-line pl-3" : ""}>
       {children.map((c, i) => (
         <li key={`${c.name}-${i}`} className="py-0.5">
-          <span className="text-[13.5px] font-medium text-plum">{c.name}</span>
-          <span className="ml-2 font-mono text-[12px] text-slate">{c.type}</span>
-          {c.required ? <span className="ml-1.5 text-[11px] text-coral">required</span> : null}
-          {c.repeated ? <span className="ml-1.5 text-[11px] text-slate">repeated</span> : null}
+          <span className="text-md font-medium text-heading">{c.name}</span>
+          <span className="ml-2 font-mono text-xs text-slate">{c.type}</span>
+          {c.required ? <span className="ml-1.5 text-2xs text-coral-dk">required</span> : null}
+          {c.repeated ? <span className="ml-1.5 text-2xs text-slate">repeated</span> : null}
           {c.children && c.children.length > 0 ? <Fields node={c} depth={depth + 1} /> : null}
         </li>
       ))}
@@ -34,10 +34,10 @@ function Fields({ node, depth = 0 }: { node: FieldNode; depth?: number }) {
 }
 
 function Contract({ node }: { node: FieldNode }) {
-  if (!node || Object.keys(node).length === 0) return <p className="text-[14px] text-slate">None</p>;
+  if (!node || Object.keys(node).length === 0) return <p className="text-md text-slate">None</p>;
   return (
     <div className="rounded-btn bg-page p-3">
-      <p className="font-mono text-[12.5px] font-semibold text-plum">{node.name ?? "root"}</p>
+      <p className="font-mono text-sm font-semibold text-heading">{node.name ?? "root"}</p>
       {node.children && node.children.length > 0 ? <Fields node={node} depth={1} /> : null}
     </div>
   );
@@ -50,8 +50,8 @@ function TriggerLine({ trigger }: { trigger: Record<string, unknown> }) {
     <div className="flex flex-wrap items-center gap-2">
       <Pill tone="plum">{kind}</Pill>
       {entries.map(([k, v]) => (
-        <span key={k} className="text-[13px]">
-          <span className="text-slate">{k}</span> <span className="font-mono text-[12.5px] text-ink">{String(v)}</span>
+        <span key={k} className="text-sm">
+          <span className="text-slate">{k}</span> <span className="font-mono text-sm text-ink">{String(v)}</span>
         </span>
       ))}
     </div>
@@ -64,14 +64,14 @@ export function IOCard({ processId }: { processId: string }) {
   const card = useIOCard(processId);
   const scenarios = useScenarios(processId);
   if (!card.data) {
-    return <section className="card p-5 text-[14px] text-slate">{card.error ? (card.error as Error).message : "Loading I/O card"}</section>;
+    return <section className="card p-5 text-md text-slate">{card.error ? (card.error as Error).message : "Loading I/O card"}</section>;
   }
   const c = card.data;
   return (
     <section className="card p-5" data-testid="io-card">
       <div className="flex items-baseline justify-between">
         <h3 className="panel-title">I/O card</h3>
-        <span className="text-[13px] text-slate">Built from the parsed model</span>
+        <span className="text-sm text-slate">Built from the parsed model</span>
       </div>
       <div className="mt-4 grid gap-6 lg:grid-cols-2">
         <div className="space-y-5">
@@ -88,7 +88,7 @@ export function IOCard({ processId }: { processId: string }) {
         <div className="space-y-5">
           <Section title="Side effects" icon={Database}>
             {c.side_effects.length === 0 ? (
-              <p className="text-[14px] text-slate">None</p>
+              <p className="text-md text-slate">None</p>
             ) : (
               <ul className="space-y-2">
                 {c.side_effects.map((s, i) => {
@@ -97,22 +97,22 @@ export function IOCard({ processId }: { processId: string }) {
                   const target = String(s.table ?? s.destination ?? s.service ?? s.process ?? s.url ?? "");
                   const shared = Array.isArray(s.shared_with) ? (s.shared_with as string[]) : [];
                   return (
-                    <li key={i} className="rounded-btn border border-line p-2.5 text-[13px]">
+                    <li key={i} className="rounded-btn border border-line p-2.5 text-sm">
                       <div className="flex flex-wrap items-center gap-2">
                         <Icon size={14} className="text-slate" aria-hidden />
                         <Pill tone={kind.endsWith("write") ? "decision" : kind === "publish" ? "coral" : "det"}>
                           {kind.replace("_", " ")}
                         </Pill>
-                        <span className="font-mono font-semibold text-plum">{target}</span>
+                        <span className="font-mono font-semibold text-heading">{target}</span>
                         {s.operation ? <span className="text-slate">{String(s.operation)}</span> : null}
                         {s.messaging_style ? <span className="text-slate">{String(s.messaging_style)}</span> : null}
-                        <span className="ml-auto text-[12px] text-slate">step {String(s.activity ?? "")}</span>
+                        <span className="ml-auto text-xs text-slate">step {String(s.activity ?? "")}</span>
                       </div>
                       {typeof s.sql === "string" ? (
-                        <pre className="mt-1.5 whitespace-pre-wrap rounded bg-page p-2 font-mono text-[11.5px] text-ink">{s.sql}</pre>
+                        <pre className="mt-1.5 whitespace-pre-wrap rounded bg-page p-2 font-mono text-xs text-ink">{s.sql}</pre>
                       ) : null}
                       {shared.length > 0 ? (
-                        <p className="mt-1 text-[12px] text-slate">Shared with {shared.join(", ")}</p>
+                        <p className="mt-1 text-xs text-slate">Shared with {shared.join(", ")}</p>
                       ) : null}
                     </li>
                   );
@@ -131,7 +131,7 @@ export function IOCard({ processId }: { processId: string }) {
                   ))}
                 </div>
               ) : (
-                <p className="text-[14px] text-slate">None</p>
+                <p className="text-md text-slate">None</p>
               )}
             </Section>
             <Section title="Subprocesses" icon={Workflow}>
@@ -144,7 +144,7 @@ export function IOCard({ processId }: { processId: string }) {
                   ))}
                 </div>
               ) : (
-                <p className="text-[14px] text-slate">None</p>
+                <p className="text-md text-slate">None</p>
               )}
             </Section>
           </div>
@@ -152,7 +152,7 @@ export function IOCard({ processId }: { processId: string }) {
       </div>
       <div className="mt-6 border-t border-line pt-4" data-testid="scenario-outputs">
         <p className="label">Scenario outputs</p>
-        <p className="mt-0.5 text-[13px] font-medium text-decision">Expected output derived from the TIBCO model</p>
+        <p className="mt-0.5 text-sm font-medium text-decision">Expected output derived from the TIBCO model</p>
         <ScenarioOutputs set={scenarios.data} loading={scenarios.isLoading} error={scenarios.error} />
       </div>
     </section>
@@ -169,18 +169,18 @@ const KIND_TONE: Record<string, "gate" | "decision" | "error" | "purple" | "det"
 
 function ScenarioOutputs({ set, loading, error }: { set: ScenarioSet | null | undefined; loading: boolean; error: unknown }) {
   if (loading) {
-    return <p className="mt-2 text-[14px] text-slate">Deriving scenarios from the TIBCO model</p>;
+    return <p className="mt-2 text-md text-slate">Deriving scenarios from the TIBCO model</p>;
   }
   if (error) {
     return (
-      <p className="mt-2 rounded-btn bg-error-bg px-4 py-3 text-[14px] text-error">
+      <p className="mt-2 rounded-btn bg-error-bg px-4 py-3 text-md text-error">
         Scenarios are not available: {(error as Error).message}
       </p>
     );
   }
   if (!set || set.scenarios.length === 0) {
     return (
-      <p className="mt-2 rounded-btn bg-warm px-4 py-4 text-[14px] text-slate">
+      <p className="mt-2 rounded-btn bg-sunken px-4 py-4 text-md text-slate">
         No scenarios yet. The parity evaluator derives one example per scenario from the parsed model.
       </p>
     );
@@ -194,24 +194,24 @@ function ScenarioOutputs({ set, loading, error }: { set: ScenarioSet | null | un
           return (
             <li key={s.id} className="rounded-btn border border-line p-3" data-testid="scenario-output">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[13.5px] font-medium text-plum">{s.name}</p>
+                <p className="text-md font-medium text-heading">{s.name}</p>
                 {s.kind ? <Pill tone={KIND_TONE[s.kind] ?? "det"}>{s.kind.replace("_", " ")}</Pill> : null}
                 {s.origin === "sme" ? <Pill tone="purple">SME</Pill> : null}
               </div>
               {exp?.fault ? (
-                <p className="mt-1 text-[13px] text-error">
+                <p className="mt-1 text-sm text-error">
                   Fault <span className="font-mono">{exp.fault.name}</span>
                 </p>
               ) : null}
               {exp?.output && Object.keys(exp.output).length > 0 ? (
-                <pre className="mt-1 max-h-48 overflow-auto rounded bg-page p-2 font-mono text-[11.5px]">
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-page p-2 font-mono text-xs">
                   {JSON.stringify(exp.output, null, 2)}
                 </pre>
               ) : (
-                <p className="mt-1 text-[12.5px] text-slate">No response body; the outcome is in the side effects.</p>
+                <p className="mt-1 text-sm text-slate">No response body; the outcome is in the side effects.</p>
               )}
               {effects.length > 0 ? (
-                <ul className="mt-1 space-y-0.5 text-[12px] text-slate">
+                <ul className="mt-1 space-y-0.5 text-xs text-slate">
                   {effects.map((e, i) => (
                     <li key={i}>
                       {e.kind.replace("_", " ")} <span className="font-mono text-ink">{e.target}</span>
@@ -224,7 +224,7 @@ function ScenarioOutputs({ set, loading, error }: { set: ScenarioSet | null | un
         })}
       </ul>
       {set.notes.length > 0 ? (
-        <ul className="mt-2 list-disc pl-5 text-[12.5px] text-slate">
+        <ul className="mt-2 list-disc pl-5 text-sm text-slate">
           {set.notes.map((n, i) => (
             <li key={i}>{n}</li>
           ))}

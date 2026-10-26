@@ -11,7 +11,7 @@ function Counter({ label, value, testId, tone }: { label: string; value: number;
       <p className="label">{label}</p>
       <p
         data-testid={testId}
-        className={`text-[28px] font-semibold leading-tight ${tone === "error" && value > 0 ? "text-error" : "text-plum"}`}
+        className={`text-4xl font-semibold leading-tight ${tone === "error" && value > 0 ? "text-error" : "text-heading"}`}
       >
         {value}
       </p>
@@ -61,10 +61,10 @@ export function ParseReportTable({
     <section className="card overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4">
         <h3 className="panel-title">Parse report</h3>
-        <span className="text-[14px] text-slate">Select a row to open the process on the canvas</span>
+        <span className="text-md text-slate">Select a row to open the process on the canvas</span>
       </div>
       <div className="overflow-x-auto">
-        <table data-testid="parse-report" className="w-full text-[14px]">
+        <table data-testid="parse-report" className="w-full text-md">
           <thead>
             <tr className="table-head">
               <th className="px-5 py-2.5 font-semibold">File</th>
@@ -80,24 +80,24 @@ export function ParseReportTable({
             {processes.map((p) => (
               <tr
                 key={p.id}
-                className="cursor-pointer hover:bg-purple-lt/50"
+                className="cursor-pointer hover:bg-accent-soft/50"
                 onClick={() => onOpen(p)}
                 data-testid={`report-row-${p.name}`}
               >
-                <td className="max-w-[420px] truncate px-5 py-2.5 font-mono text-[12.5px] text-slate" title={p.source_path}>
+                <td className="max-w-[420px] truncate px-5 py-2.5 font-mono text-sm text-slate" title={p.source_path}>
                   {p.source_path}
                 </td>
                 <td className="px-3 py-2.5">
                   <Pill tone="det">{p.dialect}</Pill>
                 </td>
-                <td className="px-3 py-2.5 font-medium text-plum">{p.name}</td>
+                <td className="px-3 py-2.5 font-medium text-heading">{p.name}</td>
                 <td className="px-3 py-2.5 text-right tabular-nums">{p.activity_count}</td>
                 <td className="px-3 py-2.5">
                   <BandPill band={p.complexity_band} />
                 </td>
                 <td className="px-3 py-2.5">{rowStatus(p, report)}</td>
                 <td className="px-5 py-2.5 text-right">
-                  <span className="inline-flex items-center gap-1 text-[13px] font-medium text-purple">
+                  <span className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink">
                     Canvas <ArrowRight size={14} aria-hidden />
                   </span>
                 </td>
@@ -105,7 +105,7 @@ export function ParseReportTable({
             ))}
             {otherFailures.map((f, i) => (
               <tr key={`fail-${i}`}>
-                <td className="px-5 py-2.5 font-mono text-[12.5px] text-slate">{reportFile(f.path)}</td>
+                <td className="px-5 py-2.5 font-mono text-sm text-slate">{reportFile(f.path)}</td>
                 <td className="px-3 py-2.5" />
                 <td className="px-3 py-2.5 text-slate">{String(f.error ?? "")}</td>
                 <td className="px-3 py-2.5" />
@@ -138,7 +138,7 @@ export function UnknownsPanel({ report }: { report: ScanReport }) {
   ].filter((g) => g.items.length > 0);
   if (groups.length === 0) {
     return (
-      <div className="rounded-card border border-gate/30 bg-gate-bg px-5 py-3 text-[14px] text-gate" data-testid="unknowns-clear">
+      <div className="rounded-card border border-gate/30 bg-gate-bg px-5 py-3 text-md text-gate" data-testid="unknowns-clear">
         Every activity type is known and every XML element is mapped or explained.
       </div>
     );
@@ -147,7 +147,7 @@ export function UnknownsPanel({ report }: { report: ScanReport }) {
     <section className="rounded-card border border-error/40 bg-error-bg p-5" data-testid="unknowns-panel">
       <div className="flex items-center gap-2 text-error">
         <AlertOctagon size={18} aria-hidden />
-        <h3 className="text-[18px] font-semibold">Needs attention before scope is confirmed</h3>
+        <h3 className="text-xl font-semibold">Needs attention before scope is confirmed</h3>
       </div>
       {groups.map((g) => (
         <div key={g.title} className="mt-3">
@@ -158,8 +158,8 @@ export function UnknownsPanel({ report }: { report: ScanReport }) {
             {g.items.map((item, i) => {
               const { where, what } = itemText(item);
               return (
-                <li key={i} className="rounded-btn bg-white/70 px-3 py-2 text-[13px]">
-                  <p className="break-all font-mono text-[12px] text-slate">{where}</p>
+                <li key={i} className="rounded-btn bg-surface/70 px-3 py-2 text-sm">
+                  <p className="break-all font-mono text-xs text-slate">{where}</p>
                   <p className="text-ink">{what}</p>
                 </li>
               );

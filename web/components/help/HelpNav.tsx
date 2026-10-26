@@ -27,8 +27,8 @@ export function HelpNav({ current }: { current: string }) {
             <Link
               href={`/help/${slug}`}
               aria-current={slug === current ? "page" : undefined}
-              className={`block rounded-btn px-3 py-2 text-[14px] font-medium transition-colors ${
-                slug === current ? "bg-purple-lt text-purple-dk" : "text-slate hover:bg-warm hover:text-plum"
+              className={`block rounded-btn px-3 py-2 text-md font-medium transition-colors ${
+                slug === current ? "bg-accent-soft text-accent-ink" : "text-slate hover:bg-sunken hover:text-heading"
               }`}
             >
               {label}
@@ -44,8 +44,8 @@ export function SupportFoot() {
   const { support_contact } = useBrand();
   if (!support_contact) return null;
   return (
-    <p data-testid="support-contact" className="mt-10 border-t border-line pt-4 text-[14px] text-slate">
-      Need help? Contact <span className="font-medium text-plum">{support_contact}</span>.
+    <p data-testid="support-contact" className="mt-10 border-t border-line pt-4 text-md text-slate">
+      Need help? Contact <span className="font-medium text-heading">{support_contact}</span>.
     </p>
   );
 }

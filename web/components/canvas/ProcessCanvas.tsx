@@ -77,7 +77,7 @@ function Inner({
     setNodes((ns) => ns.map((n) => (n.type === "container" ? n : { ...n, selected: n.id === selected })));
   }, [selected]);
 
-  if (error) return <p className="p-4 text-[14px] text-error">Layout failed: {error}</p>;
+  if (error) return <p className="p-4 text-md text-error">Layout failed: {error}</p>;
   return (
     <div ref={box} className="h-full w-full">
     <ReactFlow
@@ -94,7 +94,7 @@ function Inner({
       maxZoom={1.6}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="#E2DFD6" gap={20} />
+      <Background color="rgb(var(--c-line))" gap={20} />
       <Controls showInteractive={false} position="bottom-right" />
     </ReactFlow>
     </div>
@@ -138,7 +138,7 @@ function Legend() {
     ["Throw", STRIP.throw],
   ];
   return (
-    <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-2 rounded-btn bg-white/90 px-2.5 py-1.5 text-[11px] text-slate shadow-sm">
+    <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-2 rounded-btn bg-surface/90 px-2.5 py-1.5 text-2xs text-slate shadow-sm">
       {items.map(([l, c]) => (
         <span key={l} className="flex items-center gap-1">
           <span className="h-2.5 w-1 rounded-sm" style={{ background: c }} />

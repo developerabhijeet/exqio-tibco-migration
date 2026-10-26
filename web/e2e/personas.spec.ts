@@ -84,4 +84,7 @@ test("theme follows the system and the choice persists", async ({ page }) => {
   await page.reload();
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(250, 249, 247)");
+  await page.getByTestId("user-menu").click();
+  await expect(page.getByTestId("theme-light")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("theme-system")).toHaveAttribute("aria-checked", "false");
 });

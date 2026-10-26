@@ -57,3 +57,47 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   expect(focusedText).toMatch(/\blike\b/);
   await expect(page.getByTestId("inspector")).toContainText(`lines ${start} to ${end}`);
 });
+
+// The theme reaches the drawn surfaces too: the Cytoscape domain graph is restyled from the tokens
+// and the React Flow canvas's strokes read the token variables, both without a reload.
+test("graph and canvas recolour on theme change", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByLabel("Project name").fill(`e2e theme ${Date.now()}`);
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("zip-input").setInputFiles(SAMPLE_ZIP);
+  await page.getByRole("button", { name: "Scan" }).click();
+  await expect(page.getByTestId("counter-processes")).toHaveText("11");
+
+  await page.getByRole("button", { name: /^Discover/ }).click();
+  await page.getByTestId("domain-select").click();
+  await page.getByRole("option", { name: /Dealer Funding/ }).click();
+  await page.getByTestId("process-list").getByRole("button", { name: /DealerFundingRequest/ }).click();
+  await expect(page.locator('.react-flow__node[data-id="LookupDealer"]')).toBeVisible();
+
+  type Cy = { nodes: (sel?: string) => { length: number; [i: number]: { style: (k: string) => string } } };
+  // A resource node (table, queue, endpoint): its label is drawn in the ink colour.
+  const labelColour = () =>
+    page.evaluate(() => {
+      const cy = (window as unknown as { __cy?: Cy }).__cy;
+      const n = cy?.nodes('[kind != "process"][kind != "process-ext"]');
+      return n && n.length ? n[0].style("color").replace(/\s+/g, "") : null;
+    });
+  const edgeStroke = () =>
+    page.evaluate(() => {
+      const path = document.querySelector<SVGPathElement>(".react-flow__edge path.react-flow__edge-path");
+      return path ? getComputedStyle(path).stroke : null;
+    });
+
+  await expect.poll(labelColour).toBe("rgb(33,37,41)");
+  const lightStroke = await edgeStroke();
+  expect(lightStroke).toBeTruthy();
+
+  await page.getByTestId("user-menu").click();
+  await page.getByTestId("theme-dark").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await expect.poll(labelColour).toBe("rgb(236,232,242)");
+  await expect.poll(edgeStroke).not.toBe(lightStroke);
+});

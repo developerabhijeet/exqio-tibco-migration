@@ -107,7 +107,7 @@ export function BuildTab() {
         <div>
           <p className="eyebrow">Step 5</p>
           <h2 className="panel-title">Build</h2>
-          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[760px] text-md text-slate">
             Code writes the solution and its tests from the approved design record before any body, the Code Builder fills
             what is left, then dotnet restores, builds, formats and tests. Infrastructure is generated and validated in the
             same job. An engineer approves the build (G4).
@@ -115,7 +115,7 @@ export function BuildTab() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ProcessPicker />
-          <label className="flex items-center gap-2 text-[13.5px] text-slate">
+          <label className="flex items-center gap-2 text-md text-slate">
             Runtime
             <select
               className="select"
@@ -148,8 +148,8 @@ export function BuildTab() {
         <Empty title="No process open">Pick a process above, or open one from Discover.</Empty>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-card border border-line bg-white px-5 py-3 text-[13px]">
-            <span className="font-semibold text-plum">{proc?.name}</span>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-card border border-line bg-surface px-5 py-3 text-sm">
+            <span className="font-semibold text-heading">{proc?.name}</span>
             <span data-testid="build-design-hash" title={design.data?.record.design_hash}>
               <span className="label mr-1.5">Design hash</span>
               <span className="font-mono">{design.data ? shortHash(design.data.record.design_hash, 16) : "no design record"}</span>
@@ -179,7 +179,7 @@ export function BuildTab() {
             ) : null}
           </div>
           {g3?.state !== "approved" && !build.data ? (
-            <p className="text-[13.5px] text-slate">Approve G3 in Design before the first build.</p>
+            <p className="text-md text-slate">Approve G3 in Design before the first build.</p>
           ) : null}
           {runError ? <ErrorNote error={runError} /> : null}
           {build.data?.error ? <ErrorNote error={build.data.error} /> : null}
@@ -197,18 +197,18 @@ export function BuildTab() {
                 <p
                   role="status"
                   data-testid="g4-blocked"
-                  className="rounded-card border border-error/30 bg-error-bg px-4 py-3 text-[14px] text-error"
+                  className="rounded-card border border-error/30 bg-error-bg px-4 py-3 text-md text-error"
                 >
                   <span className="font-semibold">
                     {restoreFailed ? "G4 blocked: restore failed" : `G4 blocked: ${g4?.reason ?? "the build did not pass"}`}
                   </span>
                   {restoreFailed && restore ? (
-                    <span className="mt-1 block text-[13px]">
+                    <span className="mt-1 block text-sm">
                       <Remedy text={restore.reason} />
                     </span>
                   ) : null}
                   {restoreFailed && restore?.remedy ? (
-                    <span className="mt-1 block text-[13px] text-ink" data-testid="g4-remedy">
+                    <span className="mt-1 block text-sm text-ink" data-testid="g4-remedy">
                       <span className="label mr-1.5">Remedy</span>
                       <Remedy text={restore.remedy} />
                     </span>

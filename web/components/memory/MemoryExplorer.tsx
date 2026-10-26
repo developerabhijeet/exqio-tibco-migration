@@ -117,7 +117,7 @@ function Segmented<T extends string | number>({
   label: string;
 }) {
   return (
-    <div className="inline-flex rounded-btn bg-warm p-1" role="radiogroup" aria-label={label}>
+    <div className="inline-flex rounded-btn bg-sunken p-1" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button
           key={String(o.value)}
@@ -127,8 +127,8 @@ function Segmented<T extends string | number>({
           disabled={o.disabled}
           title={o.title}
           onClick={() => onChange(o.value)}
-          className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-[13px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-            value === o.value ? "bg-white text-plum shadow-card" : "text-slate hover:text-plum"
+          className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+            value === o.value ? "bg-surface text-heading shadow-card" : "text-slate hover:text-heading"
           }`}
         >
           {o.icon}
@@ -485,17 +485,17 @@ export function MemoryExplorer() {
     <div className="flex h-[calc(100vh-13.5rem)] min-h-[780px] flex-col gap-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Link href="/" className="inline-flex items-center gap-1.5 text-[13.5px] font-medium text-purple hover:underline">
+          <Link href="/" className="inline-flex items-center gap-1.5 text-md font-medium text-accent-ink hover:underline">
             <ArrowLeft size={15} aria-hidden /> Back to the migration
           </Link>
           <h1 className="screen-title mt-2">Memory</h1>
-          <p className="mt-0.5 text-[15px] text-slate">The old code, the new code and what the team learnt, linked and versioned by revision.</p>
+          <p className="mt-0.5 text-base text-slate">The old code, the new code and what the team learnt, linked and versioned by revision.</p>
         </div>
         <div className="flex items-center gap-3">
           <MemoryStatusPill status={status.data} />
           {projectReady ? <ReingestButton projectId={projectReady} /> : null}
           {ready ? (
-            <button type="button" className="btn-secondary py-1.5 text-[13.5px]" onClick={share} title="Copy a link to this view">
+            <button type="button" className="btn-secondary py-1.5 text-md" onClick={share} title="Copy a link to this view">
               <Share2 size={15} aria-hidden />
               {copied ? "Link copied" : "Share view"}
             </button>
@@ -538,7 +538,7 @@ export function MemoryExplorer() {
               <div className="flex flex-wrap items-center gap-3 border-b border-line/80 px-5 py-3">
                 <div className="min-w-[120px] flex-1">
                   <p className="label">{mode === "lineage" ? "Lineage of" : focus ? "Around" : "Project overview"}</p>
-                  <p className="truncate text-[15px] font-semibold text-plum">
+                  <p className="truncate text-base font-semibold text-heading">
                     {focusNode ? focusNode.name || focusNode.uid : focus ? focus : "Domains, applications and solutions"}
                     {graph.isFetching ? <Loader2 size={14} className="ml-2 inline animate-spin text-slate" aria-hidden /> : null}
                   </p>
@@ -627,7 +627,7 @@ export function MemoryExplorer() {
                   />
                 ) : null}
               </div>
-              <p className="border-t border-line/80 px-5 py-2 text-[12.5px] text-slate">
+              <p className="border-t border-line/80 px-5 py-2 text-sm text-slate">
                 Click a node to open it · double-click to {mode === "lineage" ? "explore around it" : "expand its neighbours"} · scroll to zoom
               </p>
             </section>

@@ -132,7 +132,7 @@ export function CitationChip({ refItem, number }: { refItem: CiteRef; number: nu
           setOpen(false);
           navigate(refItem.target);
         }}
-        className={`tnum mx-px inline-flex translate-y-[-1px] items-center whitespace-nowrap rounded-[5px] px-1.5 align-baseline text-[11px] font-semibold leading-[18px] tracking-[0.01em] ring-1 ring-inset transition-[filter,box-shadow] duration-150 hover:brightness-[0.97] hover:shadow-card ${
+        className={`tnum mx-px inline-flex translate-y-[-1px] items-center whitespace-nowrap rounded-[5px] px-1.5 align-baseline text-2xs font-semibold leading-[18px] tracking-[0.01em] ring-1 ring-inset transition-[filter,box-shadow] duration-150 hover:brightness-[0.97] hover:shadow-card ${
           unverified ? UNVERIFIED_TONE : PHASE_TONE[refItem.phase]
         }`}
       >

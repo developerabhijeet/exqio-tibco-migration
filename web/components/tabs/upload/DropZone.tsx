@@ -60,12 +60,12 @@ export function DropZone({
         onDragLeave={() => setOver(false)}
         onDrop={onDrop}
         className={`flex flex-col items-center justify-center rounded-card border-2 border-dashed px-6 py-10 text-center transition-colors ${
-          over ? "border-purple bg-purple-lt" : "border-line bg-white"
+          over ? "border-accent bg-accent-soft" : "border-line bg-surface"
         }`}
       >
-        <UploadCloud size={36} className="text-purple" aria-hidden />
-        <p className="mt-3 font-medium text-plum">Drop a zip or a folder of TIBCO sources</p>
-        <p className="text-[14px] text-slate">BW6 modules and applications, BW5 projects, schemas, resources, SQL</p>
+        <UploadCloud size={36} className="text-accent-ink" aria-hidden />
+        <p className="mt-3 font-medium text-heading">Drop a zip or a folder of TIBCO sources</p>
+        <p className="text-md text-slate">BW6 modules and applications, BW5 projects, schemas, resources, SQL</p>
         <div className="mt-4 flex gap-2">
           <span title={blocked ?? undefined}>
             <button
@@ -134,17 +134,17 @@ export function DropZone({
         </label>
         <input
           id="server-path"
-          className="input mt-2 font-mono text-[13px]"
+          className="input mt-2 font-mono text-sm"
           placeholder="/srv/estates/gmf or /srv/estates/gmf.zip"
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
-        <p className="mt-2 text-[13px] text-slate">
+        <p className="mt-2 text-sm text-slate">
           {roots && roots.length > 0 ? (
             <>
               Allowed roots:{" "}
               {roots.map((r) => (
-                <code key={r} className="mr-1 rounded bg-warm px-1 font-mono text-[12px]">
+                <code key={r} className="mr-1 rounded bg-sunken px-1 font-mono text-xs">
                   {r}
                 </code>
               ))}

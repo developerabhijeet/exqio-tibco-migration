@@ -72,17 +72,17 @@ export function ProjectSelector() {
         <select
           id="project-select"
           data-testid="project-select"
-          className="w-[220px] max-w-[260px] cursor-pointer appearance-none truncate rounded-btn border border-white/20 bg-white/10 py-1.5 pl-3 pr-9 text-[13.5px] font-medium text-white outline-none transition-colors hover:bg-white/15 focus:border-lilac"
+          className="w-[220px] max-w-[260px] cursor-pointer appearance-none truncate rounded-btn border border-white/20 bg-white/10 py-1.5 pl-3 pr-9 text-md font-medium text-white outline-none transition-colors hover:bg-white/15 focus:border-lilac"
           value={projectId ?? ""}
           onChange={(e) => setProjectId(e.target.value || null)}
         >
           {(projects.data ?? []).length === 0 ? (
-            <option value="" className="bg-white text-ink">
+            <option value="" className="bg-surface text-ink">
               No projects yet
             </option>
           ) : null}
           {(projects.data ?? []).map((p) => (
-            <option key={p.id} value={p.id} className="bg-white text-ink">
+            <option key={p.id} value={p.id} className="bg-surface text-ink">
               {p.name}
             </option>
           ))}
@@ -95,7 +95,7 @@ export function ProjectSelector() {
       </div>
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-btn border border-white/20 px-3 py-1.5 text-[13.5px] font-medium text-white transition-colors hover:bg-white/10"
+        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-btn border border-white/20 px-3 py-1.5 text-md font-medium text-white transition-colors hover:bg-white/10"
         onClick={() => setCreating((v) => !v)}
       >
         <FolderPlus size={16} aria-hidden />
@@ -120,7 +120,7 @@ export function ProjectSelector() {
             onChange={(e) => setName(e.target.value)}
             placeholder="GMF credit estate"
           />
-          {create.error ? <p className="mt-2 text-[13px] text-error">{(create.error as Error).message}</p> : null}
+          {create.error ? <p className="mt-2 text-sm text-error">{(create.error as Error).message}</p> : null}
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => setCreating(false)}>
               Cancel

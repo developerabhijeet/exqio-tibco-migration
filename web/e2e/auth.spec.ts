@@ -39,6 +39,7 @@ test.describe("sign-in (oidc)", () => {
     await expect(page.getByTestId("user-menu-identity")).toContainText("qa");
     await expect(page.getByRole("group", { name: "Act as" }).getByRole("menuitemradio")).toHaveCount(0);
     await expect(page.getByTestId("persona-ops.sam")).toHaveCount(0);
+    await expect(page.locator('[data-testid^="persona-"]')).toHaveCount(0);
   });
 
   test("permissions are the union of the user's roles", async ({ page }) => {

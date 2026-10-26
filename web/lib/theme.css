@@ -19,6 +19,8 @@
   --c-accent: 155 93 229;
   --c-accent-ink: 126 63 203;
   --c-accent-soft: 241 233 252;
+  /* Filled accent under white text (primary buttons): the same in both themes, white on it 6.07:1. */
+  --c-accent-strong: 126 63 203;
   --c-plum: 32 6 59;
   --c-coral: 255 73 92;
   --c-coral-dk: 211 34 56;
@@ -97,6 +99,7 @@
   --c-accent: 155 93 229;
   --c-accent-ink: 201 168 245;
   --c-accent-soft: 42 28 64;
+  --c-accent-strong: 126 63 203;
   --c-plum: 32 6 59;
   --c-coral: 255 73 92;
   --c-coral-dk: 255 122 136;
@@ -131,6 +134,7 @@
     --c-accent: 155 93 229;
     --c-accent-ink: 201 168 245;
     --c-accent-soft: 42 28 64;
+    --c-accent-strong: 126 63 203;
     --c-plum: 32 6 59;
     --c-coral: 255 73 92;
     --c-coral-dk: 255 122 136;
@@ -259,7 +263,7 @@ kbd,
     @apply inline-flex items-center justify-center gap-2 rounded-btn px-3.5 py-2 text-base font-semibold tracking-[-0.005em] transition-all duration-fast disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none;
   }
   .btn-primary {
-    @apply btn bg-accent text-white shadow-e1 hover:bg-accent/90 hover:shadow-e2 active:translate-y-px active:shadow-e1;
+    @apply btn bg-accent-strong text-white shadow-e1 hover:shadow-e2 hover:brightness-90 active:translate-y-px active:shadow-e1;
   }
   .btn-secondary {
     @apply btn border border-line bg-surface text-heading hover:border-line-strong hover:bg-sunken active:translate-y-px;
@@ -290,6 +294,16 @@ kbd,
   }
 }
 
+/* The select caret in the dark theme's slate (a data URL cannot read the tokens). */
+[data-theme="dark"] .select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A9A3B5' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .select {
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A9A3B5' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+}
+
 /* Monaco: the selected step's source element (warm yellow band) and its anchor line. */
 .xml-hl-line {
   background: var(--highlight);
@@ -310,6 +324,22 @@ kbd,
 .react-flow__handle {
   opacity: 0;
   pointer-events: none;
+}
+/* React Flow's own chrome (zoom controls, edge labels, nodes it draws itself) on the tokens. */
+.react-flow {
+  --xy-edge-stroke: rgb(var(--c-line-strong));
+  --xy-node-background-color: rgb(var(--c-surface));
+  --xy-node-border: 1px solid rgb(var(--c-line));
+  --xy-node-color: rgb(var(--c-ink));
+  --xy-edge-label-background-color: rgb(var(--c-surface));
+  --xy-edge-label-color: rgb(var(--c-ink));
+  --xy-controls-button-background-color: rgb(var(--c-surface));
+  --xy-controls-button-background-color-hover: rgb(var(--c-sunken));
+  --xy-controls-button-color: rgb(var(--c-slate));
+  --xy-controls-button-color-hover: rgb(var(--c-heading));
+  --xy-controls-button-border-color: rgb(var(--c-line));
+  --xy-controls-box-shadow: var(--shadow-e1);
+  --xy-minimap-background-color: rgb(var(--c-surface));
 }
 
 /* Export PDF from the Design tab: the browser prints the record without the app chrome. */

@@ -106,3 +106,75 @@ export function useTheme(): { choice: ThemeChoice; dark: boolean; setChoice: (ch
 export const NO_FLASH_SCRIPT = `(function(){try{var v=localStorage.getItem(${JSON.stringify(
   THEME_KEY,
 )});if(v==="light"||v==="dark")document.documentElement.setAttribute("data-theme",v)}catch(e){}})();`;
+
+/**
+ * A colour token (lib/theme.css `--c-<token>`) as the browser resolves it right now, for consumers
+ * that cannot read CSS variables (Cytoscape, Recharts props): `rgb(r, g, b)`, or `rgba(r, g, b, a)`
+ * with `alpha`. The comma form is the one Cytoscape parses. Outside a browser it returns the light
+ * value from `LIGHT_FALLBACK`, which no screen paints: the themed consumers wait for the mount.
+ */
+export function cssColor(token: string, alpha?: number): string {
+  let channels = "";
+  if (typeof document !== "undefined") {
+    channels = getComputedStyle(document.documentElement).getPropertyValue(`--c-${token}`).trim();
+  }
+  const [r, g, b] = (channels || LIGHT_FALLBACK).split(/\s+/);
+  return alpha === undefined ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const LIGHT_FALLBACK = "66 84 102";
+
+/** Whether the page paints dark right now (the resolved `color-scheme` lib/theme.css sets). */
+export function isDarkNow(): boolean {
+  return typeof document !== "undefined" && getComputedStyle(document.documentElement).colorScheme === "dark";
+}
+
+/**
+ * A value built from the resolved theme (colours from `cssColor`, `isDarkNow`), rebuilt on every
+ * `themechange` and system change. `null` until mounted, so a consumer never paints a frame in the
+ * wrong theme: the server cannot know a System choice and the first client render must match it.
+ */
+export function useThemed<T>(build: () => T): T | null {
+  const [value, setValue] = React.useState<T | null>(null);
+  const ref = React.useRef(build);
+  ref.current = build;
+  React.useEffect(() => {
+    const rebuild = () => setValue(() => ref.current());
+    rebuild();
+    const media = window.matchMedia(DARK_QUERY);
+    window.addEventListener(THEME_EVENT, rebuild);
+    media.addEventListener("change", rebuild);
+    return () => {
+      window.removeEventListener(THEME_EVENT, rebuild);
+      media.removeEventListener("change", rebuild);
+    };
+  }, []);
+  return value;
+}
+
+/** Calls `onChange` after every theme change (for imperative consumers such as a Cytoscape instance). */
+export function useThemeChange(onChange: () => void): void {
+  const ref = React.useRef(onChange);
+  ref.current = onChange;
+  React.useEffect(() => {
+    const fire = () => ref.current();
+    const media = window.matchMedia(DARK_QUERY);
+    window.addEventListener(THEME_EVENT, fire);
+    media.addEventListener("change", fire);
+    return () => {
+      window.removeEventListener(THEME_EVENT, fire);
+      media.removeEventListener("change", fire);
+    };
+  }, []);
+}
+
+/** The chart colours (Recharts takes them as SVG attributes, which cannot read CSS variables). */
+export function chartColors() {
+  return {
+    grid: cssColor("line"),
+    axis: cssColor("slate"),
+    series: cssColor("accent"),
+    cursor: cssColor("accent-soft"),
+    tooltip: { borderRadius: 6, fontSize: 12, borderColor: cssColor("line"), backgroundColor: cssColor("surface"), color: cssColor("ink") },
+  };
+}

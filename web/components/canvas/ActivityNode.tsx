@@ -43,42 +43,42 @@ export const ActivityNode = memo(function ActivityNode({ data }: NodeProps<Activ
   const Icon = iconFor(data.canonical_type);
   return (
     <div
-      className="activity-card relative flex h-[84px] w-[230px] overflow-hidden rounded-node border border-line bg-white shadow-sm"
+      className="activity-card relative flex h-[84px] w-[230px] overflow-hidden rounded-node border border-line bg-surface shadow-sm"
       data-canonical={data.canonical_type}
     >
       <Handle type="target" position={Position.Left} />
       <span aria-hidden className="w-1 shrink-0" style={{ background: STRIP[fam] }} />
       <div className="min-w-0 flex-1 px-3 py-2">
         <div className="flex items-center gap-1.5">
-          <Icon size={15} style={{ color: fam === "other" ? "#425466" : STRIP[fam] }} aria-hidden />
-          <span className="truncate text-[13.5px] font-semibold text-plum" title={data.name}>
+          <Icon size={15} style={{ color: fam === "other" ? STRIP.mapper : STRIP[fam] }} aria-hidden />
+          <span className="truncate text-md font-semibold text-heading" title={data.name}>
             {data.name}
           </span>
         </div>
-        <p className="mt-0.5 truncate font-mono text-[11px] text-slate" title={data.native_type}>
+        <p className="mt-0.5 truncate font-mono text-2xs text-slate" title={data.native_type}>
           {data.native_type}
         </p>
         <div className="mt-1 flex flex-wrap gap-1">
           {data.isStarter ? (
-            <span className="inline-flex items-center gap-0.5 rounded bg-purple-lt px-1.5 text-[10.5px] font-medium text-purple-dk">
+            <span className="inline-flex items-center gap-0.5 rounded bg-accent-soft px-1.5 text-2xs font-medium text-accent-ink">
               <Play size={9} aria-hidden /> starter
             </span>
           ) : null}
           {data.rule_ids.length > 0 ? (
-            <span className="rounded bg-ai-bg px-1.5 text-[10.5px] font-medium text-ai" title={data.rule_ids.join(", ")}>
+            <span className="rounded bg-ai-bg px-1.5 text-2xs font-medium text-ai" title={data.rule_ids.join(", ")}>
               {data.rule_ids.length} {data.rule_ids.length === 1 ? "rule" : "rules"}
             </span>
           ) : null}
           {data.finding_ids.length > 0 ? (
             <span
-              className="rounded bg-decision-bg px-1.5 text-[10.5px] font-medium text-decision"
+              className="rounded bg-decision-bg px-1.5 text-2xs font-medium text-decision"
               title={data.finding_ids.join(", ")}
             >
               {data.finding_ids.length} {data.finding_ids.length === 1 ? "finding" : "findings"}
             </span>
           ) : null}
           {data.unknown ? (
-            <span className="rounded bg-error-bg px-1.5 text-[10.5px] font-medium text-error">unknown type</span>
+            <span className="rounded bg-error-bg px-1.5 text-2xs font-medium text-error">unknown type</span>
           ) : null}
         </div>
       </div>
@@ -94,8 +94,8 @@ export const TerminalNode = memo(function TerminalNode({ data }: NodeProps<Termi
   return (
     <div
       title={data.native_type}
-      className={`terminal-pill flex h-[40px] w-[120px] items-center justify-center rounded-full border-2 text-[13px] font-semibold ${
-        end ? "border-ai bg-ai-bg text-ai" : "border-purple bg-purple-lt text-purple-dk"
+      className={`terminal-pill flex h-[40px] w-[120px] items-center justify-center rounded-full border-2 text-sm font-semibold ${
+        end ? "border-ai bg-ai-bg text-ai" : "border-accent bg-accent-soft text-accent-ink"
       }`}
     >
       <Handle type="target" position={Position.Left} />
@@ -111,15 +111,15 @@ export const GroupNode = memo(function GroupNode({ data }: NodeProps<GroupFlowNo
   return (
     <div
       className={`h-full w-full rounded-card border-2 border-dashed ${
-        data.fault ? "border-error/50 bg-error-bg/40" : "border-slate/40 bg-warm/50"
+        data.fault ? "border-error/50 bg-error-bg/40" : "border-slate/40 bg-sunken/50"
       }`}
     >
       <Handle type="target" position={Position.Left} />
       <div className="flex min-w-0 items-center gap-2 px-3 pt-1.5" title={`${data.label} ${data.detail ?? ""}`}>
-        <span className={`shrink-0 text-[11px] font-semibold uppercase tracking-wider ${data.fault ? "text-error" : "text-slate"}`}>
+        <span className={`shrink-0 text-2xs font-semibold uppercase tracking-wider ${data.fault ? "text-error" : "text-slate"}`}>
           {data.label}
         </span>
-        {data.detail ? <span className="truncate font-mono text-[11px] text-slate">{data.detail}</span> : null}
+        {data.detail ? <span className="truncate font-mono text-2xs text-slate">{data.detail}</span> : null}
       </div>
       <Handle type="source" position={Position.Right} />
     </div>

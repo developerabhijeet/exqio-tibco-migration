@@ -7,9 +7,9 @@ export function Footer() {
   return (
     <footer className="mt-12 bg-footer">
       <div className="flex w-full items-center justify-between gap-4 px-6 py-6">
-        <p className="text-[13px] text-lilac">{brand_name} Migrate</p>
+        <p className="text-sm text-lilac">{brand_name} Migrate</p>
         {support_contact ? (
-          <p data-testid="support-contact" className="text-[13px] text-lilac">
+          <p data-testid="support-contact" className="text-sm text-lilac">
             Support: {support_contact}
           </p>
         ) : null}

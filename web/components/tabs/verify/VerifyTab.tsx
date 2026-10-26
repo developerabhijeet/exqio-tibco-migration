@@ -48,7 +48,7 @@ export function VerifyTab() {
         <div>
           <p className="eyebrow">Step 6</p>
           <h2 className="panel-title">Verify</h2>
-          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[760px] text-md text-slate">
             The scenarios run through the platform&apos;s model of the TIBCO process; expected values are derived from the TIBCO
             model, not from a TIBCO runtime. The same inputs then go to the running .NET service. Every field is compared; a
             difference is a defect unless a finding decided Fix explains it. QA approves parity (G5).
@@ -70,7 +70,7 @@ export function VerifyTab() {
               consequence="Verify cannot start the generated service until a build of this process passes."
             />
           ) : buildId ? (
-            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+            <p className="flex items-center gap-1.5 text-sm text-slate">
               Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
               {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>
@@ -84,7 +84,7 @@ export function VerifyTab() {
               hint="QA approves parity when no difference is unexplained and no scenario errored."
             />
             {g5?.notes?.length ? (
-              <ul data-testid="g5-notes" className="mt-1.5 space-y-0.5 text-[13px] text-decision">
+              <ul data-testid="g5-notes" className="mt-1.5 space-y-0.5 text-sm text-decision">
                 {g5.notes.map((n) => (
                   <li key={n}>{n}</li>
                 ))}

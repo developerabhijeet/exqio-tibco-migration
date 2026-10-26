@@ -5,7 +5,7 @@ import { ArrowLeft } from "lucide-react";
 export function SecondaryScreen({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) {
   return (
     <div className="space-y-6">
-      <Link href="/" className="inline-flex items-center gap-1.5 text-[14px] font-medium text-purple hover:underline">
+      <Link href="/" className="inline-flex items-center gap-1.5 text-md font-medium text-accent-ink hover:underline">
         <ArrowLeft size={16} aria-hidden /> Back to the migration
       </Link>
       <div>

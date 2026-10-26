@@ -9,13 +9,15 @@ import type { Core, ElementDefinition } from "cytoscape";
 import type { ElkNode } from "elkjs/lib/elk-api";
 import { Focus, Maximize, Minus, Plus } from "lucide-react";
 import {
-  GROUP_HEX,
+  GROUP_TOKEN,
+  groupCss,
   GROUP_LABEL,
   displayName,
   type GraphMode,
   type Side,
   type Subgraph,
 } from "@/lib/memory";
+import { cssColor, useThemeChange } from "@/lib/theme";
 
 export interface CanvasHighlight {
   added: string[];
@@ -117,9 +119,6 @@ export function canvasElements(
         kind: n.label,
         side: n.side,
         shape: SHAPE[n.label] ?? "ellipse",
-        fill: GROUP_HEX[n.side].fill,
-        border: GROUP_HEX[n.side].border,
-        strong: GROUP_HEX[n.side].strong,
         w: size.w * scale,
         h: size.h * scale,
       },
@@ -233,172 +232,190 @@ async function lineagePositions(
 
 const FONT = "Inter, ui-sans-serif, system-ui, sans-serif";
 
-const STYLE = [
-  {
-    selector: "node",
-    style: {
-      shape: "data(shape)",
-      width: "data(w)",
-      height: "data(h)",
-      "background-color": "data(fill)",
-      "border-width": 1.5,
-      "border-color": "data(border)",
-      label: "data(label)",
-      "font-family": FONT,
-      "font-size": 11.5,
-      color: "#425466",
-      "text-valign": "bottom",
-      "text-margin-y": 6,
-      "text-wrap": "ellipsis",
-      "text-max-width": "140px",
-      "min-zoomed-font-size": 6,
-      "transition-property": "opacity, border-width, background-color",
-      "transition-duration": 150,
+/** Per-group fills and outlines (and the picked node's strong fill) from the current theme. */
+function groupStyles(c: typeof cssColor) {
+  const sides = Object.keys(GROUP_TOKEN) as Side[];
+  return {
+    base: sides.map((side) => ({
+      selector: `node[side = "${side}"]`,
+      style: { "background-color": c(GROUP_TOKEN[side].fill), "border-color": c(GROUP_TOKEN[side].border) },
+    })),
+    picked: sides.map((side) => ({
+      selector: `node.picked[side = "${side}"]`,
+      style: { "background-color": c(GROUP_TOKEN[side].strong), "border-color": c(GROUP_TOKEN[side].strong) },
+    })),
+  };
+}
+
+/** The canvas styles from the current theme's tokens; re-applied on every theme change. */
+function memoryStyle() {
+  const c = cssColor;
+  const groups = groupStyles(c);
+  return [
+    {
+      selector: "node",
+      style: {
+        shape: "data(shape)",
+        width: "data(w)",
+        height: "data(h)",
+        "border-width": 1.5,
+        label: "data(label)",
+        "font-family": FONT,
+        "font-size": 11.5,
+        color: c("slate"),
+        "text-valign": "bottom",
+        "text-margin-y": 6,
+        "text-wrap": "ellipsis",
+        "text-max-width": "140px",
+        "min-zoomed-font-size": 6,
+        "transition-property": "opacity, border-width, background-color",
+        "transition-duration": 150,
+      },
     },
-  },
-  // Labels kept when zoomed out (keyLabels sizes them for the zoom).
-  { selector: "node.key-label", style: { "min-zoomed-font-size": 0, "text-margin-y": 3 } },
-  {
-    selector: "node.focus",
-    style: {
-      "border-width": 2.5,
-      "font-weight": 600,
-      color: "#20063B",
-      "font-size": 12.5,
+    ...groups.base,
+    // Labels kept when zoomed out (keyLabels sizes them for the zoom).
+    { selector: "node.key-label", style: { "min-zoomed-font-size": 0, "text-margin-y": 3 } },
+    {
+      selector: "node.focus",
+      style: {
+        "border-width": 2.5,
+        "font-weight": 600,
+        color: c("heading"),
+        "font-size": 12.5,
+      },
     },
-  },
-  {
-    selector: "node.curated",
-    style: {
-      "underlay-color": "#9B5DE5",
-      "underlay-padding": 6,
-      "underlay-opacity": 0.22,
-      "underlay-shape": "ellipse",
+    {
+      selector: "node.curated",
+      style: {
+        "underlay-color": c("accent"),
+        "underlay-padding": 6,
+        "underlay-opacity": 0.22,
+        "underlay-shape": "ellipse",
+      },
     },
-  },
-  {
-    selector: "node.obsolete",
-    style: { "border-style": "dashed", opacity: 0.6 },
-  },
-  {
-    selector: "node.picked",
-    style: {
-      "background-color": "data(strong)",
-      "border-color": "data(strong)",
-      "border-width": 3,
-      color: "#20063B",
-      "font-weight": 600,
-      "underlay-color": "#9B5DE5",
-      "underlay-padding": 7,
-      "underlay-opacity": 0.18,
+    {
+      selector: "node.obsolete",
+      style: { "border-style": "dashed", opacity: 0.6 },
     },
-  },
-  {
-    selector: "node.added",
-    style: { "border-color": "#1E7B3C", "border-width": 3.5 },
-  },
-  {
-    selector: "node.changed",
-    style: { "border-color": "#9A5E0A", "border-width": 3.5 },
-  },
-  {
-    selector: "node.removed",
-    style: {
-      "border-color": "#A33A32",
-      "border-width": 3.5,
-      "border-style": "dashed",
-      opacity: 0.4,
+    {
+      selector: "node.picked",
+      style: {
+        "border-width": 3,
+        color: c("heading"),
+        "font-weight": 600,
+        "underlay-color": c("accent"),
+        "underlay-padding": 7,
+        "underlay-opacity": 0.18,
+      },
     },
-  },
-  {
-    selector: "edge",
-    style: {
-      width: 1.2,
-      "line-color": "#CFCABB",
-      "target-arrow-color": "#CFCABB",
-      "target-arrow-shape": "triangle",
-      "arrow-scale": 0.75,
-      "curve-style": "bezier",
-      "font-family": FONT,
-      "font-size": 9.5,
-      color: "#425466",
-      "text-background-color": "#FFFFFF",
-      "text-background-opacity": 0.92,
-      "text-background-padding": "2px",
-      "text-rotation": "autorotate",
-      "transition-property": "opacity, line-color",
-      "transition-duration": 150,
+    ...groups.picked,
+    {
+      selector: "node.added",
+      style: { "border-color": c("gate"), "border-width": 3.5 },
     },
-  },
-  {
-    selector: "edge.lineage-type",
-    style: { "line-color": "#B9A4DA", "target-arrow-color": "#B9A4DA" },
-  },
-  {
-    selector: "edge.migrated",
-    style: {
-      width: 3,
-      "line-color": "#9B5DE5",
-      "target-arrow-color": "#9B5DE5",
+    {
+      selector: "node.changed",
+      style: { "border-color": c("decision"), "border-width": 3.5 },
     },
-  },
-  {
-    selector: "edge.rejected",
-    style: {
-      "line-style": "dashed",
-      "line-color": "#A33A32",
-      "target-arrow-color": "#A33A32",
+    {
+      selector: "node.removed",
+      style: {
+        "border-color": c("error"),
+        "border-width": 3.5,
+        "border-style": "dashed",
+        opacity: 0.4,
+      },
     },
-  },
-  {
-    selector: "edge.corrected",
-    style: {
-      "line-style": "solid",
-      "line-color": "#1E7B3C",
-      "target-arrow-color": "#1E7B3C",
+    {
+      selector: "edge",
+      style: {
+        width: 1.2,
+        "line-color": c("line-strong"),
+        "target-arrow-color": c("line-strong"),
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 0.75,
+        "curve-style": "bezier",
+        "font-family": FONT,
+        "font-size": 9.5,
+        color: c("slate"),
+        "text-background-color": c("surface"),
+        "text-background-opacity": 0.92,
+        "text-background-padding": "2px",
+        "text-rotation": "autorotate",
+        "transition-property": "opacity, line-color",
+        "transition-duration": 150,
+      },
     },
-  },
-  {
-    selector: "edge.indirect",
-    style: {
-      "line-style": "dashed",
-      "line-dash-pattern": [3, 4],
-      "line-color": "#CFCABB",
-      "target-arrow-shape": "none",
-      width: 1,
+    {
+      selector: "edge.lineage-type",
+      style: { "line-color": c("accent", 0.55), "target-arrow-color": c("accent", 0.55) },
     },
-  },
-  {
-    selector: "edge.added",
-    style: {
-      "line-color": "#1E7B3C",
-      "target-arrow-color": "#1E7B3C",
-      width: 2.5,
+    {
+      selector: "edge.migrated",
+      style: {
+        width: 3,
+        "line-color": c("accent"),
+        "target-arrow-color": c("accent"),
+      },
     },
-  },
-  {
-    selector: "edge.changed",
-    style: {
-      "line-color": "#9A5E0A",
-      "target-arrow-color": "#9A5E0A",
-      width: 2.5,
+    {
+      selector: "edge.rejected",
+      style: {
+        "line-style": "dashed",
+        "line-color": c("error"),
+        "target-arrow-color": c("error"),
+      },
     },
-  },
-  {
-    selector: "edge.removed",
-    style: {
-      "line-color": "#A33A32",
-      "target-arrow-color": "#A33A32",
-      "line-style": "dashed",
-      opacity: 0.4,
+    {
+      selector: "edge.corrected",
+      style: {
+        "line-style": "solid",
+        "line-color": c("gate"),
+        "target-arrow-color": c("gate"),
+      },
     },
-  },
-  // The selected node's chain: labelled edges, everything else at 25 %.
-  { selector: "edge.chain", style: { label: "data(type)", width: 2 } },
-  { selector: "edge.chain.migrated", style: { width: 3.5 } },
-  { selector: ".dim", style: { opacity: 0.25 } },
-  { selector: "edge.lineage-mode", style: { label: "data(type)" } },
-];
+    {
+      selector: "edge.indirect",
+      style: {
+        "line-style": "dashed",
+        "line-dash-pattern": [3, 4],
+        "line-color": c("line-strong"),
+        "target-arrow-shape": "none",
+        width: 1,
+      },
+    },
+    {
+      selector: "edge.added",
+      style: {
+        "line-color": c("gate"),
+        "target-arrow-color": c("gate"),
+        width: 2.5,
+      },
+    },
+    {
+      selector: "edge.changed",
+      style: {
+        "line-color": c("decision"),
+        "target-arrow-color": c("decision"),
+        width: 2.5,
+      },
+    },
+    {
+      selector: "edge.removed",
+      style: {
+        "line-color": c("error"),
+        "target-arrow-color": c("error"),
+        "line-style": "dashed",
+        opacity: 0.4,
+      },
+    },
+    // The selected node's chain: labelled edges, everything else at 25 %.
+    { selector: "edge.chain", style: { label: "data(type)", width: 2 } },
+    { selector: "edge.chain.migrated", style: { width: 3.5 } },
+    { selector: ".dim", style: { opacity: 0.25 } },
+    { selector: "edge.lineage-mode", style: { label: "data(type)" } },
+  ];
+}
 
 function ToolButton({
   label,
@@ -415,7 +432,7 @@ function ToolButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="flex h-9 w-9 items-center justify-center text-slate transition-colors hover:bg-warm hover:text-plum"
+      className="flex h-9 w-9 items-center justify-center text-slate transition-colors hover:bg-sunken hover:text-heading"
     >
       {children}
     </button>
@@ -558,7 +575,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
       const inst = cytoscape({
         container: box.current,
         elements: built.elements,
-        style: STYLE as never,
+        style: memoryStyle() as never,
         layout: { name: "preset" },
         wheelSensitivity: 0.2,
         minZoom: 0.15,
@@ -659,6 +676,8 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
     },
     [],
   );
+  // Recolour in place on a theme change (no new layout).
+  useThemeChange(() => cy.current?.style(memoryStyle() as never));
 
   // The drawer opening or closing (or the window) resizes the canvas: keep cytoscape's viewport
   // in step so taps land on the nodes drawn under them.
@@ -778,7 +797,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
       {graph.truncated ? (
         <div
           data-testid="memory-truncated"
-          className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-decision-bg px-4 py-1.5 text-[13px] font-medium text-decision shadow-card ring-1 ring-inset ring-decision/20"
+          className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-decision-bg px-4 py-1.5 text-sm font-medium text-decision shadow-card ring-1 ring-inset ring-decision/20"
         >
           Showing {fmt(graph.nodes.length)} of {fmt(graph.total)}: narrow the filters
         </div>
@@ -786,7 +805,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
 
       {built.nodeCount === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center">
-          <p className="max-w-sm text-center text-[14.5px] text-slate">
+          <p className="max-w-sm text-center text-base text-slate">
             Nothing to show here{filtered ? " with these filters" : ""}.{" "}
             {filtered ? "Clear a filter or search for a node." : "Search for a node to explore around it."}
           </p>
@@ -795,12 +814,12 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
 
       {/* Legend: the groups present, then what the edge styles mean. */}
       {built.nodeCount > 0 ? (
-        <div className="pointer-events-none absolute bottom-4 left-4 flex max-w-[70%] flex-wrap items-center gap-x-4 gap-y-1.5 rounded-card bg-white/90 px-3.5 py-2 text-[12px] text-slate shadow-card ring-1 ring-line">
+        <div className="pointer-events-none absolute bottom-4 left-4 flex max-w-[70%] flex-wrap items-center gap-x-4 gap-y-1.5 rounded-card bg-surface/90 px-3.5 py-2 text-xs text-slate shadow-card ring-1 ring-line">
           {sides.map((s) => (
             <span key={s} className="inline-flex items-center gap-1.5">
               <span
                 className="h-2.5 w-2.5 rounded-full ring-1"
-                style={{ background: GROUP_HEX[s].fill, boxShadow: `inset 0 0 0 1.5px ${GROUP_HEX[s].border}` }}
+                style={{ background: groupCss(s, "fill"), boxShadow: `inset 0 0 0 1.5px ${groupCss(s, "border")}` }}
               />
               {GROUP_LABEL[s]}
             </span>
@@ -808,7 +827,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
           {graph.edges.some((e) => e.type === "MIGRATED_TO") ? (
             <>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-[3px] w-5 rounded bg-purple" />
+                <span className="h-[3px] w-5 rounded bg-accent" />
                 migrated to
               </span>
               <span className="inline-flex items-center gap-1.5">
@@ -823,14 +842,14 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
           ) : null}
           {hint ? (
             <span className="inline-flex items-center gap-1.5" data-testid="memory-filtered-hint" title={hintTitle}>
-              <span className="h-0 w-5 border-t border-dashed border-line-dk" />
+              <span className="h-0 w-5 border-t border-dashed border-line-strong" />
               {hint}
             </span>
           ) : null}
         </div>
       ) : null}
 
-      <div className="absolute bottom-4 right-4 flex flex-col divide-y divide-line overflow-hidden rounded-card bg-white shadow-card ring-1 ring-line">
+      <div className="absolute bottom-4 right-4 flex flex-col divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card ring-1 ring-line">
         <ToolButton label="Zoom in" onClick={() => zoomBy(1.25)}>
           <Plus size={16} aria-hidden />
         </ToolButton>

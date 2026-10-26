@@ -74,7 +74,7 @@ export function ValidateTab() {
         <div>
           <p className="eyebrow">Step 3</p>
           <h2 className="panel-title">Validate</h2>
-          <p className="mt-1 max-w-[720px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[720px] text-md text-slate">
             The model drafts rules and findings from the parsed process. Code verifies every citation and checks coverage. A
             business SME approves the rules (G1) and decides each finding (G2).
           </p>
@@ -122,9 +122,9 @@ export function ValidateTab() {
             {a?.analysed ? (
               <section className="card p-4" data-testid="analysis-summary">
                 <p className="label">Summary</p>
-                <h3 className="mt-0.5 text-[16px] font-semibold text-plum">{proc?.name}</h3>
-                <p className="mt-2 text-[14.5px] leading-relaxed text-ink">{a.summary}</p>
-                <dl className="mt-3 grid grid-cols-[110px_1fr] gap-y-1 text-[13px]">
+                <h3 className="mt-0.5 text-lg font-semibold text-heading">{proc?.name}</h3>
+                <p className="mt-2 text-base leading-relaxed text-ink">{a.summary}</p>
+                <dl className="mt-3 grid grid-cols-[110px_1fr] gap-y-1 text-sm">
                   <dt className="text-slate">Rules</dt>
                   <dd>{rules.length}</dd>
                   <dt className="text-slate">Findings</dt>
@@ -132,7 +132,7 @@ export function ValidateTab() {
                   <dt className="text-slate">Provider</dt>
                   <dd>{a.provider ?? "none"}</dd>
                   <dt className="text-slate">Spec hash</dt>
-                  <dd className="truncate font-mono text-[12px]" title={a.spec_hash}>
+                  <dd className="truncate font-mono text-xs" title={a.spec_hash}>
                     {a.spec_hash?.slice(0, 16)}
                   </dd>
                 </dl>
@@ -175,7 +175,7 @@ export function ValidateTab() {
 
                 <section aria-labelledby="rules-title" className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2 pt-2">
-                    <h3 id="rules-title" className="text-[18px] font-semibold text-plum">
+                    <h3 id="rules-title" className="text-xl font-semibold text-heading">
                       Rules
                     </h3>
                     <Count n={rules.filter((r) => r.status === "approved" || r.status === "edited").length} label="approved" tone="gate" />
@@ -193,7 +193,7 @@ export function ValidateTab() {
 
                 <section aria-labelledby="findings-title" className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2 pt-2">
-                    <h3 id="findings-title" className="text-[18px] font-semibold text-plum">
+                    <h3 id="findings-title" className="text-xl font-semibold text-heading">
                       Findings
                     </h3>
                     <Count n={findings.length - undecidedFindings} label="decided" tone="gate" />

@@ -19,7 +19,7 @@ export function CitedText({ value, className = "" }: { value: CitedTextValue; cl
             <span
               data-testid="cited-segment"
               data-refs={p.refs.map((r) => r.id).join(" ")}
-              className="rounded-[3px] transition-colors duration-150 group-has-[button:hover]/cite:bg-purple-lt/70 group-has-[button:focus-visible]/cite:bg-purple-lt/70"
+              className="rounded-[3px] transition-colors duration-150 group-has-[button:hover]/cite:bg-accent-soft/70 group-has-[button:focus-visible]/cite:bg-accent-soft/70"
             >
               {p.text}
             </span>

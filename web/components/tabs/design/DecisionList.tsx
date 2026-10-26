@@ -12,23 +12,23 @@ const NOT_A_DECISION_PREFIX = /^\s*(A )?recommendation, not a decision:\s*/i;
 
 /** Design decisions with the alternatives that were weighed and the reason for the choice. */
 export function DecisionList({ decisions }: { decisions: DesignRecord["decisions"] }) {
-  if (decisions.length === 0) return <p className="text-[14px] text-slate">No design decisions recorded.</p>;
+  if (decisions.length === 0) return <p className="text-md text-slate">No design decisions recorded.</p>;
   return (
     <ul className="space-y-3">
       {decisions.map((d, i) => (
         <li key={i} className="rounded-btn border border-line p-3">
-          <p className="font-semibold text-plum">{d.title}</p>
-          <p className="mt-1 text-[14px]">
+          <p className="font-semibold text-heading">{d.title}</p>
+          <p className="mt-1 text-md">
             <span className="label mr-1.5">Choice</span>
             {d.choice}
           </p>
           {d.alternatives.length > 0 ? (
-            <p className="mt-1 text-[14px] text-slate">
+            <p className="mt-1 text-md text-slate">
               <span className="label mr-1.5">Alternatives</span>
               {d.alternatives.join("; ")}
             </p>
           ) : null}
-          <p className="mt-1 text-[14px] text-ink">
+          <p className="mt-1 text-md text-ink">
             <span className="label mr-1.5">Reason</span>
             {d.reason}
           </p>
@@ -56,12 +56,12 @@ function Question({
   const [open, setOpen] = useState(false);
   const decided = q.decision ?? null;
   const tone = decided === "answered" ? "border-gate/40 bg-gate-bg/40" : decided === "rejected"
-    ? "border-line bg-warm/40" : "border-decision/30 bg-decision-bg/40";
+    ? "border-line bg-sunken/40" : "border-decision/30 bg-decision-bg/40";
 
   return (
     <li className={`rounded-btn border p-3 ${tone}`} data-testid="open-question" data-decision={decided ?? "open"}>
-      <p className="font-medium text-plum">{q.question}</p>
-      <p className="mt-1 text-[14px] text-ink">
+      <p className="font-medium text-heading">{q.question}</p>
+      <p className="mt-1 text-md text-ink">
         <span className="label mr-1.5">Recommendation</span>
         {q.recommendation.replace(NOT_A_DECISION, "").replace(NOT_A_DECISION_PREFIX, "")}{" "}
         <Pill tone="decision" className="ml-1 align-middle">
@@ -70,14 +70,14 @@ function Question({
       </p>
 
       {decided ? (
-        <div className="mt-2 border-t border-line/60 pt-2 text-[13.5px]">
+        <div className="mt-2 border-t border-line/60 pt-2 text-md">
           <p className="flex flex-wrap items-center gap-1.5">
             {decided === "answered" ? (
               <Check size={14} className="text-gate" aria-hidden />
             ) : (
               <X size={14} className="text-slate" aria-hidden />
             )}
-            <span className="font-medium text-plum">
+            <span className="font-medium text-heading">
               {decided === "answered" ? "Answered" : "Rejected"}
             </span>
             {q.decided_by ? <span className="text-slate">by {q.decided_by}</span> : null}
@@ -97,7 +97,7 @@ function Question({
           {open ? (
             <div className="space-y-2">
               <textarea
-                className="w-full rounded-btn border border-line p-2 text-[13.5px]"
+                className="w-full rounded-btn border border-line p-2 text-md"
                 rows={2}
                 autoFocus
                 placeholder="What did the architect or the business decide?"
@@ -153,7 +153,7 @@ export function OpenQuestions({
   questions: DesignRecord["open_questions"];
   processId: string | null;
 }) {
-  if (questions.length === 0) return <p className="text-[14px] text-slate">No open questions.</p>;
+  if (questions.length === 0) return <p className="text-md text-slate">No open questions.</p>;
   return (
     <ul className="space-y-3">
       {questions.map((q, i) => (

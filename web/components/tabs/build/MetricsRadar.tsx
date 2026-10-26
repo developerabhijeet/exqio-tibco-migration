@@ -5,6 +5,7 @@ import { PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, Responsi
 import { Gauge, X } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import type { Metrics } from "@/lib/buildTypes";
+import { chartColors, useThemed } from "@/lib/theme";
 import { Panel } from "./Panel";
 
 export const AXES = [
@@ -35,7 +36,7 @@ function MetricDrawer({ metrics, axis, onClose }: { metrics: Metrics; axis: Axis
         aria-modal="true"
         aria-label={`${label} details`}
         data-testid="metric-drawer"
-        className="relative flex h-full w-[460px] max-w-full flex-col border-l border-line bg-white shadow-2xl"
+        className="relative flex h-full w-[460px] max-w-full flex-col border-l border-line bg-surface shadow-e3"
       >
         <div className="flex items-start justify-between border-b border-line px-6 py-5">
           <div>
@@ -46,10 +47,10 @@ function MetricDrawer({ metrics, axis, onClose }: { metrics: Metrics; axis: Axis
             <X size={18} />
           </button>
         </div>
-        <div className="space-y-5 px-6 py-5 text-[14px]">
+        <div className="space-y-5 px-6 py-5 text-md">
           <div>
             <p className="label">Value</p>
-            <p className="mt-1 text-[28px] font-semibold text-plum">
+            <p className="mt-1 text-4xl font-semibold text-heading">
               {typeof value === "boolean" ? (value ? "pass" : "fail") : typeof value === "number" ? pct(value) : "no value"}
             </p>
           </div>
@@ -59,11 +60,11 @@ function MetricDrawer({ metrics, axis, onClose }: { metrics: Metrics; axis: Axis
           </div>
           <div>
             <p className="label">Counts from this build</p>
-            <p className="mt-1 rounded-btn bg-page px-3 py-2 font-mono text-[12.5px] text-ink">
+            <p className="mt-1 rounded-btn bg-page px-3 py-2 font-mono text-sm text-ink">
               {metrics.details[axis] ?? "No counts reported."}
             </p>
           </div>
-          <p className="text-[12.5px] text-slate">Computed by code from the build outputs; no model is involved.</p>
+          <p className="text-sm text-slate">Computed by code from the build outputs; no model is involved.</p>
         </div>
       </aside>
     </div>
@@ -73,10 +74,12 @@ function MetricDrawer({ metrics, axis, onClose }: { metrics: Metrics; axis: Axis
 /** Five quality axes from 0 to 100%, with compile and infrastructure validity as pills. */
 export function MetricsRadar({ metrics }: { metrics: Metrics | null }) {
   const [open, setOpen] = useState<AxisKey | null>(null);
+  // Null until mounted: the chart is drawn once the theme's colours are known.
+  const colors = useThemed(chartColors);
   if (!metrics) {
     return (
       <Panel title="Metrics" eyebrow="Computed by code" testId="metrics-radar" id="metrics">
-        <p className="text-[14px] text-slate">Metrics appear when the build reaches its metrics stage.</p>
+        <p className="text-md text-slate">Metrics appear when the build reaches its metrics stage.</p>
       </Panel>
     );
   }
@@ -108,51 +111,53 @@ export function MetricsRadar({ metrics }: { metrics: Metrics | null }) {
     >
       <div className="grid items-center gap-4 md:grid-cols-[minmax(0,1fr)_240px]">
         <div className="h-[320px] min-w-0" aria-hidden>
-          <ResponsiveContainer width="100%" height="100%">
-            <RadarChart data={data} outerRadius="68%" margin={{ top: 16, right: 72, bottom: 16, left: 72 }}>
-              <PolarGrid stroke="#E2DFD6" />
-              <PolarAngleAxis
-                dataKey="axis"
-                tick={({ x, y, payload, textAnchor }) => (
-                  <text
-                    x={x}
-                    y={y}
-                    textAnchor={textAnchor}
-                    dominantBaseline="central"
-                    fontSize={12}
-                    fill="#425466"
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setOpen(AXES.find((a) => a.label === payload.value)?.key ?? null)}
-                  >
-                    {payload.value}
-                  </text>
-                )}
-              />
-              <PolarRadiusAxis domain={[0, 100]} tickCount={5} tick={false} axisLine={false} />
-              <Radar dataKey="value" stroke="#9B5DE5" strokeWidth={2} fill="#9B5DE5" fillOpacity={0.18} dot={{ r: 4, fill: "#9B5DE5" }} />
-              <Tooltip
-                formatter={(_v, _n, item) => [(item?.payload as { shown: string }).shown, "value"]}
-                contentStyle={{ borderRadius: 6, borderColor: "#E2DFD6", fontSize: 12 }}
-              />
-            </RadarChart>
-          </ResponsiveContainer>
+          {colors ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={data} outerRadius="68%" margin={{ top: 16, right: 72, bottom: 16, left: 72 }}>
+                <PolarGrid stroke={colors.grid} />
+                <PolarAngleAxis
+                  dataKey="axis"
+                  tick={({ x, y, payload, textAnchor }) => (
+                    <text
+                      x={x}
+                      y={y}
+                      textAnchor={textAnchor}
+                      dominantBaseline="central"
+                      fontSize={12}
+                      fill={colors.axis}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setOpen(AXES.find((a) => a.label === payload.value)?.key ?? null)}
+                    >
+                      {payload.value}
+                    </text>
+                  )}
+                />
+                <PolarRadiusAxis domain={[0, 100]} tickCount={5} tick={false} axisLine={false} />
+                <Radar dataKey="value" stroke={colors.series} strokeWidth={2} fill={colors.series} fillOpacity={0.18} dot={{ r: 4, fill: colors.series }} />
+                <Tooltip
+                  formatter={(_v, _n, item) => [(item?.payload as { shown: string }).shown, "value"]}
+                  contentStyle={colors.tooltip}
+                />
+              </RadarChart>
+            </ResponsiveContainer>
+          ) : null}
         </div>
-        <ul className="space-y-1.5 text-[13.5px]">
+        <ul className="space-y-1.5 text-md">
           {data.map((d) => (
             <li key={d.key}>
               <button
                 type="button"
                 data-testid="radar-axis"
                 onClick={() => setOpen(d.key)}
-                className="flex w-full items-center gap-2 rounded-btn border border-line px-2.5 py-1.5 text-left hover:border-purple"
+                className="flex w-full items-center gap-2 rounded-btn border border-line px-2.5 py-1.5 text-left hover:border-accent"
               >
-                <Gauge size={14} className="shrink-0 text-purple" aria-hidden />
+                <Gauge size={14} className="shrink-0 text-accent-ink" aria-hidden />
                 <span className="flex-1 text-ink">{d.axis}</span>
-                <span className="font-semibold text-plum">{d.shown}</span>
+                <span className="font-semibold text-heading">{d.shown}</span>
               </button>
             </li>
           ))}
-          <li className="pt-1 text-[12px] text-slate">Select a metric for its formula and counts.</li>
+          <li className="pt-1 text-xs text-slate">Select a metric for its formula and counts.</li>
         </ul>
       </div>
       {open ? <MetricDrawer metrics={metrics} axis={open} onClose={() => setOpen(null)} /> : null}

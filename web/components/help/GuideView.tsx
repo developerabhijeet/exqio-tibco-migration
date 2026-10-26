@@ -34,7 +34,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={copy}
       aria-label="Copy"
-      className="absolute right-2 top-2 flex items-center gap-1 rounded-btn bg-white/10 px-2 py-1 text-[12px] font-medium text-lilac opacity-80 transition hover:bg-white/20 hover:text-white hover:opacity-100 focus-visible:opacity-100"
+      className="absolute right-2 top-2 flex items-center gap-1 rounded-btn bg-white/10 px-2 py-1 text-xs font-medium text-lilac opacity-80 transition hover:bg-white/20 hover:text-white hover:opacity-100 focus-visible:opacity-100"
     >
       {done ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
       {done ? "Copied" : "Copy"}
@@ -47,7 +47,7 @@ function heading(Tag: "h1" | "h2" | "h3" | "h4", cls: string) {
     <Tag id={id} className={`group scroll-mt-6 ${cls}`}>
       {children}
       {id ? (
-        <a href={`#${id}`} aria-label="Link to this section" className="ml-2 inline-block align-middle text-purple opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100">
+        <a href={`#${id}`} aria-label="Link to this section" className="ml-2 inline-block align-middle text-accent-ink opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100">
           <Link2 size={15} aria-hidden />
         </a>
       ) : null}
@@ -57,39 +57,39 @@ function heading(Tag: "h1" | "h2" | "h3" | "h4", cls: string) {
 }
 
 const COMPONENTS: Components = {
-  h1: heading("h1", "mb-4 font-display text-[28px] font-semibold leading-tight tracking-[-0.015em] text-plum"),
-  h2: heading("h2", "mb-3 mt-10 border-t border-line pt-6 font-display text-[21px] font-semibold tracking-[-0.01em] text-plum"),
-  h3: heading("h3", "mb-2 mt-7 text-[17px] font-semibold text-plum"),
-  h4: heading("h4", "mb-2 mt-5 text-[15px] font-semibold text-plum"),
+  h1: heading("h1", "mb-4 font-display text-4xl font-semibold leading-tight tracking-[-0.015em] text-heading"),
+  h2: heading("h2", "mb-3 mt-10 border-t border-line pt-6 font-display text-2xl font-semibold tracking-[-0.01em] text-heading"),
+  h3: heading("h3", "mb-2 mt-7 text-lg font-semibold text-heading"),
+  h4: heading("h4", "mb-2 mt-5 text-base font-semibold text-heading"),
   p: ({ children }) => <p className="my-3 max-w-[72ch]">{children}</p>,
   ul: ({ children }) => <ul className="my-3 max-w-[72ch] list-disc space-y-1.5 pl-6">{children}</ul>,
   ol: ({ children }) => <ol className="my-3 max-w-[72ch] list-decimal space-y-1.5 pl-6">{children}</ol>,
-  blockquote: ({ children }) => <blockquote className="my-4 max-w-[72ch] border-l-4 border-purple/40 bg-purple-lt/50 py-1 pl-4 pr-3 text-slate">{children}</blockquote>,
+  blockquote: ({ children }) => <blockquote className="my-4 max-w-[72ch] border-l-4 border-accent/40 bg-accent-soft/50 py-1 pl-4 pr-3 text-slate">{children}</blockquote>,
   hr: () => <hr className="my-8 border-line" />,
   a: ({ href = "", children }) => {
     const guide = guideHref(href);
-    if (guide) return <Link href={guide} className="text-purple underline-offset-2 hover:underline">{children}</Link>;
-    if (href.startsWith("#")) return <a href={href} className="text-purple underline-offset-2 hover:underline">{children}</a>;
+    if (guide) return <Link href={guide} className="text-accent-ink underline-offset-2 hover:underline">{children}</Link>;
+    if (href.startsWith("#")) return <a href={href} className="text-accent-ink underline-offset-2 hover:underline">{children}</a>;
     if (/^https?:\/\//i.test(href)) {
-      return <a href={href} target="_blank" rel="noopener noreferrer" className="text-purple underline-offset-2 hover:underline">{children}</a>;
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent-ink underline-offset-2 hover:underline">{children}</a>;
     }
-    return <code className="rounded bg-warm px-1 py-0.5 font-mono text-[0.9em]">{children}</code>;
+    return <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[0.9em]">{children}</code>;
   },
   code: ({ className, children }) =>
     className ? (
       <code className={`${className} font-mono`}>{children}</code>
     ) : (
-      <code className="rounded bg-warm px-1 py-0.5 font-mono text-[0.88em] text-plum">{children}</code>
+      <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[0.88em] text-heading">{children}</code>
     ),
   pre: ({ children }) => (
     <div className="relative my-4">
-      <pre className="overflow-x-auto rounded-card bg-plum p-4 pr-20 text-[13px] leading-relaxed text-white/90">{children}</pre>
+      <pre className="overflow-x-auto rounded-card bg-plum p-4 pr-20 text-sm leading-relaxed text-white/90">{children}</pre>
       <CopyButton text={textOf(children).replace(/\n$/, "")} />
     </div>
   ),
   table: ({ children }) => (
     <div className="my-5 overflow-x-auto rounded-card border border-line">
-      <table className="w-full text-left text-[14px]">{children}</table>
+      <table className="w-full text-left text-md">{children}</table>
     </div>
   ),
   thead: ({ children }) => <thead className="table-head">{children}</thead>,
@@ -99,7 +99,7 @@ const COMPONENTS: Components = {
 
 export function GuideView({ markdown }: { markdown: string }) {
   return (
-    <article data-testid="guide" className="text-[15px] leading-relaxed text-ink">
+    <article data-testid="guide" className="text-base leading-relaxed text-ink">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={COMPONENTS}>
         {markdown}
       </ReactMarkdown>

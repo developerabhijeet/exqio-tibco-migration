@@ -48,7 +48,7 @@ export function FindingCard({
   return (
     <article data-testid="finding-card" data-finding={key} data-decision={decision} className="card p-4">
       <header className="flex flex-wrap items-center gap-2">
-        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-[12px] font-semibold text-white" title={key}>
+        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-xs font-semibold text-white" title={key}>
           {shortKey(key)}
         </span>
         <Pill tone={SEVERITY[finding.severity ?? ""] ?? "det"}>{finding.severity ?? "unrated"}</Pill>
@@ -56,8 +56,8 @@ export function FindingCard({
           {finding.source === "ai" ? "AI" : "code"}
         </Pill>
         {decision ? (
-          <span className="ml-auto text-[12.5px] text-slate">
-            decided <span className="font-semibold text-plum">{DECISIONS.find((d) => d.value === decision)?.label ?? decision}</span>
+          <span className="ml-auto text-sm text-slate">
+            decided <span className="font-semibold text-heading">{DECISIONS.find((d) => d.value === decision)?.label ?? decision}</span>
             {finding.decided_by ? ` by ${finding.decided_by}` : ""}
           </span>
         ) : (
@@ -66,9 +66,9 @@ export function FindingCard({
           </span>
         )}
       </header>
-      <p className="mt-2 text-[15px] leading-relaxed text-ink">{finding.text}</p>
+      <p className="mt-2 text-base leading-relaxed text-ink">{finding.text}</p>
       {finding.business_impact ? (
-        <p className="mt-2 rounded-btn bg-warm px-3 py-2 text-[13.5px] text-ink">
+        <p className="mt-2 rounded-btn bg-sunken px-3 py-2 text-md text-ink">
           <span className="label mr-1.5">Business impact</span>
           {finding.business_impact}
         </p>
@@ -87,7 +87,7 @@ export function FindingCard({
         </label>
         <textarea
           id={noteId}
-          className="input mt-1 min-h-[44px] text-[14px]"
+          className="input mt-1 min-h-[44px] text-md"
           placeholder="Why this decision; kept with the audit trail"
           value={note}
           onChange={(e) => setNote(e.target.value)}
@@ -103,8 +103,8 @@ export function FindingCard({
                 title={d.help}
                 disabled={!!busy || (on && note.trim() === (finding.note ?? ""))}
                 onClick={() => decide(d.value)}
-                className={`btn px-3 py-1.5 text-[14px] ${
-                  on ? "bg-plum text-white disabled:opacity-100" : "border border-line bg-white text-plum hover:bg-warm"
+                className={`btn px-3 py-1.5 text-md ${
+                  on ? "bg-plum text-white disabled:opacity-100" : "border border-line bg-surface text-heading hover:bg-sunken"
                 }`}
               >
                 {busy === d.value ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
@@ -113,12 +113,12 @@ export function FindingCard({
             );
           })}
           {decision && note.trim() !== (finding.note ?? "") ? (
-            <span className="text-[12.5px] text-slate">Click the chosen decision again to save the note.</span>
+            <span className="text-sm text-slate">Click the chosen decision again to save the note.</span>
           ) : null}
         </div>
       </div>
       {error ? (
-        <p role="alert" className="mt-2 text-[13px] text-error">
+        <p role="alert" className="mt-2 text-sm text-error">
           {error}
         </p>
       ) : null}

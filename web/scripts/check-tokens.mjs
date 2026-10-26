@@ -4,7 +4,8 @@
 //   2. no opaque `bg-white` (an opacity modifier such as `bg-white/10` is fine), no `shadow-xl`/`shadow-2xl`
 //   3. no hex colour inside a className string or a style object (components/ui/BrandIcons.tsx exempt)
 //   4. no `text-plum` / `text-purple` (renamed `text-heading` / `text-accent-ink`)
-//   5. every listed token pair reaches WCAG AA 4.5:1 in both themes, read from lib/theme.css
+//   5. every listed token pair reaches WCAG AA 4.5:1 in both themes, read from lib/theme.css (the
+//      spec's thirteen plus text on filled, tinted and status surfaces)
 // `--rules=1,5` runs a subset. Exits 1 listing `file:line rule n: detail`; prints
 // `check-tokens: ok (<n> files)` on success. No dependencies: regular expressions and the WCAG formula.
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -30,7 +31,31 @@ const PAIRS = [
   ["error", "error-bg"],
   ["coral-dk", "page"],
   ["det", "det-bg"],
+  // Text on filled and tinted surfaces, and the status colours as text on the page and on cards.
+  ["white", "accent-strong"],
+  ["white", "plum"],
+  ["accent-ink", "accent-soft"],
+  ["ink", "accent-soft"],
+  ["heading", "accent-soft"],
+  ["slate", "accent-soft"],
+  ["ink", "highlight"],
+  ["ink", "highlight-strong"],
+  ["accent-ink", "page"],
+  ["gate", "page"],
+  ["gate", "surface"],
+  ["error", "page"],
+  ["error", "surface"],
+  ["decision", "page"],
+  ["decision", "surface"],
+  ["ai", "surface"],
+  ["coral-dk", "surface"],
+  // A status colour filled under surface-coloured text (stepper steps, gate buttons, pills).
+  ["surface", "gate"],
+  ["surface", "error"],
+  ["surface", "coral-dk"],
 ];
+// Colours that are not tokens but appear in the pairs.
+const FIXED = { white: [255, 255, 255] };
 
 const arg = process.argv.find((a) => a.startsWith("--rules="));
 const rules = new Set(arg ? arg.slice("--rules=".length).split(",").map(Number) : [1, 2, 3, 4, 5]);
@@ -122,8 +147,8 @@ if (rules.has(5)) {
   };
   for (const [theme, map] of Object.entries(themes)) {
     for (const [fg, bg] of PAIRS) {
-      const a = map.get(fg);
-      const b = map.get(bg);
+      const a = FIXED[fg] ? { rgb: FIXED[fg], line: 1 } : map.get(fg);
+      const b = FIXED[bg] ? { rgb: FIXED[bg], line: 1 } : map.get(bg);
       if (!a || !b) {
         problems.push(`${THEME}:1 rule 5: missing token --c-${a ? bg : fg} (${theme})`);
         continue;

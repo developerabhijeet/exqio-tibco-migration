@@ -46,20 +46,20 @@ function StepRow({ row }: { row: BuildStepRow }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-warm"
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-sunken"
       >
         <ChevronRight size={14} className={`shrink-0 text-slate transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
         <TagPill tag={row.tag} />
-        <span className="w-[170px] shrink-0 text-[14px] font-medium text-plum">{row.label}</span>
+        <span className="w-[170px] shrink-0 text-md font-medium text-heading">{row.label}</span>
         <OutcomePill outcome={row.status} text={row.statusText} />
-        <span className={`min-w-0 flex-1 truncate text-[13px] ${failed ? "text-error" : "text-slate"}`} title={row.summary}>
+        <span className={`min-w-0 flex-1 truncate text-sm ${failed ? "text-error" : "text-slate"}`} title={row.summary}>
           {row.summary}
         </span>
       </button>
       {open ? (
         <pre
           data-testid="step-log"
-          className="mx-3 mb-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-[12px] leading-5 text-ink"
+          className="mx-3 mb-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-xs leading-5 text-ink"
         >
           {row.log || "No log for this step."}
         </pre>
@@ -75,8 +75,8 @@ export function BuildSteps({ rows }: { rows: BuildStepRow[] }) {
   return (
     <section className="card p-4" data-testid="build-steps">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-[16px] font-semibold text-plum">Steps</h3>
-        <span className="text-[13px] text-slate">
+        <h3 className="text-lg font-semibold text-heading">Steps</h3>
+        <span className="text-sm text-slate">
           {passed} passed, {failed} failed, {rows.length - passed - failed} other
         </span>
       </div>

@@ -69,8 +69,8 @@ function Ring({ met, total }: { met: number; total: number }) {
         strokeDasharray={`${(c * pct) / 100} ${c}`}
         transform="rotate(-90 70 70)"
       />
-      <text x="70" y="68" textAnchor="middle" className="fill-plum text-[26px] font-semibold">{pct}%</text>
-      <text x="70" y="88" textAnchor="middle" className="fill-slate text-[11px]">{met} of {total}</text>
+      <text x="70" y="68" textAnchor="middle" className="fill-heading text-3xl font-semibold">{pct}%</text>
+      <text x="70" y="88" textAnchor="middle" className="fill-slate text-2xs">{met} of {total}</text>
     </svg>
   );
 }
@@ -79,8 +79,8 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
   const pct = total === 0 ? 0 : Math.round((met / total) * 100);
   return (
     <div>
-      <div className="flex items-baseline justify-between text-[13px]">
-        <span className="font-medium text-plum">{label}</span>
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="font-medium text-heading">{label}</span>
         <span className="text-slate">{met} of {total}</span>
       </div>
       <div className="mt-1 h-2 overflow-hidden rounded-full bg-line">
@@ -98,16 +98,16 @@ function Row({ check }: { check: Check }) {
     <details className="group/chk border-b border-line last:border-0">
       <summary className="flex cursor-pointer list-none items-center gap-2 py-2.5">
         <ChevronRight size={14} className="shrink-0 text-slate transition-transform group-open/chk:rotate-90" aria-hidden />
-        <span className="min-w-0 flex-1 text-[14px] text-ink">{check.title}</span>
+        <span className="min-w-0 flex-1 text-md text-ink">{check.title}</span>
         <Pill tone={TONE[check.state]}>{LABEL[check.state]}</Pill>
       </summary>
-      <div className="pb-3 pl-[22px] text-[13px] text-slate">
+      <div className="pb-3 pl-[22px] text-sm text-slate">
         <p>{check.what}</p>
         <p className="mt-1">
           <span className="label">Read from</span> {check.source}
         </p>
         {check.evidence ? (
-          <pre className="mt-1 overflow-x-auto rounded bg-page p-2 font-mono text-[11.5px] text-ink">{check.evidence}</pre>
+          <pre className="mt-1 overflow-x-auto rounded bg-page p-2 font-mono text-xs text-ink">{check.evidence}</pre>
         ) : null}
       </div>
     </details>
@@ -125,79 +125,79 @@ function RequestPath() {
             <path d="M0,0 L10,5 L0,10 z" className="fill-slate" />
           </marker>
         </defs>
-        <g className="fill-slate text-[10px] font-semibold tracking-[0.12em]">
+        <g className="fill-slate text-2xs font-semibold tracking-[0.12em]">
           <text x="8" y="56">CALLER</text>
           <text x="8" y="146">SERVICE</text>
           <text x="8" y="252">STARTUP</text>
         </g>
 
-        <rect x="96" y="28" width="150" height="46" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="171" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">Caller</text>
-        <text x="171" y="64" textAnchor="middle" className="fill-slate text-[10px]">holds a token for the API</text>
+        <rect x="96" y="28" width="150" height="46" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="171" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">Caller</text>
+        <text x="171" y="64" textAnchor="middle" className="fill-slate text-2xs">holds a token for the API</text>
 
         <path d="M246,51 L286,51" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="288" y="28" width="150" height="46" rx="8" className="fill-purple-lt stroke-purple" strokeWidth="1.3" />
-        <text x="363" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">API Management</text>
-        <text x="363" y="64" textAnchor="middle" className="fill-slate text-[10px]">product, policy, throttle</text>
+        <rect x="288" y="28" width="150" height="46" rx="8" className="fill-accent-soft stroke-accent" strokeWidth="1.3" />
+        <text x="363" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">API Management</text>
+        <text x="363" y="64" textAnchor="middle" className="fill-slate text-2xs">product, policy, throttle</text>
 
         <path d="M438,51 L478,51" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="480" y="28" width="170" height="46" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="565" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">HTTPS to the workload</text>
-        <text x="565" y="64" textAnchor="middle" className="fill-slate text-[10px]">private endpoint</text>
+        <rect x="480" y="28" width="170" height="46" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="565" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">HTTPS to the workload</text>
+        <text x="565" y="64" textAnchor="middle" className="fill-slate text-2xs">private endpoint</text>
 
         <path d="M565,74 L565,104" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="96" y="106" width="760" height="76" rx="10" className="fill-warm stroke-line" strokeWidth="1.2" />
-        <text x="112" y="124" className="fill-ink text-[11.5px] font-semibold">The generated .NET 10 service</text>
+        <rect x="96" y="106" width="760" height="76" rx="10" className="fill-sunken stroke-line" strokeWidth="1.2" />
+        <text x="112" y="124" className="fill-ink text-xs font-semibold">The generated .NET 10 service</text>
 
-        <rect x="112" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="187" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Authentication</text>
-        <text x="187" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">bearer token validated</text>
+        <rect x="112" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="187" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Authentication</text>
+        <text x="187" y="163" textAnchor="middle" className="fill-slate text-2xs">bearer token validated</text>
 
         <path d="M262,152 L286,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="288" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="363" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Authorization</text>
-        <text x="363" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">every endpoint requires it</text>
+        <rect x="288" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="363" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Authorization</text>
+        <text x="363" y="163" textAnchor="middle" className="fill-slate text-2xs">every endpoint requires it</text>
 
         <path d="M438,152 L462,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="464" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="539" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Controller</text>
-        <text x="539" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">contract from the TIBCO XSD</text>
+        <rect x="464" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="539" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Controller</text>
+        <text x="539" y="163" textAnchor="middle" className="fill-slate text-2xs">contract from the TIBCO XSD</text>
 
         <path d="M614,152 L638,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="640" y="132" width="200" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="740" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Domain service and repository</text>
-        <text x="740" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">the approved rules, the same SQL</text>
+        <rect x="640" y="132" width="200" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="740" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Domain service and repository</text>
+        <text x="740" y="163" textAnchor="middle" className="fill-slate text-2xs">the approved rules, the same SQL</text>
 
         <path d="M86,152 L96,152" className="stroke-slate" strokeWidth="1.3" fill="none" />
         <path d="M187,182 L187,214" className="stroke-slate" strokeWidth="1.2" strokeDasharray="4 3" fill="none" markerEnd="url(#sp-a)" />
         <path d="M740,182 L740,214" className="stroke-slate" strokeWidth="1.2" strokeDasharray="4 3" fill="none" markerEnd="url(#sp-a)" />
 
         <rect x="96" y="216" width="190" height="52" rx="8" className="fill-gate-bg stroke-gate" strokeWidth="1.4" />
-        <text x="191" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Key Vault, at startup</text>
-        <text x="191" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">read with the managed identity</text>
-        <text x="191" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">no secret in configuration</text>
+        <text x="191" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Key Vault, at startup</text>
+        <text x="191" y="251" textAnchor="middle" className="fill-slate text-2xs">read with the managed identity</text>
+        <text x="191" y="263" textAnchor="middle" className="fill-slate text-2xs">no secret in configuration</text>
 
-        <rect x="320" y="216" width="190" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="415" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Masking</text>
-        <text x="415" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">sensitive values masked before</text>
-        <text x="415" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">a log line or a fault leaves</text>
+        <rect x="320" y="216" width="190" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="415" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Masking</text>
+        <text x="415" y="251" textAnchor="middle" className="fill-slate text-2xs">sensitive values masked before</text>
+        <text x="415" y="263" textAnchor="middle" className="fill-slate text-2xs">a log line or a fault leaves</text>
 
-        <rect x="544" y="216" width="190" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="639" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Azure Monitor</text>
-        <text x="639" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">logs, traces and metrics</text>
-        <text x="639" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">from the first run</text>
+        <rect x="544" y="216" width="190" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="639" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Azure Monitor</text>
+        <text x="639" y="251" textAnchor="middle" className="fill-slate text-2xs">logs, traces and metrics</text>
+        <text x="639" y="263" textAnchor="middle" className="fill-slate text-2xs">from the first run</text>
 
-        <rect x="768" y="216" width="88" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="812" y="240" textAnchor="middle" className="fill-ink text-[11px] font-semibold">/health</text>
-        <text x="812" y="255" textAnchor="middle" className="fill-slate text-[9.5px]">anonymous</text>
+        <rect x="768" y="216" width="88" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="812" y="240" textAnchor="middle" className="fill-ink text-2xs font-semibold">/health</text>
+        <text x="812" y="255" textAnchor="middle" className="fill-slate text-2xs">anonymous</text>
       </svg>
-      <figcaption className="mt-2 text-[12px] text-slate">
+      <figcaption className="mt-2 text-xs text-slate">
         The path is read from the generated service: the middleware order, the authorization requirement and the
         health endpoint are the ones in its own Program.cs.
       </figcaption>
@@ -348,7 +348,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       eyebrow="Controls on the generated service"
       testId="security-panel"
       actions={
-        <span className="flex items-center gap-2 text-[13px]">
+        <span className="flex items-center gap-2 text-sm">
           <AzureIcon size={15} />
           <span className="label">Controls</span>
           <Pill tone={shown.length > 0 && met === shown.length ? "gate" : met === 0 ? "det" : "decision"}>
@@ -358,7 +358,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       }
     >
       {!buildId || shown.length === 0 ? (
-        <p className="text-[14px] text-slate">Build this process first; the controls are read from the build.</p>
+        <p className="text-md text-slate">Build this process first; the controls are read from the build.</p>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-6">
@@ -385,7 +385,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
           </div>
 
           <details className="group/path mt-4">
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-[14px] font-medium text-plum">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-md font-medium text-heading">
               <ChevronRight size={15} className="text-slate transition-transform group-open/path:rotate-90" aria-hidden />
               The request path, and where each control sits
             </summary>

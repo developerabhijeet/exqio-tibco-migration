@@ -18,7 +18,7 @@ export function LaterStep({ step }: { step: StepState }) {
         <StatusPill status={step.status} />
       </div>
       <p className="mt-3 max-w-[720px] text-slate">{PURPOSE[step.key]}</p>
-      <p className="mt-4 text-[14px] text-slate">This tab is not available in this build yet.</p>
+      <p className="mt-4 text-md text-slate">This tab is not available in this build yet.</p>
     </section>
   );
 }

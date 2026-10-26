@@ -31,7 +31,7 @@ function Providers({ s }: { s: SettingsView }) {
       eyebrow="Presence only, never values"
       testId="providers"
       actions={
-        <span className="flex items-center gap-2 text-[13px]">
+        <span className="flex items-center gap-2 text-sm">
           <span className="label">Choice</span>
           <Pill tone="purple">{s.provider.choice}</Pill>
           <span className="label">Active</span>
@@ -41,19 +41,19 @@ function Providers({ s }: { s: SettingsView }) {
     >
       <ul className="divide-y divide-line rounded-btn border border-line">
         {s.providers.map((p) => (
-          <li key={p.name} data-provider={p.name} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[13.5px]">
-            <span className="w-20 font-semibold text-plum">{p.name}</span>
+          <li key={p.name} data-provider={p.name} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-md">
+            <span className="w-20 font-semibold text-heading">{p.name}</span>
             <Presence ok={p.configured} />
             <span className="text-slate">{p.role}</span>
             <span className="ml-auto flex flex-wrap gap-1">
               {p.env.map((e) => (
-                <code key={e} className="rounded bg-page px-1.5 py-0.5 font-mono text-[11.5px] text-slate">
+                <code key={e} className="rounded bg-page px-1.5 py-0.5 font-mono text-xs text-slate">
                   {e}
                 </code>
               ))}
             </span>
             {p.deployments_set ? (
-              <span className="flex w-full flex-wrap gap-1.5 pl-[92px] text-[12px] text-slate">
+              <span className="flex w-full flex-wrap gap-1.5 pl-[92px] text-xs text-slate">
                 endpoint <Presence ok={!!p.endpoint_set} yes="set" no="missing" /> key <Presence ok={!!p.key_set} yes="set" no="missing" />
                 {Object.entries(p.deployments_set).map(([t, ok]) => (
                   <span key={t} className="flex items-center gap-1">
@@ -99,7 +99,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
     >
       {error ? <ErrorNote error={error} /> : null}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-        <table className="w-full text-[13.5px]">
+        <table className="w-full text-md">
           <thead>
             <tr className="table-head">
               <th className="px-3 py-2">Tier</th>
@@ -110,11 +110,11 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
           <tbody className="divide-y divide-line">
             {TIERS.map((t) => (
               <tr key={t}>
-                <td className="px-3 py-2 font-medium text-plum">{t}</td>
+                <td className="px-3 py-2 font-medium text-heading">{t}</td>
                 <td className="px-3 py-2">
                   <select
                     aria-label={`Claude model for the ${t} tier`}
-                    className="select py-1 font-mono text-[12.5px]"
+                    className="select py-1 font-mono text-sm"
                     value={models[t]}
                     onChange={(e) => setModels((m) => ({ ...m, [t]: e.target.value }))}
                   >
@@ -133,7 +133,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
           </tbody>
         </table>
         <div>
-          <table className="w-full text-[13px]">
+          <table className="w-full text-sm">
             <thead>
               <tr className="table-head">
                 <th className="px-3 py-2">Stage</th>
@@ -145,7 +145,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
             <tbody className="divide-y divide-line">
               {s.models.stages.map((st) => (
                 <tr key={st.stage}>
-                  <td className="px-3 py-1.5 font-medium text-plum">{st.stage}</td>
+                  <td className="px-3 py-1.5 font-medium text-heading">{st.stage}</td>
                   <td className="px-3 py-1.5 text-slate">{st.task_kind}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{st.weight}</td>
                   <td className="px-3 py-1.5 text-slate">{st.tier}</td>
@@ -153,7 +153,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
               ))}
             </tbody>
           </table>
-          <p className="mt-1.5 text-[12px] text-slate">
+          <p className="mt-1.5 text-xs text-slate">
             A stage takes the tier its task complexity falls in; the model is the tier&apos;s model for the active provider. The
             API has no per-stage override.
           </p>
@@ -199,12 +199,12 @@ function Routing({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =
       }
     >
       {error ? <ErrorNote error={error} /> : null}
-      <p className="text-[13.5px] text-ink">Task complexity: {s.routing.complexity}.</p>
+      <p className="text-md text-ink">Task complexity: {s.routing.complexity}.</p>
       <div className="mt-3 flex flex-wrap gap-3">
         {TIERS.map((t) => (
           <fieldset key={t} className="rounded-btn border border-line px-3 py-2">
-            <legend className="px-1 text-[13px] font-semibold text-plum">{t}</legend>
-            <div className="flex items-center gap-2 text-[13px] text-slate">
+            <legend className="px-1 text-sm font-semibold text-heading">{t}</legend>
+            <div className="flex items-center gap-2 text-sm text-slate">
               <label className="flex items-center gap-1">
                 from
                 <input
@@ -233,10 +233,10 @@ function Routing({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =
           </fieldset>
         ))}
       </div>
-      <p className="mt-1.5 text-[12px] text-slate">The three bands must cover 0 to 10 once each; the API refuses anything else.</p>
+      <p className="mt-1.5 text-xs text-slate">The three bands must cover 0 to 10 once each; the API refuses anything else.</p>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-btn border border-line p-3 text-[13px]" data-testid="langfuse">
-          <label className="flex items-center gap-2 font-semibold text-plum">
+        <div className="rounded-btn border border-line p-3 text-sm" data-testid="langfuse">
+          <label className="flex items-center gap-2 font-semibold text-heading">
             <input
               type="checkbox"
               checked={langfuse}
@@ -297,14 +297,14 @@ function Evaluation() {
       }
     >
       {!projectId ? (
-        <p className="text-[14px] text-slate">Pick a project in the top bar to choose its processes.</p>
+        <p className="text-md text-slate">Pick a project in the top bar to choose its processes.</p>
       ) : (
         <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
           {list.map((p) => (
             <label
               key={p.id}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[12.5px] ${
-                picked.includes(p.id) ? "border-purple bg-purple-lt text-plum" : "border-line text-slate"
+              className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm ${
+                picked.includes(p.id) ? "border-accent bg-accent-soft text-heading" : "border-line text-slate"
               }`}
             >
               <input
@@ -325,12 +325,12 @@ function Evaluation() {
       ) : null}
       {v ? (
         <div className="mt-3">
-          <p className="mb-1.5 text-[13px] text-slate">
+          <p className="mb-1.5 text-sm text-slate">
             Evaluation {v.id.slice(0, 8)}: {v.status}
           </p>
           {v.rows.length > 0 ? (
             <div className="overflow-x-auto rounded-btn border border-line">
-              <table className="w-full min-w-[860px] text-[13px]">
+              <table className="w-full min-w-[860px] text-sm">
                 <thead>
                   <tr className="table-head">
                     {["Provider", "Model", "Process", "Citations verified", "Coverage", "Challenger agree", "Rules", "Latency", "Cost"].map((h) => (
@@ -343,8 +343,8 @@ function Evaluation() {
                 <tbody className="divide-y divide-line">
                   {v.rows.map((r, i) => (
                     <tr key={i}>
-                      <td className="px-3 py-1.5 font-medium text-plum">{r.provider}</td>
-                      <td className="px-3 py-1.5 font-mono text-[12px]">{r.model}</td>
+                      <td className="px-3 py-1.5 font-medium text-heading">{r.provider}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs">{r.model}</td>
                       <td className="px-3 py-1.5">{r.process_name}</td>
                       <td className="px-3 py-1.5">
                         {r.citations_verified}/{r.citations_total}
@@ -362,7 +362,7 @@ function Evaluation() {
               </table>
             </div>
           ) : running ? null : (
-            <p className="text-[13px] text-slate">No result rows.</p>
+            <p className="text-sm text-slate">No result rows.</p>
           )}
         </div>
       ) : null}
@@ -375,7 +375,7 @@ function Toolchains({ s }: { s: SettingsView }) {
   const names = [...order.filter((n) => s.toolchains[n]), ...Object.keys(s.toolchains).filter((n) => !order.includes(n))];
   return (
     <Panel title="Toolchains" eyebrow="Detected on the API host" testId="toolchains">
-      <table className="w-full text-[13.5px]">
+      <table className="w-full text-md">
         <thead>
           <tr className="table-head">
             <th className="px-3 py-2">Tool</th>
@@ -389,18 +389,18 @@ function Toolchains({ s }: { s: SettingsView }) {
             const t = s.toolchains[n];
             return (
               <tr key={n} data-tool={n}>
-                <td className="px-3 py-2 font-medium text-plum">{n}</td>
+                <td className="px-3 py-2 font-medium text-heading">{n}</td>
                 <td className="px-3 py-2">
                   <Presence ok={t.present} yes="present" no="missing" />
                 </td>
-                <td className="px-3 py-2 font-mono text-[12px]">{t.version ?? ""}</td>
-                <td className="px-3 py-2 font-mono text-[12px] text-slate">{t.path ?? ""}</td>
+                <td className="px-3 py-2 font-mono text-xs">{t.version ?? ""}</td>
+                <td className="px-3 py-2 font-mono text-xs text-slate">{t.path ?? ""}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
-      <p className="mt-2 text-[12.5px] text-slate">
+      <p className="mt-2 text-sm text-slate">
         APP_SECRET <Presence ok={s.app_secret_configured} yes="set" no="not set" /> · Scenario database: {s.scenario_database}
       </p>
     </Panel>
@@ -443,7 +443,7 @@ function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView)
       eyebrow="Bring your own key"
       testId="azure-byok"
       actions={
-        <span className="flex items-center gap-2 text-[13px]">
+        <span className="flex items-center gap-2 text-sm">
           <span className="label">Key</span>
           <Pill tone={az.key_set ? "gate" : "det"}>{az.key_set ? az.source : "not configured"}</Pill>
         </span>
@@ -451,14 +451,14 @@ function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView)
     >
       {error ? <ErrorNote error={error} /> : null}
       {!az.app_secret_configured ? (
-        <p className="mb-3 flex items-start gap-2 rounded-btn border border-decision/30 bg-decision-bg/40 p-3 text-[13px] text-ink">
+        <p className="mb-3 flex items-start gap-2 rounded-btn border border-decision/30 bg-decision-bg/40 p-3 text-sm text-ink">
           <KeyRound size={15} className="mt-0.5 shrink-0 text-decision" aria-hidden />
           Set APP_SECRET on the API before storing a key here. Without it a stored key could not be read
           back after a restart, so the API refuses to keep one; the endpoint and deployments can still be saved.
         </p>
       ) : null}
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="text-[13px]">
+        <label className="text-sm">
           <span className="label">Endpoint</span>
           <input
             type="url"
@@ -469,7 +469,7 @@ function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView)
             onChange={(e) => setEndpoint(e.target.value)}
           />
         </label>
-        <label className="text-[13px]">
+        <label className="text-sm">
           <span className="label">API key</span>
           <input
             type="password"
@@ -484,7 +484,7 @@ function AzureKeys({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView)
       </div>
       <div className="mt-3 flex flex-wrap gap-3">
         {TIERS.map((t) => (
-          <label key={t} className="text-[13px]">
+          <label key={t} className="text-sm">
             <span className="label">{t} deployment</span>
             <input
               className="mt-1 w-44 rounded-btn border border-line px-2 py-1.5 text-ink"
@@ -534,7 +534,7 @@ function GeneralSettings() {
     <div className="space-y-6">
       {settings.error ? <ErrorNote error={settings.error} /> : null}
       {saved ? (
-        <p role="status" className="rounded-card border border-gate/30 bg-gate-bg px-4 py-2 text-[14px] text-gate">
+        <p role="status" className="rounded-card border border-gate/30 bg-gate-bg px-4 py-2 text-md text-gate">
           {saved}
         </p>
       ) : null}

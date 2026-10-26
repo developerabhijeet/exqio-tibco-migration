@@ -50,7 +50,7 @@ export function DeployTab() {
             <AzureIcon size={19} />
             Deploy
           </h2>
-          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[760px] text-md text-slate">
             The generated Terraform modules and Terragrunt live configuration are planned against the connected subscription.
             Without a connection, the connect-later state is recorded with the last validation. Operations approves (G6). Apply
             runs from the pipelines, not from here.
@@ -69,7 +69,7 @@ export function DeployTab() {
               consequence="Deploy cannot plan an image of the service until a build of this process passes."
             />
           ) : buildId ? (
-            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+            <p className="flex items-center gap-1.5 text-sm text-slate">
               Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
               {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>

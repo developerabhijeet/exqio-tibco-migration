@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, Search, SlidersHorizontal, X } from "lucide-react";
 import { ErrorNote } from "@/components/ui/Empty";
 import {
-  GROUP_HEX,
+  groupCss,
   GROUP_LABEL,
   LABEL_GROUPS,
   PHASES,
@@ -42,11 +42,10 @@ const SIDES: { value: Side | null; label: string }[] = [
 ];
 
 export function LabelChip({ label, side }: { label: string; side: Side }) {
-  const c = GROUP_HEX[side];
   return (
     <span
-      className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-[11px] font-semibold tracking-[0.01em]"
-      style={{ background: c.fill, color: c.strong, boxShadow: `inset 0 0 0 1px ${c.border}33` }}
+      className="inline-flex shrink-0 items-center rounded-full px-2 py-px text-2xs font-semibold tracking-[0.01em]"
+      style={{ background: groupCss(side, "fill"), color: groupCss(side, "strong"), boxShadow: `inset 0 0 0 1px ${groupCss(side, "border", 0.2)}` }}
     >
       {label}
     </span>
@@ -75,21 +74,21 @@ function LabelGroup({
   const toggleAll = () => onLabels(all ? labels.filter((l) => !members.includes(l)) : [...new Set([...labels, ...members])]);
   const toggle = (l: string) => onLabels(labels.includes(l) ? labels.filter((x) => x !== l) : [...labels, l]);
   return (
-    <div className="rounded-btn border border-line/80 bg-white">
+    <div className="rounded-btn border border-line/80 bg-surface">
       <div className="flex items-center gap-2.5 px-3 py-2">
         <input
           ref={box}
           type="checkbox"
-          className="h-4 w-4 accent-purple"
+          className="h-4 w-4 accent-accent"
           checked={all}
           onChange={toggleAll}
           aria-label={`All ${GROUP_LABEL[group]} labels`}
         />
-        <span className="h-2.5 w-2.5 rounded-full" style={{ background: GROUP_HEX[group].border }} aria-hidden />
-        <button type="button" className="flex flex-1 items-center justify-between text-left text-[14px] font-medium text-plum" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: groupCss(group, "border") }} aria-hidden />
+        <button type="button" className="flex flex-1 items-center justify-between text-left text-md font-medium text-heading" aria-expanded={open} onClick={() => setOpen(!open)}>
           <span>
             {GROUP_LABEL[group]}
-            {on.length > 0 && !all ? <span className="ml-1.5 text-[12.5px] font-normal text-slate">{on.length} of {members.length}</span> : null}
+            {on.length > 0 && !all ? <span className="ml-1.5 text-sm font-normal text-slate">{on.length} of {members.length}</span> : null}
           </span>
           <ChevronDown size={16} className={`text-slate transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
         </button>
@@ -97,10 +96,10 @@ function LabelGroup({
       {open ? (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1 border-t border-line/70 px-3 py-2.5">
           {members.map((l) => (
-            <label key={l} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-[13px] text-ink hover:bg-warm/70">
-              <input type="checkbox" className="h-3.5 w-3.5 accent-purple" checked={labels.includes(l)} onChange={() => toggle(l)} />
+            <label key={l} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm text-ink hover:bg-sunken/70">
+              <input type="checkbox" className="h-3.5 w-3.5 accent-accent" checked={labels.includes(l)} onChange={() => toggle(l)} />
               <span className="min-w-0 flex-1 truncate">{l}</span>
-              {counts[l] ? <span className="tnum text-[11.5px] text-slate/80">{counts[l]}</span> : null}
+              {counts[l] ? <span className="tnum text-xs text-slate/80">{counts[l]}</span> : null}
             </label>
           ))}
         </div>
@@ -114,9 +113,9 @@ function ScoreBar({ score }: { score: number }) {
   return (
     <span className="flex items-center gap-2" title={`Score ${score.toFixed(2)}`}>
       <span className="h-1 w-16 overflow-hidden rounded-full bg-line/70">
-        <span className="block h-full rounded-full bg-purple/70" style={{ width: `${pct}%` }} />
+        <span className="block h-full rounded-full bg-accent/70" style={{ width: `${pct}%` }} />
       </span>
-      <span className="tnum text-[11px] text-slate">{score.toFixed(2)}</span>
+      <span className="tnum text-2xs text-slate">{score.toFixed(2)}</span>
     </span>
   );
 }
@@ -172,19 +171,19 @@ export function SearchRail(props: SearchRailProps) {
         <div className="flex items-center justify-between">
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 text-[13.5px] font-medium text-slate hover:text-plum"
+            className="inline-flex items-center gap-1.5 text-md font-medium text-slate hover:text-heading"
             aria-expanded={filtersOpen}
             onClick={() => setFiltersOpen(!filtersOpen)}
           >
             <SlidersHorizontal size={15} aria-hidden />
             Filters
-            {active > 0 ? <span className="rounded-full bg-purple-lt px-1.5 text-[11.5px] font-semibold text-purple-dk">{active}</span> : null}
+            {active > 0 ? <span className="rounded-full bg-accent-soft px-1.5 text-xs font-semibold text-accent-ink">{active}</span> : null}
             <ChevronDown size={15} className={`transition-transform ${filtersOpen ? "rotate-180" : ""}`} aria-hidden />
           </button>
           {active > 0 ? (
             <button
               type="button"
-              className="inline-flex items-center gap-1 text-[12.5px] font-medium text-purple hover:underline"
+              className="inline-flex items-center gap-1 text-sm font-medium text-accent-ink hover:underline"
               onClick={() => {
                 onClear();
               }}
@@ -197,7 +196,7 @@ export function SearchRail(props: SearchRailProps) {
           <div className="space-y-4 pt-1">
             <div>
               <p className="label mb-2">Side</p>
-              <div className="grid grid-cols-3 rounded-btn bg-warm p-1" role="radiogroup" aria-label="Side">
+              <div className="grid grid-cols-3 rounded-btn bg-sunken p-1" role="radiogroup" aria-label="Side">
                 {SIDES.map((s) => (
                   <button
                     key={s.label}
@@ -205,8 +204,8 @@ export function SearchRail(props: SearchRailProps) {
                     role="radio"
                     aria-checked={side === s.value}
                     onClick={() => onSide(s.value)}
-                    className={`rounded-[5px] py-1.5 text-[13px] font-medium transition-all ${
-                      side === s.value ? "bg-white text-plum shadow-card" : "text-slate hover:text-plum"
+                    className={`rounded-[5px] py-1.5 text-sm font-medium transition-all ${
+                      side === s.value ? "bg-surface text-heading shadow-card" : "text-slate hover:text-heading"
                     }`}
                   >
                     {s.label}
@@ -243,11 +242,11 @@ export function SearchRail(props: SearchRailProps) {
             <ErrorNote error={error} />
           </div>
         ) : !q.trim() ? (
-          <p className="px-5 py-6 text-[14px] leading-relaxed text-slate">
+          <p className="px-5 py-6 text-md leading-relaxed text-slate">
             Search the old code, the new code and what the team learnt along the way. Pick a result to explore around it.
           </p>
         ) : hits && hits.length === 0 && !searching ? (
-          <p className="px-5 py-6 text-[14px] text-slate">No matches for “{q}”.</p>
+          <p className="px-5 py-6 text-md text-slate">No matches for “{q}”.</p>
         ) : (
           <ul className="divide-y divide-line/70">
             {(hits ?? []).map((h) => {
@@ -259,16 +258,16 @@ export function SearchRail(props: SearchRailProps) {
                     type="button"
                     onClick={() => onPick(h)}
                     aria-current={isSel ? "true" : undefined}
-                    className={`block w-full px-5 py-3.5 text-left transition-colors ${isSel ? "bg-purple-lt/60" : "hover:bg-warm/70"}`}
+                    className={`block w-full px-5 py-3.5 text-left transition-colors ${isSel ? "bg-accent-soft/60" : "hover:bg-sunken/70"}`}
                   >
                     <span className="flex items-center gap-2">
                       <LabelChip label={h.label} side={s} />
-                      <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-plum">{hitTitle(h)}</span>
+                      <span className="min-w-0 flex-1 truncate text-md font-semibold text-heading">{hitTitle(h)}</span>
                     </span>
-                    {h.text ? <span className="mt-1 line-clamp-2 text-[13px] leading-snug text-slate">{h.text}</span> : null}
+                    {h.text ? <span className="mt-1 line-clamp-2 text-sm leading-snug text-slate">{h.text}</span> : null}
                     <span className="mt-2 flex items-center justify-between">
                       <ScoreBar score={h.score} />
-                      <span className="text-[11.5px] text-slate/80">rev {h.citation.revision}</span>
+                      <span className="text-xs text-slate/80">rev {h.citation.revision}</span>
                     </span>
                   </button>
                 </li>

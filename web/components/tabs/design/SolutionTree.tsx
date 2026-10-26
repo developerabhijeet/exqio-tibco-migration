@@ -21,15 +21,15 @@ function grouped(files: string[]): [string, string[]][] {
 /** The generated solution: one .sln, four projects, files grouped by folder. */
 export function SolutionTree({ solution }: { solution: DesignRecord["solution"] }) {
   return (
-    <div className="font-mono text-[12.5px]" data-testid="solution-tree">
-      <p className="flex items-center gap-1.5 font-semibold text-plum">
+    <div className="font-mono text-sm" data-testid="solution-tree">
+      <p className="flex items-center gap-1.5 font-semibold text-heading">
         <Package size={15} aria-hidden /> {solution.name ?? "Solution"}.sln
       </p>
       <ul className="mt-2 grid gap-3 md:grid-cols-2">
         {solution.projects.map((p) => (
           <li key={p.name} className="rounded-btn border border-line bg-page p-3">
-            <p className="font-semibold text-plum">{p.name}</p>
-            <p className="font-sans text-[12px] text-slate">{KIND[p.kind] ?? p.kind}</p>
+            <p className="font-semibold text-heading">{p.name}</p>
+            <p className="font-sans text-xs text-slate">{KIND[p.kind] ?? p.kind}</p>
             <ul className="mt-2 space-y-1">
               {grouped(p.files).map(([dir, names]) => (
                 <li key={dir}>

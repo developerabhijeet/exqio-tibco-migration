@@ -24,7 +24,7 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
   const steps = sequence.map((s) => ({ from: s.from_ ?? s.from ?? "?", to: s.to, label: s.label }));
   const parts: string[] = [];
   for (const s of steps) for (const p of [s.from, s.to]) if (!parts.includes(p)) parts.push(p);
-  if (steps.length === 0) return <p className="text-[14px] text-slate">The record has no sequence.</p>;
+  if (steps.length === 0) return <p className="text-md text-slate">The record has no sequence.</p>;
 
   const lane = Math.min(270, Math.max(170, Math.max(...parts.map((p) => p.length)) * 7.4 + 28));
   const x = (p: string) => PAD + parts.indexOf(p) * lane + lane / 2;
@@ -59,7 +59,7 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
         >
           <defs>
             <marker id="seq-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="var(--plum)" />
+              <path d="M0,0 L10,5 L0,10 z" fill="rgb(var(--c-heading))" />
             </marker>
             <marker id="seq-arrow-alt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" fill="var(--decision)" />
@@ -71,8 +71,8 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
           {parts.map((p) => (
             <g key={p}>
               <line x1={x(p)} x2={x(p)} y1={HEAD} y2={height - 4} stroke="var(--line)" strokeWidth={1.5} strokeDasharray="4 4" />
-              <rect x={x(p) - lane / 2 + 8} y={8} width={lane - 16} height={HEAD - 14} rx={8} fill="var(--purple-lt)" stroke="var(--purple)" />
-              <text x={x(p)} y={8 + (HEAD - 14) / 2 + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill="var(--plum)">
+              <rect x={x(p) - lane / 2 + 8} y={8} width={lane - 16} height={HEAD - 14} rx={8} fill="rgb(var(--c-accent-soft))" stroke="rgb(var(--c-accent))" />
+              <text x={x(p)} y={8 + (HEAD - 14) / 2 + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill="rgb(var(--c-heading))">
                 <title>{p}</title>
                 {clip(p, lane - 24)}
               </text>
@@ -105,11 +105,11 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
             const x2 = x(s.to);
             const err = /^\[(error|catch)/.test(s.label);
             const alt = isOtherwise(s.label);
-            const color = err ? "var(--error)" : alt ? "var(--decision)" : "var(--plum)";
+            const color = err ? "var(--error)" : alt ? "var(--decision)" : "rgb(var(--c-heading))";
             const marker = `url(#seq-arrow${err ? "-err" : alt ? "-alt" : ""})`;
             const badge = (
               <g>
-                <circle cx={x1} cy={yy} r={9} fill="white" stroke={color} />
+                <circle cx={x1} cy={yy} r={9} fill="rgb(var(--c-surface))" stroke={color} />
                 <text x={x1} y={yy + 3.5} textAnchor="middle" fontSize={10} fontWeight={600} fill={color}>
                   {i + 1}
                 </text>
@@ -120,7 +120,7 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
               return (
                 <g key={i} data-testid="sequence-local">
                   <title>{`${i + 1}. local step in ${s.from}: ${s.label}`}</title>
-                  <rect x={x1 + 12} y={yy - 9} width={8} height={18} rx={2} fill="var(--warm)" stroke={color} />
+                  <rect x={x1 + 12} y={yy - 9} width={8} height={18} rx={2} fill="rgb(var(--c-sunken))" stroke={color} />
                   {badge}
                   <text x={x1 + 28} y={yy + 4} fontSize={11} fill={color}>
                     {clip(s.label, lane - 40)}
@@ -151,17 +151,17 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
           })}
         </svg>
       </div>
-      <p className="text-[12px] text-slate">
+      <p className="text-xs text-slate">
         Dashed amber frames pair a guarded call with its <span className="font-mono">[otherwise]</span> exit. A bar on a
         lifeline is a step the service runs itself.
       </p>
-      <ol className="grid gap-x-6 gap-y-1 text-[12.5px] md:grid-cols-2">
+      <ol className="grid gap-x-6 gap-y-1 text-sm md:grid-cols-2">
         {steps.map((s, i) => (
           <li key={i} className="flex gap-2">
-            <span className="w-5 shrink-0 text-right font-semibold text-plum">{i + 1}</span>
+            <span className="w-5 shrink-0 text-right font-semibold text-heading">{i + 1}</span>
             <span className="min-w-0 break-words">
               <span className="text-slate">{s.from === s.to ? `${s.from} (local step):` : `${s.from} to ${s.to}:`}</span>{" "}
-              <span className="font-mono text-[12px] text-ink">{s.label}</span>
+              <span className="font-mono text-xs text-ink">{s.label}</span>
             </span>
           </li>
         ))}

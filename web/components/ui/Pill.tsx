@@ -8,9 +8,9 @@ const TONES: Record<Tone, string> = {
   gate: "bg-gate-bg text-gate ring-1 ring-inset ring-gate/20",
   decision: "bg-decision-bg text-decision ring-1 ring-inset ring-decision/20",
   error: "bg-error-bg text-error ring-1 ring-inset ring-error/20",
-  purple: "bg-purple-lt text-purple-dk ring-1 ring-inset ring-purple/20",
+  purple: "bg-accent-soft text-accent-ink ring-1 ring-inset ring-accent/20",
   plum: "bg-plum text-white",
-  coral: "bg-coral-dk text-white",
+  coral: "bg-coral-dk text-surface",
 };
 
 export function Pill({
@@ -30,7 +30,7 @@ export function Pill({
     <span
       title={title}
       data-testid={testId}
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-semibold leading-5 tracking-[0.01em] ${TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold leading-5 tracking-[0.01em] ${TONES[tone]} ${className}`}
     >
       {children}
     </span>

@@ -15,7 +15,7 @@ export function CitationChip({ citation }: { citation: Citation }) {
       data-activity={citation.activity_id}
       onClick={() => jumpToStep(citation.activity_id)}
       title={`${citation.text}${bad && citation.reason ? `\nNot verified: ${citation.reason}` : ""}\nOpen on the canvas`}
-      className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium ${
+      className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${
         bad ? "border-error/30 bg-error-bg text-error" : "border-ai/20 bg-ai-bg text-ai hover:border-ai/60"
       }`}
     >

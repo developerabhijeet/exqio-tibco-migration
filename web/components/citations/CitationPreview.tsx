@@ -149,7 +149,7 @@ export function CitationPreview({
         width: WIDTH,
         maxWidth: `calc(100vw - ${MARGIN * 2}px)`,
       }}
-      className={`z-[60] rounded-card border border-line bg-white p-3.5 text-left shadow-pop outline-none motion-safe:transition-opacity motion-safe:duration-100 ${
+      className={`z-[60] rounded-card border border-line bg-surface p-3.5 text-left shadow-pop outline-none motion-safe:transition-opacity motion-safe:duration-100 ${
         pos ? "opacity-100" : "opacity-0"
       }`}
     >
@@ -165,7 +165,7 @@ export function CitationPreview({
         </p>
         {refItem.revision != null ? (
           <span
-            className="tnum shrink-0 rounded-full bg-warm px-1.5 py-px font-mono text-[11px] text-slate ring-1 ring-inset ring-line"
+            className="tnum shrink-0 rounded-full bg-sunken px-1.5 py-px font-mono text-2xs text-slate ring-1 ring-inset ring-line"
             title={`Revision ${refItem.revision}`}
             data-testid="cite-revision"
           >
@@ -173,15 +173,15 @@ export function CitationPreview({
           </span>
         ) : null}
       </div>
-      <p id={labelId} className="mt-1.5 break-words text-[14px] font-semibold leading-snug text-plum">
+      <p id={labelId} className="mt-1.5 break-words text-md font-semibold leading-snug text-heading">
         {refItem.label}
       </p>
       {refItem.preview ? (
-        <p className="mt-1 whitespace-pre-line break-words text-[13px] leading-relaxed text-slate">{refItem.preview}</p>
+        <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-slate">{refItem.preview}</p>
       ) : null}
       {unverified ? (
         <p
-          className="mt-2.5 flex items-start gap-1.5 rounded-btn bg-error-bg px-2 py-1.5 text-[12.5px] leading-snug text-error"
+          className="mt-2.5 flex items-start gap-1.5 rounded-btn bg-error-bg px-2 py-1.5 text-sm leading-snug text-error"
           data-testid="cite-unverified"
         >
           <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
@@ -191,7 +191,7 @@ export function CitationPreview({
       <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-line pt-2.5">
         <button
           type="button"
-          className="btn-secondary px-2.5 py-1 text-[12.5px]"
+          className="btn-secondary px-2.5 py-1 text-sm"
           onClick={() => go(refItem.target)}
           data-testid="cite-open"
         >
@@ -201,7 +201,7 @@ export function CitationPreview({
         {refItem.memory_uid ? (
           <button
             type="button"
-            className="btn-ghost px-2.5 py-1 text-[12.5px]"
+            className="btn-ghost px-2.5 py-1 text-sm"
             onClick={() => go({ kind: "memory", uid: refItem.memory_uid })}
             data-testid="cite-open-memory"
           >

@@ -20,12 +20,12 @@ import { useAppState, type StepKey } from "@/lib/state";
 import type { StepState } from "@/lib/types";
 
 const DOT: Record<StepState["status"], string> = {
-  not_started: "border-line bg-white text-slate",
-  running: "border-purple bg-purple-lt text-purple",
+  not_started: "border-line bg-surface text-slate",
+  running: "border-accent bg-accent-soft text-accent-ink",
   needs_review: "border-decision bg-decision-bg text-decision",
   complete: "border-det bg-det-bg text-det",
-  approved: "border-gate bg-gate text-white",
-  failed: "border-error bg-error text-white",
+  approved: "border-gate bg-gate text-surface",
+  failed: "border-error bg-error text-surface",
 };
 
 /** One icon per step, so a glance at the bar says what the step is, not only where it sits. */
@@ -43,7 +43,7 @@ function Dot({ index, status }: { index: number; status: StepState["status"] }) 
   return (
     <span
       aria-hidden
-      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-[13px] font-semibold ${DOT[status]}`}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-sm font-semibold ${DOT[status]}`}
     >
       {status === "approved" || status === "complete" ? (
         <Check size={16} strokeWidth={3} />
@@ -84,7 +84,7 @@ export function Stepper({
             <li key={s.key} className="flex flex-1 items-center">
               <div
                 className={`group flex flex-1 items-center gap-1 rounded-[10px] px-2 py-2 transition-colors ${
-                  isActive ? "bg-purple-lt" : "hover:bg-warm"
+                  isActive ? "bg-accent-soft" : "hover:bg-sunken"
                 }`}
               >
                 <button
@@ -94,13 +94,13 @@ export function Stepper({
                   data-view-only={mine ? undefined : "true"}
                   title={reason}
                   onClick={() => onSelect(i)}
-                  className="flex flex-1 items-center gap-2.5 rounded-[8px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple/60"
+                  className="flex flex-1 items-center gap-2.5 rounded-[8px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                 >
                   <Dot index={i} status={s.status} />
                   <span className={`min-w-0 ${mine ? "" : "opacity-70"}`}>
                     <span
                       className={`flex items-center gap-1.5 text-step font-semibold ${
-                        isActive ? "text-purple" : "text-plum"
+                        isActive ? "text-accent-ink" : "text-heading"
                       }`}
                     >
                       {(() => {
@@ -113,7 +113,7 @@ export function Stepper({
                     <span className="flex flex-col items-start gap-0.5">
                       <StatusPill status={s.status} />
                       {mine ? null : (
-                        <span className="whitespace-nowrap text-[10.5px] font-semibold uppercase tracking-[0.06em] text-slate">
+                        <span className="whitespace-nowrap text-2xs font-semibold uppercase tracking-[0.06em] text-slate">
                           view only
                         </span>
                       )}

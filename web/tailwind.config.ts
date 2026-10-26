@@ -40,7 +40,7 @@ const config: Config = {
         ink: token("ink"),
         heading: token("heading"),
         slate: token("slate"),
-        accent: { DEFAULT: token("accent"), ink: token("accent-ink"), soft: token("accent-soft") },
+        accent: { DEFAULT: token("accent"), ink: token("accent-ink"), soft: token("accent-soft"), strong: token("accent-strong") },
         // The brand bar's background, plum in both themes.
         plum: token("plum"),
         coral: token("coral"),

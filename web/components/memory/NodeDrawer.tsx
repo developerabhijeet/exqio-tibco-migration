@@ -47,13 +47,13 @@ function show(value: unknown): string {
 function CopyUid({ uid }: { uid: string }) {
   const [done, setDone] = useState(false);
   return (
-    <div className="mt-3 flex items-center gap-2 rounded-btn bg-warm/80 px-3 py-2">
-      <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink" title={uid} data-testid="node-uid">
+    <div className="mt-3 flex items-center gap-2 rounded-btn bg-sunken/80 px-3 py-2">
+      <code className="min-w-0 flex-1 truncate font-mono text-sm text-ink" title={uid} data-testid="node-uid">
         {uid}
       </code>
       <button
         type="button"
-        className="shrink-0 text-slate hover:text-plum"
+        className="shrink-0 text-slate hover:text-heading"
         aria-label="Copy uid"
         title="Copy uid"
         onClick={() => {
@@ -77,15 +77,15 @@ function Overview({ d }: { d: NodeDetail }) {
   const props = Object.entries(n.props).filter(([, v]) => v !== null && v !== undefined && v !== "");
   return (
     <div className="space-y-6">
-      {n.text ? <p className="text-[14.5px] leading-relaxed text-ink">{n.text}</p> : null}
+      {n.text ? <p className="text-base leading-relaxed text-ink">{n.text}</p> : null}
       <dl className="grid grid-cols-2 gap-3">
         <div className="rounded-btn border border-line/80 px-3.5 py-2.5">
           <dt className="label">Last changed</dt>
-          <dd className="mt-0.5 text-[14px] font-medium text-plum">Revision {n.valid_from}</dd>
+          <dd className="mt-0.5 text-md font-medium text-heading">Revision {n.valid_from}</dd>
         </div>
         <div className="rounded-btn border border-line/80 px-3.5 py-2.5">
           <dt className="label">State</dt>
-          <dd className="mt-0.5 text-[14px] font-medium text-plum">
+          <dd className="mt-0.5 text-md font-medium text-heading">
             {n.valid_to === null ? "Current" : `Closed in revision ${n.valid_to}`}
           </dd>
         </div>
@@ -93,16 +93,16 @@ function Overview({ d }: { d: NodeDetail }) {
       <div>
         <p className="label mb-2">Properties</p>
         {props.length === 0 ? (
-          <p className="text-[14px] text-slate">No properties.</p>
+          <p className="text-md text-slate">No properties.</p>
         ) : (
-          <table className="w-full text-[13.5px]">
+          <table className="w-full text-md">
             <tbody className="divide-y divide-line/70">
               {props.map(([k, v]) => (
                 <tr key={k} className="align-top">
                   <th scope="row" className="w-[38%] py-2 pr-3 text-left font-medium text-slate">
                     {k}
                   </th>
-                  <td className="break-words py-2 font-mono text-[12.5px] text-ink">{show(v)}</td>
+                  <td className="break-words py-2 font-mono text-sm text-ink">{show(v)}</td>
                 </tr>
               ))}
             </tbody>
@@ -114,32 +114,32 @@ function Overview({ d }: { d: NodeDetail }) {
 }
 
 function History({ versions }: { versions: VersionOut[] }) {
-  if (versions.length === 0) return <p className="text-[14px] text-slate">No versions recorded.</p>;
+  if (versions.length === 0) return <p className="text-md text-slate">No versions recorded.</p>;
   return (
     <ol className="relative space-y-5 border-l border-line pl-5">
       {versions.map((v, i) => {
         const first = i === versions.length - 1;
         return (
           <li key={v.valid_from} className="relative">
-            <span className={`absolute -left-[26px] top-1.5 h-3 w-3 rounded-full ring-4 ring-white ${i === 0 ? "bg-purple" : "bg-line-dk"}`} aria-hidden />
+            <span className={`absolute -left-[26px] top-1.5 h-3 w-3 rounded-full ring-4 ring-surface ${i === 0 ? "bg-accent" : "bg-line-strong"}`} aria-hidden />
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[14px] font-semibold text-plum">Revision {v.valid_from}</span>
+              <span className="text-md font-semibold text-heading">Revision {v.valid_from}</span>
               <Pill tone="purple">{v.phase}</Pill>
               {v.valid_to === null ? <Pill tone="gate">current</Pill> : null}
             </div>
-            <p className="mt-0.5 text-[13px] text-slate">
+            <p className="mt-0.5 text-sm text-slate">
               {[v.actor, v.at ? relativeTime(v.at) : null].filter(Boolean).join(" · ") || " "}
             </p>
             {first ? (
-              <p className="mt-1.5 text-[13px] text-slate">First recorded.</p>
+              <p className="mt-1.5 text-sm text-slate">First recorded.</p>
             ) : v.changed_keys.length === 0 ? (
-              <p className="mt-1.5 text-[13px] text-slate">No property changes.</p>
+              <p className="mt-1.5 text-sm text-slate">No property changes.</p>
             ) : (
               <ul className="mt-2 space-y-1">
                 {v.changed_keys.map((k) => (
-                  <li key={k} className="flex gap-2 text-[13px]">
-                    <span className="shrink-0 font-medium text-plum">{k}</span>
-                    <span className="min-w-0 truncate font-mono text-[12px] text-slate" title={show(v.props[k])}>
+                  <li key={k} className="flex gap-2 text-sm">
+                    <span className="shrink-0 font-medium text-heading">{k}</span>
+                    <span className="min-w-0 truncate font-mono text-xs text-slate" title={show(v.props[k])}>
                       {k in v.props ? show(v.props[k]) : k === "text" || k === "name" ? "updated" : "removed"}
                     </span>
                   </li>
@@ -160,15 +160,15 @@ function KnowledgeItem({ n, onSelect }: { n: MemNodeOut; onSelect(uid: string): 
       <button
         type="button"
         onClick={() => onSelect(n.uid)}
-        className="block w-full rounded-btn border border-line/80 px-4 py-3 text-left transition-colors hover:border-line-dk hover:bg-warm/50"
+        className="block w-full rounded-btn border border-line/80 px-4 py-3 text-left transition-colors hover:border-line-strong hover:bg-sunken/50"
       >
         <span className="flex items-center gap-2">
           <LabelChip label={n.label} side={n.side} />
-          {kind ? <span className="text-[12.5px] text-slate">{kind}</span> : null}
+          {kind ? <span className="text-sm text-slate">{kind}</span> : null}
           {n.obsolete ? <Pill tone="det">obsolete</Pill> : null}
-          <span className="ml-auto text-[11.5px] text-slate/80">rev {n.valid_from}</span>
+          <span className="ml-auto text-xs text-slate/80">rev {n.valid_from}</span>
         </span>
-        <span className={`mt-1.5 block text-[13.5px] leading-relaxed ${n.obsolete ? "text-slate line-through" : "text-ink"}`}>
+        <span className={`mt-1.5 block text-md leading-relaxed ${n.obsolete ? "text-slate line-through" : "text-ink"}`}>
           {n.text || displayName(n)}
         </span>
       </button>
@@ -181,7 +181,7 @@ function Knowledge({ d, onSelect }: { d: NodeDetail; onSelect(uid: string): void
   return (
     <div className="space-y-6">
       {about.length === 0 ? (
-        <p className="text-[14px] text-slate">No knowledge about this node yet. Analyses, decisions and curations add to it.</p>
+        <p className="text-md text-slate">No knowledge about this node yet. Analyses, decisions and curations add to it.</p>
       ) : (
         <ul className="space-y-2.5">
           {about.map((n) => (
@@ -212,17 +212,17 @@ function LineageRow({ l, onSelect }: { l: LineageOut; onSelect(uid: string): voi
       <button
         type="button"
         onClick={() => onSelect(l.other.uid)}
-        className="flex w-full items-center gap-3 rounded-btn border border-line/80 px-4 py-3 text-left transition-colors hover:border-line-dk hover:bg-warm/50"
+        className="flex w-full items-center gap-3 rounded-btn border border-line/80 px-4 py-3 text-left transition-colors hover:border-line-strong hover:bg-sunken/50"
       >
         <Arrow size={15} className="shrink-0 text-slate" aria-label={l.direction === "out" ? "outgoing" : "incoming"} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="font-mono text-[11.5px] font-semibold tracking-wide text-purple-dk">{l.edge.type}</span>
+            <span className="font-mono text-xs font-semibold tracking-wide text-accent-ink">{l.edge.type}</span>
             {l.edge.status ? <Pill tone={STATUS_TONE[l.edge.status]}>{l.edge.status}</Pill> : null}
           </span>
           <span className="mt-1 flex items-center gap-2">
             <LabelChip label={l.other.label} side={l.other.side} />
-            <span className="truncate text-[13.5px] font-medium text-plum">{displayName(l.other)}</span>
+            <span className="truncate text-md font-medium text-heading">{displayName(l.other)}</span>
           </span>
           <span className="mt-0.5 block truncate font-mono text-[11.5px] text-slate" title={l.other.uid}>
             {l.other.uid}
@@ -234,7 +234,7 @@ function LineageRow({ l, onSelect }: { l: LineageOut; onSelect(uid: string): voi
 }
 
 function Lineage({ lineage, onSelect }: { lineage: LineageOut[]; onSelect(uid: string): void }) {
-  if (lineage.length === 0) return <p className="text-[14px] text-slate">No migration, test or failure links yet. The build and verify phases add them.</p>;
+  if (lineage.length === 0) return <p className="text-md text-slate">No migration, test or failure links yet. The build and verify phases add them.</p>;
   const groups = [
     { title: "Outgoing", rows: lineage.filter((l) => l.direction === "out") },
     { title: "Incoming", rows: lineage.filter((l) => l.direction === "in") },
@@ -316,14 +316,14 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
               <>
                 <div className="flex items-center gap-2">
                   <LabelChip label={d.node.label} side={d.node.side} />
-                  <span className="text-[12.5px] text-slate">{GROUP_LABEL[d.node.side]}</span>
+                  <span className="text-sm text-slate">{GROUP_LABEL[d.node.side]}</span>
                   {d.node.curated ? <Pill tone="purple">curated</Pill> : null}
                   {d.node.obsolete ? <Pill tone="det">obsolete</Pill> : null}
                 </div>
-                <h2 className="mt-2 break-words text-[19px] font-semibold leading-snug text-plum">{displayName(d.node)}</h2>
+                <h2 className="mt-2 break-words text-xl font-semibold leading-snug text-heading">{displayName(d.node)}</h2>
               </>
             ) : (
-              <h2 className="text-[19px] font-semibold text-plum">Node</h2>
+              <h2 className="text-xl font-semibold text-heading">Node</h2>
             )}
           </div>
           <button type="button" className="btn-ghost -mr-2 -mt-1 p-1.5" aria-label="Close node detail" onClick={onClose}>
@@ -335,7 +335,7 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
           <p className="mt-2 rounded-btn bg-error-bg px-3 py-1.5 text-[12.5px] text-error ring-1 ring-inset ring-error/15">{removedNote}</p>
         ) : null}
         <div className="mt-2 flex justify-end">
-          <button type="button" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-purple hover:underline" onClick={() => onFocus(uid)}>
+          <button type="button" className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-ink hover:underline" onClick={() => onFocus(uid)}>
             <Crosshair size={14} aria-hidden /> Explore around this node
           </button>
         </div>
@@ -349,19 +349,19 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
               aria-selected={tab === t}
               aria-controls="node-tabpanel"
               onClick={() => setTab(t)}
-              className={`border-b-2 pb-2.5 text-[14px] font-medium transition-colors ${
-                tab === t ? "border-purple text-plum" : "border-transparent text-slate hover:text-plum"
+              className={`border-b-2 pb-2.5 text-md font-medium transition-colors ${
+                tab === t ? "border-accent text-heading" : "border-transparent text-slate hover:text-heading"
               }`}
             >
               {t}
-              {counts[t] ? <span className="ml-1.5 text-[12px] text-slate/80">{counts[t]}</span> : null}
+              {counts[t] ? <span className="ml-1.5 text-xs text-slate/80">{counts[t]}</span> : null}
             </button>
           ))}
         </div>
       </div>
       <div id="node-tabpanel" role="tabpanel" aria-labelledby={`node-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         {detail.isLoading ? (
-          <p className="flex items-center gap-2 text-[14px] text-slate">
+          <p className="flex items-center gap-2 text-md text-slate">
             <Loader2 size={15} className="animate-spin" aria-hidden /> Reading the node…
           </p>
         ) : detail.error instanceof ApiError && detail.error.status === 404 ? (

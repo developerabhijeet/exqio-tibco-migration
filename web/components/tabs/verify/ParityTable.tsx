@@ -36,9 +36,9 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
         const s = STATUS[f.status] ?? { tone: "det" as const, text: f.status };
         return (
           <tr key={`${f.path}:${i}`} data-testid="parity-row" data-status={f.status} className={f.status === "defect" ? "bg-error-bg/40" : ""}>
-            <td className="break-words px-3 py-1.5 font-mono text-[12px]">{f.path}</td>
-            <td className="break-words px-3 py-1.5 font-mono text-[12px]">{show(f.expected)}</td>
-            <td className="break-words px-3 py-1.5 font-mono text-[12px]">{show(f.actual)}</td>
+            <td className="break-words px-3 py-1.5 font-mono text-xs">{f.path}</td>
+            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.expected)}</td>
+            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.actual)}</td>
             <td className="px-3 py-1.5">
               <span className="flex flex-wrap items-center gap-1.5">
                 <Pill tone={s.tone}>{s.text}</Pill>
@@ -51,7 +51,7 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
                   <button
                     type="button"
                     data-testid="finding-pill"
-                    className="text-[12px] font-medium text-decision underline-offset-2 hover:underline"
+                    className="text-xs font-medium text-decision underline-offset-2 hover:underline"
                     title={
                       f.via === "control"
                         ? CONTROL_ONLY_TITLE
@@ -77,21 +77,21 @@ function ScenarioCard({ r }: { r: ScenarioReport }) {
   return (
     <div className="rounded-btn border border-line" data-testid="parity-scenario" data-status={r.status}>
       <div className="flex flex-wrap items-center gap-2 border-b border-line bg-page px-3 py-2">
-        <span className="font-medium text-plum">{r.scenario_name ?? r.scenario_id}</span>
-        <span className="font-mono text-[11px] text-slate">{r.scenario_key ?? r.scenario_id}</span>
-        <span className="ml-auto flex items-center gap-2 text-[13px]">
+        <span className="font-medium text-heading">{r.scenario_name ?? r.scenario_id}</span>
+        <span className="font-mono text-2xs text-slate">{r.scenario_key ?? r.scenario_id}</span>
+        <span className="ml-auto flex items-center gap-2 text-sm">
           {r.unexplained ? <Pill tone="error">{r.unexplained} unexplained</Pill> : null}
           <Pill tone={r.status === "match" ? "gate" : r.status === "error" ? "error" : "decision"}>{r.status}</Pill>
-          <span className="font-semibold text-plum">{pct(r.parity)}</span>
+          <span className="font-semibold text-heading">{pct(r.parity)}</span>
         </span>
       </div>
       {r.status === "error" ? (
-        <p className="px-3 py-2 text-[13px] text-error">{r.error ?? "the scenario did not run"}</p>
+        <p className="px-3 py-2 text-sm text-error">{r.error ?? "the scenario did not run"}</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[680px] table-fixed text-[13px]">
+          <table className="w-full min-w-[680px] table-fixed text-sm">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wide text-slate">
+              <tr className="text-left text-2xs uppercase tracking-wide text-slate">
                 <th className="w-[34%] px-3 py-1.5">Field</th>
                 <th className="w-[24%] px-3 py-1.5">Expected (TIBCO model)</th>
                 <th className="w-[24%] px-3 py-1.5">Actual (.NET service)</th>
@@ -102,7 +102,7 @@ function ScenarioCard({ r }: { r: ScenarioReport }) {
               <DiffRows rows={fields} />
               {effects.length > 0 ? (
                 <tr>
-                  <td colSpan={4} className="bg-warm px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate">
+                  <td colSpan={4} className="bg-sunken px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-slate">
                     Side effects: rows written and messages published
                   </td>
                 </tr>
@@ -137,9 +137,9 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
       id="parity"
       actions={
         p ? (
-          <span className="flex items-center gap-2 text-[14px]">
+          <span className="flex items-center gap-2 text-md">
             <span className="label">Overall</span>
-            <span className="text-[22px] font-semibold text-plum" data-testid="parity-overall">
+            <span className="text-2xl font-semibold text-heading" data-testid="parity-overall">
               {pct(p.parity)}
             </span>
             <span className="text-slate">
@@ -149,36 +149,36 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
         ) : null
       }
     >
-      <p data-testid="parity-label" className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-ai-bg px-3 py-1 text-[12.5px] font-medium text-ai">
+      <p data-testid="parity-label" className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-ai-bg px-3 py-1 text-sm font-medium text-ai">
         {sourceLabel(p?.label)}
       </p>
       {parity.error ? <ErrorNote error={parity.error} /> : null}
       {!p ? (
-        <p className="text-[14px] text-slate">{parity.isLoading ? "Loading." : "No verify run for this build yet."}</p>
+        <p className="text-md text-slate">{parity.isLoading ? "Loading." : "No verify run for this build yet."}</p>
       ) : (
         <div className="space-y-3">
           {p.unexplained > 0 ? (
-            <p role="status" data-testid="unexplained-banner" className="flex items-center gap-2 rounded-card border border-error/30 bg-error-bg px-4 py-2.5 text-[14px] text-error">
+            <p role="status" data-testid="unexplained-banner" className="flex items-center gap-2 rounded-card border border-error/30 bg-error-bg px-4 py-2.5 text-md text-error">
               <AlertTriangle size={16} aria-hidden /> Unexplained differences: {p.unexplained}
             </p>
           ) : (
-            <p role="status" data-testid="unexplained-banner" className="flex items-center gap-2 rounded-card border border-gate/30 bg-gate-bg px-4 py-2.5 text-[14px] text-gate">
+            <p role="status" data-testid="unexplained-banner" className="flex items-center gap-2 rounded-card border border-gate/30 bg-gate-bg px-4 py-2.5 text-md text-gate">
               <CheckCircle2 size={16} aria-hidden /> Unexplained differences: 0
             </p>
           )}
           {p.unconfirmed_intended ? (
-            <p data-testid="unconfirmed-intended" className="rounded-card border border-decision/30 bg-decision-bg px-4 py-2 text-[13.5px] text-decision">
+            <p data-testid="unconfirmed-intended" className="rounded-card border border-decision/30 bg-decision-bg px-4 py-2 text-md text-decision">
               <span className="font-semibold">{p.unconfirmed_intended} intended difference(s)</span>{" "}
               {p.unconfirmed_note ?? "not confirmed: no TIBCO sandbox run; derived from the TIBCO model"}
             </p>
           ) : null}
           {p.control_only_defects ? (
-            <p data-testid="control-only-defects" className="rounded-card border border-error/30 bg-error-bg px-4 py-2 text-[13.5px] text-error">
+            <p data-testid="control-only-defects" className="rounded-card border border-error/30 bg-error-bg px-4 py-2 text-md text-error">
               <span className="font-semibold">{p.control_only_defects}</span> of the unexplained differences are touched only
               through a branch decision by a Fix finding
             </p>
           ) : null}
-          <p className="text-[13px] text-slate">
+          <p className="text-sm text-slate">
             {p.intended} intended (findings decided Fix), {p.errors} scenario(s) errored. Run{" "}
             {p.created_at ? new Date(p.created_at).toLocaleString() : ""}.
           </p>
@@ -195,8 +195,8 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
             />
           ) : null}
           {p.noise_rules.length > 0 ? (
-            <details className="text-[13px]">
-              <summary className="cursor-pointer font-medium text-plum">Noise rules ({p.noise_rules.length})</summary>
+            <details className="text-sm">
+              <summary className="cursor-pointer font-medium text-heading">Noise rules ({p.noise_rules.length})</summary>
               <ul className="mt-1 space-y-0.5 text-slate">
                 {p.noise_rules.map((n) => (
                   <li key={n.path_glob}>

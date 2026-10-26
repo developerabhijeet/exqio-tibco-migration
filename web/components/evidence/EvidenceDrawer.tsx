@@ -23,7 +23,7 @@ export function EvidenceDrawer({ step, onClose }: { step: StepState | null; onCl
         aria-modal="true"
         aria-label={`Evidence for ${step.label}`}
         data-testid="evidence-drawer"
-        className="relative flex h-full w-[440px] max-w-full flex-col border-l border-line bg-white shadow-2xl"
+        className="relative flex h-full w-[440px] max-w-full flex-col border-l border-line bg-surface shadow-e3"
       >
         <div className="flex items-start justify-between border-b border-line px-6 py-5">
           <div>
@@ -39,22 +39,22 @@ export function EvidenceDrawer({ step, onClose }: { step: StepState | null; onCl
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {step.evidence.length === 0 ? (
-            <p className="text-[14px] text-slate">No evidence recorded for this step yet.</p>
+            <p className="text-md text-slate">No evidence recorded for this step yet.</p>
           ) : (
             <ul className="space-y-3">
               {step.evidence.map((e, i) => (
                 <li key={`${e.label}-${i}`} className="rounded-card border border-line bg-page p-4">
-                  <div className="flex items-center gap-2 font-medium text-plum">
+                  <div className="flex items-center gap-2 font-medium text-heading">
                     <FileCheck2 size={16} className="text-gate" aria-hidden />
                     {e.href ? (
-                      <a href={e.href} className="text-purple underline-offset-2 hover:underline">
+                      <a href={e.href} className="text-accent-ink underline-offset-2 hover:underline">
                         {e.label}
                       </a>
                     ) : (
                       e.label
                     )}
                   </div>
-                  {e.detail ? <p className="mt-1 break-words text-[14px] text-slate">{e.detail}</p> : null}
+                  {e.detail ? <p className="mt-1 break-words text-md text-slate">{e.detail}</p> : null}
                 </li>
               ))}
             </ul>

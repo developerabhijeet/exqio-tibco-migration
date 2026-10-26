@@ -1,14 +1,16 @@
 // Activity presentation by canonical type: color strip and icon name.
 import type { CanvasNodeData } from "./types";
 
+// CSS colours over the theme tokens (lib/theme.css), so the canvas follows the theme on its own.
+// No spaces: React Flow builds marker ids from colour strings.
 export const STRIP = {
-  http: "#9B5DE5",
-  jdbc: "#20063B",
-  jms: "#FF495C",
-  mapper: "#425466",
-  end: "#0E7A6E",
-  throw: "#A33A32",
-  other: "#C9C4B8",
+  http: "rgb(var(--c-accent))",
+  jdbc: "rgb(var(--c-heading))",
+  jms: "rgb(var(--c-coral))",
+  mapper: "rgb(var(--c-slate))",
+  end: "rgb(var(--c-ai))",
+  throw: "rgb(var(--c-error))",
+  other: "rgb(var(--c-line-strong))",
 } as const;
 
 export type ActivityFamily = keyof typeof STRIP;
