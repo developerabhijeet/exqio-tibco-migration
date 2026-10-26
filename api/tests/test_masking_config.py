@@ -26,3 +26,15 @@ def test_the_worker_masks_with_the_configured_fields():
         asyncio.run(worker.run(settings))
     masked = mask_node(node)[0]
     assert "4242" not in masked.text and "dealer_pin=***" in masked.text
+
+
+def test_configured_fields_and_credential_patterns_apply_together():
+    from api.app.services.citations import _cite_prose
+
+    masking.configure(["dealer_pin"])
+    raw = "Call with dealer_pin=4242 and password=hunter2 under Bearer eyJhbGciOi.payload.sig; ssn 123-45-6789."
+    out = masking.mask(raw)
+    for secret in ("4242", "hunter2", "eyJhbGciOi.payload.sig", "123-45-6789"):
+        assert secret not in out
+    cited = _cite_prose(raw, {})
+    assert cited.text == out  # cited.text (and so every span offset) is the masked text
