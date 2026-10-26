@@ -86,8 +86,10 @@ def extract_zip(archive: Path, dest: Path, max_bytes: int) -> None:
             raise UploadError(f"cannot extract archive: {exc}") from exc
 
 
-def copy_folder(src: Path, dest: Path, max_bytes: int) -> None:
-    """Copy a server folder (regular files only, symlinks skipped) under ``dest``."""
+def copy_folder(src: Path, dest: Path, max_bytes: int, skip: frozenset[str] | set[str] = frozenset()) -> None:
+    """Copy a server folder (regular files only, symlinks skipped) under ``dest``; folders named in
+    ``skip`` (a clone's ``.git``) are left out like ``SKIP_DIRS``."""
+    skipped = SKIP_DIRS | frozenset(skip)
     if dest.resolve().is_relative_to(src.resolve()):
         raise UploadError("path contains the upload store")
     budget = [max_bytes]
@@ -95,7 +97,7 @@ def copy_folder(src: Path, dest: Path, max_bytes: int) -> None:
     for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
         here = Path(dirpath)
         dirnames[:] = sorted(d for d in dirnames
-                             if d not in SKIP_DIRS and not (here / d).is_symlink())
+                             if d not in skipped and not (here / d).is_symlink())
         out = dest / here.relative_to(src)
         out.mkdir(parents=True, exist_ok=True)
         for fn in sorted(filenames):

@@ -263,36 +263,55 @@ async def create_edit_set(session: AsyncSession, settings: Settings, build_id: s
         await asyncio.to_thread(extract_zip, archive, dest, settings.upload_max_bytes)
         top = single_root(dest) if dest.is_dir() else ""
         root = dest / top if top else dest
-        if build_id is None:
-            build_id = await asyncio.to_thread(_manifest_build_id, root)
-        build = await session.get(Build, build_id)
-        process = await session.get(Process, build.process_id) if build is not None else None
-        if build is None or process is None:
-            raise UploadError(NO_BUILD)
-        if process.project_id != project_id:
-            raise UploadError(OTHER_PROJECT)
-        if build.status in ("queued", "running"):
-            raise EditRefused("the baseline build has not finished")
-        rows = list((await session.scalars(select(BuildFile).where(BuildFile.build_id == build.id))).all())
-        excluded = download_excluded(build)
-        baseline = await asyncio.to_thread(baseline_hashes, build, rows)
-        changes = await asyncio.to_thread(diff_tree, root, baseline, {r.path: r.origin for r in rows}, excluded)
-        phase = decide_resume(changes, build.design_hash, await approved_design_hash(session, process))
-        files = [c.model_dump() for c in changes]
-        try:
-            iteration = await iteration_svc.open_iteration(
-                session, project_id, [process.id], "edits", actor=actor, resume_phase=phase,
-                baseline_build_id=build.id, source={"edit_set_id": edit_id},
-                audit_detail={"edit_set_id": edit_id, "changes": change_counts(files)})
-        except iteration_svc.IterationBusy as exc:
-            raise EditRefused(str(exc)) from exc
-        row = EditSet(id=edit_id, iteration_id=iteration.id, baseline_build_id=build.id, files=files,
-                      root_dir=str(root), created_by=actor, status="previewed")
-        session.add(row)
-        await session.flush()
+        return await _edit_set_for_root(session, edit_id, root, build_id, project_id, actor, "edits", {})
     except BaseException:
         remove_tree(dest)
         raise
+
+
+async def create_edit_set_from_tree(session: AsyncSession, settings: Settings, project_id: str, root: Path,
+                                    actor: str, source: dict[str, Any]) -> EditSet:
+    """An edit set from a tree already on disk (a cloned repository branch, sub-project 6 Task 9):
+    the baseline is the build ``EXIQO_BASELINE.json`` names (at ``root`` or under its one top
+    folder; it must belong to ``project_id``), the iteration is ``kind="repo"`` with ``source``
+    (``repo_id``, ``branch``, ``commit``). The tree is used where it is (``root_dir``); nothing is
+    copied. Flushes; the caller commits."""
+    del settings  # the clone was size-checked by its caller
+    top = single_root(root) if root.is_dir() else ""
+    tree = root / top if top and not (root / BASELINE_NAME).is_file() else root
+    return await _edit_set_for_root(session, new_id(), tree, None, project_id, actor, "repo", dict(source))
+
+
+async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, build_id: str | None,
+                             project_id: str, actor: str, kind: str, source: dict[str, Any]) -> EditSet:
+    """Compare the tree at ``root`` with its baseline build, open the iteration and add the edit set."""
+    if build_id is None:
+        build_id = await asyncio.to_thread(_manifest_build_id, root)
+    build = await session.get(Build, build_id)
+    process = await session.get(Process, build.process_id) if build is not None else None
+    if build is None or process is None:
+        raise UploadError(NO_BUILD)
+    if process.project_id != project_id:
+        raise UploadError(OTHER_PROJECT)
+    if build.status in ("queued", "running"):
+        raise EditRefused("the baseline build has not finished")
+    rows = list((await session.scalars(select(BuildFile).where(BuildFile.build_id == build.id))).all())
+    excluded = download_excluded(build)
+    baseline = await asyncio.to_thread(baseline_hashes, build, rows)
+    changes = await asyncio.to_thread(diff_tree, root, baseline, {r.path: r.origin for r in rows}, excluded)
+    phase = decide_resume(changes, build.design_hash, await approved_design_hash(session, process))
+    files = [c.model_dump() for c in changes]
+    try:
+        iteration = await iteration_svc.open_iteration(
+            session, project_id, [process.id], kind, actor=actor, resume_phase=phase,
+            baseline_build_id=build.id, source={**source, "edit_set_id": edit_id},
+            audit_detail={"edit_set_id": edit_id, "changes": change_counts(files)})
+    except iteration_svc.IterationBusy as exc:
+        raise EditRefused(str(exc)) from exc
+    row = EditSet(id=edit_id, iteration_id=iteration.id, baseline_build_id=build.id, files=files,
+                  root_dir=str(root), created_by=actor, status="previewed")
+    session.add(row)
+    await session.flush()
     return row
 
 

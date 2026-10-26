@@ -23,7 +23,7 @@ class Upload(IdMixin, CreatedMixin, Base):
     __tablename__ = "uploads"
 
     project_id: Mapped[str] = mapped_column(fk("projects.id"), index=True)
-    source_kind: Mapped[str]  # zip | path
+    source_kind: Mapped[str]  # zip | path | repo (a GitHub branch, sub-project 6)
     source_name: Mapped[str]  # uploaded file name or server path
     root_dir: Mapped[str]  # absolute storage folder: data/uploads/<project>/<upload_id>
     scan_root: Mapped[str] = mapped_column(default="")  # relative folder scanned ("" or the single top folder)

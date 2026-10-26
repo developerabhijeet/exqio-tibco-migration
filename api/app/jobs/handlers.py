@@ -28,6 +28,7 @@ from api.app.services import jira_issues as jira_svc
 from api.app.services import memory_ingest as memory_ingest_svc
 from api.app.services import memory_migrate as memory_migrate_svc
 from api.app.services import providers as provider_svc
+from api.app.services import repos as repos_svc
 from api.app.services import scan as scan_svc
 from api.app.services import verify as verify_svc
 
@@ -141,6 +142,13 @@ async def github_push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Push a build to an ``exiqo/`` branch of a GitHub repository and open its pull request
     (``services.github_push``); the token is read from its mounted file now, never stored."""
     return await github_push_svc.push_job(ctx, w)
+
+
+@job(repos_svc.FETCH_KIND)
+async def source_fetch(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Clone a connected repository's branch and turn it into an edit set or an upload and a scan
+    (``services.repos``); GitHub is reached only through its connector."""
+    return await repos_svc.fetch(ctx, w)
 
 
 @job(confluence_svc.PUBLISH_KIND)
