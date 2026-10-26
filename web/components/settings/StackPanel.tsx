@@ -35,12 +35,12 @@ export function StackPanel({ s, onSaved }: { s: SettingsView; onSaved: (v: Setti
           </option>
         ))}
       </select>
-      {may.reason ? <p className="mt-1 text-[13px] text-slate">{may.reason}</p> : null}
-      {save.error ? <p role="alert" className="mt-2 text-[13px] text-error">{errorText(save.error)}</p> : null}
-      <ul className="mt-3 divide-y divide-line text-[13.5px]">
+      {may.reason ? <p className="mt-1 text-sm text-slate">{may.reason}</p> : null}
+      {save.error ? <p role="alert" className="mt-2 text-sm text-error">{errorText(save.error)}</p> : null}
+      <ul className="mt-3 divide-y divide-line text-md">
         {s.stacks.map((st) => (
           <li key={st.key} className="flex flex-wrap items-center gap-2 py-2" data-stack={st.key}>
-            <span className="font-medium text-plum">{st.label}</span>
+            <span className="font-medium text-heading">{st.label}</span>
             {st.key === s.default_stack ? <Pill tone="purple">default</Pill> : null}
             <Pill tone={st.selectable ? "gate" : "error"}>{st.selectable ? "available" : "unavailable"}</Pill>
             {st.reason ? <span className="text-slate">{st.reason}</span> : null}

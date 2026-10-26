@@ -40,10 +40,10 @@ export function StackPicker({
   };
 
   return (
-    <div className="card p-5" data-testid="stack-picker" aria-busy={pending}>
+    <div className="card" data-testid="stack-picker" aria-busy={pending}>
       <p className="label" id="stack-picker-label">Target stack</p>
       {disabledReason ? (
-        <p id="stack-picker-reason" className="mt-1 text-[13px] text-slate" data-testid="stack-picker-reason">
+        <p id="stack-picker-reason" className="mt-1 text-sm text-slate" data-testid="stack-picker-reason">
           {disabledReason}
         </p>
       ) : null}
@@ -70,8 +70,8 @@ export function StackPicker({
               aria-describedby={s.reason ? `stack-reason-${s.key}` : undefined}
               tabIndex={s.key === stop ? 0 : -1}
               data-testid={`stack-${s.key}`}
-              className={`rounded-card border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple/60 ${
-                checked ? "border-purple bg-purple-lt" : "border-line"
+              className={`rounded-card border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${
+                checked ? "border-accent bg-accent-soft" : "border-line"
               } ${disabled ? "opacity-60" : ""}`}
               onClick={() => {
                 if (!disabled && !checked) onChange(s.key);
@@ -86,10 +86,10 @@ export function StackPicker({
                 }
               }}
             >
-              <span className="block text-[14px] font-semibold text-plum">{name}</span>
-              <span className="block text-[12.5px] text-slate">{rest.join(" · ")}</span>
+              <span className="block text-md font-semibold text-heading">{name}</span>
+              <span className="block text-sm text-slate">{rest.join(" · ")}</span>
               {s.reason ? (
-                <span id={`stack-reason-${s.key}`} className="mt-1 block text-[12px] text-slate">
+                <span id={`stack-reason-${s.key}`} className="mt-1 block text-xs text-slate">
                   {s.reason}
                 </span>
               ) : null}

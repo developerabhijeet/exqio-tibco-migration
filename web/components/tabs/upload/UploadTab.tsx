@@ -73,7 +73,7 @@ export function UploadTab() {
       />
       {changeStack.error ? <ErrorNote error={changeStack.error} /> : null}
       {changeStack.isSuccess && (processes.data?.length ?? 0) > 0 ? (
-        <p role="status" data-testid="stack-change-note" className="text-[13.5px] text-slate">
+        <p role="status" data-testid="stack-change-note" className="text-md text-slate">
           Designs and builds already made keep their old stack. Re-run Design for each process you want on the new one.
         </p>
       ) : null}
