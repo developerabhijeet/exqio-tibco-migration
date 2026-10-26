@@ -4,6 +4,9 @@ parity differences and the Readiness rows (Task 4): a sample scan and analysis t
 provider, as test_analysis_gates; build and verify rows are written directly."""
 from __future__ import annotations
 
+import copy
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +19,7 @@ from api.app.services.citations import (
     cite_diff,
     cite_domain,
     cite_finding,
+    cite_parity,
     cite_readiness_row,
     cite_review,
     cite_rule,
@@ -135,6 +139,20 @@ async def test_cited_text_is_masked_and_spans_slice_it(client, app, analysed):
         sentences = [x.strip().rstrip(".") for x in ct.text.split(". ") if x.strip()]
         for span in ct.spans:
             assert ct.text[span.start:span.end] in sentences
+
+
+async def test_rule_original_text_has_a_masked_twin(client, app, analysed):
+    """"Drafted as" shows what the analyst drafted: ``original_text_masked`` is that text masked
+    (``original_text`` keeps the raw draft, as before)."""
+    a = (await client.get(f"/processes/{analysed.proc}/analysis")).json()
+    rule = a["rules"][0]
+    async with app.state.sessionmaker() as s:
+        (await s.get(Rule, rule["id"])).original_text = "Applicant ssn 123-45-6789 is checked."
+        await s.commit()
+    a = (await client.get(f"/processes/{analysed.proc}/analysis")).json()
+    out = next(r for r in a["rules"] if r["id"] == rule["id"])
+    assert out["original_text"] == "Applicant ssn 123-45-6789 is checked."
+    assert out["original_text_masked"] == "Applicant ssn ***-**-**** is checked."
 
 
 # ------------------------------------------------------------------ builders
@@ -473,6 +491,19 @@ def test_cite_design_spans_and_plain_decisions():
     assert cite_design({"narrative": None, "decisions": []}, ents)["narrative_cited"] is None
 
 
+def test_cite_design_decision_text_joins_cleanly():
+    """The choice and reason read as two sentences: no doubled period when the choice already
+    ends one, and no stray ". " when either is empty."""
+    def text(choice, reason):
+        out = cite_design({"narrative": None, "decisions": [{"choice": choice, "reason": reason}]}, {})
+        return out["decisions"][0]["cited"]["text"]
+    assert text("Use LookupDealer.", "R10 needs it.") == "Use LookupDealer. R10 needs it."
+    assert text("Keep it?", "Yes") == "Keep it? Yes"
+    assert text("Use EF Core", "a query") == "Use EF Core. a query"
+    assert text("", "Only reason") == "Only reason"
+    assert text("Only choice", None) == "Only choice"
+    assert text(None, "  ") == ""
+
 def test_cite_review_hints_class_and_method():
     f = {"reviewer": "equivalence", "file": "src/Core/FundingMapper.cs", "line": 7,
          "text": "Fine here. MapRequest drops a field."}
@@ -543,3 +574,18 @@ def test_readiness_targets_follow_the_page():
         ("memory", "page", None, None, "/", None), ("upload", "page", None, None, "/", None)]
     assert cite_readiness_row({"expectation": "X", "status": "missing", "gap": "none",
                                "evidence": []}) == CitedText.plain("X: missing; none.")
+
+
+def test_parity_fixture_is_what_cite_parity_builds():
+    """The web e2e parity fixture (web/e2e/fixtures/parity.json) carries ``cited`` blocks: they must
+    be exactly what ``cite_parity`` builds from the same view, so the e2e tests the real builder's
+    output, and a change to ``cite_diff`` shows up here (regenerate the fixture with it)."""
+    fixture = json.loads((Path(__file__).parents[2] / "web/e2e/fixtures/parity.json").read_text())
+    view = copy.deepcopy(fixture)
+    stripped = 0
+    for rep in view["reports"]:
+        for key in ("fields", "side_effects"):
+            for d in rep.get(key) or []:
+                stripped += d.pop("cited", None) is not None
+    assert stripped > 0
+    assert cite_parity(view, None) == fixture

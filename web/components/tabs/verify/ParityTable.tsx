@@ -10,6 +10,7 @@ import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { Panel } from "@/components/tabs/build/Panel";
 import { CitedText } from "@/components/citations/CitedText";
 import { JiraIssues, parityCandidates } from "@/components/connectors/JiraIssues";
+import { maskSensitive, sensitiveField } from "@/lib/citations";
 
 const STATUS: Record<string, { tone: "gate" | "error" | "decision" | "det"; text: string }> = {
   match: { tone: "gate", text: "match" },
@@ -23,10 +24,13 @@ const CONTROL_ONLY_TITLE =
 
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : `${Math.round(v * 1000) / 10}%`);
 
-function show(v: unknown): string {
+/** A compared value as shown, masked like the cited note beside it: a sensitive field's value is
+ * the mask whole; any other value has its SSNs and sensitive pairs masked. */
+function show(path: string, v: unknown): string {
   if (v === undefined) return "absent";
   if (v === null) return "null";
-  return typeof v === "string" ? v : JSON.stringify(v);
+  if (sensitiveField(path)) return "***";
+  return maskSensitive(typeof v === "string" ? v : JSON.stringify(v));
 }
 
 /** One row per compared field. A difference's note is its cited sentence (masked), with chips for
@@ -41,8 +45,8 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
         return (
           <tr key={`${f.path}:${i}`} data-testid="parity-row" data-status={f.status} className={f.status === "defect" ? "bg-error-bg/40" : ""}>
             <td className="break-words px-3 py-1.5 font-mono text-xs">{f.path}</td>
-            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.expected)}</td>
-            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.actual)}</td>
+            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.path, f.expected)}</td>
+            <td className="break-words px-3 py-1.5 font-mono text-xs">{show(f.path, f.actual)}</td>
             <td className="px-3 py-1.5">
               <span className="flex flex-wrap items-center gap-1.5">
                 <Pill tone={s.tone}>{s.text}</Pill>

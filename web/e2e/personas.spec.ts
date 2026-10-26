@@ -107,15 +107,27 @@ test("the stepper shows one status pill and works from the keyboard", async ({ p
   await expect(page.getByTestId("stepper-compact")).toContainText("Step 4 of 7 · Design");
 });
 
-test("the stepper never overflows at 1024 px or 1280 px, and the header compacts on scroll", async ({ page }) => {
+test("the stepper never overflows from 1024 px to 1440 px, no step is squeezed, and the header compacts on scroll", async ({ page }) => {
   await page.goto("/");
   await newProjectAndScan(page);
-  for (const width of [1024, 1280]) {
+  for (const width of [1024, 1100, 1280, 1440]) {
     await page.setViewportSize({ width, height: 800 });
     const tablist = page.getByRole("navigation", { name: "Migration steps" });
     await expect(tablist).toBeVisible();
     expect(await tablist.evaluate((n) => n.scrollWidth <= n.clientWidth + 1)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // The open step shows its label; no other step is squeezed below its dot and icon.
+    const widths = await tablist.locator("li").evaluateAll((lis) =>
+      lis.map((li) => {
+        const button = li.querySelector("button")!;
+        const label = button.querySelector("span.truncate") as HTMLElement;
+        return { open: button.getAttribute("aria-current") === "step", button: button.getBoundingClientRect().width, label: label.getBoundingClientRect().width };
+      }),
+    );
+    for (const w of widths) {
+      if (w.open) expect(w.label, `${width}px: open step label`).toBeGreaterThan(20);
+      else expect(w.button, `${width}px: closed step`).toBeGreaterThanOrEqual(36);
+    }
   }
   const header = page.getByTestId("pinned-header");
   await expect(header).not.toHaveAttribute("data-compact", "true");

@@ -250,6 +250,8 @@ export interface RuleView {
   rule_key?: string;
   text: string;
   original_text?: string;
+  /** `original_text` MASKED like `cited.text`: render this as "Drafted as", not `original_text`. */
+  original_text_masked?: string | null;
   status?: RuleStatus | string;
   confidence?: number | null;
   citations?: Citation[];

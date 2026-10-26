@@ -221,13 +221,22 @@ def _cite_prose(text: str, entities: dict[str, CiteRef]) -> CitedText:
     return anchor(text, hinted) if hinted else CitedText.plain(text)
 
 
+def _decision_text(choice: str | None, reason: str | None) -> str:
+    """``"{choice}. {reason}"`` without a doubled period when the choice already ends a sentence,
+    and without a stray ``". "`` when either part is empty."""
+    choice, reason = (choice or "").strip(), (reason or "").strip()
+    if not choice or not reason:
+        return choice or reason
+    return f"{choice} {reason}" if choice[-1] in ".!?" else f"{choice}. {reason}"
+
+
 def cite_design(design: dict[str, Any], entities: dict[str, CiteRef]) -> dict[str, Any]:
     """``design`` plus ``narrative_cited`` (``None`` without a narrative) and a ``cited`` on each
-    decision: ``"{choice}. {reason}"`` with a span on each sentence naming an entity. A decision
+    decision: ``"{choice}. {reason}"`` (see ``_decision_text``) with a span on each sentence naming an entity. A decision
     naming nothing has no spans and no refs (plain text)."""
     narrative = design.get("narrative")
     decisions = [
-        {**d, "cited": _cite_prose(f"{d.get('choice') or ''}. {d.get('reason') or ''}", entities)
+        {**d, "cited": _cite_prose(_decision_text(d.get("choice"), d.get("reason")), entities)
          .model_dump(mode="json")}
         for d in design.get("decisions") or []]
     return {**design, "decisions": decisions,

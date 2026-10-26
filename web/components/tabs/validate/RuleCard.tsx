@@ -82,7 +82,7 @@ export function RuleCard({
       )}
       {rule.original_text && rule.original_text !== rule.text && !editing ? (
         <p className="mt-1 text-sm text-slate">
-          Drafted as: <span className="italic">{rule.original_text}</span>
+          Drafted as: <span className="italic">{rule.original_text_masked ?? rule.original_text}</span>
         </p>
       ) : null}
 

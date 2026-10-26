@@ -66,6 +66,7 @@ export default function CodeView({
     };
   }, []);
 
+  const revealed = useRef<XmlHighlight | null>(null);
   const apply = () => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -89,7 +90,13 @@ export default function CodeView({
         options: { isWholeLine: true, className: "xml-hl-focus" },
       },
     ]);
-    editor.revealLineInCenter(highlight.focus);
+    // Scroll to the line once per highlight: a theme switch or a refetch of the same file
+    // re-decorates without pulling the reader back. It counts as revealed only once the text
+    // holds that line (the highlight can arrive before the file).
+    if (revealed.current !== highlight && (editor.getModel()?.getLineCount() ?? 0) >= highlight.focus) {
+      editor.revealLineInCenter(highlight.focus);
+      revealed.current = highlight;
+    }
   };
 
   useEffect(apply, [highlight, value, dark]);

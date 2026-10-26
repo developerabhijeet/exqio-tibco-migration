@@ -70,6 +70,8 @@ class RuleOut(BaseModel):
     rule_key: str  # R1..Rn
     text: str
     original_text: str | None
+    # ``original_text`` masked like ``cited.text``: what clients show as "Drafted as".
+    original_text_masked: str | None = None
     citations: list[CitationOut]
     confidence: float
     status: Literal["draft", "approved", "edited", "rejected", "unverified"]

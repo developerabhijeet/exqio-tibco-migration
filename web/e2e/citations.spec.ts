@@ -378,6 +378,18 @@ test("a review finding's chip opens the file at its line", async ({ page }) => {
   await expect(line12).toBeVisible();
   await expect(line12).toBeInViewport();
 
+  // A theme switch re-colours the editor but leaves the reader where they scrolled to.
+  await line12.click();
+  await page.keyboard.press("Control+End");
+  await expect(line12).toHaveCount(0);
+  await page.getByTestId("user-menu").click();
+  await page.getByTestId("theme-dark").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(viewer.getByTestId("code-viewer-editor").locator(".monaco-editor").first()).toHaveClass(/\bvs-dark\b/);
+  await expect(viewer.locator(".view-line", { hasText: /line\s300$/ })).toBeVisible();
+  await expect(line12).toHaveCount(0);
+
   // Choosing the file by hand drops the citation's highlight.
   const tree = page.getByTestId("target-tree");
   await tree.getByRole("button", { name: "Program.cs" }).click();
@@ -444,8 +456,18 @@ test("Deploy and Readiness show no evidence blocks", async ({ page }) => {
   await expect(preview).toHaveCount(0);
   // The review check's evidence opens the review panel on Build.
   await expect(panel.locator('[data-key="review"]').getByTestId("cite-chip")).toHaveAttribute("data-target-kind", "step");
-  // Opening the chip goes to the line it was read from, without toggling the check's row.
-  await expect(authz).not.toHaveAttribute("open", "");
+  // The row's disclosure is its own button; the chip is not nested in it (or in a summary).
+  await expect(panel.locator("summary [data-testid=cite-chip]")).toHaveCount(0);
+  await expect(authz.getByTestId("security-check-toggle").getByTestId("cite-chip")).toHaveCount(0);
+  const toggle = authz.getByTestId("security-check-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(authz).toContainText("Read from");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  // Opening the chip goes to the line it was read from (the row stays shut on the way out).
+  await expect(authz).toHaveAttribute("data-open", "false");
   await chip.click();
   await expect(page.getByTestId("step-build")).toHaveAttribute("aria-current", "step");
   await expect(page.getByTestId("code-viewer").getByTestId("code-path")).toHaveText(PROGRAM);

@@ -579,7 +579,7 @@ export function MemoryExplorer() {
                   ]}
                 />
               </div>
-              <div className="relative min-h-0 flex-1 bg-[radial-gradient(circle,_#E9E6DE_1px,_transparent_1px)] [background-size:22px_22px]">
+              <div className="relative min-h-0 flex-1 bg-[radial-gradient(circle,_rgb(var(--c-line))_1px,_transparent_1px)] [background-size:22px_22px]">
                 {missing ? (
                   <div className="flex h-full items-center justify-center p-6" data-testid="memory-node-missing">
                     <div className="max-w-sm text-center">

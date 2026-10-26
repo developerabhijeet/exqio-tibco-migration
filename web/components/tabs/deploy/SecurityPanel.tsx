@@ -12,6 +12,7 @@
  * check's sentence (built with `tail`, as the API builds its claims): its preview is the evidence
  * as read, and it opens where it was read from (the line in the generated file, or the panel).
  */
+import { useState } from "react";
 import { ChevronRight, ShieldCheck } from "lucide-react";
 import { Panel } from "@/components/tabs/build/Panel";
 import { Pill } from "@/components/ui/Pill";
@@ -25,7 +26,7 @@ import {
   useParity,
 } from "@/lib/buildQueries";
 import { useIdentity } from "@/lib/identity";
-import { tail, type CiteRef, type CiteTarget } from "@/lib/citations";
+import { cut, maskSensitive, PREVIEW_MAX, tail, type CiteRef, type CiteTarget } from "@/lib/citations";
 import { CitedText } from "@/components/citations/CitedText";
 
 type State = "met" | "unmet" | "unknown";
@@ -63,11 +64,12 @@ function lineNo(text: string | undefined, needle: string): number | null {
 }
 
 /** The check's sentence with its evidence as one chip at the end; plain without evidence. Evidence
- * with no place of its own (no Program.cs in the file list, say) still gets its chip, on Build. */
+ * with no place of its own (no Program.cs in the file list, say) still gets its chip, on Build. The
+ * preview is masked and cut like every server-built ref's. */
 function citedCheck(check: Check, processId: string | null) {
   const at = check.at ?? { label: "Build", target: { kind: "step" as const, step: "build", process_id: processId } };
   const refs: CiteRef[] = check.evidence
-    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: check.evidence, target: at.target }]
+    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: cut(maskSensitive(check.evidence), PREVIEW_MAX), target: at.target }]
     : [];
   return tail(check.title, refs);
 }
@@ -116,30 +118,47 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
   );
 }
 
+/**
+ * One check: a disclosure button (the chevron), the check's sentence with its evidence chip, and
+ * the state. The chip sits beside the button, not inside it (no interactive element nested in
+ * another, as a <summary> would make it); a click on the sentence outside the chip also toggles.
+ */
 function Row({ check, processId }: { check: Check; processId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const detailsId = `security-check-details-${check.key}`;
   return (
-    <details className="group/chk border-b border-line last:border-0" data-testid="security-check" data-key={check.key}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 py-2.5">
-        <ChevronRight size={14} className="shrink-0 text-slate transition-transform group-open/chk:rotate-90" aria-hidden />
-        {/* A click on the chip goes to the evidence; it must not also open or close the row. */}
+    <div className="border-b border-line last:border-0" data-testid="security-check" data-key={check.key} data-open={open ? "true" : "false"}>
+      <div className="flex items-center gap-2 py-2.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          aria-label={`Details: ${check.title}`}
+          data-testid="security-check-toggle"
+          onClick={() => setOpen((o) => !o)}
+          className="shrink-0 rounded-[6px] p-0.5 text-slate hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+        >
+          <ChevronRight size={14} className={`transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
+        </button>
+        {/* Mouse convenience only (the button is the keyboard path); a click on the chip navigates. */}
         <span
-          className="min-w-0 flex-1 text-md text-ink"
+          className="min-w-0 flex-1 cursor-pointer text-md text-ink"
           data-testid="security-check-text"
           onClick={(e) => {
-            if ((e.target as HTMLElement).closest('[data-testid="cite-chip"]')) e.preventDefault();
+            if (!(e.target as HTMLElement).closest('[data-testid="cite-chip"]')) setOpen((o) => !o);
           }}
         >
           <CitedText value={citedCheck(check, processId)} />
         </span>
         <Pill tone={TONE[check.state]}>{LABEL[check.state]}</Pill>
-      </summary>
-      <div className="pb-3 pl-[22px] text-sm text-slate">
+      </div>
+      <div id={detailsId} hidden={!open} className="pb-3 pl-[22px] text-sm text-slate">
         <p>{check.what}</p>
         <p className="mt-1">
           <span className="label">Read from</span> {check.source}
         </p>
       </div>
-    </details>
+    </div>
   );
 }
 

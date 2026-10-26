@@ -2,7 +2,10 @@ import { expect, test } from "@playwright/test";
 import {
   codePointLength,
   codePoints,
+  cut,
+  maskSensitive,
   segments,
+  sensitiveField,
   sentenceBounds,
   sliceCodePoints,
   tail,
@@ -197,4 +200,38 @@ test("tail puts every ref on the last sentence without its closing punctuation, 
   // Rendered, the whole check sentence is one cited run followed by its chip.
   const parts = segments(tail("Tokens are validated, not trusted.", [ref("a", "deploy")]));
   expect(parts.map((p) => [p.text, p.refs.length])).toEqual([["Tokens are validated, not trusted", 1], [".", 0]]);
+});
+
+test("cut and maskSensitive match engine/citations cut and mask_sensitive", () => {
+  // Expected values captured from the Python functions.
+  const cases: [string, string][] = [
+    ["ssn 123-45-6789 here", "ssn ***-**-**** here"],
+    ["borrower_ssn=987654321; ok", "borrower_ssn=***; ok"],
+    ['{"accountNumber": "12345"}', '{"accountNumber": "***"}'],
+    ['<ns:cardNumber a="1">4111</ns:cardNumber>', '<ns:cardNumber a="1">***</ns:cardNumber>'],
+    ["classname=Foo", "classname=Foo"],
+    ["customerSsn: 111223333", "customerSsn: ***"],
+    ["app.MapControllers().RequireAuthorization();", "app.MapControllers().RequireAuthorization();"],
+  ];
+  for (const [raw, masked] of cases) expect(maskSensitive(raw), raw).toBe(masked);
+  const long = "x".repeat(300);
+  expect(codePointLength(cut(long, 280))).toBe(280);
+  expect(cut(long, 280).endsWith("x…")).toBe(true);
+  expect(cut("short", 280)).toBe("short");
+  // Code points, not UTF-16 units: an astral character counts once.
+  expect(cut("😀".repeat(5), 3)).toBe("😀😀…");
+});
+
+test("sensitiveField matches the API's leaf rule for parity paths", () => {
+  // Expected values captured from api/app/services/citations._sensitive_field.
+  const cases: [string, boolean][] = [
+    ["output.body.ssn", true],
+    ["output.body.borrowerSsn", true],
+    ["output.body.classname", false],
+    ["output.accountNumber", true],
+    ["output.items[0].card_number", true],
+    ["output.ssnVerified", true],
+    ["dealerRegion", false],
+  ];
+  for (const [path, sensitive] of cases) expect(sensitiveField(path), path).toBe(sensitive);
 });
