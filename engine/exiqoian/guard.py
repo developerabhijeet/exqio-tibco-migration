@@ -6,11 +6,10 @@ import unicodedata
 from pydantic import BaseModel
 
 from engine.exiqoian.lexicon import OFF_DOMAIN_PHRASES, OFF_DOMAIN_SINGLE, split_identifier, tokens
-from engine.exiqoian.patterns import INJECTION_RULES, LEET
+from engine.exiqoian.patterns import INJECTION_RULES, LEET, OVERRIDE_COMPACT
 from engine.exiqoian.replies import Verdict
 from engine.memory.search import query_terms
 
-_INVISIBLE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
 # Cyrillic and Greek look-alikes of Latin letters (lowercase; applied after casefold).
 _HOMOGLYPHS = str.maketrans({
     "а": "a", "в": "b", "с": "c", "е": "e", "н": "h", "і": "i", "ї": "i", "ј": "j", "к": "k",
@@ -18,25 +17,49 @@ _HOMOGLYPHS = str.maketrans({
     "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t",
     "υ": "u", "χ": "x", "γ": "y",
 })
+# Upper-case look-alikes, mapped BEFORE casefold (a capital Nu casefolds to nu, which looks like v).
+_UPPER_HOMOGLYPHS = str.maketrans({
+    **{chr(g): l for g, l in zip(
+        (0x391, 0x392, 0x395, 0x396, 0x397, 0x399, 0x39a, 0x39c, 0x39d, 0x39f, 0x3a1, 0x3a4, 0x3a5, 0x3a7),
+        "ABEZHIKMNOPTYX", strict=True)},
+    **{chr(c): l for c, l in zip(
+        (0x410, 0x412, 0x415, 0x41a, 0x41c, 0x41d, 0x41e, 0x420, 0x421, 0x422, 0x425, 0x406, 0x408, 0x405),
+        "ABEKMHOPCTXIJS", strict=True)},
+})
+# Other characters that hide inside a word: combining grapheme joiner and the Hangul fillers
+# (Cf characters, tags and soft hyphen are stripped by category).
+_FILLERS = dict.fromkeys(map(ord, (chr(0x34f), chr(0x115f), chr(0x1160), chr(0x3164), chr(0xffa0))))
+_LINE_BREAKS = re.compile("[\r\v\f\x85" + chr(0x2028) + chr(0x2029) + "]+")
 _SPACES = re.compile(r"[^\S\n]+")
 _BLANKS = re.compile(r"\s*\n\s*")
 # Runs of single letters split by separators ("i g n o r e", "i.g.n.o.r.e").
 _SPLIT_LETTERS = re.compile(r"(?<![a-z])(?:[a-z][ \t._\-*]+){2,}[a-z](?![a-z])")
 _SPLIT_SEP = re.compile(r"[ \t._\-*]+")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_WRAPPED = re.compile(r"(?<=[a-z0-9+/=])[ \t]*\n(?=[a-z0-9+/=])")
 
 
 def normalise(text: str) -> str:
     """Matching form only: NFKC, invisible and bidi control characters removed, casefold,
     look-alike letters mapped to Latin, runs of blanks collapsed (line breaks are kept as one
     ``\\n`` so line-start rules still work)."""
-    t = unicodedata.normalize("NFKC", text)
-    t = _INVISIBLE.sub("", t).casefold().translate(_HOMOGLYPHS)
+    t = unicodedata.normalize("NFKC", text).replace(chr(0x2019), "'").replace(chr(0x2018), "'")
+    t = _LINE_BREAKS.sub("\n", t).translate(_FILLERS)
+    t = "".join(c for c in t if unicodedata.category(c) != "Cf")
+    t = t.translate(_UPPER_HOMOGLYPHS).casefold().translate(_HOMOGLYPHS)
     return _BLANKS.sub("\n", _SPACES.sub(" ", t)).strip()
 
 
-def _deobfuscate(n: str) -> str:
-    """Leet-mapped text with single-letter runs joined (the obfuscated_override view)."""
-    return _SPLIT_LETTERS.sub(lambda m: _SPLIT_SEP.sub("", m.group()), n.translate(LEET))
+def _deobfuscate(n: str) -> tuple[str, bool]:
+    """Leet-mapped text with single-letter runs joined (the obfuscated_override view), and
+    whether any run was joined."""
+    joined = False
+
+    def join(m: re.Match[str]) -> str:
+        nonlocal joined
+        joined = True
+        return _SPLIT_SEP.sub("", m.group())
+    return _SPLIT_LETTERS.sub(join, n.translate(LEET)), joined
 
 
 def detect_injection(text: str) -> str | None:
@@ -44,8 +67,14 @@ def detect_injection(text: str) -> str | None:
     n = normalise(text)
     for name, pattern in INJECTION_RULES:
         if name == "obfuscated_override":
-            d = _deobfuscate(n)
+            d, joined = _deobfuscate(n)
             if d != n and pattern.search(d):
+                return name
+            # a phrase spelled out letter by letter has no word gaps left
+            if joined and OVERRIDE_COMPACT.search(_NON_ALNUM.sub("", d)):
+                return name
+        elif name == "encoded_payload":
+            if pattern.search(_WRAPPED.sub("", n)):  # base64 wrapped across lines
                 return name
         elif pattern.search(n):
             return name

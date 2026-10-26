@@ -5,15 +5,20 @@ import re
 LEET = str.maketrans("103574@$", "ioestaas")
 
 _DET = r"(?:all|any|the|your|my|previous|prior|above|earlier|preceding|former|these|those|every|of)"
-_NOUN = r"(?:instructions?|rules?|prompts?|guidelines?|context|directions?|messages?)"
+_NOUN = r"(?:instructions|rules|prompts?|guidelines?|context)"
 
 OVERRIDE = re.compile(
     rf"\b(?:ignore|disregard|forget|override)\s+(?:{_DET}\s+){{1,4}}{_NOUN}\b"
     r"|\b(?:ignore|disregard|forget)\s+(?:everything|all)\s+(?:above|before|prior|previous|you were told)\b")
 
+# The override phrase with every gap removed ("ignorepreviousinstructions").
+OVERRIDE_COMPACT = re.compile(
+    r"(?:ignore|disregard|forget|override)(?:all|any|the|your|my|previous|prior|above|earlier|"
+    r"preceding|former|these|those|every|of){1,4}(?:instructions|rules|prompts?|guidelines?|context)")
+
 ROLE_CHANGE = re.compile(
     r"\byou\s+are\s+now\b"
-    r"|(?:^|[.!?;:\n]\s*|\b(?:please|now|you|just|and|then)\s+)act\s+as\b"
+    r"|(?:^|[.!?;:\n]\s*|\b(?:please|now|you|just|and|then|to)\s+)act\s+as\b"
     r"|\bpretend\s+(?:to\s+be|you\s+are|that\s+you)\b"
     r"|\brole\s*-?\s*play\s+as\b"
     r"|\bfrom\s+now\s+on,?\s+you\b"

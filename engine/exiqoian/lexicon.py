@@ -37,12 +37,13 @@ MIGRATION_VOCABULARY: frozenset[str] = frozenset({
 })
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
+_DOT_NET = re.compile(r"(?<![a-z0-9_])\.net\b")  # ".net" would otherwise tokenise to "net"
 _PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 
 
 def tokens(text: str) -> list[str]:
     """Matching tokens of already casefolded text (letters, digits, underscore)."""
-    return _TOKEN.findall(text)
+    return _TOKEN.findall(_DOT_NET.sub("dotnet", text))
 
 
 def split_identifier(name: str) -> list[str]:
