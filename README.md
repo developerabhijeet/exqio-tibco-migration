@@ -225,6 +225,33 @@ does DealerFundingRequest do?" and requires an answer with at least one citation
 is 2+2" and requires the off-topic decline. Operating notes (conversation privacy, the
 `exiqoian asked` audit row, the rate limit) are in `docs/deploy/RUNBOOK.md`, "ExiQoian".
 
+## Iterations
+
+When a build fails, a parity scenario differs or a plan errors, the loop closes without starting
+over. Each pass is a numbered iteration, and every memory revision carries its number.
+
+1. **Re-enter Design.** An architect presses Re-enter design (Build, Verify, Deploy, or always on
+   Design). The dialog lists the failures the platform collected (tick or untick each), takes up to
+   10 log files of 5 MB each and an updated requirements text. Opening the iteration resets G3 to
+   G6 and reruns Design with the errors and requirements as data; a requirement that changes
+   behaviour comes back as a draft rule marked "from iteration n" for the SME to approve, which is
+   the one path to a behaviour change.
+2. **Resume from edited code.** An engineer downloads a build (the zip carries `EXIQO_BASELINE.json`),
+   edits it and drops it on Upload edited build. The preview lists exactly the modified, added and
+   deleted files; Resume builds from them with a three-way merge, keeps hand edits (badged "hand"
+   and protected from the agents), and lists conflicts, where the hand edit wins.
+3. **GitHub as a source.** With the GitHub connector on, the Repository panel connects an
+   `owner/name` branch: a TIBCO estate becomes an upload and a scan, an exported build with edits
+   becomes an edit set. "Pull latest" fetches later commits; an iteration's build can be pushed back
+   to `exiqo/<process>/iteration-<n>`.
+
+`make demo-check` has an `iteration` step after `memory`: as `architect.lee` it opens iteration 2
+with a requirement on the first target, waits for the design, checks G3 is pending again,
+downloads the latest build, changes one agent file, uploads it and checks the preview lists exactly
+that path; with memory configured it also checks for a revision with iteration 2. Failure modes
+(a stuck iteration, an edit set that conflicts, a clone that times out) are in
+`docs/deploy/RUNBOOK.md`, "Iterations".
+
 ## Install on AKS
 
 The guides for installing and running the platform in GM Financial's Azure tenant are in

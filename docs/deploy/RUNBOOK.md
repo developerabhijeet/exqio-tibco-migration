@@ -376,6 +376,107 @@ where action like 'connector %' and detail->>'outcome' <> 'ok' and ts > now() - 
 
 What was published where is in `connector_links` (kind, object type, remote id and URL, `stale`).
 
+## Iterations
+
+An iteration is one numbered pass of the loop that re-enters Design with error logs and new
+requirements, resumes from an edited copy of a downloaded build, or starts from a GitHub branch.
+The counter is per project; iteration 1 always exists. The architect opens one from the Build,
+Verify, Deploy or Design tab ("Re-enter design"), an engineer uploads an edited zip on the Build
+tab ("Upload edited build"), and the Repository panel on the Upload and Build tabs connects a
+branch (it shows only when the GitHub connector is on, see "Connectors"). Opening an iteration
+resets G3 to G6 of the process with an audit line naming the iteration. Roles: architect or admin
+open and close (an SME may open with requirements only); engineer or admin upload edits and
+connect or push repositories (an SME may connect an estate repository); viewers read.
+
+The tables are `iterations` (status `open`, `designing`, `building`, `verifying`, `deploying`,
+`closed`, `abandoned`; `kind` `initial`, `reentry`, `edits`, `repo`), `iteration_inputs`, `edit_sets`
+and `project_repos`. Audit lines: `iteration opened`, `iteration closed`, `iteration abandoned`,
+`edit set uploaded`, `edit set resumed`, `repo connected`, `repo pulled`.
+
+```sql
+select n, kind, status, resume_phase, opened_by, opened_at, closed_at, note
+from iterations where project_id = '<project id>' order by n;
+
+select ts, actor, action, detail from audit_log
+where action in ('iteration opened', 'iteration closed', 'iteration abandoned',
+                 'edit set uploaded', 'edit set resumed', 'repo connected', 'repo pulled')
+order by ts desc limit 50;
+```
+
+**An iteration is stuck.** The status follows the jobs (a design job sets `designing`, build
+`building`, verify `verifying`, plan `deploying`; G6 approved for every process of the iteration
+sets `closed`), so a status that does not move means a job that did not run or did not finish.
+
+1. Read the iteration: `GET /api/iterations/<id>` returns its inputs and a timeline of the design
+   records, builds and gate decisions that belong to it. The Iterations strip under the stepper
+   shows the same.
+2. Look at its jobs with the queries in "A stuck job" (`kind` design, build, verify or plan for the
+   process). A `running` job with a stale heartbeat is "worker lost": run the step again. A
+   `queued` job waits for a slot or a pinned worker.
+3. Opening another iteration for the same process is refused with 409 while its design or build job
+   is queued or running: cancel the job (or wait), then open it. If the design job could not even
+   be queued, the platform abandons the new iteration itself with the note "the design job could not
+   be queued: the iteration was abandoned, open it again" (the gate reset stands); open it again.
+4. To give up on an iteration, an architect or admin closes it (`POST /api/iterations/<id>/close`)
+   or abandons it (`.../abandon`) with a note. Both answer 409 if it already ended. Opening a new
+   iteration for a process that is in an open one abandons the old one ("superseded by iteration
+   n"). Iterations are never deleted and their inputs stay readable.
+5. Never edit the `iterations` table by hand.
+
+**An edit set conflicts.** An uploaded edited zip is compared with the baseline build the server
+holds (the manifest `EXIQO_BASELINE.json` in the zip only names the build, so editing it changes
+nothing), and `edit_sets.files` lists exactly the modified, added and deleted files. Nothing is
+built until the engineer presses "Resume from <phase>" on the preview. A refused upload says why:
+a path outside the archive folder, a symlink, a duplicate or case-colliding name, more than 20 000
+entries, a size over `upload_max_bytes` (413), a compression ratio that looks like a bomb, a build
+that is still queued or running, or a manifest naming a build of another project.
+
+A conflict is a file the engineer changed and the regenerated code changed on the same lines. The
+hand edit always wins and is kept as uploaded; the Build tab's "hand edits" stage lists every path
+as `kept`, `merged`, `conflict`, `added`, `deleted` or `restored`, and the merge output with both
+versions is in the build folder at `.exiqo/conflicts/<path>.merge`. To resolve one, take the
+generated improvement by hand, download the new build, and upload it again as the next edit set.
+Files marked with the "hand" badge are protected: the code builder, test engineer and both repair
+loops leave them alone, and the review panel still reads them.
+
+| Resume message | Meaning and fix |
+|---|---|
+| "the edit set was already resumed" (409) | The build for it was queued. Open the build. |
+| "the design must be approved again (G3) ..." (409) | The approved design moved since the baseline build (someone re-designed). The edits are kept; the architect approves the design, then the engineer presses Resume again. |
+| "upload them again" (409) | The approved design hash no longer equals the baseline build's. Download the latest build, re-apply the edits, upload again. |
+
+An infrastructure-only edit set (only `infra/`, `Dockerfile` or pipelines changed) builds from the
+`infra validate` stage and records the earlier stages as skipped; its code is the baseline's, so
+check the build's test results are the baseline's before approving G4.
+
+**A clone times out.** Connecting a repository or pulling a branch queues a `source.fetch` job on
+a worker: a shallow, single-branch `git clone` through the GitHub connector with a 300 second limit
+and the upload size limit applied to the checkout. When it fails, the job's error (Jobs panel, or
+`select error from jobs where kind = 'source.fetch' order by created_at desc limit 5`) names the
+reason, with secrets removed.
+
+| Symptom | Cause and fix |
+|---|---|
+| 409 "the GitHub connector is not enabled" | Off in the install or in Settings. Enable it as under "Connectors". Nothing was sent. |
+| 502 on connect or pull | The connector could not read the repository or branch (`head`): wrong `owner/name` or branch, or the token lacks `contents:read`. The message is the connector's; use the "Connectors" troubleshooting table. |
+| The job fails with a timeout | Egress to the GitHub host from the **worker** pod: check `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` lists the host's `cidrs`, the Azure Firewall FQDN rule and private DNS. Cloning runs in the worker, not the api, so test from `deploy/exiqo-worker`. |
+| Fails with a size message | The checkout is larger than `upload_max_bytes`. Point at a branch that holds the estate or the exported build only, not a monorepo. |
+| 422 on connect | The repository name must be `owner/name` (letters, digits, `_`, `.`, `-`) and the branch a valid branch name. |
+| A pull answers `{"changed": false}` | The branch head equals the last fetched commit. Nothing runs. Push the reviewer's commit first. |
+
+The clone runs with a scrubbed environment, no prompts, no submodules, no Git LFS download and no
+hooks, and only over https; generated code is never run by it. To retry after a timeout, press
+"Pull latest" (or `POST /api/repos/<id>/pull`); a repository that holds a TIBCO estate creates an
+upload and a scan, and one that holds an exported build creates an edit set against that build.
+Pushing an iteration's build back (`POST /api/repos/<id>/push`) goes to the branch
+`exiqo/<process slug>/iteration-<n>` and opens a pull request when asked.
+
+**Memory and the timeline.** Every memory revision carries its iteration number. The explorer's
+timeline groups revisions by iteration and `GET /api/memory/<project id>/revisions?iteration=<n>`
+filters them. Requirements and uploaded-log excerpts are searchable memory with citations; after a
+Neo4j restore follow "Memory (Neo4j)" and check that the iteration's revision is back in the
+timeline.
+
 ## Secret rotation
 
 The procedure per secret is in `GMF-INSTALL.md`, section 10; the Deploy-step credentials are in
