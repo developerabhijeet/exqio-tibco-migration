@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { apiUrl } from "../scripts/root-env";
+import { gotoStep } from "./helpers";
 
 // AUTH_MODE=oidc as the web sees it. The e2e API runs in dev mode (it answers /auth/me with 404),
 // so these tests stub /auth/me to play an API in oidc mode: a 200 there is how the web knows it is
@@ -66,8 +67,11 @@ test.describe("sign-in (oidc)", () => {
 
   test("a 401 mid-session sends the next API call to the sign-in, with the page to return to", async ({ page }) => {
     const session = await signedIn(page);
-    await page.goto("/?step=upload");
+    // Not /?step=upload: the home page drops ?step= only once a project is selected, so the address
+    // the 401 returns to would depend on how far loading got.
+    await page.goto("/");
     await expect(page.getByTestId("user-menu")).toContainText("Pat Lee");
+    await gotoStep(page, "upload");
     await page.getByRole("button", { name: "New project" }).click();
     await page.getByLabel("Project name").fill(`auth ${Date.now()}`);
     session.expire(); // the session runs out while the page is open
