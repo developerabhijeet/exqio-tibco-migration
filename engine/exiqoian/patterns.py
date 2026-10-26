@@ -29,7 +29,10 @@ PROMPT_EXFILTRATION = re.compile(
     r"(?:system|hidden|initial|original|secret)\s+(?:prompt|instructions?|rules)\b"
     # "your" addressed to the assistant, with or without an adjective
     r"|\b(?:show|print|reveal|repeat|output|display|tell|give|leak|dump)\s+(?:me\s+)?your\s+(?:\w+\s+)?(?:prompt|instructions|rules)\b"
-    r"|\bwhat\s+(?:is|are|were)\s+your\s+(?:\w+\s+)?(?:prompt|instructions|rules|guidelines)\b")
+    r"|\bwhat(?:'s|s|\s+is|\s+are|\s+were)\s+your\s+(?:\w+\s+)?(?:prompt|instructions|rules|guidelines)\b"
+    r"|\bwhat(?:'s|s|\s+is|\s+are|\s+were)\s+the\s+(?:system|hidden|initial|original|secret)\s+(?:prompt|instructions?|rules)\b"
+    r"|\bwhat\s+(?:\w+\s+)?(?:instructions|rules|prompt)\s+(?:were|are|did)\s+you\s+(?:given|get|receive|follow)\b"
+    r"|\bwhat\s+(?:were|are)\s+you\s+told\b")
 
 DELIMITER_FORGERY = re.compile(
     r"<\s*/?\s*(?:source|history|system|question)\b"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -185,3 +187,41 @@ def test_personas_held_and_resolved():
         resolve_persona(ops, "sme")
     assert e.value.status_code == 403 and e.value.detail == "persona not held"
     assert held_personas(dev_principal("nobody")) == ["viewer"] and resolve_persona(dev_principal("viewer.val"), None) == "viewer"
+
+
+async def test_rate_limit_holds_under_concurrency(app, project_id):
+    async with app.state.sessionmaker() as s:
+        c = await create_conversation(s, project_id, "qa.priya", "qa")
+
+    async def one(i: int):
+        async with app.state.sessionmaker() as s:
+            try:
+                await go(s, project_id, c, "qa.priya", f"hi {i}", persona="qa")
+                return "ok"
+            except HTTPException as e:
+                return e.status_code
+
+    results = await asyncio.gather(*(one(i) for i in range(16)))
+    assert results.count("ok") == 12 and results.count(429) == 4
+
+
+async def test_user_row_is_committed_before_the_answer_is_computed(app, project_id):
+    seen = {}
+
+    class Spy:
+        async def retrieve(self, *a, **kw):
+            async with app.state.sessionmaker() as other:
+                seen["rows"] = len((await other.execute(select(ChatMessage))).scalars().all())
+            return []
+
+    async with app.state.sessionmaker() as s:
+        c = await create_conversation(s, project_id, "sme.vicky", "sme")
+        await go(s, project_id, c, "sme.vicky", QUESTION, retriever=Spy())
+    assert seen["rows"] == 1
+
+
+async def test_an_unexpected_failure_is_stored_audited_and_counted(session, project_id):
+    c = await create_conversation(session, project_id, "sme.vicky", "sme")
+    _, bot = await go(session, project_id, c, "sme.vicky", QUESTION, retriever=RaisingRetriever(RuntimeError("boom")))
+    assert (bot.verdict, bot.text, bot.rule) == ("unavailable", UNAVAILABLE_REPLY, "error")
+    assert len((await session.execute(select(AuditLog).where(AuditLog.action == "exiqoian asked"))).scalars().all()) == 1

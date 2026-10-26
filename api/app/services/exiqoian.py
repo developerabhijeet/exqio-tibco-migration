@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
@@ -155,10 +155,14 @@ async def delete_conversation(session: AsyncSession, project_id: str, owner: str
     await session.commit()
 
 
-async def check_rate(session: AsyncSession, owner: str) -> None:
+async def check_rate(session: AsyncSession, owner: str, *, lock: bool = False) -> None:
     """429 when ``owner`` has asked ``RATE_LIMIT`` questions in the last ``RATE_WINDOW_S`` seconds
-    (counted from the table, so it holds across API replicas)."""
-    since = datetime.now(UTC) - timedelta(seconds=RATE_WINDOW_S)
+    (counted from the table on the database clock, so it holds across API replicas). With
+    ``lock`` it first takes the owner's transaction-scoped advisory lock, so a check followed by an
+    insert in the same transaction cannot interleave with another request of that owner."""
+    if lock:
+        await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(owner))))
+    since = func.now() - timedelta(seconds=RATE_WINDOW_S)
     count = (await session.execute(
         select(func.count()).select_from(ChatMessage)
         .join(ChatConversation, ChatConversation.id == ChatMessage.conversation_id)
@@ -197,8 +201,12 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
     prior = await list_messages(session, conv.id)
     started = time.monotonic()
     masked = mask_sensitive(text)
+    # Count and insert under the owner's lock, and commit the user row before the (slow) answer,
+    # so concurrent requests see each other's slots and the 12 a minute cap holds.
+    await check_rate(session, owner, lock=True)
     user = ChatMessage(conversation_id=conv.id, role="user", text=masked, persona=persona)
     session.add(user)
+    await session.commit()
     lexicon, process_ids, _ = await project_lexicon(session, project_id)
     try:
         reply = await respond(
@@ -206,6 +214,9 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
             process_ids=process_ids, history=history_turns(prior), provider=provider, on_stage=on_stage)
     except (MemoryUnavailable, KnowledgeUnavailable) as exc:
         reply = _unavailable(exc)
+    except Exception:
+        log.exception("exiqoian answer failed: project=%s", project_id)
+        reply = Reply(verdict="unavailable", cited=CitedText.plain(UNAVAILABLE_REPLY), rule="error")
     bot = ChatMessage(
         conversation_id=conv.id, role="assistant", text=reply.cited.text, cited=reply.cited.model_dump(mode="json"),
         verdict=reply.verdict, persona=persona, used_model=reply.used_model,
@@ -213,9 +224,10 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
         rule=reply.rule, dropped_sources=reply.dropped_sources, latency_ms=int((time.monotonic() - started) * 1000))
     session.add(bot)
     await session.flush()
+    conv = await get_conversation(session, project_id, owner, conversation_id)
     if not conv.title:
         conv.title = masked[:TITLE_CHARS]
-    conv.updated_at = datetime.now(UTC)
+    conv.updated_at = func.now()
     audit(session, None, owner, "exiqoian asked", project_id=project_id, detail={
         "conversation_id": conv.id, "message_id": bot.id, "verdict": reply.verdict, "rule": reply.rule,
         "persona": persona, "used_model": reply.used_model, "provider": bot.provider,
