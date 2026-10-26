@@ -47,6 +47,12 @@ async def test_released_on_error_and_cancellation(app):
             pass
 
 
+# pg_locks is cluster-wide: other checkouts run their suites against their own databases on the
+# same server, and their advisory locks must not count against this one.
+OWN_ADVISORY_LOCKS = ("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = "
+                      "(SELECT oid FROM pg_database WHERE datname = current_database())")
+
+
 async def test_no_advisory_lock_left_behind(app):
     from sqlalchemy import text
 
@@ -56,7 +62,7 @@ async def test_no_advisory_lock_left_behind(app):
             await s.execute(text("SELECT 1"))
             await s.commit()
     async with sm() as s:
-        held = await s.scalar(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"))
+        held = await s.scalar(text(OWN_ADVISORY_LOCKS))
     assert held == 0
 
 
@@ -84,7 +90,7 @@ async def test_cancelled_waiter_leaves_no_lock(app):
     await h
     await asyncio.sleep(0.2)
     async with sm() as s:
-        held = await s.scalar(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"))
+        held = await s.scalar(text(OWN_ADVISORY_LOCKS))
     assert held == 0
     async with asyncio.timeout(2):
         async with advisory_lock(sm, "scenario"):
