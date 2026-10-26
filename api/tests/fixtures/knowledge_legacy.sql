@@ -66,7 +66,8 @@ CREATE INDEX IF NOT EXISTS memory_items_embedding_idx
 -- chunk texts are what the earlier release's index_process stored for the analysis rows the
 -- test seeds (analysis.chunk_entries).
 
-INSERT INTO knowledge.meta (key, value) VALUES ('embedding_backend', '@BACKEND@');
+INSERT INTO knowledge.meta (key, value) VALUES ('embedding_backend', '@BACKEND@')
+  ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO knowledge.chunks (id, project_id, process_id, kind, text, embedding) VALUES
   ('chunk:@PROJECT@:@PROCESS@:summary:legacy0001', '@PROJECT@', '@PROCESS@', 'summary',
@@ -78,10 +79,10 @@ INSERT INTO knowledge.chunks (id, project_id, process_id, kind, text, embedding)
 
 INSERT INTO knowledge.memory_items (id, project_id, kind, text, context, source, created_by,
                                     created_at, embedding) VALUES
-  ('mem_legacy0dec1', '@PROJECT@', 'decision',
+  ('mem_legacy0dec1_@PROJECT@', '@PROJECT@', 'decision',
    'Rule R1 of dealer funding: requests above the cap are held for review.',
    '{"process_id": "@PROCESS@", "rule_key": "R1", "user": "sme.vicky"}', 'sme', 'sme.vicky',
    '2026-03-02T10:00:00+00', array_fill(0.03::real, ARRAY[384])::vector),
-  ('mem_legacy0map1', '@PROJECT@', 'mapping',
+  ('mem_legacy0map1_@PROJECT@', '@PROJECT@', 'mapping',
    'Map the dealer lookup activity to DealerRepository.FindAsync.',
    '{}', 'sme', 'arch.sam', '2026-03-03T11:30:00+00', array_fill(0.02::real, ARRAY[384])::vector);

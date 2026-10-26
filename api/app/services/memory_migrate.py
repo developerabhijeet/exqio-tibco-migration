@@ -45,11 +45,11 @@ from api.app.jobs.runner import JobContext
 from api.app.models import Build, Gate, MemoryEvent, Plan, Process, Project
 from api.app.services import evidence as evidence_svc
 from api.app.services import memory_ingest as mi
-from api.app.services.knowledge import about_uid
+from api.app.services.knowledge import _mask_value, about_uid
 from engine.agents.provider import mask_sensitive
 from engine.knowledge import embeddings
 from engine.memory.graph import MemoryGraph
-from engine.memory.model import MemNode, MemRel, RevisionMeta, ScopedDelta
+from engine.memory.model import KnowledgeError, MemNode, MemRel, RevisionMeta, ScopedDelta
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,9 @@ ORPHAN_SCOPE = "migration:orphan"
 MIGRATE_LOCK = "memory:migrate"
 PROJECT_LOCK_WAIT_S = 120
 PROJECT_LOCK_POLL_S = 0.5
+BUSY_RETRY_S = 5
+# The artifact an orphan chunk cites, by its old kind (summary, rule and finding: the analysis).
+ORPHAN_ARTIFACT = {"design": "design"}
 
 # The old schema, read only here (the R5 test allows this module alone).
 PRESENT_SQL = "SELECT to_regclass('knowledge.meta') IS NOT NULL AS present"
@@ -77,6 +80,10 @@ RETIRE_SQL = "ALTER SCHEMA knowledge RENAME TO knowledge_retired"
 RETIRED_STAMP_SQL = ("INSERT INTO knowledge_retired.meta (key, value) "
                      "VALUES ('neo4j_migrated_at', now()::text) "
                      "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
+
+
+class MigrationBusy(RuntimeError):
+    """Another migration holds the ``memory:migrate`` lock (a second replica's job)."""
 
 
 class MigrationReport(BaseModel):
@@ -147,8 +154,7 @@ async def _copy_items(s: AsyncSession, project_id: str, items: list[dict[str, An
     for item in wanted:
         if item["id"] in have:
             continue
-        context = {**(item["context"] or {}), "kind": item["kind"]}
-        context = {k: mask_sensitive(v) if isinstance(v, str) else v for k, v in context.items()}
+        context = _mask_value({**(item["context"] or {}), "kind": item["kind"]})
         about = await about_uid(s, context)
         if about and "about_uid" not in context:
             context["about_uid"] = about
@@ -237,7 +243,8 @@ async def _orphans(s: AsyncSession, deltas: list[ScopedDelta], chunks: list[dict
         uid = f"chunk:migrated:{c['id']}"
         nodes.append(MemNode(label="Chunk", uid=uid, name=f"{c['kind']} (migrated)", text=masked,
                              props={"kind": c["kind"], "source": "migration",
-                                    "artifact_type": "analysis", "artifact_id": c["process_id"],
+                                    "artifact_type": ORPHAN_ARTIFACT.get(c["kind"], "analysis"),
+                                    "artifact_id": c["process_id"],
                                     "process_id": c["process_id"]},
                              embedding=_vector(c["embedding"]) if reuse else None))
         process = await s.get(Process, c["process_id"])
@@ -308,15 +315,17 @@ async def _project_lock(sessionmaker: async_sessionmaker[AsyncSession],
 async def migrate_all(sessionmaker: async_sessionmaker[AsyncSession], memory: MemoryGraph,
                       dsn: str) -> list[MigrationReport]:
     """Migrate every project of schema ``knowledge``, then retire it; ``[]`` when there is no
-    such schema. Raises ``RuntimeError`` naming the first incomplete project before any rename."""
+    such schema (also when another migration retired it first). Raises :class:`MigrationBusy`
+    while another migration runs, and ``RuntimeError`` naming the first incomplete project
+    before any rename. Projects already migrated are no-ops, so a re-run resumes."""
     conn = await asyncio.to_thread(_connect, dsn)
     try:
-        if not await asyncio.to_thread(_present, conn):
-            log.info("memory migration: no schema knowledge; nothing to migrate")
-            return []
         async with try_advisory_lock(sessionmaker, MIGRATE_LOCK) as locked:
             if not locked:
-                raise RuntimeError("another memory migration is running")
+                raise MigrationBusy("another memory migration is running")
+            if not await asyncio.to_thread(_present, conn):  # checked under the lock
+                log.info("memory migration: no schema knowledge; nothing to migrate")
+                return []
             legacy = await asyncio.to_thread(_projects, conn)
             async with sessionmaker() as s:
                 known = set((await s.execute(select(Project.id).where(Project.id.in_(legacy))))
@@ -348,6 +357,8 @@ async def migrate_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         raise RuntimeError("memory not configured: NEO4J_URI is empty")
     try:
         reports = await migrate_all(w.sessionmaker, w.memory, psycopg_url(w.settings.database_url))
+    except MigrationBusy as exc:  # a second replica's job: back in 5 s, then a no-op
+        raise RetryLater(BUSY_RETRY_S, str(exc), count_attempt=False) from exc
     except mi.UNAVAILABLE as exc:
         raise mi.unavailable_retry(ctx.attempt, exc) from exc
     for r in reports:
@@ -356,17 +367,40 @@ async def migrate_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return {"projects": [r.model_dump() for r in reports]}
 
 
-async def reembed_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
-    if w.memory is None:
-        raise RuntimeError("memory not configured: NEO4J_URI is empty")
-    project_id = ctx.payload["project_id"]
+async def _reembed_one(ctx: JobContext, w: WorkerServices, project_id: str) -> int:
     async with try_advisory_lock(w.sessionmaker, f"memory:{project_id}") as locked:
         if not locked:
             raise RetryLater(mi.LOCK_BUSY_DELAY_S, "memory of this project is being written",
                              count_attempt=False)
-        try:
-            n = await w.memory.reembed(project_id)
-        except mi.UNAVAILABLE as exc:
-            raise mi.unavailable_retry(ctx.attempt, exc) from exc
-    await ctx.log(f"re-embedded {n} nodes of project {project_id} with {embeddings.backend_name()}")
-    return {"project_id": project_id, "reembedded": n, "backend": embeddings.backend_name()}
+        n = await w.memory.reembed(project_id)
+    await ctx.log(f"re-embedded {n} nodes of project {project_id}")
+    return n
+
+
+async def reembed_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Without ``project_id``: re-embed every project, then record the active backend (only
+    after the last project is written, so no project's old vectors pass the backend check).
+    With one: refresh that project's vectors under the backend already recorded; refused while
+    the graph records another backend (that needs every project re-embedded)."""
+    if w.memory is None:
+        raise RuntimeError("memory not configured: NEO4J_URI is empty")
+    backend = embeddings.backend_name()
+    project_id = ctx.payload.get("project_id")
+    try:
+        if project_id:
+            recorded = await w.memory.recorded_backend()
+            if recorded is not None and recorded != backend:
+                raise KnowledgeError(
+                    f"the memory graph records {recorded!r} but the active backend is {backend!r}: "
+                    "re-embed every project (memory_admin reembed, no --project)")
+            done = {project_id: await _reembed_one(ctx, w, project_id)}
+        else:
+            async with w.sessionmaker() as s:
+                ids = list((await s.execute(select(Project.id).order_by(Project.id))).scalars())
+            done = {pid: await _reembed_one(ctx, w, pid) for pid in ids}
+            await w.memory.record_backend()
+            await ctx.log(f"re-embedded {len(ids)} projects; the graph records {backend}")
+    except mi.UNAVAILABLE as exc:
+        raise mi.unavailable_retry(ctx.attempt, exc) from exc
+    return {"projects": done, "reembedded": sum(done.values()), "backend": backend,
+            "recorded": not project_id}

@@ -2,14 +2,17 @@
 
 - ``migrate``: queue the one-time ``memory.migrate`` job (the Postgres ``knowledge`` schema into
   Neo4j, then retired; ``services.memory_migrate``).
-- ``reembed --project <id>``: queue ``memory.reembed``, which re-embeds the project's memory with
-  the active embedding backend (after the backend changed; run it for every project).
+- ``reembed``: queue ``memory.reembed``, which re-embeds every project's memory with the active
+  embedding backend and then records that backend (after the backend changed).
+  ``--project <id>`` only refreshes one project's vectors under the backend the graph already
+  records (refused while it records another).
 - ``reingest --project <id>``: queue one ``memory.ingest`` per scope of the project (estate; per
   process analysis, design, latest build, verify, deploy and each gate; every ``memory_events``
   row; seed), each with ingest key ``reingest:<uuid>:<scope>``.
 
-``migrate`` and ``reembed`` take ``--wait`` to follow the job to its end (the exit status is 1
-when it failed). The workers run the jobs; nothing runs without ``NEO4J_URI``.
+``migrate`` and ``reembed`` take ``--wait`` to follow the job to its end, at most ``--timeout``
+seconds (default 1800). Exit status: 0 done (or queued), 1 the job failed, 2 a usage error
+(``NEO4J_URI`` empty, unknown project), 3 the wait timed out. The workers run the jobs.
 """
 from __future__ import annotations
 
@@ -33,6 +36,11 @@ from api.app.services.memory_migrate import MIGRATE_KIND, REEMBED_KIND
 
 ADMIN_ACTOR = "memory_admin"
 POLL_S = 1.0
+WAIT_TIMEOUT_S = 1800.0
+
+
+class UnknownProject(ValueError):
+    pass
 
 
 def _key(scope: str) -> str:
@@ -54,7 +62,7 @@ async def reingest(sessionmaker: async_sessionmaker[AsyncSession], settings: Set
 
     async with sessionmaker() as s:
         if await s.get(Project, project_id) is None:
-            raise ValueError(f"project {project_id!r} not found")
+            raise UnknownProject(f"project {project_id!r} not found")
         procs = (await s.execute(select(Process).where(Process.project_id == project_id)
                                  .order_by(Process.ir_id))).scalars().all()
         plan: list[tuple[str, str, dict[str, Any]]] = [("discover", "estate", {})]
@@ -86,7 +94,13 @@ async def reingest(sessionmaker: async_sessionmaker[AsyncSession], settings: Set
     return queued
 
 
-async def _wait(sessionmaker: async_sessionmaker[AsyncSession], job_id: str) -> Job:
+async def _wait(sessionmaker: async_sessionmaker[AsyncSession], job_id: str, timeout: float) -> Job:
+    """The job once it is ``done`` or ``failed``; ``TimeoutError`` after ``timeout`` seconds."""
+    async with asyncio.timeout(timeout):
+        return await _poll(sessionmaker, job_id)
+
+
+async def _poll(sessionmaker: async_sessionmaker[AsyncSession], job_id: str) -> Job:
     while True:
         async with sessionmaker() as s:
             job = await s.get(Job, job_id)
@@ -109,15 +123,24 @@ async def run(args: argparse.Namespace, settings: Settings) -> int:
     sessionmaker = make_sessionmaker(engine)
     try:
         if args.command == "reingest":
-            ids = await reingest(sessionmaker, settings, args.project)
+            try:
+                ids = await reingest(sessionmaker, settings, args.project)
+            except UnknownProject as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
             print(f"queued {len(ids)} memory ingests for project {args.project}")
             return 0
+        project_id = getattr(args, "project", None)
         if args.command == "migrate":
             kind, payload, key = MIGRATE_KIND, {}, MIGRATE_KIND
-            project_id = None
         else:
-            kind, payload, key = REEMBED_KIND, {"project_id": args.project}, f"{REEMBED_KIND}|{args.project}"
-            project_id = args.project
+            if project_id:
+                async with sessionmaker() as s:
+                    if await s.get(Project, project_id) is None:
+                        print(f"project {project_id!r} not found", file=sys.stderr)
+                        return 2
+            kind, payload = REEMBED_KIND, ({"project_id": project_id} if project_id else {})
+            key = f"{REEMBED_KIND}|{project_id or '*'}"
         job_id = await enqueue(sessionmaker, kind, payload, project_id=project_id, dedupe_key=key)
         if job_id is None:
             job_id = await _queued_job(sessionmaker, kind, key)
@@ -126,7 +149,11 @@ async def run(args: argparse.Namespace, settings: Settings) -> int:
             print(f"queued {kind}: job {job_id}")
         if not args.wait or job_id is None:
             return 0
-        job = await _wait(sessionmaker, job_id)
+        try:
+            job = await _wait(sessionmaker, job_id, args.timeout)
+        except TimeoutError:
+            print(f"{kind} job {job_id} still running after {args.timeout:g} s", file=sys.stderr)
+            return 3
         print(f"{kind} {job.status}: {job.result if job.status == 'done' else job.error}")
         return 0 if job.status == "done" else 1
     finally:
@@ -138,10 +165,12 @@ def parser() -> argparse.ArgumentParser:
                                 description="Memory (Neo4j) administration.")
     sub = p.add_subparsers(dest="command", required=True)
     m = sub.add_parser("migrate", help="copy the Postgres knowledge schema into Neo4j, then retire it")
-    m.add_argument("--wait", action="store_true", help="follow the job to its end")
-    r = sub.add_parser("reembed", help="re-embed a project's memory with the active backend")
-    r.add_argument("--project", required=True)
-    r.add_argument("--wait", action="store_true", help="follow the job to its end")
+    r = sub.add_parser("reembed", help="re-embed every project's memory with the active backend")
+    r.add_argument("--project", help="only refresh this project's vectors (backend unchanged)")
+    for cmd in (m, r):
+        cmd.add_argument("--wait", action="store_true", help="follow the job to its end")
+        cmd.add_argument("--timeout", type=float, default=WAIT_TIMEOUT_S,
+                         help="seconds --wait waits at most (default %(default)g)")
     i = sub.add_parser("reingest", help="queue an ingest of every scope of a project")
     i.add_argument("--project", required=True)
     return p

@@ -152,9 +152,9 @@ class MemoryGraph:
 
     async def reembed(self, project_id: str) -> int:
         """Re-embed every current version of the embedded labels of the project with the active
-        backend, and record that backend; returns how many vectors were written. Run it for each
-        project after the embedding backend changed (``memory_admin reembed``)."""
-        backend = embeddings.backend_name()
+        backend; returns how many vectors were written. The recorded backend is left alone: after
+        a backend change, re-embed every project, then :meth:`record_backend`
+        (``memory_admin reembed`` does both)."""
         rows = await self._read(_rows, cypher.CURRENT_EMBEDDED, {
             "project_id": project_id, "open": OPEN_VALID_TO, "labels": list(EMBEDDED_LABELS)})
         texts = [r["text"] for r in rows]
@@ -164,13 +164,24 @@ class MemoryGraph:
         out = [{"vid": r["vid"], "embedding": v} for r, v in zip(rows, vectors, strict=True)]
 
         async def write(tx: AsyncManagedTransaction) -> int:
-            written = await _total(tx, cypher.SET_EMBEDDINGS, "rows", out, "set",
-                                   project_id=project_id)
-            await (await tx.run(cypher.META_REPLACE, value=backend)).consume()
-            return written
+            return await _total(tx, cypher.SET_EMBEDDINGS, "rows", out, "set", project_id=project_id)
 
         async with self._driver.session(database=self.database) as session:
             return await session.execute_write(write)
+
+    async def recorded_backend(self) -> str | None:
+        """The embedding backend the graph records (install-wide), ``None`` before any write."""
+        await self.ensure_ready()
+        async with self._driver.session(database=self.database) as session:
+            row = await (await session.run(cypher.META_GET)).single()
+        return row["value"] if row else None
+
+    async def record_backend(self) -> str:
+        """Record the active embedding backend (after every project was re-embedded with it)."""
+        backend = embeddings.backend_name()
+        async with self._driver.session(database=self.database) as session:
+            await (await session.run(cypher.META_REPLACE, value=backend)).consume()
+        return backend
 
     # MemoryRetriever: hybrid search (engine.memory.search) as a method.
     retrieve = hybrid

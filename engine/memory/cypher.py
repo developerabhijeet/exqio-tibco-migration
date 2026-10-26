@@ -539,7 +539,8 @@ META_SET = (
     "MERGE (m:MemoryMeta {key: 'embedding_backend'}) ON CREATE SET m.value = $value "
     "RETURN m.value AS value"
 )
-# Replaces the recorded backend after a re-embed (MemoryGraph.reembed; install-wide, R22).
+# Replaces the recorded backend once every project is re-embedded (MemoryGraph.record_backend;
+# install-wide, R22).
 META_REPLACE = (
     "MERGE (m:MemoryMeta {key: 'embedding_backend'}) SET m.value = $value RETURN m.value AS value"
 )
