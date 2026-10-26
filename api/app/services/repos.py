@@ -181,6 +181,17 @@ async def last_fetched(session: AsyncSession, row: ProjectRepo, branch: str) -> 
     return (line.detail or {}).get("commit") if line is not None else None
 
 
+async def known_head(session: AsyncSession, row: ProjectRepo, branch: str) -> str:
+    """The commit of ``branch`` this platform last pushed or fetched (``""`` when neither): what a
+    push to it leases on, so a reviewer's commit since then is never overwritten (final review I3)."""
+    line = await session.scalar(
+        select(AuditLog).where(AuditLog.action.in_(("repo pushed", "repo pulled")),
+                               AuditLog.project_id == row.project_id, AuditLog.detail["repo_id"].astext == row.id,
+                               AuditLog.detail["branch"].astext == branch)
+        .order_by(AuditLog.id.desc()).limit(1))
+    return str((line.detail or {}).get("commit") or "") if line is not None else ""
+
+
 async def remote_head(session: AsyncSession, settings: Settings, row: ProjectRepo, branch: str, actor: str) -> str:
     gh = await github(session, settings)
     repo = full_name(row)
@@ -380,6 +391,7 @@ async def push_build(session: AsyncSession, sessionmaker, settings: Settings, ro
     root = Path(build.output_dir)
     extras = {github_push_svc.EXPORT_NOTE: export_note(build, proc).encode(),
               edits_svc.BASELINE_NAME: edits_svc.baseline_file(build, proc, root, DOWNLOAD_EXCLUDED)}
+    lease = await known_head(session, row, branch)
     async with try_advisory_lock(sessionmaker, github_push_svc.dedupe_key(build.id, repo, branch)) as locked:
         if not locked:
             raise PushBusy("another push of this build to this branch is running")
@@ -389,7 +401,8 @@ async def push_build(session: AsyncSession, sessionmaker, settings: Settings, ro
         commit = await _audited(session, actor, "push", target, row.project_id, row.process_id,
                                 lambda: gh.push_build(root, repo, branch, message,
                                                       base_branch=base_name if base_exists else None,
-                                                      extra_files=extras, excluded=DOWNLOAD_EXCLUDED),
+                                                      extra_files=extras, excluded=DOWNLOAD_EXCLUDED,
+                                                      lease=lease, mirror=True),
                                 repo=repo, branch=branch, build_id=build.id, iteration=build.iteration)
     await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
                       object_type="branch", local_ref=build.id, remote_id=branch,

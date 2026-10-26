@@ -21,7 +21,7 @@ import hashlib
 import json
 import unicodedata
 import zipfile
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
+from api.app.connectors.github import repository_kept
 from api.app.db import new_id
 from api.app.models import Build, BuildFile, DesignRecord, EditSet, InfraAsset, Iteration, Process
 from api.app.services import gates as gate_svc
@@ -121,14 +122,17 @@ def tree_hashes(root: Path, excluded: frozenset[str]) -> dict[str, str]:
 
 
 def diff_tree(root: Path, baseline: dict[str, str], origins: dict[str, str],
-              excluded: frozenset[str]) -> list[FileChange]:
+              excluded: frozenset[str], ignore_added: Callable[[str], bool] | None = None) -> list[FileChange]:
     """What changed under ``root`` against ``baseline`` (path → ``text_sha256``), sorted by path;
     unchanged files are left out, and so are ``.git``, the excluded folders, symbolic links,
     ``EXPORTED_FROM.md``, ``EXIQO_BASELINE.json`` and operating-system clutter (``.DS_Store``,
-    ``Thumbs.db``, ``desktop.ini``, ``__MACOSX``)."""
+    ``Thumbs.db``, ``desktop.ini``, ``__MACOSX``). ``ignore_added``: files the build does not have
+    that are not edits either (a repository branch's own README, LICENSE, ``.github/``)."""
     edited = {p: sha for p, sha in tree_hashes(root, excluded).items() if not _clutter(p)}
     out: list[FileChange] = []
     for path, sha in edited.items():
+        if path not in baseline and ignore_added is not None and ignore_added(path):
+            continue
         if path not in baseline:
             out.append(FileChange(path=path, change="added", origin="new", sha256=sha))
         elif baseline[path] != sha:
@@ -356,7 +360,9 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
     rows = list((await session.scalars(select(BuildFile).where(BuildFile.build_id == build.id))).all())
     excluded = download_excluded(build)
     baseline = await asyncio.to_thread(baseline_hashes, build, rows)
-    changes = await asyncio.to_thread(diff_tree, root, baseline, {r.path: r.origin for r in rows}, excluded)
+    # a repository branch keeps the repository's own files (README, LICENSE, .github/) beside the build
+    ignore = repository_kept if kind == "repo" else None
+    changes = await asyncio.to_thread(diff_tree, root, baseline, {r.path: r.origin for r in rows}, excluded, ignore)
     if not changes:
         # nothing to build, and no iteration is opened: opening one would supersede the process's
         # active iteration for nothing (final review I1)

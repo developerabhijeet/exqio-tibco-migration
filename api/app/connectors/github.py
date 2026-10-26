@@ -48,6 +48,27 @@ _LINK_NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 _EXECUTABLE = (".sh",)
 
 
+#: Files of the base branch a mirrored push keeps (the repository's own, not the build's): the
+#: workflows folder, and README*/LICENSE* at the root. A pull ignores them when they are not the build's.
+MIRROR_KEEP_PREFIXES = (".github/",)
+MIRROR_KEEP_ROOT = ("README", "LICENSE")
+BRANCH_MOVED = "the branch has commits since the last push: pull the reviewer's edits first"
+
+
+class BranchMoved(ConnectorError):
+    """The push branch's head is not the commit the push was leased on (HTTP 409)."""
+
+    def __init__(self, branch: str) -> None:
+        super().__init__(f"{branch}: {BRANCH_MOVED}", 409)
+
+
+def repository_kept(path: str) -> bool:
+    """A file of the repository itself that a mirrored push keeps from the base branch."""
+    if path.startswith(MIRROR_KEEP_PREFIXES):
+        return True
+    return "/" not in path and path.upper().startswith(MIRROR_KEEP_ROOT)
+
+
 def valid_repo(repo: str) -> bool:
     """``owner/name``, GitHub's characters only (nothing a URL or a git option could hide in)."""
     if not _REPO.fullmatch(repo or ""):
@@ -312,10 +333,18 @@ class GitHubConnector(BaseConnector):
 
     async def push_build(self, build_root: Path, repo: str, branch: str, message: str, *,
                          base_branch: str | None = None, extra_files: Mapping[str, bytes] | None = None,
-                         excluded: Iterable[str] = DOWNLOAD_EXCLUDED, timeout_s: int = GIT_TIMEOUT_S) -> str:
+                         excluded: Iterable[str] = DOWNLOAD_EXCLUDED, timeout_s: int = GIT_TIMEOUT_S,
+                         lease: str | None = None, mirror: bool = False) -> str:
         """Commit the build's shipped files (plus ``extra_files``, e.g. ``EXPORTED_FROM.md``) on
         top of ``base_branch`` (or as a first commit) and push it to ``branch`` (``exiqo/...``
-        only) with ``--force-with-lease``. The pushed commit."""
+        only) with ``--force-with-lease``. The pushed commit.
+
+        ``lease``: the commit the branch must still be at (``""``: it must not exist); a branch that
+        moved raises :class:`BranchMoved` and nothing is pushed. Without it the lease is the head
+        read just before the push (sub-project 7's per-build branches, which nobody commits to).
+        ``mirror``: the commit holds exactly the build's files (and ``extra_files``): files of the
+        base branch the build does not ship are removed, except the repository's own
+        (:func:`repository_kept`)."""
         if not valid_push_branch(branch):
             raise ValueError(PUSH_REFUSED)
         if base_branch is not None:
@@ -345,8 +374,20 @@ class GitHubConnector(BaseConnector):
                     git("fetch", "--quiet", "--depth", "1", "--no-tags", "origin", f"refs/heads/{base_branch}")
                     git("checkout", "--quiet", "-B", branch, "FETCH_HEAD")
                 remote = git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").split()
-                expected = remote[0] if remote else ""  # empty: the branch must not exist yet
-                for rel in build_tree_files(root, skip):
+                head = remote[0] if remote else ""  # empty: the branch does not exist yet
+                if lease is not None and head != lease:
+                    raise BranchMoved(branch)
+                expected = head if lease is None else lease
+                shipped = build_tree_files(root, skip)
+                if mirror and base_branch:
+                    keep = set(shipped) | set(extras)
+                    tracked = [p for p in git("ls-files", "-z").split("\0") if p]
+                    stale = [p for p in tracked if p not in keep and not repository_kept(p)]
+                    for i in range(0, len(stale), 200):
+                        git("rm", "--quiet", "--cached", "-r", "--", *stale[i:i + 200])
+                    for rel in stale:
+                        (work / rel).unlink(missing_ok=True)
+                for rel in shipped:
                     _write_into(work, rel, _read_regular(root / rel))
                 for rel, data in extras.items():
                     _write_into(work, rel, data)

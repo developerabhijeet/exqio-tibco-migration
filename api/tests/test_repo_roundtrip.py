@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from api.app.models import AuditLog
 from api.tests import test_repos as repos_tests
-from api.tests.test_repos import AGENT_FILE, PROC, P, replace_body, wait_terminal
+from api.tests.test_repos import AGENT_FILE, FILES, PROC, P, replace_body, wait_terminal
 
 gh_settings = repos_tests.gh_settings
 app = repos_tests.app
@@ -83,3 +83,36 @@ async def test_the_sp7_push_job_also_writes_the_baseline(client, app, fake_githu
     out = await wait_terminal(client, r.json()["job_id"])
     files = fake_github.branch_files("gmf/credit", out["branch"])
     assert json.loads(files["EXIQO_BASELINE.json"])["build_id"] == finished_build
+
+
+# ------------------------------------------------------------------ final review fixes
+async def test_a_second_push_never_overwrites_reviewer_commits(client, fake_github, connected_build_repo,
+                                                               finished_build, engineer):  # final I3
+    first = (await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build},
+                               headers=engineer)).json()
+    reviewer = fake_github.commit(first["branch"], {AGENT_FILE: replace_body}, repo="gmf/svc")
+    again = await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build}, headers=engineer)
+    assert again.status_code == 409 and "pull the reviewer's edits first" in again.json()["detail"]
+    assert fake_github.branch_files("gmf/svc", first["branch"])[AGENT_FILE] == replace_body(FILES[AGENT_FILE])
+    pulled = (await client.post(f"/repos/{connected_build_repo}/pull", json={"branch": first["branch"]},
+                                headers=engineer)).json()
+    assert pulled["commit"] == reviewer
+    await wait_terminal(client, pulled["job_id"])
+    assert (await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build},
+                              headers=engineer)).status_code == 200  # the reviewer's commit was fetched first
+
+
+async def test_a_push_onto_a_non_empty_base_ships_exactly_the_build(client, fake_github, finished_build, engineer):  # I4
+    fake_github.add_repo("gmf/live", branch="main", tree={"README.md": "# GMF\n", ".github/workflows/ci.yml": "on: push\n",
+                                                          "src/Credit/Old.cs": "class Old {}\n", "LICENSE": "MIT\n"})
+    r = await client.post(f"/projects/{P}/repos", headers=engineer,
+                          json={"repo": "gmf/live", "branch": "main", "purpose": "build", "process_id": PROC})
+    await wait_terminal(client, r.json()["job_id"])
+    out = (await client.post(f"/repos/{r.json()['id']}/push", json={"build_id": finished_build}, headers=engineer)).json()
+    files = set(fake_github.branch_files("gmf/live", out["branch"]))
+    assert files == {*FILES, "EXIQO_BASELINE.json", "EXPORTED_FROM.md", "README.md", ".github/workflows/ci.yml",
+                     "LICENSE"}  # the stale Old.cs is removed; the kept repository files stay
+    fake_github.commit(out["branch"], {AGENT_FILE: replace_body}, repo="gmf/live")
+    job = (await client.post(f"/repos/{r.json()['id']}/pull", json={"branch": out["branch"]}, headers=engineer)).json()
+    es = (await client.get(f"/edit-sets/{(await wait_terminal(client, job['job_id']))['id']}")).json()
+    assert [f["path"] for f in es["files"]] == [AGENT_FILE]  # README, LICENSE and the workflow are no edits

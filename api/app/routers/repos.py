@@ -18,6 +18,7 @@ from sqlalchemy import select
 from api.app.auth.roles import Principal
 from api.app.connectors.audit import audit_connector
 from api.app.connectors.base import ConnectorDisabled, ConnectorError, ConnectorNotConfigured
+from api.app.connectors.github import BranchMoved
 from api.app.deps import SessionDep, SettingsDep, require_roles
 from api.app.models import Project, ProjectRepo
 from api.app.services import repos as svc
@@ -71,6 +72,8 @@ class RepoOut(BaseModel):
 
 
 def connector_errors(exc: Exception) -> HTTPException:
+    if isinstance(exc, BranchMoved):
+        return HTTPException(status_code=409, detail=exc.message)
     if isinstance(exc, (ConnectorDisabled, ConnectorNotConfigured)):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, ConnectorError):
