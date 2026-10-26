@@ -1,5 +1,13 @@
 import { expect, type Page } from "@playwright/test";
 import { SAMPLE_ZIP } from "./global-setup";
+import { apiUrl, webPort } from "../scripts/root-env";
+
+/** The two origins a run may talk to: everything else is outbound traffic (global constraints). */
+export const WEB_ORIGIN = `http://localhost:${webPort}`;
+export const API_ORIGIN = new URL(apiUrl, WEB_ORIGIN).origin;
+
+/** A process of the synthetic estate (Dealer Funding domain). */
+export const SAMPLE_PROCESS_NAME = "DealerFundingRequest";
 
 /** Act as one of the five users through the top bar menu (sent as X-User). */
 export async function actAs(page: Page, user: string): Promise<void> {
@@ -35,4 +43,30 @@ export async function openDealerProcess(page: Page, name: string): Promise<void>
   await page.getByRole("option", { name: /Dealer Funding/ }).click();
   await page.getByTestId("process-list").getByRole("button", { name: new RegExp(name) }).click();
   await expect(page.getByTestId("process-view")).toContainText(name);
+}
+
+/** From the start page: a fresh project with the synthetic estate uploaded and scanned. */
+export async function uploadSample(page: Page): Promise<void> {
+  await page.goto("/");
+  await newProjectAndScan(page);
+}
+
+/** uploadSample, then the analysis of the sample process (Validate), which memory records. */
+export async function uploadAndAnalyse(page: Page): Promise<void> {
+  await uploadSample(page);
+  await openDealerProcess(page, SAMPLE_PROCESS_NAME);
+  await page.getByTestId("step-validate").click();
+  const run = page.getByRole("button", { name: "Run analysis" });
+  await run.click();
+  await expect(page.getByTestId("analysis-log")).toContainText("citations verified", { timeout: 90_000 });
+  await expect(run).toBeEnabled();
+}
+
+/** The memory explorer with the node named `name` found by search, focused and open in the drawer. */
+export async function openNode(page: Page, name: string): Promise<void> {
+  await page.goto("/memory");
+  await expect(page.getByTestId("memory-status")).toContainText(/Revision \d+/, { timeout: 60_000 });
+  await page.getByTestId("memory-search").fill(name);
+  await page.getByTestId("memory-results").getByText(name).first().click();
+  await expect(page.getByTestId("node-drawer")).toBeVisible();
 }

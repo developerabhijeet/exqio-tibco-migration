@@ -45,6 +45,10 @@ export default defineConfig({
         // Offline and deterministic: fastembed would try to download its model on first use.
         EMBEDDINGS_BACKEND: process.env.EMBEDDINGS_BACKEND ?? "hash",
         DATABASE_URL: process.env.DATABASE_URL ?? "postgresql+asyncpg://exiqo:exiqo@localhost:5432/exiqo",
+        // The memory graph (`make neo4j`): the scan and every phase are ingested into it, and the
+        // /memory explorer reads it.
+        NEO4J_URI: process.env.NEO4J_URI ?? "bolt://localhost:7687",
+        NEO4J_PASSWORD: process.env.NEO4J_PASSWORD ?? "exiqo-dev-neo4j",
         // The browser calls the API directly: allow this run's web origin.
         CORS_ORIGINS: process.env.CORS_ORIGINS ?? `http://localhost:${webPort}`,
         // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),

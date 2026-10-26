@@ -26,6 +26,9 @@ const config: Config = {
         gate: { DEFAULT: "#1E7B3C", bg: "#E2F3E6" },
         decision: { DEFAULT: "#9A5E0A", bg: "#FBF0DF" },
         error: { DEFAULT: "#A33A32", bg: "#F9E5E3" },
+        // The memory explorer's three node groups: old code plum, new code teal, knowledge amber.
+        teal: { DEFAULT: "#0F766E", lt: "#DDF2EF", dk: "#0B5A54" },
+        amber: { DEFAULT: "#B45309", lt: "#FCEFD9", dk: "#8A3F06" },
       },
       fontFamily: {
         // Inter for everything read as content; Poppins only where the brand speaks (see layout.tsx).

@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardCheck, Coins, Headphones, History, Settings } from "lucide-react";
+import { ClipboardCheck, Coins, Headphones, History, Network, Settings } from "lucide-react";
 import { useBrand } from "@/lib/brand";
 import { useStepStates } from "@/lib/steps";
 import { ProjectSelector } from "./ProjectSelector";
@@ -12,6 +12,7 @@ import { UserMenu } from "./UserMenu";
 const LINKS = [
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/history", label: "History", icon: History },
+  { href: "/memory", label: "Memory", icon: Network },
   { href: "/tokenomics", label: "Tokenomics", icon: Coins },
   { href: "/readiness", label: "Readiness", icon: ClipboardCheck },
   { href: "/help", label: "Help & Support", icon: Headphones },
@@ -48,12 +49,12 @@ export function TopBar() {
         <div className="h-8 w-px bg-white/15" />
         <ProjectSelector />
         <PhasePill />
-        <nav className="ml-auto flex items-center gap-1" aria-label="Secondary">
+        <nav className="ml-auto flex items-center gap-0.5" aria-label="Secondary">
           {LINKS.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
-              className={`flex items-center gap-1.5 rounded-btn px-3 py-1.5 text-[13.5px] font-medium transition-colors ${
+              className={`flex items-center gap-1.5 whitespace-nowrap rounded-btn px-2.5 py-1.5 text-[13.5px] font-medium transition-colors ${
                 path === href || path.startsWith(`${href}/`) ? "bg-white/15 text-white shadow-inset" : "text-lilac hover:bg-white/10 hover:text-white"
               }`}
             >

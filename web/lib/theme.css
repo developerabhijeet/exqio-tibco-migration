@@ -26,6 +26,10 @@
   --decision-bg: #fbf0df;
   --error: #a33a32;
   --error-bg: #f9e5e3;
+  --teal: #0f766e;
+  --teal-lt: #ddf2ef;
+  --amber: #b45309;
+  --amber-lt: #fcefd9;
   --highlight: #fff2b8;
   --highlight-strong: #ffe27a;
   --shadow-card: 0 1px 2px rgba(32, 6, 59, 0.04), 0 1px 3px rgba(32, 6, 59, 0.05);

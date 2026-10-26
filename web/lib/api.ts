@@ -148,7 +148,8 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   return res;
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
+/** A GET (or the given request) read as JSON; the base of every typed call, here and in lib/memory.ts. */
+export async function json<T>(path: string, init?: RequestInit): Promise<T> {
   return (await request(path, init)).json() as Promise<T>;
 }
 
