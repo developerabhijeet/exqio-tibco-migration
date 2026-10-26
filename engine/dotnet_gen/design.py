@@ -499,7 +499,10 @@ def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap])
 
 # --------------------------------------------------------------------- build
 def _spec_hash(process: Process, rules: list[Rule], findings: list[Finding]) -> str:
-    approved = [r.model_dump(mode="json") for r in rules if r.status in ("approved", "edited")]
+    # ``source`` (sub-project 6) only enters the hash when set, so a rule from before iterations
+    # keeps the spec hash it had.
+    approved = [r.model_dump(mode="json", exclude={"source"} if r.source is None else None)
+                for r in rules if r.status in ("approved", "edited")]
     decisions = [{"id": f.id, "decision": f.decision, "note": f.note} for f in findings]
     return compute_spec_hash(process.model_dump(mode="json"), approved, decisions)
 

@@ -82,8 +82,8 @@ def recording_provider(monkeypatch):
 def provider_proposing_one_rule(monkeypatch):
     original = fake_responses.designer_reply
 
-    def designer_reply(process):
-        return {**original(process), "proposed_rules": [
+    def designer_reply(process, user=""):
+        return {**original(process, user), "proposed_rules": [
             {"text": "Reject a funding request from a dealer on the watch list.",
              "rationale": "Iteration 2 requirement: reject dealers on watch list."}]}
 

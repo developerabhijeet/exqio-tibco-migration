@@ -239,9 +239,10 @@ def test_alembic_has_one_head_and_it_is_the_stacks_revision():
     cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
     script = ScriptDirectory.from_config(cfg)
-    # X25: one head; the ExiQoian chat migration (0013) rides on the stacks revision until SP6's
-    # 0012_iterations lands between them.
-    assert script.get_heads() == ["0013"]
+    # X25a: one head; SP3's chat migration (0013) sits on the stacks revision and SP6's
+    # iterations (0014) on it.
+    assert script.get_heads() == ["0014_iterations"]
+    assert script.get_revision("0014_iterations").down_revision == "0013"
     assert script.get_revision("0013").down_revision == "0011_target_stack"
     assert script.get_revision("0011_target_stack").down_revision == "0010"
 

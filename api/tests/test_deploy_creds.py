@@ -259,7 +259,7 @@ async def test_plan_payload_and_events_hold_no_secret(wi_settings, app, client, 
     job_id, plan_id = r.json()["job_id"], r.json()["plan_id"]
     job = await wait_terminal(app, job_id, timeout=30)
     assert job.status == "done", job.error
-    assert job.payload == {"build_id": build_id, "plan_id": plan_id, "environment": "test"}
+    assert job.payload == {"build_id": build_id, "plan_id": plan_id, "environment": "test", "iteration": 1}
     dump = await _job_dump(app, job_id, plan_id)
     assert "s3cr3t" not in dump
     assert "1 to add" in dump  # the plan output is stored, redacted

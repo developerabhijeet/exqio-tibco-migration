@@ -220,7 +220,7 @@ async def test_push_leaves_out_the_build_stacks_output(client, app, fake_github,
     fake_github.add_repo("gmf/credit")
     out = await wait_terminal(client, (await client.post(f"/builds/{build_id}/github/push",
                                                          json={"repo": "gmf/credit"}, headers=engineer)).json()["job_id"])
-    assert set(fake_github.branch_files("gmf/credit", out["branch"])) == shipped | {"EXPORTED_FROM.md"}
+    assert set(fake_github.branch_files("gmf/credit", out["branch"])) == shipped | {"EXPORTED_FROM.md", "EXIQO_BASELINE.json"}
 
 
 async def test_second_push_reuses_the_open_pr(client, app, fake_github, pushed_once, engineer, wait_terminal):
