@@ -200,6 +200,21 @@ nuget-cache:
 	rm -rf $(NUGET_WORK)
 	@echo "Offline NuGet feed ready in $(NUGET_CACHE) ($$(ls $(NUGET_CACHE) | wc -l) packages)."
 
+# Target-stack dependency locks, refreshed on a machine that reaches GMF's mirrors. Python: the
+# requirements of engine/stacks/python/versions.py with every hash, for every platform, from
+# UV_INDEX_URL (the lock names no index; builds install it with --require-hashes).
+.PHONY: stack-locks stack-locks-python
+UV ?= uv
+stack-locks: stack-locks-python
+
+stack-locks-python:
+	@test -n "$(UV_INDEX_URL)" || { echo "stack-locks-python: set UV_INDEX_URL to GMF's PyPI mirror (.../simple)"; exit 1; }
+	mkdir -p .tools && $(PY) -m engine.stacks.python.versions > .tools/python-requirements.in
+	$(UV) pip compile .tools/python-requirements.in --generate-hashes --universal --python-version 3.12 \
+		--index-url "$(UV_INDEX_URL)" --no-emit-index-url --no-annotate --custom-compile-command "make stack-locks" \
+		-o engine/stacks/python/requirements.lock
+	rm -f .tools/python-requirements.in
+
 # ---------------------------------------------------------------- container images (deploy/docker)
 # `make images` builds both images for this machine's architecture; the pipelines (deploy/pipelines)
 # build linux/amd64 for AKS with GMF's mirrored base images (BASE_IMAGE_* build args) and push by

@@ -1,0 +1,66 @@
+"""HTTP helpers of the starter routes: request parameters typed like the TIBCO REST declaration, JSON
+bodies, and the reply of a process run as a response."""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from fastapi import Request
+from fastapi.responses import Response
+
+from {{ pkg }}.core import tib
+from {{ pkg }}.core.tib import ProcessResult
+
+PROBLEM = "application/problem+json"
+
+
+class BadRequest(ValueError):
+    """A request the route refuses with 400 problem+json."""
+
+
+def problem_response(status: int, body: object) -> Response:
+    return Response(content=tib.dumps(body), status_code=status, media_type=PROBLEM)
+
+
+def bad_request(detail: str) -> Response:
+    return problem_response(400, tib.problem(400, "Bad Request", detail))
+
+
+def parameter(raw: str | None, kind: str, name: str, required: bool) -> Any:
+    """A path, query or header parameter as its declared type: string, integer, long, number
+    (Decimal) or boolean; None when it is absent and optional."""
+    if raw is None:
+        if required:
+            raise BadRequest(f"required parameter '{name}' is not present")
+        return None
+    if kind in ("integer", "int", "long"):
+        try:
+            return int(raw.strip())
+        except ValueError as ex:
+            raise BadRequest(f"parameter '{name}' is not an integer: {raw!r}") from ex
+    if kind in ("number", "decimal"):
+        try:
+            return Decimal(raw.strip())
+        except InvalidOperation as ex:
+            raise BadRequest(f"parameter '{name}' is not a number: {raw!r}") from ex
+    if kind in ("boolean", "bool"):
+        if raw.strip().lower() not in ("true", "false"):
+            raise BadRequest(f"parameter '{name}' is not a boolean: {raw!r}")
+        return raw.strip().lower() == "true"
+    return raw
+
+
+async def json_body(request: Request) -> Any:
+    """The request body as JSON (None when empty); BadRequest when it is not JSON."""
+    try:
+        return tib.loads(await request.body())
+    except ValueError as ex:
+        raise BadRequest(str(ex)) from ex
+
+
+def reply(result: ProcessResult) -> Response:
+    """The run's reply: its status, and its body as JSON when it has one."""
+    if result.body is None:
+        return Response(status_code=result.status_code)
+    return Response(content=tib.dumps(result.body), status_code=result.status_code, media_type="application/json")

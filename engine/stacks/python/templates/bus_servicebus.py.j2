@@ -1,0 +1,129 @@
+"""Azure Service Bus (MESSAGING_MODE=ServiceBus), reached at
+MESSAGING_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE with DefaultAzureCredential (the workload's managed
+identity; no connection strings). The synchronous client runs in worker threads. A handler's
+dead-letter outcome dead-letters the message with its reason; an exception abandons it so Service
+Bus redelivers it."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+import time
+import uuid
+from collections.abc import Callable
+from typing import Any
+
+from {{ pkg }}.core import tib
+from {{ pkg }}.core.bus import (
+    CORRELATION_ID,
+    DEAD_LETTER,
+    ENQUEUED_TIME,
+    MESSAGE_ID,
+    REPLY_TO,
+    Handler,
+    Message,
+    MessageBus,
+)
+
+LOG = logging.getLogger(__name__)
+
+# The entities the design names as topics; every other entity is a queue.
+TOPICS: frozenset[str] = frozenset({ {% for t in topics %}{{ t | py_string }}{{ ", " if not loop.last else "" }}{% endfor %} })
+
+
+class ServiceBusMessageBus(MessageBus):
+    def __init__(self, namespace: str) -> None:
+        from azure.identity import DefaultAzureCredential
+        from azure.servicebus import ServiceBusClient
+
+        self._client = ServiceBusClient(namespace, DefaultAzureCredential())
+        self._lock = threading.Lock()
+        self._stops: list[threading.Event] = []
+
+    def _send(self, entity: str, message: Any, properties: dict[str, str]) -> None:
+        from azure.servicebus import ServiceBusMessage
+
+        out = ServiceBusMessage(tib.dumps(message, drop_nulls=True), content_type="application/json",
+                                application_properties=dict(properties),
+                                correlation_id=properties.get(CORRELATION_ID), reply_to=properties.get(REPLY_TO))
+        with self._lock:
+            sender = (self._client.get_topic_sender(entity) if entity in TOPICS
+                      else self._client.get_queue_sender(entity))
+        with sender:
+            sender.send_messages(out)
+
+    async def publish(self, entity: str, message: Any, properties: dict[str, str] | None = None) -> None:
+        await asyncio.to_thread(self._send, entity, message, dict(properties or {}))
+
+    @staticmethod
+    def _received(entity: str, message: Any) -> Message:
+        properties = {(k.decode() if isinstance(k, bytes) else str(k)): (v.decode() if isinstance(v, bytes) else str(v))
+                      for k, v in (message.application_properties or {}).items()}
+        if message.correlation_id:
+            properties.setdefault(CORRELATION_ID, message.correlation_id)
+        if message.reply_to:
+            properties.setdefault(REPLY_TO, message.reply_to)
+        if message.message_id:
+            properties.setdefault(MESSAGE_ID, str(message.message_id))
+        if message.enqueued_time_utc:
+            properties.setdefault(ENQUEUED_TIME, tib.of(message.enqueued_time_utc))
+        return Message(entity, str(message), properties)
+
+    def subscribe(self, entity: str, handler: Handler) -> Callable[[], None]:
+        loop = asyncio.get_running_loop()
+        stop = threading.Event()
+        self._stops.append(stop)
+        topic, _, subscription = entity.partition("/")
+
+        def receive() -> None:
+            receiver = (self._client.get_subscription_receiver(topic, subscription) if subscription
+                        else self._client.get_queue_receiver(entity))
+            with receiver:
+                while not stop.is_set():
+                    for msg in receiver.receive_messages(max_message_count=10, max_wait_time=5):
+                        try:
+                            outcome = asyncio.run_coroutine_threadsafe(handler(self._received(entity, msg)),
+                                                                       loop).result()
+                        except Exception as ex:
+                            LOG.warning("message on %s abandoned: %s", entity, type(ex).__name__)
+                            receiver.abandon_message(msg)
+                            continue
+                        if outcome.disposition == DEAD_LETTER:
+                            receiver.dead_letter_message(msg, reason=outcome.reason,
+                                                         error_description=outcome.description)
+                        else:
+                            receiver.complete_message(msg)
+
+        threading.Thread(target=receive, name=f"servicebus-{entity}", daemon=True).start()
+        return stop.set
+
+    async def request(self, entity: str, message: Any, timeout_s: float) -> Message:
+        correlation = uuid.uuid4().hex
+        reply_to = f"{entity}.reply"
+        await self.publish(entity, message, {REPLY_TO: reply_to, CORRELATION_ID: correlation})
+
+        def wait() -> Message:
+            deadline = time.monotonic() + timeout_s
+            with self._client.get_queue_receiver(reply_to) as receiver:
+                while (left := deadline - time.monotonic()) > 0:
+                    for msg in receiver.receive_messages(max_message_count=10, max_wait_time=left):
+                        if msg.correlation_id == correlation:
+                            receiver.complete_message(msg)
+                            return self._received(reply_to, msg)
+                        receiver.abandon_message(msg)
+            raise RuntimeError(f"no reply on {reply_to} within {timeout_s}s")
+
+        return await asyncio.to_thread(wait)
+
+    async def reply(self, request: Message, message: Any) -> None:
+        reply_to = request.properties.get(REPLY_TO)
+        if reply_to is None:
+            raise RuntimeError(f"message on {request.entity} has no {REPLY_TO} property")
+        correlation = request.properties.get(CORRELATION_ID)
+        await self.publish(reply_to, message, {CORRELATION_ID: correlation} if correlation else {})
+
+    async def close(self) -> None:
+        for stop in self._stops:
+            stop.set()
+        await asyncio.to_thread(self._client.close)

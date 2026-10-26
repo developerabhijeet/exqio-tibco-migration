@@ -1,0 +1,105 @@
+"""The XPath functions the generator translates, over ``tib`` values and with XPath 1.0 semantics
+(1-based positions with rounding, code points, the empty string for nothing). Each returns a JSON
+value so calls nest like the TIBCO expression they come from."""
+
+from __future__ import annotations
+
+import datetime as _dt
+import math
+import re
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import Any
+
+from {{ pkg }}.core import tib
+
+
+def concat(*parts: Any) -> str:
+    return "".join(tib.text(p) for p in parts)
+
+
+def string(value: Any) -> str:
+    return tib.text(value)
+
+
+def number(value: Any) -> Decimal | None:
+    return tib.number(value)
+
+
+def upper_case(value: Any) -> str:
+    return tib.text(value).upper()
+
+
+def lower_case(value: Any) -> str:
+    return tib.text(value).lower()
+
+
+def normalize_space(value: Any) -> str:
+    return re.sub(r"\s+", " ", tib.text(value).strip())
+
+
+def string_length(value: Any) -> int:
+    return len(tib.text(value))
+
+
+def substring(value: Any, start: Any, length: Any = None) -> str:
+    """XPath substring: the characters at positions p with round(start) <= p < round(start) + round(length)."""
+    chars = tib.text(value)
+    first = tib.number(start)
+    size = None if length is None else tib.number(length)
+    if first is None or (length is not None and size is None):
+        return ""
+    begin = _round(first)
+    end = None if size is None else begin + _round(size)
+    return "".join(c for i, c in enumerate(chars, 1) if i >= begin and (end is None or i < end))
+
+
+def substring_before(value: Any, separator: Any) -> str:
+    s, sep = tib.text(value), tib.text(separator)
+    at = s.find(sep)
+    return "" if not sep or at < 0 else s[:at]
+
+
+def substring_after(value: Any, separator: Any) -> str:
+    s, sep = tib.text(value), tib.text(separator)
+    at = s.find(sep)
+    return "" if at < 0 else s[at + len(sep):]
+
+
+def translate(value: Any, source: Any, target: Any) -> str:
+    src, dst = tib.text(source), tib.text(target)
+    out = []
+    for c in tib.text(value):
+        at = src.find(c)
+        if at < 0:
+            out.append(c)
+        elif at < len(dst):
+            out.append(dst[at])
+    return "".join(out)
+
+
+def round_(value: Any) -> Decimal | None:
+    n = tib.number(value)
+    return None if n is None else _round(n)
+
+
+def floor(value: Any) -> Decimal | None:
+    n = tib.number(value)
+    return None if n is None else n.to_integral_value(rounding=ROUND_FLOOR)
+
+
+def ceiling(value: Any) -> Decimal | None:
+    n = tib.number(value)
+    return None if n is None else n.to_integral_value(rounding=ROUND_CEILING)
+
+
+def current_date_time() -> str:
+    return tib.date_time(_dt.datetime.now(_dt.UTC).astimezone())
+
+
+def current_date() -> str:
+    return _dt.date.today().isoformat()
+
+
+def _round(n: Decimal) -> Decimal:
+    """XPath round: half way rounds towards positive infinity."""
+    return Decimal(math.floor(n + Decimal("0.5")))

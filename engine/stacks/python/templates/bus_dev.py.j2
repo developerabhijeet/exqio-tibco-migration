@@ -1,0 +1,60 @@
+"""Development only, with the in-memory bus: drive JMS-started processes and read what they
+published (POST /_bus/publish, GET /_bus/messages, GET /_bus/dead-letters)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+
+from {{ pkg }}.core import masking, tib
+from {{ pkg }}.core.bus import DEAD_LETTER, Message
+from {{ pkg }}.infrastructure.bus_memory import InMemoryMessageBus
+
+router = APIRouter()
+
+
+def _bus(request: Request) -> InMemoryMessageBus:
+    return request.app.state.bus
+
+
+def _message(m: Message) -> dict[str, Any]:
+    return {"entity": m.entity, "body": m.body, "properties": dict(m.properties)}
+
+
+@router.post("/_bus/publish")
+async def publish(request: Request) -> dict[str, Any]:
+    """Delivers ``{"entity", "payload", "properties"}``; the disposition is completed, dead_lettered
+    or abandoned, and messages_published counts the messages the run published."""
+    try:
+        body = tib.loads(await request.body()) or {}
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+    bus = _bus(request)
+    entity = str(body.get("entity") or "")
+    properties = {str(k): str(v) for k, v in (body.get("properties") or {}).items()}
+    before = len(bus.published) + 1  # the delivered message is recorded too
+    try:
+        outcomes = await bus.deliver(Message(entity, tib.dumps(body.get("payload")), properties))
+    except Exception as ex:  # a transient failure: Service Bus would abandon the message and redeliver it
+        return {"disposition": "abandoned", "reason": type(ex).__name__, "description": masking.mask_text(str(ex)),
+                "messages_published": len(bus.published) - before}
+    count = len(bus.published) - before
+    for outcome in outcomes:
+        if outcome.disposition == DEAD_LETTER:
+            return {"disposition": "dead_lettered", "reason": outcome.reason, "description": outcome.description,
+                    "messages_published": count}
+    reason = f"no consumer subscribed to {entity}" if not outcomes else None
+    return {"disposition": "completed", "reason": reason, "description": None, "messages_published": count}
+
+
+@router.get("/_bus/messages")
+async def messages(request: Request, entity: str | None = None) -> list[dict[str, Any]]:
+    bus = _bus(request)
+    return [_message(m) for m in bus.published if entity is None or m.entity == entity]
+
+
+@router.get("/_bus/dead-letters")
+async def dead_letters(request: Request) -> list[dict[str, Any]]:
+    return [{"message": _message(d.message), "reason": d.reason, "description": d.description}
+            for d in _bus(request).dead_lettered]

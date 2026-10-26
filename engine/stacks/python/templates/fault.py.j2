@@ -1,0 +1,20 @@
+"""Maps an uncaught TIBCO fault to application/problem+json (status 500, as an uncaught BW fault fails
+the job): the fault name is the title and the fault data, with its sensitive fields masked, is the
+"fault" member."""
+
+from __future__ import annotations
+
+from fastapi import Request
+from fastapi.responses import Response
+
+from {{ pkg }}.api.http import problem_response
+from {{ pkg }}.core import masking, tib
+from {{ pkg }}.core.exceptions import ProcessFault
+
+
+async def fault_handler(request: Request, fault: Exception) -> Response:
+    if not isinstance(fault, ProcessFault):  # registered for ProcessFault only
+        raise fault
+    body = tib.problem(500, fault.fault_name, masking.mask_text(str(fault)))
+    body["fault"] = masking.mask_json(fault.fault_data)
+    return problem_response(500, body)

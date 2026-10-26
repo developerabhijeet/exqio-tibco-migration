@@ -18,7 +18,6 @@ __all__ = ["STACK_KEYS", "StackKey", "all_stacks", "get_stack", "stack_status"]
 # registers in ``_FACTORIES``.
 _PENDING: dict[str, tuple[str, tuple[str, ...]]] = {
     "go": ("Go 1.25 · net/http · pgx", ("go",)),
-    "python": ("Python 3.12 · FastAPI · uv", ("python3", "uv")),
 }
 
 
@@ -32,8 +31,13 @@ def _java() -> StackGenerator:
     return JavaStack()
 
 
-# Implemented stacks, in STACK_KEYS order; Tasks 12 and 14 register go and python.
-_FACTORIES: dict[str, Callable[[], StackGenerator]] = {"dotnet": _dotnet, "java": _java}
+def _python() -> StackGenerator:
+    from engine.stacks.python import PythonStack
+    return PythonStack()
+
+
+# Implemented stacks, in STACK_KEYS order; Task 12 registers go.
+_FACTORIES: dict[str, Callable[[], StackGenerator]] = {"dotnet": _dotnet, "java": _java, "python": _python}
 _INSTANCES: dict[str, StackGenerator] = {}
 
 

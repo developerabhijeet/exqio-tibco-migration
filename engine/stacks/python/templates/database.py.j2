@@ -1,0 +1,79 @@
+"""Connections per TIBCO JDBC resource, from its connection string (CONNECTION_STRINGS_<RESOURCE>,
+ConnectionStrings__<Resource> in the environment), on psycopg 3. The string is the runtime contract's
+Npgsql form (Host=..;Port=..;Database=..;Username=..;Password=..), a jdbc:postgresql: URL, or a
+postgresql:// URL. Every statement runs in autocommit, as a TIBCO JDBC activity without a
+transaction group does."""
+
+from __future__ import annotations
+
+import urllib.parse
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+
+from {{ pkg }}.config import Settings
+
+
+def conninfo(value: str) -> str:
+    """A libpq connection string or URL for any of the three forms."""
+    value = value.strip()
+    if value.startswith("jdbc:"):
+        url = urllib.parse.urlsplit(value[len("jdbc:"):])
+        query = dict(urllib.parse.parse_qsl(url.query))
+        parts = {"host": url.hostname or "localhost", "port": str(url.port or 5432), "dbname": url.path.lstrip("/")}
+        if "user" in query:
+            parts["user"] = query["user"]
+        if "password" in query:
+            parts["password"] = query["password"]
+        return psycopg.conninfo.make_conninfo(**parts)
+    if value.startswith(("postgresql://", "postgres://")):
+        return value
+    pairs: dict[str, str] = {}
+    for item in value.split(";"):
+        key, eq, val = item.partition("=")
+        if eq:
+            pairs[key.strip().lower()] = val.strip()
+    parts = {"host": pairs.get("host", pairs.get("server", "localhost")), "port": pairs.get("port", "5432"),
+             "dbname": pairs.get("database", "")}
+    user = pairs.get("username", pairs.get("user id"))
+    if user:
+        parts["user"] = user
+    if "password" in pairs:
+        parts["password"] = pairs["password"]
+    return psycopg.conninfo.make_conninfo(**parts)
+
+
+class Database:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    @asynccontextmanager
+    async def connect(self, name: str, key: str, timeout_s: int = 0) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
+        """A connection to the resource ``name`` (its setting ``key``) with the TIBCO activity's
+        timeout in seconds (0: none); rows come back as dicts."""
+        value = self.settings.text(key)
+        if not value:
+            raise RuntimeError(f"connection string ConnectionStrings__{name} ({key}) is not set")
+        extra = {"options": f"-c statement_timeout={timeout_s * 1000}"} if timeout_s > 0 else {}
+        connection = await psycopg.AsyncConnection.connect(conninfo(value), autocommit=True, row_factory=dict_row,
+                                                           **extra)
+        try:
+            yield connection
+        finally:
+            await connection.close()
+
+    async def query(self, name: str, key: str, sql: str, params: list[Any], timeout_s: int = 0,
+                    max_rows: int = 0) -> list[dict[str, Any]]:
+        """The rows of a query; at most ``max_rows`` when it is set (TIBCO maxRows)."""
+        async with self.connect(name, key, timeout_s) as connection:
+            cursor = await connection.execute(sql, params)
+            return await (cursor.fetchmany(max_rows) if max_rows > 0 else cursor.fetchall())
+
+    async def update(self, name: str, key: str, sql: str, params: list[Any], timeout_s: int = 0) -> int:
+        """The number of rows a statement changed."""
+        async with self.connect(name, key, timeout_s) as connection:
+            cursor = await connection.execute(sql, params)
+            return max(cursor.rowcount, 0)

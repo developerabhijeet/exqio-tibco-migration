@@ -1,0 +1,32 @@
+"""Development JWTs (AUTH_MODE=Development in development only): HMAC-SHA256 signed with
+AUTH_DEV_TOKEN_SIGNING_KEY. Production validates Microsoft Entra ID tokens (``auth``)."""
+
+from __future__ import annotations
+
+import datetime as _dt
+from typing import Any
+
+import jwt
+from fastapi import APIRouter, Request
+
+from {{ pkg }}.api.auth import dev_token_settings
+from {{ pkg }}.core import tib
+
+router = APIRouter()
+
+
+@router.post("/auth/dev-token")
+async def issue(request: Request) -> dict[str, Any]:
+    """Development only: a signed JWT for the API docs and the verifier (body ``{"subject"}``)."""
+    try:
+        body = tib.loads(await request.body())
+    except ValueError:
+        body = None
+    subject = str(tib.path(body, "subject") or "").strip() or "exiqo-verifier"
+    settings = dev_token_settings(request.app.state.settings)
+    now = _dt.datetime.now(_dt.UTC)
+    expires = now + _dt.timedelta(hours=8)
+    claims = {"iss": settings.issuer, "aud": [settings.audience], "sub": subject, "name": subject,
+              "iat": int(now.timestamp()), "exp": int(expires.timestamp())}
+    token = jwt.encode(claims, settings.key, algorithm="HS256")
+    return {"access_token": token, "token_type": "Bearer", "expires_at": tib.date_time(expires)}
