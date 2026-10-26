@@ -24,6 +24,11 @@ ROLE_CHANGE = re.compile(
     r"|\bfrom\s+now\s+on,?\s+you\b"
     r"|\bnew\s+persona\b|\bdeveloper\s+mode\b|\bdan\s+(?:mode|prompt|jailbreak)\b|\b(?:act|behave|respond|reply)\s+(?:like|as)\s+dan\b|\byou(?:'re|\s+are)\s+dan\b|^\s*dan\s*[.!?]*\s*$|\bdo\s+anything\s+now\b|\bjail\s*break")
 
+# The role/turn forgery part of ROLE_CHANGE: no "act as", which migration answers use in prose.
+ROLE_FORGERY = re.compile(
+    ROLE_CHANGE.pattern.replace(
+        r"|(?:^|[.!?;:\n]\s*|\b(?:please|now|you|just|and|then|to)\s+)act\s+as\b", ""))
+
 PROMPT_EXFILTRATION = re.compile(
     r"\b(?:show|print|reveal|repeat|output|display|tell|give|leak|dump)\s+(?:me\s+)?(?:your|the)\s+"
     r"(?:system|hidden|initial|original|secret)\s+(?:prompt|instructions?|rules)\b"
@@ -68,6 +73,18 @@ INJECTION_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("delimiter_forgery", DELIMITER_FORGERY),
     ("tool_coercion", TOOL_COERCION),
     ("encoded_payload", ENCODED_PAYLOAD),
+    ("multilingual_override", MULTILINGUAL_OVERRIDE),
+    ("obfuscated_override", OVERRIDE),
+)
+
+# The families that mark a hijacked ANSWER (X22a): override, role/turn forgery, prompt leaks and
+# forged delimiters. Not tool_coercion, "act as" or encoded payloads: answers legitimately
+# describe processes that execute commands, call curl or carry hashes.
+OUTPUT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("override", OVERRIDE),
+    ("role_change", ROLE_FORGERY),
+    ("prompt_exfiltration", PROMPT_EXFILTRATION),
+    ("delimiter_forgery", DELIMITER_FORGERY),
     ("multilingual_override", MULTILINGUAL_OVERRIDE),
     ("obfuscated_override", OVERRIDE),
 )

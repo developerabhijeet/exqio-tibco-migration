@@ -6,7 +6,7 @@ import unicodedata
 from pydantic import BaseModel
 
 from engine.exiqoian.lexicon import OFF_DOMAIN_PHRASES, OFF_DOMAIN_SINGLE, split_identifier, tokens
-from engine.exiqoian.patterns import INJECTION_RULES, LEET, OVERRIDE_COMPACT
+from engine.exiqoian.patterns import INJECTION_RULES, LEET, OUTPUT_RULES, OVERRIDE_COMPACT
 from engine.exiqoian.replies import Verdict
 from engine.memory.search import query_terms
 
@@ -78,10 +78,10 @@ def _join_base64_lines(n: str) -> str:
     return "\n".join(out)
 
 
-def detect_injection(text: str) -> str | None:
+def detect_injection(text: str, rules: tuple[tuple[str, re.Pattern[str]], ...] = INJECTION_RULES) -> str | None:
     """Name of the first matching injection rule for ``text`` (normalised here), else None."""
     n = normalise(text)
-    for name, pattern in INJECTION_RULES:
+    for name, pattern in rules:
         if name == "obfuscated_override":
             d, joined = _deobfuscate(n)
             if d != n and pattern.search(d):
@@ -95,6 +95,11 @@ def detect_injection(text: str) -> str | None:
         elif pattern.search(n):
             return name
     return None
+
+
+def detect_output_injection(text: str) -> str | None:
+    """The hijack families only (``OUTPUT_RULES``), for the text of a model answer."""
+    return detect_injection(text, OUTPUT_RULES)
 
 
 _GREETING = re.compile(

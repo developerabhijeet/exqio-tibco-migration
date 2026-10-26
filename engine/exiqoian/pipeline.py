@@ -16,7 +16,7 @@ from engine.agents.provider import ProviderError, mask_sensitive
 from engine.agents.routing import RoutedProvider
 from engine.citations.model import CitedText, CiteRef
 from engine.citations.spans import from_markers, sentence_bounds
-from engine.exiqoian.guard import check, detect_injection, normalise
+from engine.exiqoian.guard import check, detect_output_injection, normalise
 from engine.exiqoian.personas import PersonaKey
 from engine.exiqoian.replies import REPLY_FOR, Verdict
 from engine.exiqoian.sources import (
@@ -89,29 +89,39 @@ def compose_without_model(sources: list[Source]) -> str:
     return COMPOSER_INTRO + "\n" + "\n".join(lines) if lines else ""
 
 
+_PREV_ENDS_WITH_MARKER = re.compile(r"\]\s*[.!?]+\s*$")
+
+
+def _leads(answer: str, start: int) -> bool:
+    """A marker leads its text when only a bullet, number or punctuation stands before it on its
+    line, or when the sentence before it already ends with its own marker. Anywhere else it
+    trails the sentence before it (`Fact one. [S1] Fact two. [S2]` cites each sentence)."""
+    prefix = answer[answer.rfind("\n", 0, start) + 1:start]
+    return bool(_BODYLESS.match(prefix) or _PREV_ENDS_WITH_MARKER.search(prefix))
+
+
 def _trailing_markers(answer: str) -> str:
-    """A marker that leads its sentence or list item (`[S1] Text.`, `- [S2] Text.`, a marker on
-    its own line before the claim) cites nothing as written: move it to the end of that sentence,
-    before the closing punctuation. Repeats until no marker leads."""
+    """Move a marker that leads its sentence or list item (`[S1] Text.`, `- [S2] Text.`) to the end
+    of that sentence, before the closing punctuation. A marker with no text after it stays where
+    it is (it cites what precedes it, or nothing)."""
+    pos_from = 0
     for _ in range(100):
         moved = False
-        for m in _MARKER_GROUP.finditer(answer):
+        for m in _MARKER_GROUP.finditer(answer, pos_from):
             start = m.start() + len(m.group()) - len(m.group().lstrip())  # the spaces before it stay
-            bounds = sentence_bounds(answer)
-            sentence = next(((a, b) for a, b in bounds if a <= start < b), None)
-            if sentence is None or not _BODYLESS.match(answer[sentence[0]:start]):
+            if not _leads(answer, start):
                 continue
-            group = m.group().strip()
             rest = answer[:start] + answer[m.end():]
-            pos = start
-            body = next(((a, b) for a, b in sentence_bounds(rest) if a <= pos < b), None)
-            if body is None:  # nothing follows the marker: drop it
-                answer = rest
-            else:
-                end = body[1]
-                while end > pos and rest[end - 1] in ".!?":
-                    end -= 1
-                answer = rest[:end] + " " + group + rest[end:]
+            body = next(((a, b) for a, b in sentence_bounds(rest) if a <= start < b), None)
+            if body is None:
+                continue
+            end = body[1]
+            while end > start and rest[end - 1] in ".!?":
+                end -= 1
+            if end <= start:
+                continue
+            answer = rest[:end] + " " + m.group().strip() + rest[end:]
+            pos_from = start
             moved = True
             break
         if not moved:
@@ -130,7 +140,7 @@ def validate_answer(answer: str, sources: list[Source], canary: str,
     cited, _dropped = from_markers(_trailing_markers(mask_sensitive(answer)), {s.marker: s.ref for s in sources})
     if not cited.refs:
         return "not_covered", CitedText.plain(REPLY_FOR["not_covered"]), "uncited"
-    if detect_injection(cited.text) is not None:
+    if detect_output_injection(cited.text) is not None:
         return "injection", CitedText.plain(REPLY_FOR["injection"]), "output_leak"
     return "answer", cited, None
 
