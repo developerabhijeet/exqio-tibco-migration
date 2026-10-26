@@ -23,6 +23,18 @@ export interface ScanState {
   error: string | null;
 }
 
+export interface BuildFileRequest {
+  path: string;
+  line: number | null;
+  /** The API process the file belongs to; null for whichever process Build shows. */
+  processId: string | null;
+  /** When it was asked for (Date.now()), so a late or repeated request is told apart. */
+  at: number;
+}
+
+/** How long a file request waits for Build to open it before it is dropped. */
+export const BUILD_FILE_TTL_MS = 10_000;
+
 interface AppState {
   /** dev or oidc, and in oidc the signed-in user; "unknown" until /auth/me has answered. */
   auth: AuthState;
@@ -46,9 +58,12 @@ interface AppState {
   /** Open a step on the canvas with its XML lines, remembering the step to come back to. */
   jumpToStep: (activityId: string, processId?: string | null) => void;
   returnTo: StepKey | null;
-  /** A generated file asked for (by a citation, say), opened by Build's source and target explorer. */
-  buildFile: { path: string; line: number | null } | null;
-  openBuildFile: (path: string | null, line?: number | null) => void;
+  /**
+   * A generated file asked for (by a citation, say), opened by Build's source and target explorer
+   * of that process. Dropped when the step leaves Build or after BUILD_FILE_TTL_MS unanswered.
+   */
+  buildFile: BuildFileRequest | null;
+  openBuildFile: (path: string | null, line?: number | null, processId?: string | null) => void;
   askOpen: boolean;
   setAskOpen: (open: boolean) => void;
 }
@@ -83,10 +98,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("Config");
   const [returnTo, setReturnTo] = useState<StepKey | null>(null);
   const [askOpen, setAskOpen] = useState(false);
-  const [buildFile, setBuildFile] = useState<{ path: string; line: number | null } | null>(null);
-  const openBuildFile = useCallback((path: string | null, line?: number | null) => {
-    setBuildFile(path ? { path, line: line ?? null } : null);
+  const [buildFile, setBuildFile] = useState<BuildFileRequest | null>(null);
+  const openBuildFile = useCallback((path: string | null, line?: number | null, pid?: string | null) => {
+    setBuildFile(path ? { path, line: line ?? null, processId: pid ?? null, at: Date.now() } : null);
   }, []);
+  // A file request only stands while Build is open, and not forever even then.
+  useEffect(() => {
+    if (!buildFile) return;
+    if (step !== "build") {
+      setBuildFile(null);
+      return;
+    }
+    const t = setTimeout(() => setBuildFile((b) => (b === buildFile ? null : b)), BUILD_FILE_TTL_MS);
+    return () => clearTimeout(t);
+  }, [buildFile, step]);
   const processRef = useRef<string | null>(null);
   useEffect(() => {
     processRef.current = processId;

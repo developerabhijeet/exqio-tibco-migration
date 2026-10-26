@@ -3,9 +3,11 @@
 // The card a citation chip opens on hover or focus: where the claim comes from, a masked excerpt,
 // whether it was verified, and the ways to open the source. It is rendered into document.body so
 // no scrolling or clipped container cuts it off, and is placed under the chip, or above it when
-// there is no room below, kept inside the viewport. Keyboard: Tab from the chip enters it, Shift+Tab
-// from its first button returns to the chip, Tab past its last button moves on past the chip, and
-// Escape closes it with focus back on the chip.
+// there is no room below, kept inside the viewport; it fades in over 100 ms unless the reader asks
+// for reduced motion. Keyboard: Tab from the chip enters it, Shift+Tab from its first button
+// returns to the chip, Tab past its last button moves on to whatever follows the chip, and Escape
+// closes it with focus back on the chip. The card itself takes focus (tabIndex -1) when its text
+// is clicked, so selecting or clicking its text does not count as focus leaving it.
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, ArrowUpRight, Network } from "lucide-react";
@@ -23,12 +25,12 @@ function tabbables(): HTMLElement[] {
   );
 }
 
-/** Focus whatever follows `anchor` in Tab order, skipping the preview itself. */
+/** Focus whatever follows `anchor` in Tab order, skipping the preview; the anchor if nothing does. */
 export function focusAfter(anchor: HTMLElement, preview: HTMLElement | null): void {
   const all = tabbables().filter((el) => !preview?.contains(el));
-  const next = all[all.indexOf(anchor) + 1];
-  if (next) next.focus();
-  else anchor.blur();
+  const at = all.indexOf(anchor);
+  const next = at >= 0 ? all[at + 1] : undefined;
+  (next ?? anchor).focus();
 }
 
 export function CitationPreview({
@@ -104,7 +106,7 @@ export function CitationPreview({
     }
   };
 
-  // Focus leaving for anywhere but the chip closes the card.
+  // Focus leaving for anywhere but the card or the chip closes the card.
   const onBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget as Node | null;
     if (to && (box.current?.contains(to) || anchor?.contains(to))) return;
@@ -133,8 +135,13 @@ export function CitationPreview({
       data-placement={pos?.above ? "top" : "bottom"}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
-      onMouseEnter={() => onHover?.(true)}
-      onMouseLeave={() => onHover?.(false)}
+      tabIndex={-1}
+      onPointerEnter={(e) => {
+        if (e.pointerType === "mouse") onHover?.(true);
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType === "mouse") onHover?.(false);
+      }}
       style={{
         position: "fixed",
         top: pos?.top ?? -9999,
@@ -142,7 +149,9 @@ export function CitationPreview({
         width: WIDTH,
         maxWidth: `calc(100vw - ${MARGIN * 2}px)`,
       }}
-      className="z-[60] rounded-card border border-line bg-white p-3.5 text-left shadow-pop"
+      className={`z-[60] rounded-card border border-line bg-white p-3.5 text-left shadow-pop outline-none motion-safe:transition-opacity motion-safe:duration-100 ${
+        pos ? "opacity-100" : "opacity-0"
+      }`}
     >
       <div className="flex items-center justify-between gap-2">
         <p className="flex min-w-0 items-center gap-1.5 text-eyebrow uppercase text-slate">

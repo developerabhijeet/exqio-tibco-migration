@@ -270,9 +270,11 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     }
   }, [nodeId, list, process.ir_id, design.data]);
 
-  // A generated file asked for from elsewhere (a citation chip) opens once the files arrive.
+  // A generated file asked for from elsewhere (a citation chip) opens once the files arrive, if it
+  // was asked for this process; a request for another process is left for that one's explorer.
   useEffect(() => {
     if (!buildFile || list.length === 0) return;
+    if (buildFile.processId && buildFile.processId !== process.id) return;
     if (list.some((f) => f.path === buildFile.path)) {
       setSelected(buildFile.path);
       setActivity(null);
@@ -282,7 +284,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
       setNote(`${buildFile.path} is not in this build.`);
     }
     openBuildFile(null);
-  }, [buildFile, list, openBuildFile]);
+  }, [buildFile, list, openBuildFile, process.id]);
 
   const openSource = (f: FileEntry) => {
     const p = procByPath.get(f.path);

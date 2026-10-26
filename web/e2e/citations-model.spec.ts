@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { codePointLength, segments, sliceCodePoints, type CiteRef, type CitedText } from "../lib/citations";
+import { codePointLength, codePoints, segments, sliceCodePoints, type CiteRef, type CitedText } from "../lib/citations-model";
 
 // The shared cited-text model, without a browser: span offsets from the server are code points
-// (Python indices), so an emoji or other astral character before a span must not shift it.
+// (Python indices), so an emoji or other astral character before a span must not shift it. The
+// module imports no React or Next; `npm run test:model` runs this file without the e2e servers.
 
 function ref(id: string, phase: CiteRef["phase"] = "validate"): CiteRef {
   return { id, phase, kind: "rule", label: `Rule ${id}`, preview: "", target: { kind: "step", step: phase } };
@@ -102,4 +103,64 @@ test("plain text is one segment", () => {
   expect(segments({ text: "No sources 🙂", spans: [], refs: [] })).toEqual([
     { text: "No sources 🙂", refs: [], number: [] },
   ]);
+});
+
+test("adjacent spans stay separate runs", () => {
+  const parts = segments({
+    text: "AB",
+    spans: [
+      { start: 0, end: 1, refs: ["c1"] },
+      { start: 1, end: 2, refs: ["c2"] },
+    ],
+    refs: [ref("c1"), ref("c2")],
+  });
+  expect(parts.map((p) => [p.text, p.number])).toEqual([
+    ["A", [1]],
+    ["B", [2]],
+  ]);
+});
+
+test("the same ref in two spans keeps one number", () => {
+  const parts = segments({
+    text: "One. Two.",
+    spans: [
+      { start: 0, end: 3, refs: ["c1"] },
+      { start: 5, end: 8, refs: ["c1"] },
+    ],
+    refs: [ref("c1")],
+  });
+  expect(parts.filter((p) => p.refs.length).map((p) => p.number)).toEqual([[1], [1]]);
+});
+
+test("a ref named twice in one span is cited once", () => {
+  const parts = segments({ text: "One.", spans: [{ start: 0, end: 3, refs: ["c1", "c1"] }], refs: [ref("c1")] });
+  expect(parts[0].refs.map((r) => r.id)).toEqual(["c1"]);
+  expect(parts[0].number).toEqual([1]);
+});
+
+test("negative and non-finite offsets are clamped or ignored", () => {
+  const parts = segments({
+    text: "😀 Hi. Yo.",
+    spans: [
+      { start: -5, end: 4, refs: ["c1"] },
+      { start: Number.NaN, end: 6, refs: ["c2"] },
+      { start: 7, end: Number.POSITIVE_INFINITY, refs: ["c2"] },
+    ],
+    refs: [ref("c1"), ref("c2")],
+  });
+  expect(parts.map((p) => [p.text, p.refs.map((r) => r.id)])).toEqual([
+    ["😀 Hi", ["c1"]],
+    [". Yo.", []],
+  ]);
+});
+
+test("empty text renders nothing", () => {
+  expect(segments({ text: "", spans: [], refs: [] })).toEqual([]);
+  expect(segments({ text: "", spans: [{ start: 0, end: 1, refs: ["c1"] }], refs: [ref("c1")] })).toEqual([]);
+});
+
+test("sliceCodePoints takes a pre-split text", () => {
+  const chars = codePoints("a😀b");
+  expect(sliceCodePoints(chars, 1, 2)).toBe("😀");
+  expect(sliceCodePoints(chars, 2)).toBe("b");
 });

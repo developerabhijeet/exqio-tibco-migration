@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
+    "test:model": "playwright test -c playwright.model.config.ts",
     "postinstall": "node scripts/copy-monaco.mjs"
   },
   "dependencies": {
