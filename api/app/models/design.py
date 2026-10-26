@@ -16,6 +16,7 @@ class DesignRecord(IdMixin, CreatedMixin, Base):
 
     process_id: Mapped[str] = mapped_column(fk("processes.id"), index=True)
     version: Mapped[int] = mapped_column(default=1)
+    iteration: Mapped[int] = mapped_column(default=1, server_default="1")  # Iteration.n of the job
     job_id: Mapped[str | None]
     spec_hash: Mapped[str]
     design_hash: Mapped[str]

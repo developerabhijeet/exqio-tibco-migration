@@ -42,6 +42,7 @@ class Rule(IdMixin, CreatedMixin, Base):
     owner: Mapped[str | None]
     memory_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
     challenge: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    source: Mapped[str | None]  # "iteration <n>" for a rule an iteration's requirements proposed
     updated_by: Mapped[str | None]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                  onupdate=func.now())

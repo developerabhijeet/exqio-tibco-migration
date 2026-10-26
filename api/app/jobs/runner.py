@@ -88,6 +88,8 @@ LOST_REASON = "worker lost"
 STOPPED_REASON = "worker stopped"
 CANCELLED_REASON = "cancelled"
 REAP_SECONDS = 30.0
+#: Job kinds stamped with the process's current iteration on submit (sub-project 6).
+ITERATION_STAMPED = frozenset({"design", "build"})
 POLL_SECONDS = 0.5  # how often an idle worker looks for jobs queued by another process
 
 _JOBS = Job.__table__.fullname
@@ -636,9 +638,20 @@ class JobRunner:
     async def submit(self, kind: str, payload: dict[str, Any], *, project_id: str | None = None,
                      process_id: str | None = None, affinity: str | None = None) -> str | None:
         """:func:`enqueue` on this runner's database, then wake its worker (``None`` only when
-        ``payload`` carries a ``dedupe_key`` a queued job already has)."""
+        ``payload`` carries a ``dedupe_key`` a queued job already has). A design or build job of a
+        process is stamped with the process's current iteration (``payload["iteration"]``)."""
+        if kind in ITERATION_STAMPED and process_id is not None and "iteration" not in payload:
+            payload = {**payload, "iteration": await self._iteration(process_id)}
         job_id = await enqueue(self.sessionmaker, kind, payload, project_id=project_id,
                                process_id=process_id, affinity=affinity)
         if self.worker is not None:
             self.worker.wake()
         return job_id
+
+    async def _iteration(self, process_id: str) -> int:
+        from api.app.services.iterations import current_iteration  # services import this module
+
+        async with self.sessionmaker() as s:
+            n = (await current_iteration(s, process_id)).n
+            await s.commit()  # iteration 1 may have just been created
+        return n

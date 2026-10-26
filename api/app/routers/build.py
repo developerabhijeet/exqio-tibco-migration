@@ -84,7 +84,7 @@ async def list_builds(process_id: str, session: SessionDep) -> list[dict[str, An
     rows = (await session.execute(select(Build).where(Build.process_id == process_id)
                                   .order_by(Build.created_at.desc()))).scalars().all()
     return [{"id": b.id, "status": b.status, "runtime": b.runtime, "stack": b.stack or "dotnet",
-             "build_hash": b.build_hash, "job_id": b.job_id,
+             "iteration": b.iteration, "build_hash": b.build_hash, "job_id": b.job_id,
              "created_at": b.created_at.isoformat() if b.created_at else None,
              "finished_at": b.finished_at.isoformat() if b.finished_at else None} for b in rows]
 

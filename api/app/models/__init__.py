@@ -7,6 +7,7 @@ from api.app.models.design import DesignRecord
 from api.app.models.domain import Domain, GraphEdge, GraphNode
 from api.app.models.gate import AuditLog, Gate
 from api.app.models.infra import AzureConnection, InfraAsset, Plan
+from api.app.models.iteration import EditSet, Iteration, IterationInput, ProjectRepo
 from api.app.models.job import Job, JobEvent, ModelCall
 from api.app.models.memory import MemoryEvent
 from api.app.models.process import Process
@@ -28,6 +29,7 @@ __all__ = [
     "CoverageItem",
     "DesignRecord",
     "Domain",
+    "EditSet",
     "Eval",
     "FieldDiff",
     "File",
@@ -36,6 +38,8 @@ __all__ = [
     "GraphEdge",
     "GraphNode",
     "InfraAsset",
+    "Iteration",
+    "IterationInput",
     "Job",
     "JobEvent",
     "MemoryEvent",
@@ -44,6 +48,7 @@ __all__ = [
     "Plan",
     "Process",
     "Project",
+    "ProjectRepo",
     "Provider",
     "Rule",
     "ScanReport",

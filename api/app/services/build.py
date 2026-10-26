@@ -68,6 +68,7 @@ from api.app.models import (
 )
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from api.app.services import iterations as iteration_svc
 from api.app.services import settings as settings_svc
 from api.app.services.context import engine_app, engine_findings, engine_process, engine_rules
 from api.app.services.design import ai_logger
@@ -475,6 +476,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         previous_build = await latest_for(s, process_id)
         carried_reviews = kept_findings(previous_build) if previous_build and previous_build.id != build_id else []
         build.design_id = design_row.id
+        build.iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
         build.spec_hash = row.spec_hash
         build.design_hash = design_row.design_hash
         build.stack = stack.key
@@ -1072,8 +1074,8 @@ async def build_view(session: AsyncSession, build: Build) -> dict[str, Any]:
     process = await session.get(Process, build.process_id)
     gates = await gate_svc.gates_view(session, process) if process else []
     return {"id": build.id, "process_id": build.process_id, "job_id": build.job_id, "status": build.status,
-            "runtime": build.runtime, "stack": build.stack or "dotnet", "build_hash": build.build_hash,
-            "spec_hash": build.spec_hash,
+            "runtime": build.runtime, "stack": build.stack or "dotnet", "iteration": build.iteration,
+            "build_hash": build.build_hash, "spec_hash": build.spec_hash,
             "design_hash": build.design_hash, "design_id": build.design_id,
             "created_at": build.created_at.isoformat() if build.created_at else None,
             "finished_at": build.finished_at.isoformat() if build.finished_at else None,

@@ -26,6 +26,7 @@ from api.app.models import DesignRecord, Process, Project
 from api.app.services import evidence
 from api.app.services import figma_sync as figma_svc
 from api.app.services import gates as gate_svc
+from api.app.services import iterations as iteration_svc
 from api.app.services.context import engine_app, engine_findings, engine_process, engine_rules
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.process_views import io_card_for
@@ -130,7 +131,8 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         previous = await evidence.latest_design(s, process_id)
         version = (await s.scalar(select(func.max(DesignRecord.version))
                                   .where(DesignRecord.process_id == process_id)) or 0) + 1
-        record = DesignRecord(process_id=process_id, version=version, job_id=ctx.job_id,
+        iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
+        record = DesignRecord(process_id=process_id, version=version, iteration=iteration, job_id=ctx.job_id,
                               spec_hash=design.spec_hash, design_hash=design.design_hash,
                               record=design.model_dump(mode="json", by_alias=True),
                               narrative=design.narrative)
@@ -142,12 +144,12 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
                 s, process, rows, "G3", RESET_REASON, gate_svc.SYSTEM, gate_svc.SYSTEM,
                 {"old_design_hash": previous.design_hash, "new_design_hash": design.design_hash})
         gate_svc.audit(s, process, gate_svc.SYSTEM, "design generated", actor_kind=gate_svc.SYSTEM,
-                       detail={"version": version, "design_hash": design.design_hash,
+                       detail={"version": version, "iteration": iteration, "design_hash": design.design_hash,
                                "spec_hash": design.spec_hash, "job_id": ctx.job_id})
         await s.commit()
         design_id = record.id
     await ctx.log(f"stored design record v{version}" + (f"; gates reset: {', '.join(reset)}" if reset else ""))
-    return {"design_id": design_id, "version": version, "design_hash": design.design_hash,
+    return {"design_id": design_id, "version": version, "iteration": iteration, "design_hash": design.design_hash,
             "spec_hash": design.spec_hash, "mapping_rows": len(design.mapping), "agent_rows": agent_rows,
             "decisions": len(design.decisions), "open_questions": len(design.open_questions),
             "ai_available": provider is not None and ai_error is None,
@@ -193,6 +195,6 @@ async def design_view(session: AsyncSession, process: Process) -> dict[str, Any]
     questions = [{**q, "question_id": question_id(q.get("question") or "")}
                  for q in row.record.get("open_questions") or []]
     return {**row.record, "open_questions": questions, "narrative": row.narrative, "id": row.id, "version": row.version,
-            "job_id": row.job_id, "created_at": row.created_at.isoformat() if row.created_at else None,
+            "iteration": row.iteration, "job_id": row.job_id, "created_at": row.created_at.isoformat() if row.created_at else None,
             "current_spec_hash": process.spec_hash, "stale": stale,
             "stale_reason": "the spec hash changed since this record was generated" if stale else None}
