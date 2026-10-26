@@ -131,6 +131,15 @@ www.ietf.org
 www.iso.org
 www.whatwg.org
 
+# The install guide rendered by the Help pages (web/app/help/[slug], from docs/deploy/GMF-INSTALL.md,
+# prerendered into .next/server/app/help/*.html): prose and example commands naming the Neo4j Helm
+# repository, the Entra v1 token issuer, and the public registries GMF mirrors. Text for the
+# operator to read; the page requests none of them (GMF substitutes its own mirrors).
+helm.neo4j.com
+sts.windows.net
+docker.io
+mcr.microsoft.com
+
 # --------------------------------------------------------------------------- optional sections
 # optional: claude
 # The Anthropic API, used only when providers.claude.enabled=true (claude-agent-sdk). It is not
