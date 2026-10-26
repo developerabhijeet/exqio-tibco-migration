@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import type { FindingView } from "@/lib/types";
-import { CitationChip } from "./CitationChip";
+import { CitedText } from "@/components/citations/CitedText";
 
 const DECISIONS = [
   { value: "keep", label: "Keep behavior", help: "Generate the same behavior as TIBCO" },
@@ -66,21 +66,15 @@ export function FindingCard({
           </span>
         )}
       </header>
-      <p className="mt-2 text-base leading-relaxed text-ink">{finding.text}</p>
+      <p className="mt-2 text-base leading-relaxed text-ink" data-testid="finding-text">
+        {finding.cited ? <CitedText value={finding.cited} /> : finding.text}
+      </p>
       {finding.business_impact ? (
         <p className="mt-2 rounded-btn bg-sunken px-3 py-2 text-md text-ink">
           <span className="label mr-1.5">Business impact</span>
           {finding.business_impact}
         </p>
       ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        <span className="label mr-1">Evidence</span>
-        {(finding.citations ?? [])
-          .filter((c, i, all) => all.findIndex((o) => o.activity_id === c.activity_id && o.kind === c.kind) === i)
-          .map((c, i) => (
-            <CitationChip key={`${c.activity_id}-${i}`} citation={c} />
-          ))}
-      </div>
       <div className="mt-3 border-t border-line pt-3">
         <label htmlFor={noteId} className="label">
           Note

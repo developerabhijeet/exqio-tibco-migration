@@ -10,8 +10,12 @@
 // is clicked, so selecting or clicking its text does not count as focus leaving it.
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowUpRight, Network } from "lucide-react";
+import { ApiError } from "@/lib/api";
 import { PHASE_LABEL, PHASE_TONE, UNVERIFIED_TONE, useCiteNavigate, type CiteRef } from "@/lib/citations";
+import { memoryApi } from "@/lib/memory";
+import { useAppState } from "@/lib/state";
 
 const GAP = 6;
 const MARGIN = 8;
@@ -31,6 +35,49 @@ export function focusAfter(anchor: HTMLElement, preview: HTMLElement | null): vo
   const at = all.indexOf(anchor);
   const next = at >= 0 ? all[at + 1] : undefined;
   (next ?? anchor).focus();
+}
+
+/** 404 (not ingested yet) and 503 (memory off) are answers, not failures to retry. */
+const retryUnlessAnswered = (count: number, e: unknown) =>
+  !(e instanceof ApiError && (e.status === 404 || e.status === 503)) && count < 1;
+
+/**
+ * The ref's memory node, read lazily when the preview first opens (memory links are optimistic:
+ * built from uid conventions on the server, checked here). Shows the node's current revision,
+ * "Not in memory yet" when the node is not ingested (404) and "Memory unavailable" when memory is
+ * off (503); without a memory uid, the revision the payload carries, if any.
+ */
+function MemoryRevision({ refItem }: { refItem: CiteRef }) {
+  const { projectId } = useAppState();
+  const uid = refItem.memory_uid ?? null;
+  const node = useQuery({
+    queryKey: ["memory-node", projectId, uid, null],
+    queryFn: () => memoryApi.node(projectId!, uid!, null),
+    enabled: !!projectId && !!uid,
+    staleTime: 60_000,
+    retry: retryUnlessAnswered,
+  });
+  const status = node.error instanceof ApiError ? node.error.status : null;
+  const revision = node.data?.node.valid_from ?? (uid ? null : refItem.revision ?? null);
+  if (revision != null) {
+    return (
+      <span
+        className="tnum shrink-0 rounded-full bg-sunken px-1.5 py-px font-mono text-2xs text-slate ring-1 ring-inset ring-line"
+        title={`Memory revision ${revision}`}
+        data-testid="cite-revision"
+      >
+        r{revision}
+      </span>
+    );
+  }
+  if (status === 404 || status === 503) {
+    return (
+      <span className="shrink-0 text-2xs text-slate" data-testid="cite-memory-state" data-state={status === 404 ? "missing" : "off"}>
+        {status === 404 ? "Not in memory yet" : "Memory unavailable"}
+      </span>
+    );
+  }
+  return null;
 }
 
 export function CitationPreview({
@@ -163,15 +210,7 @@ export function CitationPreview({
             {phase} · {refItem.kind}
           </span>
         </p>
-        {refItem.revision != null ? (
-          <span
-            className="tnum shrink-0 rounded-full bg-sunken px-1.5 py-px font-mono text-2xs text-slate ring-1 ring-inset ring-line"
-            title={`Revision ${refItem.revision}`}
-            data-testid="cite-revision"
-          >
-            r{refItem.revision}
-          </span>
-        ) : null}
+        <MemoryRevision refItem={refItem} />
       </div>
       <p id={labelId} className="mt-1.5 break-words text-md font-semibold leading-snug text-heading">
         {refItem.label}

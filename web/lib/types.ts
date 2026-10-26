@@ -1,5 +1,7 @@
 // Shapes returned by the ExiQO Migrate API (api/app/schemas, Tasks 17 to 19).
 
+import type { CitedText } from "./citations-model";
+
 export const INSPECTOR_TABS = ["Config", "SQL", "Mappings", "Rules", "Findings", "XML"] as const;
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
@@ -115,6 +117,8 @@ export interface Domain {
   ir_process_ids?: string[];
   evidence: DomainEvidence[];
   renamed_by: string | null;
+  /** The evidence as rationale sentences with a chip per item; `cited.text` is masked. */
+  cited?: CitedText | null;
 }
 
 export interface GraphNode {
@@ -254,6 +258,8 @@ export interface RuleView {
   challenge?: Challenge | null;
   updated_by?: string | null;
   updated_at?: string | null;
+  /** The rule text with its citations inline. `cited.text` is the MASKED text: render it, not `text`. */
+  cited?: CitedText | null;
 }
 
 export type FindingDecision = "keep" | "fix" | "ask";
@@ -270,6 +276,8 @@ export interface FindingView {
   note?: string | null;
   decided_by?: string | null;
   decided_at?: string | null;
+  /** The finding text with its citations inline. `cited.text` is the MASKED text: render it, not `text`. */
+  cited?: CitedText | null;
 }
 
 export interface VerificationFailure {

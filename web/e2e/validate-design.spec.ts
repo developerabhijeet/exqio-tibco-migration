@@ -42,8 +42,8 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
 
   // A citation chip jumps to the canvas step and its XML lines, and back.
   const firstRule = page.getByTestId("rule-card").first();
-  const chip = firstRule.getByTestId("citation-chip").first();
-  const cited = await chip.getAttribute("data-activity");
+  const chip = firstRule.getByTestId("cite-chip").first();
+  const cited = await chip.getAttribute("data-step");
   expect(cited).toBeTruthy();
   await chip.click();
   await expect(page.getByTestId("process-view")).toBeVisible();

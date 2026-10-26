@@ -9,6 +9,7 @@ import { useAppState } from "@/lib/state";
 import { STEP_LABELS } from "@/lib/steps";
 import { BandPill, Pill } from "@/components/ui/Pill";
 import { Empty } from "@/components/ui/Empty";
+import { CitedText } from "@/components/citations/CitedText";
 import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
 import { Inspector } from "@/components/canvas/Inspector";
 import { ALL, DomainSelect } from "./DomainSelect";
@@ -56,7 +57,6 @@ export function DiscoverTab() {
   const graph = useGraph(projectId);
   const { domains, editable } = useDomainList(projectId);
   const [filters, setFilters] = useState<GraphFilters>({ band: "all", status: "all" });
-  const [allEvidence, setAllEvidence] = useState(false);
   const canvas = useCanvas(processId);
 
   const all = useMemo(() => processes.data ?? [], [processes.data]);
@@ -110,19 +110,10 @@ export function DiscoverTab() {
           editable={editable}
         />
       ) : null}
-      {current && current.evidence.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5" aria-label="Domain evidence">
-          {(allEvidence ? current.evidence : current.evidence.slice(0, 3)).map((e, i) => (
-            <span key={i} className="rounded-btn border border-line bg-surface px-2 py-0.5 text-sm text-slate">
-              <span className="font-semibold uppercase tracking-wide text-2xs text-coral-dk">{e.kind}</span> {e.text}
-            </span>
-          ))}
-          {current.evidence.length > 3 ? (
-            <button type="button" className="text-sm font-medium text-accent-ink" onClick={() => setAllEvidence((v) => !v)}>
-              {allEvidence ? "Show less" : `${current.evidence.length - 3} more`}
-            </button>
-          ) : null}
-        </div>
+      {current?.cited?.text ? (
+        <p className="max-w-[80ch] text-md leading-relaxed text-ink" data-testid="domain-rationale">
+          <CitedText value={current.cited} />
+        </p>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">

@@ -5,7 +5,7 @@ import { Check, Loader2, Pencil, X } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
 import type { RuleView } from "@/lib/types";
 import { ChallengeBadge } from "./ChallengeBadge";
-import { CitationChip } from "./CitationChip";
+import { CitedText } from "@/components/citations/CitedText";
 
 const STATUS: Record<string, { label: string; tone: "gate" | "decision" | "error" | "det" }> = {
   draft: { label: "draft", tone: "decision" },
@@ -76,7 +76,9 @@ export function RuleCard({
           </p>
         </div>
       ) : (
-        <p className="mt-2 text-base leading-relaxed text-ink">{rule.text}</p>
+        <p className="mt-2 text-base leading-relaxed text-ink" data-testid="rule-text">
+          {rule.cited ? <CitedText value={rule.cited} /> : rule.text}
+        </p>
       )}
       {rule.original_text && rule.original_text !== rule.text && !editing ? (
         <p className="mt-1 text-sm text-slate">
@@ -87,19 +89,6 @@ export function RuleCard({
       {rule.challenge?.verdict && rule.challenge.verdict !== "agree" ? (
         <p className="mt-2 rounded-btn bg-decision-bg px-3 py-2 text-md text-decision">{rule.challenge.reason}</p>
       ) : null}
-
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        <span className="label mr-1">Cites</span>
-        {(rule.citations ?? []).map((c, i) => (
-          <CitationChip key={`${c.activity_id}-${i}`} citation={c} />
-        ))}
-        {rule.owner ? <span className="ml-2 text-sm text-slate">owner: {rule.owner}</span> : null}
-        {rule.memory_refs && rule.memory_refs.length > 0 ? (
-          <Pill tone="purple" title="Earlier decisions retrieved from migration memory">
-            {rule.memory_refs.length} earlier decision{rule.memory_refs.length > 1 ? "s" : ""}
-          </Pill>
-        ) : null}
-      </div>
 
       <footer className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
         {editing ? (
@@ -164,11 +153,19 @@ export function RuleCard({
             </button>
           </>
         )}
-        {rule.updated_by ? (
-          <span className="ml-auto text-xs text-slate">
-            {status} by {rule.updated_by}
-          </span>
-        ) : null}
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {rule.owner ? <span className="text-sm text-slate">owner: {rule.owner}</span> : null}
+          {rule.memory_refs && rule.memory_refs.length > 0 ? (
+            <Pill tone="purple" title="Earlier decisions retrieved from migration memory">
+              {rule.memory_refs.length} earlier decision{rule.memory_refs.length > 1 ? "s" : ""}
+            </Pill>
+          ) : null}
+          {rule.updated_by ? (
+            <span className="text-xs text-slate">
+              {status} by {rule.updated_by}
+            </span>
+          ) : null}
+        </span>
       </footer>
       {error ? (
         <p role="alert" className="mt-2 text-sm text-error">
