@@ -35,13 +35,13 @@ function masks(page: Page): Locator[] {
   ];
 }
 
-async function shoot(page: Page, screen: string, width: number): Promise<void> {
+async function shoot(page: Page, screen: string, width: number, mask: Locator[] = masks(page)): Promise<void> {
   await page.mouse.move(0, 0);
   for (const theme of THEMES) {
     await page.emulateMedia({ colorScheme: theme });
     // System theme: no data-theme, the media query decides; the page must actually follow it.
     expect(await page.evaluate(() => window.matchMedia("(prefers-color-scheme: dark)").matches)).toBe(theme === "dark");
-    await expect(page).toHaveScreenshot(`${screen}-${theme}-${width}.png`, { mask: masks(page) });
+    await expect(page).toHaveScreenshot(`${screen}-${theme}-${width}.png`, { mask });
   }
 }
 
@@ -109,7 +109,9 @@ test.describe("@visual", () => {
       // The ExiQoian panel, open over Design with its first-visit intro and suggestions.
       await page.getByTestId("exiqoian-launcher").click();
       await expect(page.getByTestId("exiqoian-panel")).toBeVisible();
-      await shoot(page, "exiqoian", width);
+      // At 390 px the panel is a full sheet: the page's masks underneath would paint over it.
+      const panelMasks = [page.getByTestId("exiqoian-panel").locator("h2 + p, time, [data-mask]")];
+      await shoot(page, "exiqoian", width, width < 768 ? panelMasks : masks(page));
       await page.getByRole("button", { name: "Close ExiQoian" }).click();
       await expect(page.getByTestId("exiqoian-panel")).toBeHidden();
 
