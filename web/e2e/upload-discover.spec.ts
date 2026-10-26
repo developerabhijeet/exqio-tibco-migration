@@ -93,6 +93,11 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await expect.poll(labelColour).toBe("rgb(33,37,41)");
   const lightStroke = await edgeStroke();
   expect(lightStroke).toBeTruthy();
+  // The code view (Monaco) of the selected step's source.
+  await page.locator('.react-flow__node[data-id="LookupDealer"]').click();
+  await page.getByRole("tab", { name: "XML" }).click();
+  const editor = page.getByTestId("xml-viewer").locator(".monaco-editor").first();
+  await expect(editor).toHaveClass(/\bvs\b/);
 
   await page.getByTestId("user-menu").click();
   await page.getByTestId("theme-dark").click();
@@ -100,4 +105,16 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
 
   await expect.poll(labelColour).toBe("rgb(236,232,242)");
   await expect.poll(edgeStroke).not.toBe(lightStroke);
+  await expect(editor).toHaveClass(/\bvs-dark\b/);
+
+  // A Recharts chart (History, by phase): its axis labels take the theme's slate.
+  await page.goto("/history");
+  const tick = page.getByTestId("history-phases").locator(".recharts-cartesian-axis-tick-value").first();
+  await expect(tick).toBeVisible();
+  const darkFill = await tick.getAttribute("fill");
+  await page.getByTestId("user-menu").click();
+  await page.getByTestId("theme-light").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect.poll(() => tick.getAttribute("fill")).not.toBe(darkFill);
+  await expect.poll(() => tick.getAttribute("fill")).toBe("rgb(66, 84, 102)");
 });

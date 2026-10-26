@@ -51,7 +51,7 @@ export function RuleCard({
       className={`card p-4 ${status === "rejected" ? "opacity-70" : ""}`}
     >
       <header className="flex flex-wrap items-center gap-2">
-        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-xs font-semibold text-white">{key}</span>
+        <span className="rounded-btn bg-heading px-2 py-0.5 font-mono text-xs font-semibold text-page">{key}</span>
         <Pill tone={s.tone}>{s.label}</Pill>
         {typeof rule.confidence === "number" ? (
           <span className="text-sm text-slate" title="Analyst confidence">

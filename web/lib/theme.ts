@@ -117,6 +117,8 @@ export function cssColor(token: string, alpha?: number): string {
   let channels = "";
   if (typeof document !== "undefined") {
     channels = getComputedStyle(document.documentElement).getPropertyValue(`--c-${token}`).trim();
+    // In a browser every real token resolves; an empty value is a typo that would paint slate.
+    if (!channels && process.env.NODE_ENV !== "production") console.warn(`cssColor: unknown colour token "${token}" (no --c-${token})`);
   }
   const [r, g, b] = (channels || LIGHT_FALLBACK).split(/\s+/);
   return alpha === undefined ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha})`;

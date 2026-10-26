@@ -3,7 +3,8 @@
 //   1. no arbitrary font size class (`text-[13px]`) under components/, app/, lib/
 //   2. no opaque `bg-white` (an opacity modifier such as `bg-white/10` is fine), no `shadow-xl`/`shadow-2xl`
 //   3. no hex colour inside a className string or a style object (components/ui/BrandIcons.tsx exempt)
-//   4. no `text-plum` / `text-purple` (renamed `text-heading` / `text-accent-ink`)
+//   4. no `text-plum` / `text-purple` (renamed `text-heading` / `text-accent-ink`), and no
+//      `text-purple-lt` / `text-warm` (a surface tint used as text)
 //   5. every listed token pair reaches WCAG AA 4.5:1 in both themes, read from lib/theme.css (the
 //      spec's thirteen plus text on filled, tinted and status surfaces)
 // `--rules=1,5` runs a subset. Exits 1 listing `file:line rule n: detail`; prints
@@ -53,6 +54,8 @@ const PAIRS = [
   ["surface", "gate"],
   ["surface", "error"],
   ["surface", "coral-dk"],
+  // Inverted chips and selected toggles (rule ids, finding keys): page-coloured text on heading.
+  ["page", "heading"],
 ];
 // Colours that are not tokens but appear in the pairs.
 const FIXED = { white: [255, 255, 255] };
@@ -76,6 +79,8 @@ const LINE_RULES = [
   { rule: 2, re: /(?<![\w-])bg-white(?![\w/-])/g, what: "opaque bg-white" },
   { rule: 2, re: /(?<![\w-])shadow-(?:2xl|xl)(?![\w-])/g, what: "shadow-xl/2xl" },
   { rule: 4, re: /(?<![\w-])text-(?:plum|purple)(?![\w-])/g, what: "legacy text colour" },
+  // A surface tint as text: no token means that; pick an ink (text-heading, text-slate, ...).
+  { rule: 4, re: /(?<![\w-])text-(?:purple-lt|warm)(?![\w-])/g, what: "surface tint as text colour" },
 ];
 
 /** Rule 3, line based: an arbitrary-value hex class anywhere, or a hex on a className or style line. */

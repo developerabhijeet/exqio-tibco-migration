@@ -13,7 +13,7 @@
 // code, and class names assembled from fragments at run time.
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIRS = ["components", "app", "lib"];
@@ -59,10 +59,12 @@ const RULES = [
   { name: "shadow-xl/2xl -> shadow-e3", re: new RegExp(`${B}shadow-(?:2xl|xl)${E}`, "g"), to: () => "shadow-e3" },
   { name: "text-plum -> text-heading", re: new RegExp(`${B}text-plum${E}`, "g"), to: () => "text-heading" },
   { name: "text-purple(-dk) -> text-accent-ink", re: new RegExp(`${B}text-purple(?:-dk)?${E}`, "g"), to: () => "text-accent-ink" },
-  { name: "*-purple-lt -> *-accent-soft", re: new RegExp(`${B}(text|${UTIL.slice(1, -1)})-purple-lt${E}`, "g"), to: (_, u) => `${u}-accent-soft` },
+  // `text-purple-lt` and `text-warm` are left alone: a surface tint as text has no token meaning,
+  // and check-tokens rejects both so a person picks the right ink.
+  { name: "*-purple-lt -> *-accent-soft", re: new RegExp(`${B}${UTIL}-purple-lt${E}`, "g"), to: (_, u) => `${u}-accent-soft` },
   { name: "*-purple-dk -> *-accent-ink", re: new RegExp(`${B}${UTIL}-purple-dk${E}`, "g"), to: (_, u) => `${u}-accent-ink` },
   { name: "*-purple -> *-accent", re: new RegExp(`${B}${UTIL}-purple${E}`, "g"), to: (_, u) => `${u}-accent` },
-  { name: "*-warm -> *-sunken (bg-warm)", re: new RegExp(`${B}(text|${UTIL.slice(1, -1)})-warm${E}`, "g"), to: (_, u) => `${u}-sunken` },
+  { name: "*-warm -> *-sunken (bg-warm)", re: new RegExp(`${B}${UTIL}-warm${E}`, "g"), to: (_, u) => `${u}-sunken` },
   { name: "*-line-dk -> *-line-strong", re: new RegExp(`${B}(text|${UTIL.slice(1, -1)})-line-dk${E}`, "g"), to: (_, u) => `${u}-line-strong` },
   // Plum stays the brand bar's fill (`bg-plum`, `bg-plum/NN` scrims); plum as ink or outline is
   // the heading colour, which turns light on a dark page.
@@ -80,31 +82,45 @@ function walk(p) {
   return readdirSync(p).flatMap((name) => walk(join(p, name)));
 }
 
-const args = process.argv.slice(2);
-const dry = args.includes("--dry-run");
-const targets = args.filter((a) => !a.startsWith("--"));
-const files = (targets.length ? targets : DIRS).flatMap((t) => walk(join(ROOT, t)));
-
-const counts = RULES.map(() => 0);
-let changedFiles = 0;
-for (const file of files) {
-  const before = readFileSync(file, "utf8");
-  const rel = relative(ROOT, file).split("\\").join("/");
-  let text = before;
+/** Applies every rule to one file's text (`rel`: its path under web/); returns the new text and a
+ * count per rule, in RULES order. Pure, so the tests can call it. */
+export function transform(text, rel = "") {
+  const counts = RULES.map(() => 0);
+  let out = text;
   RULES.forEach((rule, i) => {
     if (rule.skip === rel) return;
-    text = text.replace(rule.re, (...m) => {
+    out = out.replace(rule.re, (...m) => {
       counts[i] += 1;
       return rule.to(...m);
     });
   });
-  if (text !== before) {
-    changedFiles += 1;
-    if (!dry) writeFileSync(file, text);
-    if (dry) console.log(`would change ${relative(ROOT, file)}`);
-  }
+  return { text: out, counts };
 }
 
-RULES.forEach((rule, i) => console.log(`${String(counts[i]).padStart(5)}  ${rule.name}`));
-const total = counts.reduce((a, b) => a + b, 0);
-console.log(`codemod-tokens: ${total} replacement(s) in ${changedFiles} file(s) of ${files.length}${dry ? " (dry run)" : ""}`);
+function main() {
+  const args = process.argv.slice(2);
+  const dry = args.includes("--dry-run");
+  const targets = args.filter((a) => !a.startsWith("--"));
+  const files = (targets.length ? targets : DIRS).flatMap((t) => walk(join(ROOT, t)));
+
+  const counts = RULES.map(() => 0);
+  let changedFiles = 0;
+  for (const file of files) {
+    const before = readFileSync(file, "utf8");
+    const rel = relative(ROOT, file).split("\\").join("/");
+    const { text, counts: c } = transform(before, rel);
+    c.forEach((n, i) => (counts[i] += n));
+    if (text !== before) {
+      changedFiles += 1;
+      if (!dry) writeFileSync(file, text);
+      if (dry) console.log(`would change ${relative(ROOT, file)}`);
+    }
+  }
+
+  RULES.forEach((rule, i) => console.log(`${String(counts[i]).padStart(5)}  ${rule.name}`));
+  const total = counts.reduce((a, b) => a + b, 0);
+  console.log(`codemod-tokens: ${total} replacement(s) in ${changedFiles} file(s) of ${files.length}${dry ? " (dry run)" : ""}`);
+}
+
+// Run only as a script: importing the module (the tests) must never rewrite the tree.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

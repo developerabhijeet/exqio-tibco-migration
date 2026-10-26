@@ -9,7 +9,7 @@ const TONES: Record<Tone, string> = {
   decision: "bg-decision-bg text-decision ring-1 ring-inset ring-decision/20",
   error: "bg-error-bg text-error ring-1 ring-inset ring-error/20",
   purple: "bg-accent-soft text-accent-ink ring-1 ring-inset ring-accent/20",
-  plum: "bg-plum text-white",
+  plum: "bg-heading text-page",
   coral: "bg-coral-dk text-surface",
 };
 

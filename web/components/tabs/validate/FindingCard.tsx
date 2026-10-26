@@ -48,7 +48,7 @@ export function FindingCard({
   return (
     <article data-testid="finding-card" data-finding={key} data-decision={decision} className="card p-4">
       <header className="flex flex-wrap items-center gap-2">
-        <span className="rounded-btn bg-plum px-2 py-0.5 font-mono text-xs font-semibold text-white" title={key}>
+        <span className="rounded-btn bg-heading px-2 py-0.5 font-mono text-xs font-semibold text-page" title={key}>
           {shortKey(key)}
         </span>
         <Pill tone={SEVERITY[finding.severity ?? ""] ?? "det"}>{finding.severity ?? "unrated"}</Pill>
@@ -104,7 +104,7 @@ export function FindingCard({
                 disabled={!!busy || (on && note.trim() === (finding.note ?? ""))}
                 onClick={() => decide(d.value)}
                 className={`btn px-3 py-1.5 text-md ${
-                  on ? "bg-plum text-white disabled:opacity-100" : "border border-line bg-surface text-heading hover:bg-sunken"
+                  on ? "bg-heading text-page disabled:opacity-100" : "border border-line bg-surface text-heading hover:bg-sunken"
                 }`}
               >
                 {busy === d.value ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}

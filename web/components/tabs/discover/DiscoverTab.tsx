@@ -25,7 +25,7 @@ function statusLabel(s: string): string {
 function ViewToggle() {
   return (
     <div className="inline-flex rounded-btn border border-line bg-surface p-0.5 text-md" role="group" aria-label="View">
-      <button type="button" aria-pressed="true" className="rounded-[5px] bg-plum px-3 py-1 font-medium text-white">
+      <button type="button" aria-pressed="true" className="rounded-[5px] bg-heading px-3 py-1 font-medium text-page">
         TIBCO view
       </button>
       <span title="Available after code generation">

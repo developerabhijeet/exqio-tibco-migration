@@ -11,6 +11,7 @@
     "lint": "eslint . && node scripts/check-tokens.mjs",
     "lint:tokens": "node scripts/check-tokens.mjs",
     "typecheck": "tsc --noEmit",
+    "test:scripts": "node --test scripts/",
     "e2e": "playwright test",
     "test:model": "playwright test -c playwright.model.config.ts",
     "postinstall": "node scripts/copy-monaco.mjs"

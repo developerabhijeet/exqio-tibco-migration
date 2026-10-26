@@ -67,7 +67,7 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-1">
                   {m.rule_ids.map((r) => (
-                    <span key={r} data-testid="rule-badge" className="rounded bg-plum px-1.5 font-mono text-xs font-semibold text-white">
+                    <span key={r} data-testid="rule-badge" className="rounded bg-heading px-1.5 font-mono text-xs font-semibold text-page">
                       {ruleKey.get(r) ?? r}
                     </span>
                   ))}
