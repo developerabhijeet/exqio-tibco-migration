@@ -9,8 +9,9 @@ Identity (ruling X17): an item's ``local_ref`` and label never depend on a list 
 per-run id. A finding is ``finding:<finding key>``; an open question is
 ``question:<sha256(normalised question text)[:16]>``, so a re-design that reorders the questions
 still updates the right issue; a parity difference is ``parity:<scenario key>:<field path>``, so
-the same difference found by a re-verify maps to the same issue. A request may still name a
-question by its index or a difference by its field diff id: ``canonical`` turns either into the
+the same difference found by a re-verify maps to the same issue. A request names a question by
+its id (``question_id``, which the design read API returns with each question; a list position
+is refused) and a difference by its key or its field diff id, which ``canonical`` turns into the
 stable form against the current data.
 
 Issue text is built by code from stored rows only. Every value is masked (``mask_sensitive`` plus
@@ -67,7 +68,7 @@ _LINE_START = re.compile(r"(?m)^([ \t]*)(#|h[1-6](?=\.)|bq(?=\.))")
 
 class IssueItem(BaseModel):
     type: ItemType
-    # finding key; question id or index; ``<scenario key>:<field path>`` or field diff id
+    # finding key; question id (never its index); ``<scenario key>:<field path>`` or field diff id
     ref: str = Field(min_length=1, max_length=500)
 
     @property
@@ -110,8 +111,8 @@ def canonical(item: IssueItem, src: IssueSource) -> IssueItem:
         ids = [question_id(q.get("question") or "") for q in src.questions]
         if _QUESTION_ID.match(item.ref) and item.ref in ids:
             return item
-        if item.ref.isdigit() and int(item.ref) < len(src.questions):
-            return IssueItem(type="question", ref=ids[int(item.ref)])
+        if item.ref.isdigit() and not _QUESTION_ID.match(item.ref):
+            raise ValueError(f"open question {item.ref}: name it by its question_id, not its position")
         raise ValueError(f"open question {item.ref} not found")
     if item.ref in src.diffs:
         return item

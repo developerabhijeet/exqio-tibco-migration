@@ -3,6 +3,10 @@
 // session cookie instead, and a 401 sends the browser to the API's sign-in, which comes back here.
 import type {
   AnalysisView,
+  ConnectorLinkView,
+  FigmaFrame,
+  FigmaFrameLink,
+  JiraItem,
   AskAnswer,
   AuditEntry,
   DesignRecord,
@@ -320,6 +324,20 @@ export const api = {
       { method: "DELETE" },
     ),
   readiness: (projectId: string) => json<ReadinessView>(`/projects/${projectId}/readiness`),
+
+  // Connector publish actions: each answers 202 with the job that does the work.
+  links: (processId: string) => json<ConnectorLinkView[]>(`/processes/${processId}/links`),
+  pushToGithub: (buildId: string, body: { repo: string; branch?: string; open_pr: boolean; base?: string }) =>
+    json<{ job_id: string }>(`/builds/${buildId}/github/push`, post(body)),
+  publishConfluence: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/confluence/publish`, post()),
+  jiraIssues: (processId: string, items: JiraItem[], createAgain = false) =>
+    json<{ job_id: string }>(`/processes/${processId}/jira/issues`, post({ items, create_again: createAgain })),
+  figmaFileFrames: (fileKey: string) => json<FigmaFrame[]>(`/figma/files/${encodeURIComponent(fileKey)}/frames`),
+  attachFigmaFrames: (processId: string, fileKey: string, nodeIds: string[]) =>
+    json<{ job_id: string }>(`/processes/${processId}/figma/frames`, post({ file_key: fileKey, node_ids: nodeIds })),
+  figmaFrames: (processId: string) => json<FigmaFrameLink[]>(`/processes/${processId}/figma/frames`),
+  /** A stored frame thumbnail, as a blob (the request carries the caller like every other). */
+  figmaFrameImage: async (linkId: string) => (await request(`/figma/frames/${linkId}/image`)).blob(),
 };
 
 export interface DesignView {

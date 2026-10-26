@@ -16,6 +16,7 @@ import { JobLog } from "@/components/jobs/JobLog";
 import { GateButton } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
+import { findingCandidates, JiraIssues } from "@/components/connectors/JiraIssues";
 import { AiBanner, CitationsBanner, CoverageBanner, NoticeBanner } from "./Banners";
 import { RuleCard } from "./RuleCard";
 import { FindingCard } from "./FindingCard";
@@ -199,6 +200,13 @@ export function ValidateTab() {
                     <Count n={undecidedFindings} label="to decide" tone="decision" />
                   </div>
                   {findings.length === 0 ? <Empty title="No findings">Code and the risk reviewer raised nothing.</Empty> : null}
+                  <JiraIssues
+                    processId={processId}
+                    scope="validate"
+                    title="Jira issues for findings"
+                    candidates={findingCandidates(findings)}
+                    empty="No finding to track: each is decided keep or ask."
+                  />
                   {findings.map((f) => (
                     <FindingCard
                       key={`${f.id}:${f.decision ?? ""}:${f.note ?? ""}`}

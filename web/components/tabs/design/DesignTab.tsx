@@ -16,6 +16,9 @@ import { JobLog } from "@/components/jobs/JobLog";
 import { GateButton } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
+import { FigmaReferences } from "@/components/connectors/FigmaReferences";
+import { JiraIssues, questionCandidates } from "@/components/connectors/JiraIssues";
+import { PublishConfluence } from "@/components/connectors/PublishConfluence";
 import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { ConfigTable } from "./ConfigTable";
 import { DecisionList, OpenQuestions } from "./DecisionList";
@@ -152,6 +155,11 @@ export function DesignTab() {
                 {stream ? <JobLog title="Design job" stream={stream} stages={STAGES} testId="design-log" idle={null} /> : null}
               </div>
             ) : null}
+          </div>
+
+          <div className="grid items-start gap-4 xl:grid-cols-2 print:hidden">
+            <PublishConfluence processId={processId} hasDesign={!!rec} />
+            <FigmaReferences processId={processId} />
           </div>
 
           {design.error ? <ErrorNote error={design.error} /> : null}
@@ -316,6 +324,13 @@ export function DesignTab() {
                     ) : null}
                     <OpenQuestions questions={rec.open_questions} processId={processId} />
                   </Panel>
+                  <JiraIssues
+                    processId={processId}
+                    scope="design"
+                    title="Jira issues for open questions"
+                    candidates={questionCandidates(rec.open_questions)}
+                    empty="No open question is waiting for an answer."
+                  />
                   <Panel title="Expected differences" eyebrow="Findings decided Fix at G2" testId="expected-differences">
                     {rec.expected_differences.length === 0 ? (
                       <p className="text-[14px] text-slate">None: the .NET service keeps the TIBCO behavior everywhere.</p>

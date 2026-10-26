@@ -16,6 +16,7 @@ import { Pill } from "@/components/ui/Pill";
 import { GateButton, gateDisplayState } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
+import { PushToGitHub } from "@/components/connectors/PushToGitHub";
 import { BuildJobLog, BuildSteps, failedBuildOutcome } from "./BuildLog";
 import { AccuracyScore } from "./AccuracyScore";
 import { ExportPanel } from "./ExportPanel";
@@ -238,6 +239,7 @@ export function BuildTab() {
                 />
                 <InfraPanel buildId={buildId} />
                 <ExportPanel buildId={buildId} compiled={build.data.metrics?.compile_ok ?? null} />
+                <PushToGitHub processId={processId} processName={proc?.name ?? ""} buildId={buildId} finished={finished} />
               </>
             ) : (
               <Empty title="Build in progress">The files, tests, metrics and infrastructure appear when the job finishes.</Empty>

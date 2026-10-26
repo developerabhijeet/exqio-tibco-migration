@@ -44,6 +44,7 @@ from api.app.services.jira_issues import ISSUES_KIND
 SME = {"X-User": "sme.vicky"}
 ADMIN = {"X-User": "ops.sam"}
 IR_ID = "dealerfunding.DealerFundingRequest"
+Q_OPEN = "Should inactive dealers be rejected before the deal lookup?"
 CITATION = {"activity_id": "CheckDealer", "kind": "sql", "text": "SELECT * FROM dealer WHERE id = ?"}
 
 
@@ -191,7 +192,7 @@ async def _links(app_, pid: str) -> list[ConnectorLink]:
 
 
 async def test_create_then_republish_updates(client_atlassian, process_with_findings, sme, wait_terminal):
-    c, _ = client_atlassian("datacenter"); body = {"items": [{"type": "finding", "ref": "F1"}, {"type": "question", "ref": "0"}]}
+    c, _ = client_atlassian("datacenter"); body = {"items": [{"type": "finding", "ref": "F1"}, {"type": "question", "ref": question_id(Q_OPEN)}]}
     first = await wait_terminal(c, (await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=sme)).json()["job_id"])
     second = await wait_terminal(c, (await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=sme)).json()["job_id"])
     assert first["created"] == ["GMF-1", "GMF-2"] and second["updated"] == ["GMF-1", "GMF-2"] and second["created"] == []
@@ -236,7 +237,7 @@ def test_fields_per_source_summary_labels_and_masking():
     assert f["labels"] == ["exiqo", "gmf-team", "finding", "high", ref_label("proc-1", "finding:F1")]
     assert "CheckDealer" in f["description"] and "SELECT \\* FROM dealer" in f["description"]
 
-    q = issue_fields(IssueItem(type="question", ref="0"), src, app(), project_key="GMF", issue_type="Task",
+    q = issue_fields(IssueItem(type="question", ref=question_id("Reject inactive dealers?")), src, app(), project_key="GMF", issue_type="Task",
                      labels=["exiqo"])["fields"]
     assert q["summary"] == "[DealerFundingRequest] Open question: Reject inactive dealers?"
     assert q["labels"][:2] == ["exiqo", "open-question"] and "Yes" in q["description"]
@@ -412,7 +413,7 @@ async def test_item_decided_after_the_202_is_refused_by_the_job(client_atlassian
 
 async def test_concurrent_jobs_do_not_duplicate(client_atlassian, jira_app, process_with_findings, wait_terminal):
     c, fake = client_atlassian("datacenter")
-    items = [{"type": "finding", "ref": "F1"}, {"type": "question", "ref": "0"}]
+    items = [{"type": "finding", "ref": "F1"}, {"type": "question", "ref": question_id(Q_OPEN)}]
     ids = [await jira_app.state.runner.submit(ISSUES_KIND, {  # no dedupe key: two jobs really run
         "process_id": process_with_findings, "items": items, "create_again": False, "actor": "sme.vicky"})
         for _ in range(3)]
@@ -465,7 +466,7 @@ async def test_jira_connector_calls(client_atlassian, jira_app):
     assert isinstance(atl, AtlassianConnector)
     jira = atl.jira
     assert isinstance(jira, JiraConnector)
-    fields = issue_fields(IssueItem(type="question", ref="0"), proc_with_text("t"), app(), project_key="GMF",
+    fields = issue_fields(IssueItem(type="question", ref=question_id("Reject inactive dealers?")), proc_with_text("t"), app(), project_key="GMF",
                           issue_type="Task", labels=["exiqo"])
     key, url = await jira.create(fields)
     assert key == "GMF-1" and url == f"{fake.jira.url}/browse/GMF-1"
@@ -484,8 +485,11 @@ async def test_jira_connector_calls(client_atlassian, jira_app):
 
 @pytest.mark.parametrize(("items", "detail"), [
     ([{"type": "finding", "ref": "F9"}], "finding F9 not found"),
-    ([{"type": "question", "ref": "1"}], "open question 1 is answered: nothing to track"),
-    ([{"type": "question", "ref": "7"}], "open question 7 not found"),
+    ([{"type": "question", "ref": question_id("Answered one")}],
+     f"open question {question_id('Answered one')} is answered: nothing to track"),
+    ([{"type": "question", "ref": "0" * 16}], f"open question {'0' * 16} not found"),
+    ([{"type": "question", "ref": "0"}], "open question 0: name it by its question_id, not its position"),
+    ([{"type": "question", "ref": "7"}], "open question 7: name it by its question_id, not its position"),
     ([{"type": "question", "ref": "x"}], "open question x not found"),
     ([{"type": "parity", "ref": "diff-intended"}], "parity difference diff-intended is intended: nothing to track"),
     ([{"type": "parity", "ref": "nope"}], "parity difference nope is not in the latest verify run"),
@@ -506,7 +510,7 @@ async def test_body_limits(client_atlassian, process_with_findings):
 
 async def test_roles(client_atlassian, process_with_findings, wait_terminal):
     c, _ = client_atlassian("datacenter")
-    refs = iter([("finding", "F1"), ("finding", "F3"), ("question", "0"), ("parity", "diff-defect")])
+    refs = iter([("finding", "F1"), ("finding", "F3"), ("question", question_id(Q_OPEN)), ("parity", "diff-defect")])
     for user, status in (("viewer.val", 403), ("engineer.ravi", 403), ("architect.lee", 202), ("qa.priya", 202),
                          ("sme.vicky", 202), ("ops.sam", 202)):
         kind, ref = next(refs) if status == 202 else ("finding", "F1")  # one request each: none deduped
@@ -556,21 +560,31 @@ async def _new_design(app_, pid: str, questions: list[dict]) -> None:
 
 async def test_reordered_questions_update_the_right_issue(client_atlassian, process_with_findings, wait_terminal):
     c, fake = client_atlassian("datacenter")
-    a = "Should inactive dealers be rejected before the deal lookup?"
-    out = await _issues(c, process_with_findings, [{"type": "question", "ref": "0"}], wait_terminal)
+    a, b = Q_OPEN, "Is the funding event ordered?"
+    out = await _issues(c, process_with_findings, [{"type": "question", "ref": question_id(a)}], wait_terminal)
     assert out["created"] == ["GMF-1"]
     await _new_design(c.app, process_with_findings, [  # a re-design puts a new question first
-        {"question": "Is the funding event ordered?", "recommendation": "Use sessions"},
+        {"question": b, "recommendation": "Use sessions"},
         {"question": a, "recommendation": "Yes, always"}])
-    moved = await _issues(c, process_with_findings, [{"type": "question", "ref": "1"}], wait_terminal)
+    moved = await _issues(c, process_with_findings, [{"type": "question", "ref": question_id(a)}], wait_terminal)
     assert moved == {"created": [], "updated": ["GMF-1"], "stale": []}
     assert fake.jira.issue("GMF-1")["summary"].endswith(a) and "Yes, always" in fake.jira.issue("GMF-1")["description"]
-    new = await _issues(c, process_with_findings, [{"type": "question", "ref": "0"}], wait_terminal)
+    new = await _issues(c, process_with_findings, [{"type": "question", "ref": question_id(b)}], wait_terminal)
     assert new["created"] == ["GMF-2"] and fake.jira.issue("GMF-1")["summary"].endswith(a)  # never overwritten
-    by_id = await _issues(c, process_with_findings, [{"type": "question", "ref": question_id(a)}], wait_terminal)
-    assert by_id["updated"] == ["GMF-1"]
     refs = [lk.local_ref for lk in await _links(c.app, process_with_findings)]
-    assert sorted(refs) == sorted([f"question:{question_id(a)}", f"question:{question_id('Is the funding event ordered?')}"])
+    assert sorted(refs) == sorted([f"question:{question_id(a)}", f"question:{question_id(b)}"])
+
+
+async def test_design_view_gives_each_open_question_its_id(client_atlassian, process_with_findings):
+    """The UI names a question by this id when it files an issue (X17); the list index is refused."""
+    c, fake = client_atlassian("datacenter")
+    r = await c.get(f"/processes/{process_with_findings}/design", headers=SME)
+    assert r.status_code == 200, r.text
+    assert [q["question_id"] for q in r.json()["open_questions"]] == [question_id(Q_OPEN), question_id("Answered one")]
+    by_index = await c.post(f"/processes/{process_with_findings}/jira/issues",
+                            json={"items": [{"type": "question", "ref": "0"}]}, headers=SME)
+    assert by_index.status_code == 422 and "not its position" in by_index.json()["detail"]
+    assert fake.jira.requests == []
 
 
 async def test_reverify_maps_the_same_difference_to_the_same_issue(client_atlassian, process_with_findings,

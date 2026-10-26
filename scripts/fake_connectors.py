@@ -25,6 +25,8 @@ from api.tests.fakes.github import FakeGitHub
 from api.tests.fakes.jira import FakeJira
 
 DEFAULT_PORTS = "github=9711,confluence=9712,jira=9713,figma=9714,figma-images=9715"
+#: Seeded when no ``--repo`` is given: ``gmf/credit`` is where the e2e run pushes its build.
+DEFAULT_REPOS = ["gmf/svc", "gmf/credit"]
 
 
 def parse_ports(text: str) -> dict[str, int]:
@@ -40,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ports", default=DEFAULT_PORTS)
     parser.add_argument("--flavor", choices=("datacenter", "cloud"), default="datacenter")
     parser.add_argument("--repo", action="append", default=[], metavar="OWNER/NAME[=DIR]",
-                        help="seed a GitHub repository (main branch from DIR, else empty); repeatable")
+                        help="seed a GitHub repository (main branch from DIR, else empty); repeatable "
+                             f"(default: {', '.join(DEFAULT_REPOS)})")
     parser.add_argument("--space", default="GMF", help="the Confluence space key to seed")
     parser.add_argument("--token-dir", type=Path, default=None,
                         help="where to write the token files (default: a new temp directory)")
@@ -70,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     for srv in servers:
         srv.start()
 
-    for spec in args.repo or ["gmf/svc"]:
+    for spec in args.repo or DEFAULT_REPOS:
         name, _, tree = spec.partition("=")
         github.add_repo(name, tree=Path(tree) if tree else None)
     parent = confluence.create_page(args.space, "ExiQO", "<p>ExiQO pages live under this page.</p>")
@@ -87,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     print("CONNECTORS_ALLOW_INSECURE_LOOPBACK=true")
     for var, path in env.items():
         print(f"{var}={path}")
-    print("GITHUB_REPOS=" + ",".join(r.partition("=")[0] for r in args.repo or ["gmf/svc"]))
+    print("GITHUB_REPOS=" + ",".join(r.partition("=")[0] for r in args.repo or DEFAULT_REPOS))
     print(f"CONFLUENCE_SPACE={args.space} CONFLUENCE_PARENT_PAGE_ID={parent} JIRA_PROJECT={jira.project}")
     print("Fake connectors are up; Ctrl-C to stop.", flush=True)
     try:

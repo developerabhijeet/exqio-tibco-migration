@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
+from api.app.connectors.jira import question_id
 from api.app.jobs.runner import JobContext
 from api.app.models import DesignRecord, Process
 from api.app.services import evidence
@@ -185,7 +186,10 @@ async def design_view(session: AsyncSession, process: Process) -> dict[str, Any]
     if row is None:
         return None
     stale = row.spec_hash != process.spec_hash
-    return {**row.record, "narrative": row.narrative, "id": row.id, "version": row.version,
+    # Each open question carries its stable identity (ruling X17), which Jira issues name it by.
+    questions = [{**q, "question_id": question_id(q.get("question") or "")}
+                 for q in row.record.get("open_questions") or []]
+    return {**row.record, "open_questions": questions, "narrative": row.narrative, "id": row.id, "version": row.version,
             "job_id": row.job_id, "created_at": row.created_at.isoformat() if row.created_at else None,
             "current_spec_hash": process.spec_hash, "stale": stale,
             "stale_reason": "the spec hash changed since this record was generated" if stale else None}

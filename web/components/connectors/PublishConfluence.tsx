@@ -1,0 +1,67 @@
+"use client";
+
+// Design tab: publish (or republish) the process's architecture page to Confluence
+// (POST /processes/{id}/confluence/publish, a `connector.confluence.publish` job). Hidden when
+// Confluence is off; disabled with the reason for anyone but an architect or admin.
+import { useState } from "react";
+import { BookOpen, Loader2 } from "lucide-react";
+import { api } from "@/lib/api";
+import { useConnectors } from "@/lib/connectors";
+import { useJob } from "@/lib/jobs";
+import { actionError, useActionAccess, useLinks } from "@/lib/publish";
+import { RoleLock } from "@/components/shell/RoleNotice";
+import { ActionStatus, LinkChips } from "./LinkChips";
+
+function summary(result: Record<string, unknown>): string | null {
+  return result.version ? `published "${String(result.title ?? "")}", version ${String(result.version)}` : null;
+}
+
+export function PublishConfluence({ processId, hasDesign }: { processId: string; hasDesign: boolean }) {
+  const flags = useConnectors();
+  const access = useActionAccess("confluence");
+  const links = useLinks(processId);
+  const { stream, watch } = useJob("confluence", processId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!flags.data?.atlassian.confluence) return null;
+  const page = (links.data ?? []).filter((l) => l.object_type === "confluence_page");
+  const running = busy || stream?.status === "running";
+  const reason = access.reason ?? (!hasDesign ? "Generate the design record first" : undefined);
+
+  const publish = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { job_id } = await api.publishConfluence(processId);
+      watch(job_id);
+    } catch (e) {
+      setError(actionError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card space-y-2 p-4 print:hidden" data-testid="confluence-publish" aria-labelledby="confluence-publish-title">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 id="confluence-publish-title" className="text-[16px] font-semibold text-plum">
+          Confluence
+        </h3>
+        <LinkChips links={page} />
+        <span className="ml-auto" title={reason}>
+          <button type="button" className="btn-secondary" data-testid="publish-confluence" disabled={!!reason || running} onClick={publish}>
+            {running ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <BookOpen size={16} aria-hidden />}
+            <RoleLock reason={access.reason} />
+            {page.length > 0 ? "Republish to Confluence" : "Publish to Confluence"}
+          </button>
+        </span>
+      </div>
+      <p className="text-[12.5px] text-slate">
+        {access.reason ??
+          "The architecture page is built from this design record by code: the mapping, views, decisions and open questions."}
+      </p>
+      <ActionStatus stream={stream} error={error} testId="publish-confluence" summary={summary} />
+    </section>
+  );
+}

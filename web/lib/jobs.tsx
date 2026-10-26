@@ -9,7 +9,20 @@ import { api } from "./api";
 import { subscribeJob } from "./sse";
 import type { JobEvent } from "./types";
 
-export type JobKind = "analyse" | "design" | "build" | "verify" | "plan" | "eval";
+export type JobKind =
+  | "analyse"
+  | "design"
+  | "build"
+  | "verify"
+  | "plan"
+  | "eval"
+  // Connector publish actions (components/connectors): one stream per action and process.
+  | "github"
+  | "confluence"
+  | "jira-validate"
+  | "jira-design"
+  | "jira-verify"
+  | "figma";
 
 export interface JobStream {
   kind: JobKind;
@@ -90,6 +103,8 @@ export function JobsProvider({ children }: { children: React.ReactNode }) {
           // Build, verify and plan runs feed the stepper even when their tab is not open.
           qc.invalidateQueries({ queryKey: ["builds", processId] });
           for (const q of ["build", "parity", "plan"]) qc.invalidateQueries({ queryKey: [q] });
+          // A publish action's result: the links and attached frames it recorded.
+          for (const q of ["links", "figma-frames"]) qc.invalidateQueries({ queryKey: [q, processId] });
         }
         },
         {

@@ -422,6 +422,8 @@ export interface DesignRecord {
   open_questions: {
     question: string;
     recommendation: string;
+    /** The question's stable identity (16 hex): a Jira issue names it by this, never by its position. */
+    question_id?: string;
     /** The architect's verdict. Answering never moves the design hash, so G3 stays approved. */
     decision?: "answered" | "rejected" | null;
     answer?: string;
@@ -466,3 +468,57 @@ export interface ScenarioSet {
 
 export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam", "viewer.val"] as const;
 export type UserName = (typeof USERS)[number];
+
+// ---- Connector publish actions (api/app/routers/connectors.py)
+
+/** One row of GET /processes/{id}/links: something this process published to a connector. */
+export interface ConnectorLinkView {
+  id: string;
+  project_id: string;
+  process_id: string;
+  kind: "github" | "atlassian" | "figma" | string;
+  object_type: "branch" | "pull_request" | "confluence_page" | "jira_issue" | "figma_frame" | string;
+  /** What was published: a build id (GitHub), "architecture" (Confluence), `<type>:<ref>` (Jira). */
+  local_ref: string;
+  remote_id: string;
+  remote_url: string;
+  remote_version: number | null;
+  /** The remote object is gone (deleted in Jira or Confluence). */
+  stale: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type JiraItemType = "finding" | "question" | "parity";
+
+/** An item a Jira issue is filed for, by its stable identity (ruling X17). */
+export interface JiraItem {
+  type: JiraItemType;
+  ref: string;
+}
+
+/** A frame of a Figma file, to choose from (GET /figma/files/{key}/frames). */
+export interface FigmaFrame {
+  node_id: string;
+  name: string;
+  page: string;
+  width: number;
+  height: number;
+}
+
+/** A frame attached to a process as a design reference (GET /processes/{id}/figma/frames). */
+export interface FigmaFrameLink {
+  id: string;
+  file_key: string;
+  node_id: string;
+  name: string;
+  page: string;
+  text: string;
+  /** Empty when the install has no Figma web URL. */
+  url: string;
+  has_image: boolean;
+  image_note?: string | null;
+  stale: boolean;
+  updated_at: string;
+}

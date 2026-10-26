@@ -8,6 +8,7 @@ import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { Panel } from "@/components/tabs/build/Panel";
+import { JiraIssues, parityCandidates } from "@/components/connectors/JiraIssues";
 
 const STATUS: Record<string, { tone: "gate" | "error" | "decision" | "det"; text: string }> = {
   match: { tone: "gate", text: "match" },
@@ -126,6 +127,7 @@ function sourceLabel(label: string | null | undefined): string {
 /** Field-by-field parity of the latest verify run, against the expected output of the TIBCO model. */
 export function ParityTable({ buildId }: { buildId: string | null }) {
   const parity = useParity(buildId);
+  const { processId } = useAppState();
   const p = parity.data;
   return (
     <Panel
@@ -183,6 +185,15 @@ export function ParityTable({ buildId }: { buildId: string | null }) {
           {p.reports.map((r) => (
             <ScenarioCard key={r.run_id ?? r.scenario_id} r={r} />
           ))}
+          {processId ? (
+            <JiraIssues
+              processId={processId}
+              scope="verify"
+              title="Jira issues for unexplained differences"
+              candidates={parityCandidates(p.reports)}
+              empty="No unexplained difference to track."
+            />
+          ) : null}
           {p.noise_rules.length > 0 ? (
             <details className="text-[13px]">
               <summary className="cursor-pointer font-medium text-plum">Noise rules ({p.noise_rules.length})</summary>
