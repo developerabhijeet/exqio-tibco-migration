@@ -247,7 +247,7 @@ Settings, Connectors tab; `GET /api/connectors` shows the result.
 **Enabling one.** Create the service account and token with the permissions in the install guide,
 write the Key Vault secret, set `connectors.<kind>` (`enabled`, URLs, `allowedHosts`, `cidrs`),
 `helm upgrade`, then in Settings, Connectors set the Confluence space or Jira project and press
-"Test connection". Enable them one at a time; each test is audited.
+"Test connection" (the test needs the `admin` role). Enable them one at a time; each test is audited.
 
 **Rotating a token.** Write a new Key Vault version, wait for the CSI refresh (or restart api and
 worker), press "Test connection", then revoke the old token. A running push or publish keeps the
@@ -263,12 +263,12 @@ verification off; there is none.
 | Message or symptom | Cause and fix |
 |---|---|
 | 401 or "bad credentials" | The token is wrong, expired or revoked, or (Atlassian cloud) `ATLASSIAN_USER` is not the email of the token's account. Rotate as above. |
-| 403 | The token lacks a permission: GitHub `contents:write`, `pull_requests:write`, `metadata:read`; Confluence "add page" on the space; Jira "create issues" in the project; Figma `file_content:read`. GitHub branch protection or a required SSO authorization of the token (enterprise "Authorize SSO") also gives 403. |
+| 403 | The token lacks a permission: GitHub `contents:write`, `pull_requests:write`, `metadata:read`; Confluence View space, Add page, Edit page and Add attachment on the space; Jira Browse Projects, Create Issues and Edit Issues in the project; Figma `file_content:read` (files, frames, images) and `current_user:read` (the connection test). GitHub branch protection or a required SSO authorization of the token (enterprise "Authorize SSO") also gives 403. |
 | "host ... is not in this connector's allowed hosts" or "not allowed" | The URL or a redirect names a host outside `connectors.<kind>.allowedHosts` (or Settings holds a URL for another host). Add the host to the install values; the client never follows a redirect off the list or to plain http. |
 | Redirect to an SSO or login page | The service wants browser sign-in for that URL: the base URL points at the web front door instead of the API, or the token type is not accepted there. Use the API base URL (GitHub `apiUrl`, Confluence and Jira context path). |
-| Timeouts, "connection refused" | Egress. `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` should list the connector's `cidrs` on 443; check the Azure Firewall FQDN rule and private DNS for the name, and that the CIDR covers the address the name resolves to from inside the cluster (`kubectl -n exiqo exec deploy/exiqo-api -- python -c "import socket;print(socket.getaddrinfo('<host>',443))"`). The NetworkPolicy exists only when an enabled connector lists `cidrs`. |
+| Timeouts, "connection refused" | Egress. `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` should list the connector's `cidrs` on 443; check the Azure Firewall FQDN rule and private DNS for the name, and that the CIDR covers the address the name resolves to from inside the cluster (`kubectl -n exiqo exec deploy/exiqo-api -- python -c "import socket;print(socket.getaddrinfo('<host>',443))"`). The chart refuses to render an enabled connector without its own `cidrs` (and Figma `imageCidrs` when `imageHosts` is set); `egress.allowCidrs` does not substitute. |
 | Confluence publish answers 409 ("Confluence rejected the update twice") | Someone saved the page in Confluence while the platform was updating it: the platform re-reads the current version and retries once, and two conflicts in a row fail the job. Wait until the editing stops and publish again. |
-| Jira shows a 404 on a link, issue marked stale | The issue was deleted or moved out of the project. The link is marked stale; replace it by posting the same items to `POST /api/processes/<id>/jira/issues` with `"create_again": true`. |
+| Jira shows a 404 on a link, issue marked stale | The issue was deleted or moved out of the project. The link is marked stale; in the Jira issues dialog tick "Create again the issues that were deleted in Jira" (shown when a selected item has a stale link) and create them again. The API equivalent is `POST /api/processes/<id>/jira/issues` with `"create_again": true`. |
 | "the ... connector is not enabled" (409) | Off in the install or in Settings. Nothing was sent. |
 | "the ... connector has no credential: mount ..." (409) | The secret file is missing or empty: check the Key Vault object and `kubectl -n exiqo describe pod`. |
 

@@ -22,3 +22,9 @@ def test_a_failed_connection_test_fails_the_row(fake_api_with_github) -> None:
     out = run_demo_check(["--base-url", fake_api_with_github.url])
     assert "FAILED: host github.x is not allowed" in out
     assert "1 failed" in out
+
+
+def test_a_failed_test_without_a_body_is_rendered_readably(fake_api_with_github) -> None:
+    fake_api_with_github.tests.pop("github")  # the fake answers its no-test body with 200 ok false
+    out = run_demo_check(["--base-url", fake_api_with_github.url])
+    assert "FAILED: no test" in out

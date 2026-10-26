@@ -656,13 +656,13 @@ What each needs, and the least privilege for its token (use a GMF service accoun
 | Connector | Values | Key Vault secret | Token permissions |
 |---|---|---|---|
 | GitHub | `connectors.github.baseUrl` (and `apiUrl` when it is not `<baseUrl>/api/v3`), `allowedHosts`, `cidrs`, optional `commitEmail` | `GITHUB_TOKEN` (`keyVault.secrets.githubToken`) | Fine-grained token on the target repositories only: `contents:write`, `pull_requests:write`, `metadata:read`. Branch protection stays on: the platform pushes only `exiqo/...` branches and never to the default branch. |
-| Confluence | `connectors.atlassian.confluenceUrl`, `allowedHosts`, `cidrs`; the space is chosen in Settings, Connectors | `ATLASSIAN_TOKEN` (`keyVault.secrets.atlassianToken`); with `flavor: cloud` also `ATLASSIAN_USER` (the account email) | Space permission "add page" on that one space (and "add comment" is not needed). Data Center: a personal access token of the service account. |
-| Jira | `connectors.atlassian.jiraUrl` (same install block as Confluence); the project key is chosen in Settings | same secret as Confluence | Project permission "create issues" in that one project. |
-| Figma | `connectors.figma.apiUrl`, optional `webUrl` (frame links) and `imageHosts` with `imageCidrs` (thumbnails), `allowedHosts`, `cidrs` | `FIGMA_TOKEN` (`keyVault.secrets.figmaToken`) | Scope `file_content:read`. Read-only; nothing is written to Figma. |
+| Confluence | `connectors.atlassian.confluenceUrl`, `allowedHosts`, `cidrs`; the space is chosen in Settings, Connectors | `ATLASSIAN_TOKEN` (`keyVault.secrets.atlassianToken`); with `flavor: cloud` also `ATLASSIAN_USER` (the account email) | Space permissions on that one space: View space, Add page, Edit page (republishing and the 409 retry update the page) and Add attachment (the design record is attached); "Add comment" is not needed. Data Center: a personal access token of the service account. |
+| Jira | `connectors.atlassian.jiraUrl` (same install block as Confluence); the project key is chosen in Settings | same secret as Confluence | Project permissions in that one project: Browse Projects, Create Issues and Edit Issues (re-filing updates an issue; the platform finds earlier issues by label and reads the project and `myself` in the test). |
+| Figma | `connectors.figma.apiUrl`, optional `webUrl` (frame links) and `imageHosts` with `imageCidrs` (thumbnails), `allowedHosts`, `cidrs` | `FIGMA_TOKEN` (`keyVault.secrets.figmaToken`) | Scopes `file_content:read` (files, frames, images) and `current_user:read` (the connection test calls `GET /v1/me`). Read-only; nothing is written to Figma. |
 
 Firewall: allow the api and worker pods to reach exactly the `allowedHosts` of each enabled
 connector on TCP 443 (Azure Firewall FQDN rules for the names, and the CIDRs of their private
-endpoints or load balancers in `cidrs`). The chart renders NetworkPolicy `exiqo-connectors-egress` from
+endpoints or load balancers in `cidrs`). The chart refuses to render an enabled connector without its own `cidrs` (and Figma `imageCidrs` when `imageHosts` is set); `egress.allowCidrs` does not substitute. It renders NetworkPolicy `exiqo-connectors-egress` from
 those `cidrs` and adds the hosts to the About panel's egress list. A redirect to any host outside
 `allowedHosts` (typically an SSO page) is refused by the client, so a service that answers a token
 call with a redirect to a login host needs that host in `allowedHosts` or, more usually, a corrected
@@ -879,7 +879,7 @@ connectors (a pass). With connectors enabled it runs each one's connection test 
 example, `connectors: github test ok (exiqo-bot)`; a failing test fails the run. To exercise the
 real thing once, add `--publish --github-repo <owner>/<repo>`: one push and pull request, one
 Confluence page and one Jira issue on the acceptance project. Only the connection tests are run
-without `--publish`. The check can also run alone with `--only connectors`.
+without `--publish`. Connection tests need the `admin` role, so with OIDC the `--token` user must hold `admin` as well as the four gate roles; without it the step reports the 403. The check can also run alone with `--only connectors`.
 
 ## 9. Backup and restore
 

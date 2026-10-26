@@ -30,6 +30,10 @@ when none answers. It never prints key values.
                                  [--mode full|offline|toolchain-off]
                                  [--zip PATH]
 
+The ``connectors`` step (also ``--only connectors``) runs each enabled connector's connection test,
+which needs the ``admin`` role: ``ops.sam`` locally, and with ``--token`` a user who holds ``admin``.
+``--publish --github-repo OWNER/NAME`` also pushes one build, publishes one page and creates one issue.
+
 Without ``--api`` the API URL comes from API_URL, else from API_PORT in the environment or .env
 (the same key the Makefile and the web read), so this never probes a port the API has moved off.
 
@@ -571,14 +575,18 @@ class Flow:
             self.run.notes.append("connectors: SKIP (none enabled)")
             return
         for kind in enabled:
-            r = self.post(f"/connectors/{kind}/test", headers={"X-User": OPS})
+            r = self.post(f"/connectors/{kind}/test", headers={"X-User": OPS})  # admin only
             body = r.json() if r.status_code == 200 else {}
             ok = r.status_code == 200 and body.get("ok") is True
             who = body.get("account") or body.get("site") or ""
             if ok:
                 detail = f"ok ({who})" if who else "ok"
             else:
-                detail = body.get("message") or _first_line(r.text) or f"HTTP {r.status_code}"
+                try:
+                    msg = body.get("message") or r.json().get("detail")
+                except ValueError:
+                    msg = None
+                detail = f"HTTP {r.status_code}: {msg or _first_line(r.text)}" if r.status_code != 200 else (msg or "failed")
             self.run.check(s, f"{kind} test", ok, detail)
             self.run.notes.append(f"connectors: {kind} test {detail if ok else 'FAILED: ' + detail}")
         if not self.publish:
@@ -703,6 +711,8 @@ def main(argv: list[str] | None = None) -> int:
                     github_repo=args.github_repo)
         try:
             flow.connectors()
+        except StepFailed:
+            pass
         except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
             run.check("connectors", "unexpected error", False, f"{type(exc).__name__}: {exc}")
         print_table(run, [f"ExiQO Migrate {args.only} check against {args.api}"])

@@ -177,7 +177,11 @@ It creates a project, uploads the synthetic zip, scans, discovers, analyzes `Dea
 and `CreditApplicationIntake`, approves G1 to G3 as `sme.vicky` and `architect.lee`, builds,
 checks the infrastructure, verifies, runs the plan in connect-later mode and checks test data
 masking, readiness and the audit trail. It prints a pass/fail table and exits non-zero on any
-failed row. A `connectors` step runs the enabled connectors' connection tests (skipped when none is enabled). A `memory` step checks the project memory: available, a revision per
+failed row.
+
+A `connectors` step runs the enabled connectors' connection tests (skipped when none is enabled; the tests need `admin`).
+
+A `memory` step checks the project memory: available, a revision per
 content phase, lineage and search for each target, a non-empty latest diff, a curation note as
 `sme.vicky` that lands as a new revision, and an answer that cites a memory node.
 
