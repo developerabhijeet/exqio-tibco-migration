@@ -28,6 +28,7 @@ from api.app.config import Settings
 from api.app.models import Setting
 from api.app.services.infra import make_fernet
 from engine.agents.routing import TASK_WEIGHTS, RoutingTable
+from engine.stacks import STACK_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +85,12 @@ def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
     if "langfuse_enabled" in stored:
         settings.langfuse_enabled = bool(stored["langfuse_enabled"])
     if stored.get(DEFAULT_STACK_KEY):
-        settings.default_stack = str(stored[DEFAULT_STACK_KEY])
+        key = str(stored[DEFAULT_STACK_KEY])
+        if key in STACK_KEYS:
+            settings.default_stack = key
+        else:
+            log.warning("the stored default stack %r is not a known stack; using dotnet", key)
+            settings.default_stack = "dotnet"
     azure = stored.get(AZURE_KEY) or {}
     # A stored block is authoritative for the fields it carries, empty ones included: clearing the
     # key in the screen has to take it out of the live settings too, not just out of the row.
@@ -199,7 +205,7 @@ def settings_view(settings: Settings, toolchains: dict[str, Any],
             "app_secret_configured": bool(settings.app_secret),
         },
         "toolchains": toolchains,
-        "stacks": stack_views(settings),
+        "stacks": stack_views(settings, toolchains),
         "default_stack": settings.default_stack,
         "langfuse": {"enabled": settings.langfuse_enabled, "host": settings.langfuse_host or None,
                      "keys_configured": bool(settings.langfuse_public_key and settings.langfuse_secret_key)},

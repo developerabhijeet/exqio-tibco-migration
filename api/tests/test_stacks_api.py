@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from api.app.db import asyncpg_url, make_engine
 from api.app.routers import stacks as stacks_mod
+from api.app.services import settings as settings_svc
 from api.tests.conftest import TEST_DSN
 from api.tests.test_auth import (  # noqa: F401  fixtures and helper
     as_roles,
@@ -33,12 +34,26 @@ async def test_create_project_defaults_to_settings_default(client):
     assert (await client.get(f"/projects/{p['id']}")).json()["target_stack"] == "dotnet"
 
 
-async def test_unavailable_stack_is_refused_with_reason(client, monkeypatch):
-    monkeypatch.setattr(stacks_mod, "_toolchains", lambda: {"dotnet": {"present": True}})
+async def test_unavailable_stack_is_refused_with_reason(client):
     r = await client.post("/projects", json={"name": "a", "target_stack": "java"})
-    assert r.status_code == 422 and r.json()["detail"].startswith("java is not available: ")
+    assert r.status_code == 422 and r.json()["detail"] == "java is not available: not implemented yet"
     r = await client.put("/settings", json={"default_stack": "go"}, headers=ADMIN)
     assert r.status_code == 422 and r.json()["detail"].startswith("go is not available: ")
+
+
+async def test_not_enabled_stack_is_refused(client, app):
+    app.state.settings.enabled_stacks = "java"
+    r = await client.post("/projects", json={"name": "a", "target_stack": "dotnet"})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "dotnet is not available: not enabled on this install (stacks.enabled)"
+
+
+async def test_toolchain_presence_is_not_checked_on_the_api(client, monkeypatch):
+    monkeypatch.setattr(settings_svc, "detect_toolchains", dict)
+    p = await client.post("/projects", json={"name": "a", "target_stack": "dotnet"})
+    assert p.status_code == 201
+    stacks = (await client.get("/stacks")).json()["stacks"]
+    assert stacks[0]["reason"] == "toolchain missing: dotnet"  # shown, not enforced
 
 
 async def test_patch_stack_needs_architect_or_admin(client, project_id):
@@ -50,15 +65,32 @@ async def test_patch_stack_needs_architect_or_admin(client, project_id):
     assert r.status_code == 200 and r.json()["target_stack"] == "dotnet"
 
 
-async def test_patch_stack_refuses_unavailable_and_audits_change(client, project_id, monkeypatch):
-    monkeypatch.setattr(stacks_mod, "_toolchains",
-                        lambda: {"dotnet": {"present": True}, "java": {"present": True}, "mvn": {"present": True}})
+async def test_patch_stack_changes_it_and_audits_old_and_new(client, project_id, monkeypatch):
+    real = stacks_mod.stack_status
+    monkeypatch.setattr(stacks_mod, "stack_status", lambda key, tc, en: real("dotnet", tc, en).model_copy(
+        update={"key": key}))
+    lee = {"X-User": "architect.lee"}
+    r = await client.patch(f"/projects/{project_id}", json={"target_stack": "java"}, headers=lee)
+    assert r.status_code == 200 and r.json()["target_stack"] == "java"
+    assert (await client.get(f"/projects/{project_id}")).json()["target_stack"] == "java"
+    audit = [a for a in (await client.get(f"/projects/{project_id}/audit")).json()
+             if a["action"] == "project stack changed"]
+    assert len(audit) == 1 and audit[0]["detail"] == {"old": "dotnet", "new": "java"}
+    assert audit[0]["actor"] == "architect.lee"
+
+
+async def test_patch_stack_refuses_unavailable_and_unknown(client, project_id):
     lee = {"X-User": "architect.lee"}
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "java"}, headers=lee)
     assert r.status_code == 422 and r.json()["detail"] == "java is not available: not implemented yet"
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "cobol"}, headers=lee)
     assert r.status_code == 422
     assert (await client.patch("/projects/nope", json={"target_stack": "dotnet"}, headers=lee)).status_code == 404
+
+
+def test_invalid_stored_default_stack_falls_back_to_dotnet(settings, caplog):
+    settings_svc.apply_stored(settings, {"default_stack": "cobol"})
+    assert settings.default_stack == "dotnet" and "cobol" in caplog.text
 
 
 async def test_viewer_cannot_patch_in_oidc(oidc_client):  # noqa: F811
