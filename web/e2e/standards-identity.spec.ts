@@ -132,7 +132,7 @@ test.describe("authentication", () => {
     await expect(page.getByTestId("identity-panel")).not.toContainText("Auth:EntraId:TenantId");
   });
 
-  test("the sign-in preview says it contacts no provider and issues no token", async ({ page }) => {
+  test("the sign-in preview says nothing leaves the page and no credential is held", async ({ page }) => {
     await page.goto("/settings");
     await expect(page.getByTestId("identity-panel")).toBeVisible();
     await page.getByTestId("identity-instance").fill("https://login.microsoftonline.com/");
@@ -142,7 +142,7 @@ test.describe("authentication", () => {
     const dialog = page.getByTestId("sso-preview");
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("Microsoft Entra ID");
-    await expect(dialog).toContainText("contacts no identity provider and issues no token");
+    await expect(dialog).toContainText("Nothing leaves this page and no credential is held here.");
     await page.getByTestId("sso-continue").click();
     await expect(dialog).toContainText("Signed in");
     await expect(dialog).toContainText("api://gmf-credit");

@@ -111,7 +111,9 @@ export function Stepper({
           const Icon = STEP_ICON[s.key];
           const title = `${s.label}: ${STATUS_LABEL[s.status]}${reason ? `. ${reason}` : ""}`;
           return (
-            <li key={s.key} className="flex min-w-0 flex-1 items-center">
+            // The open step keeps its full width (label and status pill); the others share the rest
+            // and truncate first.
+            <li key={s.key} className={`flex min-w-0 items-center ${isActive ? "flex-none" : "flex-1"}`}>
               <button
                 ref={(el) => {
                   tabs.current[i] = el;

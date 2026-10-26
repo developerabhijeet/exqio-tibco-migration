@@ -139,3 +139,16 @@ export async function throughBuild(page: Page): Promise<void> {
   });
   await expect(start).toBeEnabled();
 }
+
+/** Open a step from the stepper: its button from 1024 px up, the compact menu below (whose
+ * button then names the step: "Step 2 of 8 · Discover"). */
+export async function gotoStep(page: Page, step: string): Promise<void> {
+  const full = page.getByTestId(`step-${step}`);
+  if (await full.isVisible()) await full.click();
+  else {
+    await page.getByTestId("stepper-compact").click();
+    await page.getByTestId(`step-option-${step}`).click();
+  }
+  if (await full.isVisible()) await expect(full).toHaveAttribute("aria-current", "step");
+  else await expect(page.getByTestId("stepper-compact")).toContainText(new RegExp(step, "i"));
+}

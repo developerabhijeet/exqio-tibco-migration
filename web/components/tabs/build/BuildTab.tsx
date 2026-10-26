@@ -103,7 +103,7 @@ export function BuildTab() {
 
   return (
     <div className="space-y-5" data-testid="build-tab">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 5</p>
           <h2 className="panel-title">Build</h2>
@@ -113,7 +113,7 @@ export function BuildTab() {
             same job. An engineer approves the build (G4).
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <ProcessPicker />
           <label className="flex items-center gap-2 text-md text-slate">
             Runtime

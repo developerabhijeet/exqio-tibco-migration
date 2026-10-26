@@ -46,7 +46,7 @@ export function JobLog({
   const lines = (stream?.events ?? []).filter((e) => e.event === "log" || e.event === "error");
   const over = stream && stream.status !== "running" ? (outcome ?? null) : null;
   return (
-    <section className="card p-4" data-testid={testId} aria-live="polite">
+    <section className="card card-compact" data-testid={testId} aria-live="polite">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-lg font-semibold text-heading">{title}</h3>
         {stream ? (

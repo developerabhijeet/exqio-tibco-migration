@@ -46,7 +46,7 @@ export function NextStep({
 
   if (!next) {
     return (
-      <div className="card flex items-center gap-2 px-4 py-3 text-md">
+      <div className="card card-compact flex items-center gap-2 text-md">
         {done ? (
           <>
             <CheckCircle2 size={18} className="text-gate" aria-hidden />
@@ -65,7 +65,7 @@ export function NextStep({
     <div
       data-testid="next-step"
       data-ready={done ? "yes" : "no"}
-      className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+      className="card card-compact flex flex-wrap items-center justify-between gap-3"
     >
       <p className="text-md text-slate">
         {done ? (

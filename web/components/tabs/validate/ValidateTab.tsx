@@ -70,7 +70,7 @@ export function ValidateTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 3</p>
           <h2 className="panel-title">Validate</h2>
@@ -79,7 +79,7 @@ export function ValidateTab() {
             business SME approves the rules (G1) and decides each finding (G2).
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <ProcessPicker />
           <button type="button" className="btn-secondary" onClick={() => setAskOpen(true)}>
             <MessageSquare size={16} aria-hidden /> Ask AI
@@ -120,7 +120,7 @@ export function ValidateTab() {
               }
             />
             {a?.analysed ? (
-              <section className="card p-4" data-testid="analysis-summary">
+              <section className="card card-compact" data-testid="analysis-summary">
                 <p className="label">Summary</p>
                 <h3 className="mt-0.5 text-lg font-semibold text-heading">{proc?.name}</h3>
                 <p className="mt-2 text-base leading-relaxed text-ink">{a.summary}</p>

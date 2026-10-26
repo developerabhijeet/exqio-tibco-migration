@@ -44,7 +44,7 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={`card break-inside-avoid p-5 ${className}`} data-testid={testId}>
+    <section className={`card break-inside-avoid ${className}`} data-testid={testId}>
       {eyebrow ? <p className="label">{eyebrow}</p> : null}
       <h3 className="text-xl font-semibold text-heading">{title}</h3>
       <div className="mt-3">{children}</div>
@@ -102,7 +102,7 @@ export function DesignTab() {
 
   return (
     <div className="space-y-5" data-testid="design-tab">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 4</p>
           <h2 className="panel-title">Design</h2>
@@ -111,7 +111,7 @@ export function DesignTab() {
             the narrative. An architect approves the record (G3).
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 print:hidden">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 print:hidden">
           <ProcessPicker />
           <button type="button" className="btn-secondary" disabled={!processId} onClick={() => setAuditOpen(true)}>
             <History size={16} aria-hidden /> Audit trail
@@ -231,7 +231,7 @@ export function DesignTab() {
                 <SequenceDiagram sequence={rec.sequence} />
               </Panel>
 
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Panel title="Solution layout" eyebrow="Projects and files">
                   <SolutionTree solution={rec.solution} />
                 </Panel>
@@ -242,13 +242,13 @@ export function DesignTab() {
                     <ul className="space-y-2 text-md">
                       {rec.contracts.map((c) => (
                         <li key={c.contract_id} className="rounded-btn border border-line p-2.5">
-                          <p className="font-mono text-sm font-semibold text-heading">{c.contract_id}</p>
+                          <p className="break-all font-mono text-sm font-semibold text-heading">{c.contract_id}</p>
                           <p className="mt-0.5">
                             <span className="label mr-1.5">Records</span>
                             <span className="font-mono text-xs">{(c.record_names ?? []).join(", ") || "none"}</span>
                           </p>
-                          {c.namespace ? <p className="font-mono text-xs text-slate">{c.namespace}</p> : null}
-                          {c.file ? <p className="font-mono text-xs text-slate">{c.file}</p> : null}
+                          {c.namespace ? <p className="break-all font-mono text-xs text-slate">{c.namespace}</p> : null}
+                          {c.file ? <p className="break-all font-mono text-xs text-slate">{c.file}</p> : null}
                         </li>
                       ))}
                     </ul>
@@ -260,7 +260,7 @@ export function DesignTab() {
                 <ConfigTable config={rec.config} ignored={rec.config_ignored} />
               </Panel>
 
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Panel title="Messaging" eyebrow="Azure Service Bus entities">
                   {rec.messaging.length === 0 ? (
                     <p className="text-md text-slate">No queues or topics.</p>
@@ -294,7 +294,7 @@ export function DesignTab() {
                     <ul className="space-y-2 text-md">
                       {rec.resilience.map((r) => (
                         <li key={r.resource_id} className="rounded-btn border border-line p-2.5">
-                          <p className="font-mono text-sm font-semibold text-heading">{r.resource_id}</p>
+                          <p className="break-all font-mono text-sm font-semibold text-heading">{r.resource_id}</p>
                           <p>
                             <span className="label mr-1.5">Timeout</span>
                             {r.timeout_ms != null ? `${r.timeout_ms} ms` : "none"}
@@ -314,7 +314,7 @@ export function DesignTab() {
                 </Panel>
               </div>
 
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Panel title="Decisions" eyebrow="Choice, alternatives, reason">
                   <DecisionList decisions={rec.decisions} />
                 </Panel>

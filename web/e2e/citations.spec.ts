@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page, type Response, type Route } from "@playwright/test";
-import { actAs, newProjectAndScan, openDealerProcess, SAMPLE_PROCESS_NAME } from "./helpers";
+import { actAs, gotoStep, newProjectAndScan, openDealerProcess, SAMPLE_PROCESS_NAME } from "./helpers";
 import { apiUrl } from "../scripts/root-env";
 import type { CitedText } from "../lib/citations-model";
 
@@ -315,6 +315,23 @@ test("a design decision's chip opens the rule it names", async ({ page }) => {
   await rule.click();
   await expect(page.getByTestId("step-validate")).toHaveAttribute("aria-current", "step");
   await expect(page.getByTestId("rule-card").first()).toBeVisible();
+});
+
+test("no horizontal scroll at 390 px", async ({ page }) => {
+  test.setTimeout(300_000);
+  // Every step with its cited content in place: rules, findings, the design and its decisions.
+  await design(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Wide content (tables, the canvas, code) scrolls inside its own region, never the page.
+  for (const step of ["upload", "discover", "validate", "design", "build", "verify", "deploy"]) {
+    await gotoStep(page, step);
+    await expect(page.locator("main")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${step}: page`).toBe(true);
+    expect(
+      await page.evaluate(() => document.querySelector("main")!.scrollWidth <= document.querySelector("main")!.clientWidth),
+      `${step}: main`,
+    ).toBe(true);
+  }
 });
 
 test("a review finding's chip opens the file at its line", async ({ page }) => {

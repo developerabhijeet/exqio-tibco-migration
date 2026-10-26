@@ -248,6 +248,11 @@ kbd,
     @apply rounded-card border border-line bg-surface shadow-e1;
     padding: var(--card-pad);
   }
+  /* The one compact variant: a card in a dense list (rule, finding, job log) or a one-line bar
+     (next step, a stat tile). 16 px all round; every other card keeps the default padding. */
+  .card-compact {
+    padding: 1rem;
+  }
   /* A card's header: title (and an eyebrow or one-line description) on the left, actions on the
      right, wrapping on a narrow card; 16 px above the body. */
   .card-header {

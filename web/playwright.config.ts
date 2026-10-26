@@ -76,7 +76,10 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
   timeout: 120_000,
-  expect: { timeout: 20_000 },
+  // The visual baselines (e2e/visual.spec.ts, tagged @visual) run only with E2E_VISUAL=1
+  // (`make e2e-visual`): screenshots are machine-sensitive, so `make e2e` leaves them out.
+  grepInvert: process.env.E2E_VISUAL === "1" ? undefined : /@visual/,
+  expect: { timeout: 20_000, toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: "disabled" } },
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],

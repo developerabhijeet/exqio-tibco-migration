@@ -25,7 +25,7 @@ export function SolutionTree({ solution }: { solution: DesignRecord["solution"] 
       <p className="flex items-center gap-1.5 font-semibold text-heading">
         <Package size={15} aria-hidden /> {solution.name ?? "Solution"}.sln
       </p>
-      <ul className="mt-2 grid gap-3 md:grid-cols-2">
+      <ul className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
         {solution.projects.map((p) => (
           <li key={p.name} className="rounded-btn border border-line bg-page p-3">
             <p className="font-semibold text-heading">{p.name}</p>

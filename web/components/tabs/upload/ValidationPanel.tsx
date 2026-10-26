@@ -47,7 +47,7 @@ export function ValidationPanel({ files, report }: { files: FileEntry[]; report:
   const unsupported = files.filter((f) => f.kind === "other");
   const unreadable = report?.failures ?? [];
   return (
-    <section className="card p-5" data-testid="validation-panel">
+    <section className="card" data-testid="validation-panel">
       {/* Collapsed: the checks are opened when they are discussed, not read off a full panel. */}
       <details className="group/validation">
         <summary className="cursor-pointer list-none">

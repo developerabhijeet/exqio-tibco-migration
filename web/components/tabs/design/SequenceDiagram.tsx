@@ -155,7 +155,7 @@ export function SequenceDiagram({ sequence }: { sequence: DesignRecord["sequence
         Dashed amber frames pair a guarded call with its <span className="font-mono">[otherwise]</span> exit. A bar on a
         lifeline is a step the service runs itself.
       </p>
-      <ol className="grid gap-x-6 gap-y-1 text-sm md:grid-cols-2">
+      <ol className="grid grid-cols-1 gap-x-6 gap-y-1 text-sm md:grid-cols-2">
         {steps.map((s, i) => (
           <li key={i} className="flex gap-2">
             <span className="w-5 shrink-0 text-right font-semibold text-heading">{i + 1}</span>

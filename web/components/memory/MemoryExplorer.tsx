@@ -482,7 +482,9 @@ export function MemoryExplorer() {
   const focusNode = shown?.nodes.find((n) => n.uid === (mode === "lineage" ? view.uid : focus));
 
   return (
-    <div className="flex h-[calc(100vh-15rem)] min-h-[780px] flex-col gap-6">
+    // Fills the content area (Chrome's column is a flex column at least as tall as it); below
+    // 780 px of height the page scrolls instead of squeezing the graph.
+    <div className="flex min-h-[780px] flex-1 flex-col gap-6">
       <PageHeader
         back={{ href: "/", label: "Back to the migration" }}
         eyebrow="Project"
@@ -492,12 +494,20 @@ export function MemoryExplorer() {
           <>
             <MemoryStatusPill status={status.data} />
             {projectReady ? <ReingestButton projectId={projectReady} /> : null}
-            {ready ? (
-              <button type="button" className="btn-secondary py-1.5 text-md" onClick={share} title="Copy a link to this view">
-                <Share2 size={15} aria-hidden />
-                {copied ? "Link copied" : "Share view"}
-              </button>
-            ) : null}
+            {/* Its slot is kept while memory loads, so the header does not shift (or rewrap on a
+                phone) when the button appears. */}
+            <button
+              type="button"
+              className={`btn-secondary py-1.5 text-md ${ready ? "" : "invisible"}`}
+              onClick={share}
+              title="Copy a link to this view"
+              disabled={!ready}
+              aria-hidden={ready ? undefined : true}
+              tabIndex={ready ? undefined : -1}
+            >
+              <Share2 size={15} aria-hidden />
+              {copied ? "Link copied" : "Share view"}
+            </button>
           </>
         }
       />

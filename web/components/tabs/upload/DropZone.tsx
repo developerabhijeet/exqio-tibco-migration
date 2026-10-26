@@ -120,7 +120,7 @@ export function DropZone({
         />
       </div>
       <form
-        className="card flex flex-col p-5"
+        className="card flex flex-col"
         onSubmit={(e) => {
           e.preventDefault();
           if (path.trim()) onSource({ kind: "path", path: path.trim() });

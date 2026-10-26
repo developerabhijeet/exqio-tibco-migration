@@ -20,7 +20,7 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db neo4j neo4j-test api worker web test test-all neo4j-test-reset e2e demo-check toolchain samples samples-zip nuget-cache \
+.PHONY: setup db neo4j neo4j-test api worker web test test-all neo4j-test-reset e2e e2e-visual demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
 	azure-validate pipeline-lint kind-tools kind-e2e
 
@@ -133,6 +133,16 @@ e2e: neo4j
 	echo "e2e: API on port $$api, web on port $$web"; \
 	cd web && ([ -d node_modules ] || npm install) && \
 		E2E_API_PORT=$$api E2E_WEB_PORT=$$web NEXT_PUBLIC_API_URL=http://localhost:$$api npx playwright test
+
+# Visual baselines (web/e2e/visual.spec.ts, opt in: `make e2e` skips @visual): the main screens in
+# both themes at 1440 and 390 px against the committed screenshots. UPDATE=1 rewrites them; run it
+# before a release (docs/deploy/RUNBOOK.md) and review the changed images in the diff.
+e2e-visual: neo4j
+	@ports=$$($(TWO_FREE_PORTS)); api=$(or $(E2E_API_PORT),$${ports% *}); web=$(or $(E2E_WEB_PORT),$${ports#* }); \
+	echo "e2e-visual: API on port $$api, web on port $$web"; \
+	cd web && ([ -d node_modules ] || npm install) && \
+		E2E_VISUAL=1 E2E_API_PORT=$$api E2E_WEB_PORT=$$web NEXT_PUBLIC_API_URL=http://localhost:$$api \
+		npx playwright test e2e/visual.spec.ts $(if $(UPDATE),--update-snapshots)
 
 # Acceptance run (design spec section 12; scripts/demo_check.py). Uses the API answering at API_URL,
 # or starts one on API_PORT for the run and stops it afterwards. Started here, the API uses

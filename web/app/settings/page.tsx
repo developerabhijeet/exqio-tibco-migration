@@ -99,7 +99,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
       }
     >
       {error ? <ErrorNote error={error} /> : null}
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
         <ScrollRegion label="Model assignments">
           <table className="table">
             <thead>

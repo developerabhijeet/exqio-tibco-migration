@@ -69,7 +69,7 @@ export function PlanView({
   const offline = !p || p.status === "connect_later" || p.status === "acknowledged";
 
   return (
-    <section className="card p-5" data-testid="plan-view" data-status={p?.status ?? "none"}>
+    <section className="card" data-testid="plan-view" data-status={p?.status ?? "none"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="label">terragrunt run --all -- plan</p>

@@ -73,7 +73,7 @@ export function BuildSteps({ rows }: { rows: BuildStepRow[] }) {
   const passed = rows.filter((r) => r.status === "passed").length;
   const failed = rows.filter((r) => r.status === "failed").length;
   return (
-    <section className="card p-4" data-testid="build-steps">
+    <section className="card card-compact" data-testid="build-steps">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-lg font-semibold text-heading">Steps</h3>
         <span className="text-sm text-slate">

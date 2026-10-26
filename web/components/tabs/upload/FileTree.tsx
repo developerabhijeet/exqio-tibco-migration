@@ -111,7 +111,7 @@ export function FileTree({
   // the moment an estate lands.
   if (collapsible) {
     return (
-      <section className="card p-5" data-testid="file-tree">
+      <section className="card" data-testid="file-tree">
         <details className="group/files">
           <summary className="cursor-pointer list-none">
             <h3 className="panel-title flex items-center gap-1.5">
@@ -130,7 +130,7 @@ export function FileTree({
     );
   }
   return (
-    <section className="card p-5" data-testid="file-tree">
+    <section className="card" data-testid="file-tree">
       <div className="flex items-center justify-between">
         <h3 className="panel-title">Files</h3>
         <span className="text-md text-slate">{files.length} files</span>

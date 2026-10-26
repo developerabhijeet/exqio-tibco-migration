@@ -216,7 +216,7 @@ export function DomainSelect({
       {rename.error ? <ErrorNote error={rename.error} /> : null}
       {merging && current ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-plum/25" role="presentation">
-          <div role="dialog" aria-modal="true" aria-label="Merge domain" className="card w-[440px] p-6 shadow-e3">
+          <div role="dialog" aria-modal="true" aria-label="Merge domain" className="card w-[440px] shadow-e3">
             <div className="flex items-start justify-between">
               <div>
                 <p className="eyebrow">Merge domain</p>

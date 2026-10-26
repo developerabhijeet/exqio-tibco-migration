@@ -99,7 +99,7 @@ export function TestDataPanel({ processId }: { processId: string }) {
             </div>
           ) : null}
           {d.notes.map((n) => (
-            <p key={n} className="text-sm text-decision">
+            <p key={n} className="break-words text-sm text-decision">
               {n}
             </p>
           ))}

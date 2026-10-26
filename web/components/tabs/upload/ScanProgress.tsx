@@ -15,7 +15,7 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
 
   const reached = STAGES.indexOf(scan.stage ?? "");
   return (
-    <section className="card p-5" data-testid="scan-progress" aria-live="polite">
+    <section className="card" data-testid="scan-progress" aria-live="polite">
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="panel-title">Scan</h3>
         {scan.status === "running" ? (

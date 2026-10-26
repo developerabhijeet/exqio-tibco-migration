@@ -51,7 +51,7 @@ export function UploadTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0">
         <p className="eyebrow">Step 1</p>
         <h2 className="panel-title">Upload the estate</h2>
       </div>
@@ -69,7 +69,7 @@ export function UploadTab() {
             <FileTree files={fileList} collapsible />
             <div className="space-y-4">
               <ValidationPanel files={fileList} report={lastUpload && report.data?.upload_id !== lastUpload ? null : (report.data ?? null)} />
-              <div className="card p-5">
+              <div className="card">
                 <p className="text-md text-slate">
                   The scan parses every process, resource, schema and SQL file, builds the neutral model, groups
                   processes into domains and writes the parse report.

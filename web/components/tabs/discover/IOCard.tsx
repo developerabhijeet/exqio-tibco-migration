@@ -64,11 +64,11 @@ export function IOCard({ processId }: { processId: string }) {
   const card = useIOCard(processId);
   const scenarios = useScenarios(processId);
   if (!card.data) {
-    return <section className="card p-5 text-md text-slate">{card.error ? (card.error as Error).message : "Loading I/O card"}</section>;
+    return <section className="card text-md text-slate">{card.error ? (card.error as Error).message : "Loading I/O card"}</section>;
   }
   const c = card.data;
   return (
-    <section className="card p-5" data-testid="io-card">
+    <section className="card" data-testid="io-card">
       <div className="flex items-baseline justify-between">
         <h3 className="panel-title">I/O card</h3>
         <span className="text-sm text-slate">Built from the parsed model</span>

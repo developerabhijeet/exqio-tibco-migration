@@ -11,7 +11,7 @@ const PURPOSE: Record<string, string> = {
 
 export function LaterStep({ step }: { step: StepState }) {
   return (
-    <section className="card p-8">
+    <section className="card">
       <p className="eyebrow">Step</p>
       <div className="mt-1 flex items-center gap-3">
         <h2 className="panel-title">{step.label}</h2>

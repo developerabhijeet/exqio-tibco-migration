@@ -48,7 +48,7 @@ export function RuleCard({
       data-testid="rule-card"
       data-rule={key}
       data-status={status}
-      className={`card p-4 ${status === "rejected" ? "opacity-70" : ""}`}
+      className={`card card-compact ${status === "rejected" ? "opacity-70" : ""}`}
     >
       <header className="flex flex-wrap items-center gap-2">
         <span className="rounded-btn bg-heading px-2 py-0.5 font-mono text-xs font-semibold text-page">{key}</span>

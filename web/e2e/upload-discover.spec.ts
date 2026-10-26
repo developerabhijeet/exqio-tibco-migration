@@ -6,10 +6,13 @@ const SAMPLE_ZIP = join(__dirname, "..", "..", "samples", "synthetic-gmf.zip");
 test("upload, scan, discover a domain and trace a step to its XML", async ({ page }) => {
   await page.goto("/");
 
-  // A fresh project so the run does not depend on earlier data.
+  // A fresh project so the run does not depend on earlier data; it must be the open one before
+  // the upload, or the estate goes to whichever project was open before (see newProjectAndScan).
+  const name = `e2e ${Date.now()}`;
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByLabel("Project name").fill(`e2e ${Date.now()}`);
+  await page.getByLabel("Project name").fill(name);
   await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
 
   // Upload tab: zip, file tree, scan, streamed progress, parse report.
   await page.getByTestId("zip-input").setInputFiles(SAMPLE_ZIP);
@@ -64,8 +67,10 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   await page.getByRole("button", { name: "New project" }).click();
-  await page.getByLabel("Project name").fill(`e2e theme ${Date.now()}`);
+  const name = `e2e theme ${Date.now()}`;
+  await page.getByLabel("Project name").fill(name);
   await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
   await page.getByTestId("zip-input").setInputFiles(SAMPLE_ZIP);
   await page.getByRole("button", { name: "Scan" }).click();
   await expect(page.getByTestId("counter-processes")).toHaveText("11");
@@ -116,5 +121,11 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.getByTestId("theme-light").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect.poll(() => tick.getAttribute("fill")).not.toBe(darkFill);
-  await expect.poll(() => tick.getAttribute("fill")).toBe("rgb(66, 84, 102)");
+  // The light slate token as the page defines it (--c-slate holds "r g b" channels), not a copy.
+  const slate = await page.evaluate(() => {
+    const [r, g, b] = getComputedStyle(document.documentElement).getPropertyValue("--c-slate").trim().split(/\s+/);
+    return `rgb(${r}, ${g}, ${b})`;
+  });
+  expect(slate).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  await expect.poll(() => tick.getAttribute("fill")).toBe(slate);
 });

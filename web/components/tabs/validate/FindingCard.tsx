@@ -46,7 +46,7 @@ export function FindingCard({
   };
 
   return (
-    <article data-testid="finding-card" data-finding={key} data-decision={decision} className="card p-4">
+    <article data-testid="finding-card" data-finding={key} data-decision={decision} className="card card-compact">
       <header className="flex flex-wrap items-center gap-2">
         <span className="rounded-btn bg-heading px-2 py-0.5 font-mono text-xs font-semibold text-page" title={key}>
           {shortKey(key)}

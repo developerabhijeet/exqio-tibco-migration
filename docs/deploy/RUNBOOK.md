@@ -503,7 +503,10 @@ Before:
 1. Read the release notes for migrations and for changes to the values schema; compare your
    `values.gmf.yaml` with the new `values.gmf.example.yaml`.
 2. Confirm the release was built, scanned and signed by the pipeline, and note the digests.
-3. Note the time (UTC) as the Postgres recovery point, and make sure no long build is running
+3. For a release that changes the web app, the visual baselines pass on the release commit:
+   `make e2e-visual` (main screens, both themes, 1440 and 390 px). A deliberate change of look is
+   re-baselined with `make e2e-visual UPDATE=1` and the new screenshots reviewed in the diff.
+4. Note the time (UTC) as the Postgres recovery point, and make sure no long build is running
    (`select kind, stage from jobs where status = 'running'`). Running jobs are drained, but a
    build is cheaper finished.
 

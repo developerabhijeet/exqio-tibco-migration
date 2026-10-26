@@ -7,7 +7,7 @@ import type { ProcessSummary, ReportItem, ScanReport } from "@/lib/types";
 
 function Counter({ label, value, testId, tone }: { label: string; value: number; testId: string; tone?: "error" }) {
   return (
-    <div className={`card px-4 py-3 ${tone === "error" && value > 0 ? "border-error/40 bg-error-bg" : ""}`}>
+    <div className={`card card-compact ${tone === "error" && value > 0 ? "border-error/40 bg-error-bg" : ""}`}>
       <p className="label">{label}</p>
       <p
         data-testid={testId}
