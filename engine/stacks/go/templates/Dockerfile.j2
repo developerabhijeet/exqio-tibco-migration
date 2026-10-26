@@ -25,6 +25,7 @@ ENV CGO_ENABLED=0 \
 # Download first so the module layer is cached until go.mod or go.sum changes.
 COPY go.mod go.sum ./
 RUN if [ -z "${GOPROXY}" ]; then echo "GOPROXY is empty: pass GMF's Go module mirror as a build argument" >&2; exit 1; fi \
+ && case "${GOPROXY}" in *direct*) echo "GOPROXY must name only the module mirror, not direct" >&2; exit 1 ;; esac \
  && go mod download
 
 COPY cmd ./cmd

@@ -15,8 +15,10 @@ from engine.stacks.contracts import ContractModel, ContractProp
 from engine.stacks.go.naming import GO_KEYWORDS
 from engine.stacks.go.text import doc, go_string, import_block
 
-_SCALAR = {"string": "string", "int": "int", "long": "int64", "double": "float64", "float": "float32",
-           "bool": "bool", "decimal": "json.Number", "ulong": "json.Number", "date": "string",
+# Strings, integers, floating point and booleans are tib's lenient scalars (lenient.go): a body is
+# checked the way Jackson reads it in the Java stack (X19 parity).
+_SCALAR = {"string": "tib.String", "int": "tib.Int", "long": "tib.Int64", "double": "tib.Float", "float": "tib.Float",
+           "bool": "tib.Boolean", "decimal": "json.Number", "ulong": "json.Number", "date": "string",
            "datetime": "time.Time", "time": "string", "bytes": "[]byte", "any": "json.RawMessage"}
 _NO_POINTER = frozenset({"[]byte", "json.RawMessage"})
 
@@ -80,6 +82,8 @@ def render(model: ContractModel, import_path: str, source: str) -> str:
                 imports.add("encoding/json")
             if "time." in gt:
                 imports.add("time")
+            if "tib." in gt:
+                imports.add(f"{import_path.split('/internal/', 1)[0]}/internal/tib")
             tag = f'`json:"{p.json_name}{"" if p.required else ",omitempty"}"`'
             if '"' in p.json_name or "`" in p.json_name or "," in p.json_name:
                 tag = f"`json:{go_string(p.json_name)}`"
@@ -99,5 +103,5 @@ def render(model: ContractModel, import_path: str, source: str) -> str:
     lines = [f"// Package {package} holds the contract records of {doc(source)}, generated from the TIBCO schema.",
              f"package {package}"]
     if imports:
-        lines += ["", *import_block(imports, "")]
+        lines += ["", *import_block(imports, import_path.split("/internal/", 1)[0])]
     return "\n".join(lines + body) + "\n"

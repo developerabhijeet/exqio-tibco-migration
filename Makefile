@@ -227,16 +227,24 @@ stack-locks-python:
 # ---------------------------------------------------------------- stack dependency locks
 # `make stack-locks` refreshes the checksums generated projects build with (GOFLAGS=-mod=readonly,
 # GOSUMDB=off): a scratch module requiring engine/stacks/go/versions.py's direct modules is tidied
-# against $$GOPROXY (GMF's module mirror) and its go.sum becomes engine/stacks/go/go.sum.lock.
-# Copy any changed indirect versions from the tidied go.mod (printed) into versions.py.
+# against $$GOPROXY (GMF's module mirror) with a fresh module cache and the checksum database on
+# ($$GOSUMDB, default sum.golang.org), then `go mod verify`, so every hash is checked against the
+# checksum database, never only trusted from the proxy; its go.sum, under a header saying so,
+# becomes engine/stacks/go/go.sum.lock. Copy any changed indirect versions from the tidied go.mod
+# (printed) into versions.py.
 GO ?= go
 STACK_LOCK_WORK := .tools/stack-locks
 stack-locks-go:
 	@test -n "$$GOPROXY" || { echo "set GOPROXY to the Go module mirror"; exit 1; }
 	rm -rf $(STACK_LOCK_WORK) && mkdir -p $(STACK_LOCK_WORK)/go
 	$(PY) -c 'from engine.stacks.go import versions as v; open("$(STACK_LOCK_WORK)/go/go.mod", "w").write("module stack-lock\n\ngo " + v.GO_MIN + "\n\nrequire (\n" + "".join(f"\t{m} {ver}\n" for m, ver in v.DIRECT) + ")\n"); open("$(STACK_LOCK_WORK)/go/main.go", "w").write("package main\n\nimport (\n" + "".join(f"\t_ \"{m}\"\n" for m, _ in v.DIRECT if not m.endswith("pgx/v5")) + "\t_ \"github.com/jackc/pgx/v5/stdlib\"\n)\n\nfunc main() {}\n")'
-	cd $(STACK_LOCK_WORK)/go && GOFLAGS=-mod=mod GOSUMDB=off GOTOOLCHAIN=local $(GO) mod tidy && cat go.mod
-	cp $(STACK_LOCK_WORK)/go/go.sum engine/stacks/go/go.sum.lock
+	cd $(STACK_LOCK_WORK)/go && GOMODCACHE=$(CURDIR)/$(STACK_LOCK_WORK)/mod GOFLAGS=-mod=mod GONOSUMDB= \
+		GOPRIVATE= GOTOOLCHAIN=local $(GO) mod tidy && GOMODCACHE=$(CURDIR)/$(STACK_LOCK_WORK)/mod $(GO) mod verify && cat go.mod
+	{ printf '%s\n' "# go.sum.lock: the checksums every generated Go project builds with (go.sum, GOFLAGS=-mod=readonly," \
+	  "# GOSUMDB=off). Written by make stack-locks: tidied with a fresh module cache and the checksum database" \
+	  "# ON ($${GOSUMDB:-sum.golang.org}), then go mod verify; refreshed $$(date +%F) with $$($(GO) version | cut -d' ' -f3)." \
+	  "# Lines starting with # are not copied to go.sum."; cat $(STACK_LOCK_WORK)/go/go.sum; } > engine/stacks/go/go.sum.lock
+	chmod -R u+w $(STACK_LOCK_WORK) 2>/dev/null || true
 	rm -rf $(STACK_LOCK_WORK)
 
 # ---------------------------------------------------------------- container images (deploy/docker)

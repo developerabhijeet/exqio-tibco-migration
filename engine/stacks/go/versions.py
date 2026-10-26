@@ -4,7 +4,8 @@ requires, pinned here once, with ``go.sum.lock`` (next to this file) holding the
 No agent adds a dependency. A generated project builds with ``GOFLAGS=-mod=readonly``,
 ``GOSUMDB=off``, ``GOTOOLCHAIN=local`` and ``GOTELEMETRY=off`` against GMF's ``GOPROXY``, so the
 checksums are ExiQO's, never resolved per build: refresh both with ``make stack-locks`` (a scratch
-module, ``GOFLAGS=-mod=mod go mod tidy`` against ``$GOPROXY``) and copy the require blocks here.
+module, ``GOFLAGS=-mod=mod go mod tidy`` against ``$GOPROXY`` with the checksum database on, then
+``go mod verify``) and copy the require blocks here.
 """
 from __future__ import annotations
 

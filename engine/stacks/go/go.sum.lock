@@ -1,3 +1,9 @@
+# go.sum.lock: the checksums every generated Go project builds with (go.sum, GOFLAGS=-mod=readonly,
+# GOSUMDB=off). Written by `make stack-locks`: a scratch module requiring versions.py's direct
+# modules, tidied with a fresh module cache and the checksum database ON (GOSUMDB=sum.golang.org,
+# or GMF's $GOSUMDB), then `go mod verify`; so every hash was checked against the checksum
+# database at refresh, not trusted from the proxy. Last refresh 2026-10-26, Go 1.27.3,
+# GOSUMDB=sum.golang.org: all modules verified. Lines starting with # are not copied to go.sum.
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3 h1:qgnWTiWs1G7AqcKZegFvkJD1bmXJcaDU3uC0ELSgZ5U=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3/go.mod h1:XtxD48QPInqoj+GMlcRlXHEYsoOxFnP6w2JgIZ9rDS4=
 github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0 h1:w3gDUJlJ0BfBsHH02DCBDwbkmMSXJqBj6nBOCo9iocY=

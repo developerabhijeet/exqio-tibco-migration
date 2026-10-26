@@ -2,8 +2,9 @@
 
 Every step runs with ``GOFLAGS=-mod=readonly``, ``GOSUMDB=off``, ``GOTOOLCHAIN=local`` and
 ``GOTELEMETRY=off``: the checksums are the generated ``go.sum`` (ExiQO's pinned lock), the module
-proxy is the platform's ``GOPROXY`` (GMF's mirror; ``off`` when the chart has none), and no step
-downloads a toolchain or reaches ``sum.golang.org``.
+proxy is the platform's ``GOPROXY`` (GMF's mirror; ``off`` when none is set, never Go's public
+default), a proxy list with ``direct`` or the public proxy is refused before ``go`` runs, and no
+step downloads a toolchain or reaches ``sum.golang.org``.
 
 * restore: ``go mod download``;
 * build: ``go build -o .exiqo-bin/server ./cmd/server`` then ``go vet ./...``; the
@@ -49,9 +50,25 @@ TEST_JSON = ".exiqo-bin/test.json"
 #: The Go settings every step runs with (global constraint).
 GO_SETTINGS = {"GOFLAGS": "-mod=readonly", "GOSUMDB": "off", "GOTOOLCHAIN": "local", "GOTELEMETRY": "off",
                "CGO_ENABLED": "0"}
-# What the platform's environment may set for a build: the module proxy (GMF's mirror) and the
-# caches the image points at /cache/stacks.
-_PLATFORM_KEPT = ("GOPROXY", "GONOPROXY", "GOPRIVATE", "GOMODCACHE", "GOCACHE", "GOPATH", "GOROOT")
+# What the platform's environment may set for a build besides GOPROXY: the caches the image points
+# at /cache/stacks. GOPRIVATE, GONOPROXY and GONOSUMDB are never passed: they route modules around
+# the mirror, straight to their VCS hosts.
+_PLATFORM_KEPT = ("GOMODCACHE", "GOCACHE", "GOPATH", "GOROOT")
+_ROUTING = ("GOPRIVATE", "GONOPROXY", "GONOSUMDB")
+# Go's own default proxy is a golang.org host: a proxy list naming one reaches public hosts.
+_PUBLIC_PROXY = "golang.org"
+
+
+def proxy_problem(proxy: str, explicit: bool) -> str | None:
+    """Why a GOPROXY may not be used, or None. ``direct`` (fetch from the VCS host) is always
+    refused; the public proxy only when it was inherited rather than passed to the runner on
+    purpose (a local check)."""
+    entries = [e.strip() for e in re.split(r"[,|]", proxy) if e.strip()]
+    if "direct" in entries:
+        return f"GOPROXY {proxy!r} contains direct, which fetches modules from their VCS hosts: use only the module mirror"
+    if not explicit and any(_PUBLIC_PROXY in e for e in entries):
+        return f"GOPROXY {proxy!r} is the public Go proxy: set it to GMF's module mirror (mirrors.goproxy)"
+    return None
 _DIAG = re.compile(r"^(?:\./)?(?P<file>[^\s:#][^:]*\.go):(?P<line>\d+)(?::(?P<col>\d+))?:\s*(?P<msg>.*?)\s*$")
 
 
@@ -111,17 +128,31 @@ class GoRunner:
 
     # environment
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """The child environment. GOPROXY fails closed: the platform's mirror, else ``off`` (an
+        empty GOPROXY would mean Go's public default)."""
         env = child_env()
         env.update({k: os.environ[k] for k in _PLATFORM_KEPT if os.environ.get(k)})
+        env["GOPROXY"] = os.environ.get("GOPROXY", "").strip() or "off"
         env.update(GO_SETTINGS)
         if Path(self.go).is_absolute():
             env["PATH"] = os.pathsep.join([str(Path(self.go).parent), env.get("PATH", "")])
         env.update(self.extra_env)
         if extra:
             env.update(extra)
+        for name in _ROUTING:
+            env.pop(name, None)
+        if not env.get("GOPROXY", "").strip():
+            env["GOPROXY"] = "off"
         return env
 
+    def proxy_problem(self, extra: dict[str, str] | None = None) -> str | None:
+        explicit = "GOPROXY" in self.extra_env or bool(extra and "GOPROXY" in extra)
+        return proxy_problem(self.env(extra)["GOPROXY"], explicit)
+
     def _run(self, cmd: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
+        problem = self.proxy_problem(env)
+        if problem:
+            return 2, problem
         try:
             code, out, timed_out = run_captured(cmd, cwd=self.root, env=self.env(env), timeout_s=self.timeout_s)
         except FileNotFoundError as exc:
@@ -211,4 +242,4 @@ class GoRunner:
         raise RuntimeError(f"service did not answer {HEALTH} within {timeout_s}s:\n{_tail(log_path)}")
 
 
-__all__ = ["GO_SETTINGS", "GoRunner", "find_tool", "parse_go_errors"]
+__all__ = ["GO_SETTINGS", "GoRunner", "find_tool", "parse_go_errors", "proxy_problem"]

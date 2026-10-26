@@ -124,7 +124,36 @@ func DSN(value string) string {
 			u.User = url.User(user)
 		}
 	}
+	if mode := sslMode(parts, host); mode != "" {
+		u.RawQuery = "sslmode=" + mode
+	}
 	return u.String()
+}
+
+// sslMode is the pgx sslmode of the Npgsql SSL Mode (SslMode) setting: Require and VerifyFull
+// verify the server certificate and host name (verify-full), unless Trust Server Certificate is
+// true (require: encrypted, not verified); VerifyCA, Prefer, Allow and Disable keep their meaning.
+// Without a setting an Azure Database for PostgreSQL host gets verify-full, any other host pgx's
+// default.
+func sslMode(parts map[string]string, host string) string {
+	mode := strings.ToLower(strings.ReplaceAll(first(parts["ssl mode"], parts["sslmode"]), " ", ""))
+	trust := strings.EqualFold(first(parts["trust server certificate"], parts["trustservercertificate"]), "true")
+	switch mode {
+	case "require", "verifyfull", "verify-full":
+		if trust {
+			return "require"
+		}
+		return "verify-full"
+	case "verifyca", "verify-ca":
+		return "verify-ca"
+	case "prefer", "allow", "disable":
+		return mode
+	case "":
+		if strings.HasSuffix(strings.ToLower(host), ".postgres.database.azure.com") {
+			return "verify-full"
+		}
+	}
+	return ""
 }
 
 func first(values ...string) string {

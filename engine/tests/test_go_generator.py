@@ -24,6 +24,7 @@ from engine.stacks.contracts import ContractEnum, ContractModel, ContractProp, C
 from engine.stacks.go import GoStack, versions
 from engine.stacks.go import contracts as go_contracts
 from engine.stacks.go.generator import CONTRACT_FILE, generate_go, prune_imports
+from engine.stacks.go.language import GoLanguage
 from engine.stacks.go.naming import GoNaming, env_key, go_file, module_path, snake
 from engine.stacks.go.printer import FUNCTIONS as GO_FUNCTIONS
 from engine.stacks.go.printer import ExprPrinter, strip_parens
@@ -269,7 +270,7 @@ def test_layout_and_starters(go_solution):
 def test_contract_structs(go_solution):
     text = _file(go_solution, "contracts/dealerfunding/funding_status_lookup_funding.go").content
     assert "package dealerfunding" in text
-    assert "\t// TibcoPath: /FundingStatusResponse/fundingId\n\tFundingId *int `json:\"fundingId,omitempty\"`" in text
+    assert "\t// TibcoPath: /FundingStatusResponse/fundingId\n\tFundingId *tib.Int `json:\"fundingId,omitempty\"`" in text
     assert "FundedAt *time.Time" in text and '"time"' in text
 
 
@@ -285,9 +286,10 @@ def test_contract_renderer_types():
     model.enums["Status"] = ContractEnum("Status", ["ON-HOLD", "1st", "ON_HOLD"])
     text = go_contracts.render(model, "gmf-credit/internal/core/contracts/loans", "x.xsd")
     assert "package loans" in text and '"encoding/json"' in text
-    assert "\t// TibcoPath: /Loan/count\n\tCount int `json:\"count\"`" in text
-    assert "Score *int `json:\"score,omitempty\"`" in text and "Notes []string" in text
+    assert "\t// TibcoPath: /Loan/count\n\tCount tib.Int `json:\"count\"`" in text
+    assert "Score *tib.Int `json:\"score,omitempty\"`" in text and "Notes []tib.String" in text
     assert "Status Status `json:\"status\"`" in text and "Amount json.Number" in text
+    assert '"gmf-credit/internal/tib"' in text  # the lenient scalars (X19: Jackson's coercions)
     assert '\tStatusOnHold  Status = "ON-HOLD"\n\tStatus1st     Status = "1st"\n\tStatusOnHold2 Status = "ON_HOLD"' in text
 
 
@@ -346,7 +348,8 @@ def test_the_whole_sample_application_generates(tmp_path, gmf_app):
             assert re.search(r"^package \w+$", f.content, re.MULTILINE), f.path
             if folder.startswith("internal/"):
                 assert f"\npackage {folder.rsplit('/', 1)[-1]}\n" in "\n" + f.content, f.path
-            assert f.content.count("{") == f.content.count("}"), f.path
+            code = GoLanguage().code_only(f.content)  # a brace in a rune or string literal is not a block
+            assert code.count("{") == code.count("}"), f.path
     service = files["internal/core/nightly_delinquency_scan_service.go"].content
     assert 'range tib.Items(tib.Path(state.Get("FindDelinquentAccounts"), "Record"))' in service
     assert "internal/infrastructure/jobs/nightly_delinquency_scan_job.go" in files
@@ -355,3 +358,11 @@ def test_the_whole_sample_application_generates(tmp_path, gmf_app):
 def test_a_design_for_another_stack_is_refused(tmp_path, gmf_app, gmf_designs, gmf_rules, gmf_findings):
     with pytest.raises(ValueError, match="is for dotnet, not go"):
         generate_go(gmf_app, [DFR], gmf_designs, gmf_rules, gmf_findings, [], tmp_path / "x", Mirrors())
+
+
+def test_contract_scalars_are_lenient_like_jackson():
+    """X19 parity: a request body is checked the way Jackson reads it in the Java stack (a number
+    for a string, "5" for an int, 12.0 for an int), still refusing real type errors."""
+    lenient = (TEMPLATES / "lenient.go.j2").read_text(encoding="utf-8")
+    for t in ("String", "Int", "Int64", "Float", "Boolean"):
+        assert f"func (v *{t}) UnmarshalJSON(data []byte) error" in lenient, t

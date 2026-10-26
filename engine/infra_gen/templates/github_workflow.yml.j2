@@ -105,6 +105,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+      - name: Check the module proxy
+        run: |
+          # an empty GOPROXY is Go's public default, and direct fetches from the VCS hosts
+          test -n "$GOPROXY" || { echo "set the GOPROXY repository variable to GMF's Go module mirror"; exit 1; }
+          case "$GOPROXY" in *direct*) echo "GOPROXY must name only the module mirror, not direct"; exit 1 ;; esac
       - name: Restore
         run: [[ ci.restore ]]
       - name: Build

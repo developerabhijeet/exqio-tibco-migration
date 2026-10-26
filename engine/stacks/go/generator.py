@@ -325,6 +325,7 @@ class _GoSolution:
         self.template("internal/tib/state.go", "tib_state.go.j2")
         self.template("internal/tib/fault.go", "fault.go.j2")
         self.template("internal/tib/masking.go", "masking.go.j2", names=sorted(SENSITIVE_NAMES))
+        self.template("internal/tib/lenient.go", "lenient.go.j2")
         for name in ("config", "auth", "devtoken", "health", "bus", "bus_memory", "bus_servicebus", "bus_dev"):
             self.template(f"internal/platform/{name}.go", f"{name}.go.j2")
         self.template("internal/core/message_bus.go", "message_bus.go.j2")

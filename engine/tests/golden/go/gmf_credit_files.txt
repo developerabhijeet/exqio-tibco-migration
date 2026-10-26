@@ -36,6 +36,7 @@ internal/platform/devtoken.go
 internal/platform/health.go
 internal/platform/settings.go
 internal/tib/fault.go
+internal/tib/lenient.go
 internal/tib/masking.go
 internal/tib/state.go
 internal/tib/text.go

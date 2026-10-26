@@ -406,3 +406,132 @@ def test_image_pins_the_go_toolchain_of_the_stack():
         assert env in df, env
     images = (REPO_ROOT / "deploy" / "tests" / "test_images.sh").read_text(encoding="utf-8")
     assert "go version" in images and "GOTOOLCHAIN" in images
+
+
+# ------------------------------------------------------------------ review fix round 1
+_LENIENT_CHECK = '''package tib_test
+
+import (
+	"testing"
+
+	"gmf-credit/internal/core/contracts/dealerfunding"
+	"gmf-credit/internal/tib"
+)
+
+type loan struct {
+	Count  tib.Int    `json:"count"`
+	Big    tib.Int64  `json:"big"`
+	Rate   tib.Float  `json:"rate"`
+	Active tib.Boolean `json:"active"`
+	Name   tib.String `json:"name"`
+}
+
+func TestInvalidIsAsLenientAsJackson(t *testing.T) {
+	ok := []string{
+		`{"count": 5, "big": 7, "rate": 1.5, "active": true, "name": "a"}`,
+		`{"count": "5", "big": "7", "rate": "1.5", "active": "true", "name": 123}`,
+		`{"count": 12.0, "big": 1e2, "name": false}`,
+		`{"count": null, "name": null}`,
+	}
+	for _, body := range ok {
+		v, _ := tib.Parse(body)
+		if got := tib.Invalid(v, &loan{}); got != "" {
+			t.Errorf("%s: refused: %s", body, got)
+		}
+	}
+	bad := []string{`{"count": "x"}`, `{"count": 12.5}`, `{"active": "yes"}`, `{"big": [1]}`, `{"name": {"a": 1}}`}
+	for _, body := range bad {
+		v, _ := tib.Parse(body)
+		if tib.Invalid(v, &loan{}) == "" {
+			t.Errorf("%s: accepted", body)
+		}
+	}
+	v, _ := tib.Parse(`{"dealId": 123, "dealerId": "D1", "fundingAmount": "31500.00", "contractDate": "2026-01-01"}`)
+	if got := tib.Invalid(v, &dealerfunding.FundingRequest{}); got != "" {
+		t.Errorf("the generated contract refuses a number for a string: %s", got)
+	}
+}
+'''
+
+_DSN_CHECK = '''package infrastructure_test
+
+import (
+	"testing"
+
+	"gmf-credit/internal/infrastructure"
+)
+
+func TestDSNKeepsTheSSLMode(t *testing.T) {
+	cases := map[string]string{
+		"Host=h;Port=5432;Database=d;Username=u;Password=p":                         "postgres://u:p@h:5432/d",
+		"Host=h;Database=d;Username=u;SSL Mode=Require":                             "postgres://u@h:5432/d?sslmode=verify-full",
+		"Host=h;Database=d;Username=u;SslMode=VerifyFull":                           "postgres://u@h:5432/d?sslmode=verify-full",
+		"Host=h;Database=d;Username=u;SSL Mode=Require;Trust Server Certificate=true": "postgres://u@h:5432/d?sslmode=require",
+		"Host=h;Database=d;Username=u;Ssl Mode=VerifyCA":                            "postgres://u@h:5432/d?sslmode=verify-ca",
+		"Host=h;Database=d;Username=u;SSL Mode=Disable":                             "postgres://u@h:5432/d?sslmode=disable",
+		"Host=x.postgres.database.azure.com;Database=d;Username=u":                  "postgres://u@x.postgres.database.azure.com:5432/d?sslmode=verify-full",
+	}
+	for in, want := range cases {
+		if got := infrastructure.DSN(in); got != want {
+			t.Errorf("%s: got %s, want %s", in, got, want)
+		}
+	}
+}
+'''
+
+
+@needs_go
+def test_contract_validation_and_dsn_in_go(go_solution_with_tests, tmp_path):
+    """I1 and M4 in the generated runtime: tib.Invalid coerces scalars like Jackson, DSN keeps the
+    Npgsql SSL mode (verify-full for Require and VerifyFull, and for Azure Database hosts)."""
+    import shutil
+
+    root = tmp_path / "copy"
+    shutil.copytree(go_solution_with_tests.root, root, ignore=shutil.ignore_patterns(".exiqo-bin"))
+    (root / "internal/tib/lenient_check_test.go").write_text(_LENIENT_CHECK, encoding="utf-8")
+    (root / "internal/infrastructure/dsn_check_test.go").write_text(_DSN_CHECK, encoding="utf-8")
+    r = GoRunner(root)
+    assert r.restore().ok
+    code, log = r._run([r.go, "test", "-count=1", "./internal/tib/", "./internal/infrastructure/"])
+    assert code == 0, log
+
+
+def test_runner_proxy_fails_closed(tmp_path, monkeypatch):
+    for name in ("GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB"):
+        monkeypatch.delenv(name, raising=False)
+    r = GoRunner(tmp_path, go="/usr/local/go/bin/go")
+    assert r.env()["GOPROXY"] == "off"  # no mirror configured: nothing is fetched
+    monkeypatch.setenv("GOPROXY", "")
+    assert GoRunner(tmp_path, go="go").env()["GOPROXY"] == "off"
+    monkeypatch.setenv("GOPRIVATE", "github.com/gmf/*")
+    monkeypatch.setenv("GONOPROXY", "*")
+    monkeypatch.setenv("GONOSUMDB", "*")
+    env = GoRunner(tmp_path, go="go").env()
+    assert not {"GOPRIVATE", "GONOPROXY", "GONOSUMDB"} & set(env)  # nothing routes around the mirror
+
+
+@pytest.mark.parametrize("proxy", ["https://goproxy.gmf.internal/go,direct", "direct",
+                                   "https://proxy.golang.org", "https://goproxy.gmf.internal/go|direct"])
+def test_runner_refuses_a_proxy_that_reaches_public_hosts(tmp_path, monkeypatch, proxy):
+    monkeypatch.setenv("GOPROXY", proxy)
+    go = _fake_tool(tmp_path, "go")
+    step = GoRunner(tmp_path, go=str(go)).restore()
+    assert not step.ok and "GOPROXY" in step.log
+    assert not (tmp_path / "calls.txt").exists()  # go never ran
+
+
+def test_runner_takes_the_configured_mirror_and_an_explicit_public_proxy(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOPROXY", "https://goproxy.gmf.internal/go")
+    go = _fake_tool(tmp_path, "go")
+    assert GoRunner(tmp_path, go=str(go)).restore().ok
+    # a caller that names the public proxy on purpose (a local check) may, never with direct
+    explicit = GoRunner(tmp_path, go=str(go), env={"GOPROXY": "https://proxy.golang.org"})
+    assert explicit.restore().ok
+    assert not GoRunner(tmp_path, go=str(go), env={"GOPROXY": "https://proxy.golang.org,direct"}).restore().ok
+
+
+def test_pipelines_and_dockerfile_refuse_an_empty_or_direct_proxy(go_infra):
+    for name in (".github/workflows/gmf-credit.yml", "azure-pipelines.yml"):
+        text = go_infra[name]
+        assert 'test -n "$GOPROXY"' in text and "*direct*" in text, name
+    assert "*direct*" in go_infra["Dockerfile"]
