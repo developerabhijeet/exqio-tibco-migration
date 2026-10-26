@@ -213,6 +213,7 @@ spec:
 {{- range $kind := list "github" "atlassian" "figma" -}}
 {{- $c := index $.Values.connectors $kind -}}
 {{- if and $c.enabled $c.cidrs }}{{ $connRules = append $connRules $c.cidrs }}{{ end -}}
+{{- if and $c.enabled (eq $kind "figma") $c.imageCidrs }}{{ $connRules = append $connRules $c.imageCidrs }}{{ end -}}
 {{- end }}
 {{- if $connRules }}
 ---

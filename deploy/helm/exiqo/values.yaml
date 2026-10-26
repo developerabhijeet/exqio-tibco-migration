@@ -235,8 +235,9 @@ mirrors:
 # Connectors (GitHub Enterprise, Confluence/Jira, Figma): all off. The install layer is the ceiling
 # for Settings -> Connectors. Hosts and addresses are GMF's own; the chart names no public host.
 # An enabled connector needs its keyVault.secrets.* token, allowedHosts (the hosts the client may
-# reach; also added to the About panel's egress list) and cidrs (NetworkPolicy, port 443) or a
-# non-empty egress.allowCidrs. Every URL is https://.
+# reach; also added to the About panel's egress list) and its own cidrs: the NetworkPolicy
+# exiqo-connectors-egress opens TCP 443 to exactly those (egress.allowCidrs does not substitute).
+# Every URL is https:// with no user info.
 connectors:
   # GMF's private CA, as PEM text (a ConfigMap mounted in api and worker) -- or keyVault.secrets.
   # connectorsCaBundle for a Key Vault object. Not both. Empty: the image's trust store.
@@ -260,6 +261,7 @@ connectors:
     apiUrl: ""           # Figma's REST base URL, when GMF allows its Figma organisation
     webUrl: ""           # base for frame links shown to people; empty -> names without links
     imageHosts: []       # optional: hosts of rendered images (off when empty)
+    imageCidrs: []       # required when imageHosts is set: their addresses, port 443
     allowedHosts: []
     cidrs: []
 

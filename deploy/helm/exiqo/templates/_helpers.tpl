@@ -75,7 +75,8 @@ The platform secrets: logical key (keyVault.secrets), the file name under /mnt/s
 objectAlias, or the CI Secret's key) and the variable the app reads it from (<NAME>_FILE).
 neo4jAuth is not here: only the Neo4j server reads it, from the Secret the CSI driver syncs.
 "roles" limits a secret to those pods: the worker runs generated code (dotnet test, terraform) as
-its own UID, so it gets only what its jobs use; sign-in secrets stay on the api.
+its own UID, so it gets only what it needs and not the sign-in secrets (those stay on the api).
+The connector secrets go to both: the worker pushes to GitHub and publishes for jobs.
 "when" ties a row to a feature (claude, langfuse, or a connector that is enabled; atlassianCloud is
 Atlassian enabled with flavor cloud). "noEnv" is a file the app reads by a path setting
 (CONNECTORS_CA_BUNDLE in the ConfigMap), not through <NAME>_FILE: GMF's private CA certificates.

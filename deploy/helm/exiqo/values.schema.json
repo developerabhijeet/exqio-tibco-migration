@@ -923,7 +923,10 @@
       "properties": {
         "caBundle": {
           "type": "string",
-          "pattern": "^(\\s*-----BEGIN CERTIFICATE-----[\\s\\S]*)?$"
+          "pattern": "^(\\s*-----BEGIN CERTIFICATE-----[\\s\\S]*)?$",
+          "not": {
+            "pattern": "PRIVATE KEY"
+          }
         },
         "github": {
           "type": "object",
@@ -948,11 +951,11 @@
             },
             "baseUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             },
             "apiUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             },
             "commitEmail": {
               "type": "string"
@@ -988,11 +991,11 @@
             },
             "confluenceUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             },
             "jiraUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             }
           }
         },
@@ -1019,11 +1022,11 @@
             },
             "apiUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             },
             "webUrl": {
               "type": "string",
-              "pattern": "^(https://.+)?$"
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
             },
             "imageHosts": {
               "type": "array",
@@ -1031,6 +1034,32 @@
                 "type": "string",
                 "minLength": 1,
                 "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "imageCidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "imageHosts": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "imageHosts"
+            ]
+          },
+          "then": {
+            "required": [
+              "imageCidrs"
+            ],
+            "properties": {
+              "imageCidrs": {
+                "minItems": 1
               }
             }
           }
@@ -1134,57 +1163,19 @@
             }
           },
           {
-            "anyOf": [
-              {
-                "properties": {
-                  "connectors": {
-                    "properties": {
-                      "github": {
-                        "properties": {
-                          "cidrs": {
-                            "minItems": 1
-                          }
-                        },
-                        "required": [
-                          "cidrs"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "github"
-                    ]
-                  }
-                }
-              },
-              {
-                "properties": {
-                  "egress": {
-                    "properties": {
-                      "allowCidrs": {
-                        "minItems": 1
-                      }
-                    },
-                    "required": [
-                      "allowCidrs"
-                    ]
-                  }
-                },
-                "required": [
-                  "egress"
-                ]
-              }
-            ]
-          },
-          {
             "properties": {
               "connectors": {
                 "properties": {
                   "github": {
                     "required": [
-                      "allowedHosts"
+                      "allowedHosts",
+                      "cidrs"
                     ],
                     "properties": {
                       "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
                         "minItems": 1
                       }
                     }
@@ -1260,57 +1251,19 @@
             }
           },
           {
-            "anyOf": [
-              {
-                "properties": {
-                  "connectors": {
-                    "properties": {
-                      "figma": {
-                        "properties": {
-                          "cidrs": {
-                            "minItems": 1
-                          }
-                        },
-                        "required": [
-                          "cidrs"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "figma"
-                    ]
-                  }
-                }
-              },
-              {
-                "properties": {
-                  "egress": {
-                    "properties": {
-                      "allowCidrs": {
-                        "minItems": 1
-                      }
-                    },
-                    "required": [
-                      "allowCidrs"
-                    ]
-                  }
-                },
-                "required": [
-                  "egress"
-                ]
-              }
-            ]
-          },
-          {
             "properties": {
               "connectors": {
                 "properties": {
                   "figma": {
                     "required": [
-                      "allowedHosts"
+                      "allowedHosts",
+                      "cidrs"
                     ],
                     "properties": {
                       "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
                         "minItems": 1
                       }
                     }
@@ -1386,57 +1339,19 @@
             }
           },
           {
-            "anyOf": [
-              {
-                "properties": {
-                  "connectors": {
-                    "properties": {
-                      "atlassian": {
-                        "properties": {
-                          "cidrs": {
-                            "minItems": 1
-                          }
-                        },
-                        "required": [
-                          "cidrs"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "atlassian"
-                    ]
-                  }
-                }
-              },
-              {
-                "properties": {
-                  "egress": {
-                    "properties": {
-                      "allowCidrs": {
-                        "minItems": 1
-                      }
-                    },
-                    "required": [
-                      "allowCidrs"
-                    ]
-                  }
-                },
-                "required": [
-                  "egress"
-                ]
-              }
-            ]
-          },
-          {
             "properties": {
               "connectors": {
                 "properties": {
                   "atlassian": {
                     "required": [
-                      "allowedHosts"
+                      "allowedHosts",
+                      "cidrs"
                     ],
                     "properties": {
                       "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
                         "minItems": 1
                       }
                     }

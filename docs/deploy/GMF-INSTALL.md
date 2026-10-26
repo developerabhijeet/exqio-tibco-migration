@@ -401,17 +401,18 @@ Secrets User on the vault. The object names below are the defaults of `keyVault.
 
 Connectors are off. Enabling one in `connectors.<kind>` needs: its secret name above, `allowedHosts`
 (the hosts the client may reach; they join `EGRESS_ALLOWLIST` in the About panel), HTTPS URLs, and
-`cidrs` (the chart renders NetworkPolicy `exiqo-connectors-egress`, api and worker to those
-addresses on 443) or a non-empty `egress.allowCidrs` that already covers them. The chart refuses
-(schema) an enabled connector missing any of these, an `http://` URL, or Atlassian cloud without
-`atlassianUser`. `values.gmf.example.yaml` has a commented example (GitHub Enterprise Server,
+its own `cidrs`: the chart renders NetworkPolicy `exiqo-connectors-egress` (api and worker to
+exactly those addresses, TCP 443; `egress.allowCidrs` does not substitute). The chart refuses
+(schema) an enabled connector missing any of these, a URL that is not `https://` or carries user
+info, or Atlassian cloud without `atlassianUser`. `values.gmf.example.yaml` has a commented example (GitHub Enterprise Server,
 Confluence and Jira Data Center). Figma's rendered-image host is a separate optional entry,
-`connectors.figma.imageHosts`; leave it empty to show frame names without thumbnails.
+`connectors.figma.imageHosts`; leave it empty to show frame names without thumbnails. With it set, `connectors.figma.imageCidrs`
+(its addresses, port 443, same policy) is required.
 
 If GMF's servers use a certificate from a private CA, give the connectors its PEM bundle (root and
 intermediates), by one of: `connectors.caBundle` in the values (a ConfigMap `exiqo-connectors-ca`
 mounted at `/etc/exiqo-connectors-ca/ca.pem` in api and worker), or a Key Vault object named by
-`keyVault.secrets.connectorsCaBundle`. Setting both is refused. The bundle is only a trust anchor
+`keyVault.secrets.connectorsCaBundle`. Setting both is refused, as is a bundle containing a private key. The bundle is only a trust anchor
 for the connectors' TLS (verification is never turned off); it holds no secret.
 
 Terraform creates the two database URLs. Create the rest in the same vault, using the names in
