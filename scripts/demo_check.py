@@ -662,6 +662,41 @@ class Flow:
         self.run.check(step, name, ok, detail)
         self.run.notes.append(f"connectors: {name} {'ok' if ok else 'FAILED: ' + detail}")
 
+    def exiqoian(self) -> None:
+        s = "exiqoian"
+        base = f"/exiqoian/{self.project_id}"
+        made = self.post(f"{base}/conversations", headers={"X-User": SME}, json={})
+        cid = made.json().get("id") if made.status_code == 201 else None
+        self.run.check(s, "conversation created", bool(cid), f"HTTP {made.status_code}", fatal=True)
+
+        def ask(question: str) -> dict:
+            r = self.post(f"{base}/conversations/{cid}/messages", headers={"X-User": SME}, json={"text": question})
+            return _done_message(r.text) if r.status_code == 200 else {}
+
+        answer = ask("What does DealerFundingRequest do?")
+        refs = ((answer.get("cited") or {}).get("refs")) or []
+        self.run.check(s, "answers with a citation", answer.get("verdict") == "answer" and len(refs) > 0,
+                       f"verdict {answer.get('verdict')}, {len(refs)} citation(s)" if answer else "no answer")
+        declined = ask("what is 2+2")
+        self.run.check(s, "declines off-topic", declined.get("verdict") == "off_topic",
+                       f"verdict {declined.get('verdict')}" if declined else "no answer")
+
+
+def _done_message(stream: str) -> dict:
+    """The ``message`` of the ``done`` event of a text/event-stream body ({} when there is none)."""
+    for frame in stream.replace("\r\n", "\n").split("\n\n"):
+        event, data = None, []
+        for line in frame.split("\n"):
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].lstrip())
+        if event == "done" and data:
+            try:
+                return json.loads("\n".join(data)).get("message") or {}
+            except ValueError:
+                return {}
+    return {}
 
 def _lineage_uids(entry: dict[str, Any]) -> list[str]:
     """The node uids a lineage entry reaches: the edge's ends and the other node."""
@@ -710,6 +745,26 @@ def print_table(run: Run, header: list[str]) -> None:
     failed = sum(1 for r in run.rows if not r.ok)
     print()
     print(f"{len(run.rows) - failed} passed, {failed} failed")
+
+
+def build_steps(flow: Flow) -> list[tuple[str, Callable[[], None], bool]]:
+    """(name, function, later steps depend on it): a failure in a step others depend on stops the
+    run; infra, verify, plan and evidence only end their own step."""
+    steps: list[tuple[str, Callable[[], None], bool]] = [
+        ("preflight", flow.preflight, True), ("upload", flow.upload, True), ("scan", flow.scan, True),
+        ("discover", flow.discover, False)]
+    steps += [(f"analyze {t}", lambda t=t: flow.analyze(t), True) for t in TARGETS]
+    steps += [(f"gates {t}", lambda t=t: flow.gates(t), True) for t in TARGETS]
+    for t in TARGETS:
+        steps += [(f"build {t}", lambda t=t: flow.build(t), True),
+                  (f"infra {t}", lambda t=t: flow.infra(t), False),
+                  (f"verify {t}", lambda t=t: flow.verify(t), False),
+                  (f"plan {t}", lambda t=t: flow.plan(t), False)]
+    steps.append(("evidence", flow.evidence, False))
+    steps.append(("memory", flow.memory, False))
+    steps.append(("exiqoian", flow.exiqoian, False))
+    steps.append(("connectors", flow.connectors, False))
+    return steps
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -786,21 +841,7 @@ def main(argv: list[str] | None = None) -> int:
 
     flow = Flow(run, client, mode, args.zip, token=bool(args.token), publish=args.publish,
                 github_repo=args.github_repo, stack=args.stack)
-    # (name, function, later steps depend on it): a failure in a step others depend on stops the
-    # run; infra, verify, plan and evidence only end their own step.
-    steps: list[tuple[str, Callable[[], None], bool]] = [
-        ("preflight", flow.preflight, True), ("upload", flow.upload, True), ("scan", flow.scan, True),
-        ("discover", flow.discover, False)]
-    steps += [(f"analyze {t}", lambda t=t: flow.analyze(t), True) for t in TARGETS]
-    steps += [(f"gates {t}", lambda t=t: flow.gates(t), True) for t in TARGETS]
-    for t in TARGETS:
-        steps += [(f"build {t}", lambda t=t: flow.build(t), True),
-                  (f"infra {t}", lambda t=t: flow.infra(t), False),
-                  (f"verify {t}", lambda t=t: flow.verify(t), False),
-                  (f"plan {t}", lambda t=t: flow.plan(t), False)]
-    steps.append(("evidence", flow.evidence, False))
-    steps.append(("memory", flow.memory, False))
-    steps.append(("connectors", flow.connectors, False))
+    steps = build_steps(flow)
 
     stopped_at: str | None = None
     for name, fn, blocking in steps:

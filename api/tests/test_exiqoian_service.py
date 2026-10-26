@@ -250,3 +250,16 @@ async def test_lexicon_parts_skip_stopwords_and_short_words(client, app):
     extra = {w for w in lex if (w in STOPWORDS or len(w) < 3) and w not in {"bw", "sql", "jms"}}
     assert extra == set(), extra
     assert query_terms("how to cook dosa") and "to" not in lex
+
+
+async def test_deleting_the_project_removes_its_conversations_and_messages(session, project_id):
+    """The runbook says so: both chat tables cascade from the project."""
+    from sqlalchemy import delete, func
+
+    from api.app.models import ChatConversation, Project
+    c = await create_conversation(session, project_id, "sme.vicky", "sme")
+    await go(session, project_id, c, "sme.vicky", "hi")
+    await session.execute(delete(Project).where(Project.id == project_id))
+    await session.commit()
+    for model in (ChatConversation, ChatMessage):
+        assert (await session.execute(select(func.count()).select_from(model))).scalar_one() == 0

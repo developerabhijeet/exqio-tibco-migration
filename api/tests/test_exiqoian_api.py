@@ -216,3 +216,11 @@ def test_the_web_intro_is_the_engines_intro_reply():
     source = (Path(__file__).resolve().parents[2] / "web" / "lib" / "exiqoian.ts").read_text(encoding="utf-8")
     match = re.search(r'export const INTRO =\s*\n?\s*"((?:[^"\\]|\\.)*)"', source)
     assert match and match.group(1) == INTRO_REPLY
+
+
+async def test_the_demo_check_questions_over_real_memory(memory_client, scanned):  # noqa: F811  needs the test Neo4j
+    """scripts/demo_check.py's exiqoian step asks exactly these two questions as sme.vicky."""
+    cid = await new_conversation(memory_client, scanned)
+    done = await last_done(memory_client, scanned, cid, "What does DealerFundingRequest do?")
+    assert done["verdict"] == "answer" and len(done["cited"]["refs"]) >= 1
+    assert (await last_done(memory_client, scanned, cid, "what is 2+2"))["verdict"] == "off_topic"
