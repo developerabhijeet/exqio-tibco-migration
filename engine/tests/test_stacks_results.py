@@ -107,3 +107,24 @@ def test_entity_expansion_bomb_is_not_expanded(tmp_path):
     except etree.XMLSyntaxError:
         return
     assert len(msg) < 100
+
+
+_BOMB = ('<!DOCTYPE t [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;">]>'
+         '<testsuite><testcase classname="k" name="n"><failure message="&c;"/></testcase></testsuite>')
+
+
+@pytest.mark.parametrize("label,data", [
+    ("padded", ('<?xml version="1.0"?><!--' + "x" * 70000 + "-->" + _BOMB).encode()),
+    ("utf16", ('<?xml version="1.0" encoding="UTF-16"?>' + _BOMB).encode("utf-16")),
+    ("bom", b"\xef\xbb\xbf" + ('<?xml version="1.0"?>' + _BOMB).encode()),
+    ("plain", ('<?xml version="1.0"?>' + _BOMB).encode()),
+])
+def test_entity_declarations_rejected_in_any_encoding(tmp_path, label, data):
+    f = tmp_path / f"{label}.xml"
+    f.write_bytes(data)
+    with pytest.raises(etree.XMLSyntaxError):
+        parse_junit([f])
+
+
+def test_jacoco_external_doctype_still_parses():
+    assert parse_jacoco(SAMPLES / "jacoco.xml", None) == pytest.approx(0.75)

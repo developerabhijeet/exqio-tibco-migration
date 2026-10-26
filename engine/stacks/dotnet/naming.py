@@ -9,13 +9,11 @@ Every member takes raw words (``StackNaming``) and cases them here.
 """
 from __future__ import annotations
 
-from engine.dotnet_gen.patterns import PATTERNS
+from engine.dotnet_gen.patterns import JDBC_PATTERNS, JMS_PATTERNS, PATTERNS
 from engine.stacks.contracts import ident, pascal
 
 CONFIG_ROOT = "Gmf"
 _PROJECT_SUFFIX = {"api": "Api", "core": "Core", "infrastructure": "Infrastructure", "tests": "Tests"}
-_JMS_TYPES = frozenset({"jms.receive", "jms.send", "jms.publish", "jms.reply", "jms.request_reply"})
-_JDBC_TYPES = frozenset({"jdbc.query", "jdbc.update", "jdbc.call"})
 # C# keywords (all lower case, so a PascalCase identifier never meets one).
 CSHARP_KEYWORDS = frozenset({
     "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class",
@@ -64,13 +62,35 @@ class DotnetNaming:
 
         One name is a substitution variable; two are a resource and one of its settings
         (``Gmf:<Module>:<Resource>:<Setting>``)."""
-        fallbacks = ("Var",) if len(names) == 1 else ("Resource", "Setting", *(("Value",) * len(names)))
-        parts = [ident(n, f) for n, f in zip(names, fallbacks, strict=False)]
+        if len(names) == 1:
+            parts = [ident(names[0], "Var")]
+        elif len(names) == 2:
+            parts = [ident(names[0], "Resource"), ident(names[1], "Setting")]
+        else:
+            raise ValueError(f"config_key takes a setting or a resource and its setting, not {names!r}")
         return ":".join([CONFIG_ROOT, ident(module, "Module"), *parts])
 
     def connection_key(self, resource: str) -> str:
         """``ConnectionStrings:<Resource>``, the section ``IConfiguration.GetConnectionString`` reads."""
         return f"ConnectionStrings:{ident(resource, 'Resource')}"
+
+    def row_names(self, pattern: str, words: dict[str, str]) -> tuple[str, str, str]:
+        """(file, class, method) of a row: the ``PatternSpec`` templates over the cased words.
+
+        Each ``TEMPLATE_KEYS`` value is PascalCase (``Step`` prefixed to one that starts with a digit),
+        ``resource`` loses a trailing ``Client``, ``exception`` is ``exception_name(fault)`` and
+        ``destination`` stays verbatim."""
+        resource = ident(words["resource"], "Step")
+        if resource.endswith("Client") and len(resource) > len("Client"):
+            resource = resource[: -len("Client")]
+        values = {"app": ident(words["app"], "App"), "process": ident(words["process"], "Process"),
+                  "activity": ident(words["activity"], "Step"), "starter": ident(words["starter"], "Step"),
+                  "resource": resource, "fault": ident(words["fault"], "Step"),
+                  "exception": self.exception_name(words["fault"]),
+                  "target": ident(words["target"], "Step") if words["target"] else "",
+                  "destination": words["destination"]}
+        file_t, class_t, method_t = self.pattern_paths(pattern)
+        return file_t.format(**values), class_t.format(**values), method_t.format(**values)
 
     def pattern_paths(self, pattern: str) -> tuple[str, str, str]:
         """(file, class, method) templates of ``pattern`` over ``patterns.TEMPLATE_KEYS``; the file
@@ -97,11 +117,11 @@ class DotnetNaming:
         files["api"] |= {"Program.cs", "appsettings.json"}
         files["core"] |= {"Contracts/TibcoPathAttribute.cs", f"Services/{process}Service.cs"}
         files["tests"] |= {f"{process}RulesTests.cs", f"{process}BranchTests.cs", f"{process}ScenarioTests.cs"}
-        if patterns & _JMS_TYPES:
+        if patterns & JMS_PATTERNS:
             files["core"].add("Messaging/IMessageBus.cs")
             files["infrastructure"] |= {"Messaging/ServiceBusMessageBus.cs", "Messaging/InMemoryMessageBus.cs"}
         if "throw" in patterns:
             files["api"].add("Errors/FaultExceptionHandler.cs")
-        if patterns & _JDBC_TYPES:
+        if patterns & JDBC_PATTERNS:
             files["tests"].add("TestDatabase.cs")
         return files

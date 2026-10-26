@@ -123,7 +123,10 @@ class StackNaming(Protocol):
       ``type_name`` and ``method_name`` already return escaped names.
     * ``platform``, ``config_file``, ``messaging_actor``: words the design writes into its text
       (open questions, ignored-config reasons, the sequence's message broker).
-    * ``pattern_paths``, ``layer_folder``, ``contract_target``, ``layout_scaffold``: where things go.
+    * ``row_names(pattern, words)``: the (file, class, method) of a design row, from the raw words
+      of ``patterns.TEMPLATE_KEYS`` (``activity`` ``"Lookup Dealer"``, ``process``, ``resource``, ...).
+      A stack builds them with its own ``type_name``, ``method_name`` and ``file_name``.
+    * ``layer_folder``, ``contract_target``, ``layout_scaffold``: where things go.
 
     Per stack, for the activity ``Lookup Dealer`` (``method_name("", "Lookup Dealer")``); .NET is
     implemented, the other rows are the targets Tasks 7, 12 and 14 implement:
@@ -161,7 +164,7 @@ class StackNaming(Protocol):
 
     def connection_key(self, resource: str) -> str: ...
 
-    def pattern_paths(self, pattern: str) -> tuple[str, str, str]: ...
+    def row_names(self, pattern: str, words: dict[str, str]) -> tuple[str, str, str]: ...
 
     def layer_folder(self, kind: str, app: str) -> str: ...
 
