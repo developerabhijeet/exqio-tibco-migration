@@ -506,3 +506,12 @@ def test_connection_string_keeps_the_ssl_mode(java_solution):
     assert 'case "require", "verifyfull", "verify-full":' in src and 'return trust ? "require" : "verify-full"' in src
     assert ".postgres.database.azure.com" in src
     assert 'uri.getRawQuery()' in src  # a postgresql:// URL keeps its own query (sslmode=...)
+
+
+def test_verify_modes_use_the_jdk_trust_store(java_solution):
+    """pgjdbc's default factory reads ~/.postgresql/root.crt: verify-ca/verify-full must name the JDK one."""
+    src = _file(java_solution, "DataSources.java").content
+    assert "org.postgresql.ssl.DefaultJavaSSLFactory" in src
+    assert "static String trustStoreFor(String jdbcUrl)" in src
+    # all three forms go through it
+    assert src.count("trustStoreFor(") >= 4

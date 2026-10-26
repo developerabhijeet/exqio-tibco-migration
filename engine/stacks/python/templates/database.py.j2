@@ -6,6 +6,7 @@ transaction group does, on its own connection (no pool: psycopg_pool is not in t
 
 from __future__ import annotations
 
+import os
 import urllib.parse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -35,6 +36,16 @@ def _sslmode(pairs: dict[str, str], host: str) -> str:
     return ""
 
 
+def _roots(parts: dict[str, str]) -> dict[str, str]:
+    """libpq needs a root certificate for verify-ca and verify-full and the image has no
+    ``~/.postgresql/root.crt``: read the system roots (Azure's are public) unless the string names
+    a root or ``PGSSLROOTCERT`` does (a private CA belongs in the runtime image's store)."""
+    if parts.get("sslmode") in ("verify-ca", "verify-full") and "sslrootcert" not in parts \
+            and not os.environ.get("PGSSLROOTCERT"):
+        parts["sslrootcert"] = "system"
+    return parts
+
+
 def conninfo(value: str) -> str:
     """A libpq connection string or URL for any of the three forms."""
     value = value.strip()
@@ -48,8 +59,13 @@ def conninfo(value: str) -> str:
             parts["password"] = query["password"]
         if query.get("sslmode") in ("disable", "allow", "prefer", "require", "verify-ca", "verify-full"):
             parts["sslmode"] = query["sslmode"]
-        return psycopg.conninfo.make_conninfo(**parts)
+        if "sslrootcert" in query:
+            parts["sslrootcert"] = query["sslrootcert"]
+        return psycopg.conninfo.make_conninfo(**_roots(parts))
     if value.startswith(("postgresql://", "postgres://")):
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(value).query))
+        if _roots(dict(query)) != query:  # verify-* without a root: add the system roots
+            return value + ("&" if "?" in value else "?") + "sslrootcert=system"
         return value
     pairs: dict[str, str] = {}
     for item in value.split(";"):
@@ -66,7 +82,7 @@ def conninfo(value: str) -> str:
     sslmode = _sslmode(pairs, parts["host"])
     if sslmode:
         parts["sslmode"] = sslmode
-    return psycopg.conninfo.make_conninfo(**parts)
+    return psycopg.conninfo.make_conninfo(**_roots(parts))
 
 
 CONNECT_TIMEOUT_S = 10  # seconds to open a connection

@@ -392,7 +392,8 @@ def _conninfo(python_solution):
 
     src = _file(python_solution, "database.py").content
     body = src[src.index("def _sslmode"):src.index("CONNECT_TIMEOUT_S")]
-    scope = {"psycopg": psycopg, "urllib": urllib}
+    import os
+    scope = {"psycopg": psycopg, "urllib": urllib, "os": os}
     exec(body, scope)  # noqa: S102 - generated code under test
     return scope["conninfo"]
 
@@ -413,3 +414,25 @@ def test_connection_string_keeps_the_ssl_mode(python_solution):
     azure = "Host=x.postgres.database.azure.com;Database=x;Username=u;Password=p"
     assert parse(azure)["sslmode"] == "verify-full"
     assert parse("jdbc:postgresql://h:5432/d?user=u&sslmode=require")["sslmode"] == "require"
+
+
+def test_verify_modes_read_the_system_roots_unless_a_root_is_given(python_solution, monkeypatch):
+    """libpq's verify-ca/verify-full need a root certificate; the image has no ~/.postgresql/root.crt."""
+    import psycopg
+    monkeypatch.delenv("PGSSLROOTCERT", raising=False)
+    conninfo = _conninfo(python_solution)
+
+    def parse(value):
+        return psycopg.conninfo.conninfo_to_dict(conninfo(value))
+
+    base = "Host=db.example;Database=x;Username=u;Password=p;"
+    assert parse(base + "SSL Mode=Require")["sslrootcert"] == "system"
+    assert parse(base + "SSL Mode=VerifyCA")["sslrootcert"] == "system"
+    assert "sslrootcert" not in parse(base + "SSL Mode=Require;Trust Server Certificate=true")
+    assert "sslrootcert" not in parse(base + "SSL Mode=Prefer")
+    assert parse("Host=x.postgres.database.azure.com;Database=x;Username=u;Password=p")["sslrootcert"] == "system"
+    assert parse("jdbc:postgresql://h/d?sslmode=verify-full")["sslrootcert"] == "system"
+    assert "sslrootcert=system" in conninfo("postgresql://u:p@h/d?sslmode=verify-full")
+    assert conninfo("postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=/ca.pem").count("sslrootcert") == 1
+    monkeypatch.setenv("PGSSLROOTCERT", "/etc/db-ca.pem")  # libpq reads it itself
+    assert "sslrootcert" not in parse(base + "SSL Mode=Require")

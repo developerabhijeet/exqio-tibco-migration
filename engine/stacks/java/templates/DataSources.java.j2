@@ -54,13 +54,13 @@ public class DataSources implements DisposableBean {
         config.setPoolName(name);
         config.setMaximumPoolSize(10);
         if (value.startsWith("jdbc:")) {
-            config.setJdbcUrl(value);
+            config.setJdbcUrl(trustStoreFor(value));
         } else if (value.startsWith("postgresql://") || value.startsWith("postgres://")) {
             URI uri = URI.create(value);
             String[] user = uri.getUserInfo() == null ? new String[0] : uri.getUserInfo().split(":", 2);
             int port = uri.getPort() > 0 ? uri.getPort() : 5432;
-            config.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath()
-                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()));
+            config.setJdbcUrl(trustStoreFor("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath()
+                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery())));
             if (user.length > 0) {
                 config.setUsername(user[0]);
             }
@@ -79,8 +79,8 @@ public class DataSources implements DisposableBean {
             String port = parts.getOrDefault("port", "5432");
             String database = parts.getOrDefault("database", "");
             String sslMode = sslMode(parts, host);
-            config.setJdbcUrl("jdbc:postgresql://" + host + ":" + port + "/" + database
-                    + (sslMode.isEmpty() ? "" : "?sslmode=" + sslMode));
+            config.setJdbcUrl(trustStoreFor("jdbc:postgresql://" + host + ":" + port + "/" + database
+                    + (sslMode.isEmpty() ? "" : "?sslmode=" + sslMode)));
             config.setUsername(parts.getOrDefault("username", parts.get("user id")));
             config.setPassword(parts.get("password"));
         }
@@ -111,6 +111,19 @@ public class DataSources implements DisposableBean {
             default:
                 return "";
         }
+    }
+
+    /**
+     * pgjdbc's default socket factory verifies against {@code ~/.postgresql/root.crt}, which the
+     * image does not have. For verify-ca and verify-full the JDK trust store is named instead (pgjdbc
+     * still checks the host name for verify-full); a URL that names its own factory or root is kept.
+     */
+    static String trustStoreFor(String jdbcUrl) {
+        boolean verify = jdbcUrl.contains("sslmode=verify-ca") || jdbcUrl.contains("sslmode=verify-full");
+        if (!verify || jdbcUrl.contains("sslfactory=") || jdbcUrl.contains("sslrootcert=")) {
+            return jdbcUrl;
+        }
+        return jdbcUrl + (jdbcUrl.contains("?") ? "&" : "?") + "sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory";
     }
 
     @Override
