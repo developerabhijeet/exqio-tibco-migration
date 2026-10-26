@@ -5,8 +5,8 @@ generation, theirs = the edited file (``git merge-file -p --diff3``). Fresh equa
 the edited file verbatim (``kept``); a clean merge is written (``merged``); a conflict keeps the
 edited file verbatim and writes the merge output, both sides marked, to
 ``.exiqo/conflicts/<path>.merge`` (``conflict``): the engineer's edit is the newest human decision.
-A file a model filled in the baseline (``ai``) is kept verbatim: its base is the model's output,
-not the generator's, so a merge would undo the fill. ``added`` files are copied; ``deleted`` files are removed unless they are a required scaffold the
+A file a model filled in the baseline (``ai``) merges against the baseline's filled file (X23):
+the edit is kept, and flagged as a ``conflict`` when the design changed since the baseline. ``added`` files are copied; ``deleted`` files are removed unless they are a required scaffold the
 fresh generation still has (``restored``). Every outcome but ``deleted`` is a ``hand`` path the
 agents leave alone (:func:`hand_paths`).
 
@@ -32,6 +32,8 @@ TMP_DIR = ".exiqo/tmp"
 MERGE_TIMEOUT_S = 60
 NO_BASELINE = "baseline folder missing: edit kept as uploaded"
 MODEL_WRITTEN = "model-written in the baseline build: edit kept as uploaded"
+SCAFFOLD_NOTE = ("# The design changed since the baseline build: the hand edit (a model-filled file) was kept.\n"
+                 "# Below is the scaffold the new design generates for this file; carry its changes over by hand.")
 #: conflict markers name the three sides
 LABELS = ("generated", "baseline", "hand edit")
 
@@ -111,14 +113,28 @@ def _write(solution: GeneratedSolution, path: str, data: bytes) -> None:
     solution.files.append(GenFile(path=path, content=content, origin="hand"))
 
 
+def _conflict_record(solution: GeneratedSolution, path: str, text: str) -> str:
+    record = f"{CONFLICTS_DIR}/{path}.merge"
+    target = _inside(solution.root, record)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8", newline="\n")
+    return record
+
+
 def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, origin: str, theirs: bytes,
-              git: str) -> MergeResult:
+              git: str, scaffold_changed: bool) -> MergeResult:
     if origin == "ai":
-        # The baseline file is a model's fill of the generator's scaffold, and the fresh generation
-        # is that scaffold again: merging would read every filled body as a generated change and
-        # put the placeholders back around the person's edit. The edit already holds the fill.
+        # X23: the merge base of a model-filled file is the baseline's filled file, not the fresh
+        # unfilled scaffold (merging against that would put the placeholders back). With the
+        # design unchanged that is a clean merge to the edit. With a new design the scaffold may
+        # have moved under the fill: the edit is kept and flagged, never silently re-scaffolded.
+        fresh_bytes = _read(solution.root, path)
         _write(solution, path, theirs)
-        return MergeResult(path=path, outcome="kept", detail=MODEL_WRITTEN)
+        if not scaffold_changed:
+            return MergeResult(path=path, outcome="kept", detail=MODEL_WRITTEN)
+        fresh = (fresh_bytes or b"").decode("utf-8", "replace")
+        record = _conflict_record(solution, path, f"{SCAFFOLD_NOTE}\n{fresh}")
+        return MergeResult(path=path, outcome="conflict", detail=record)
     base = _read(base_root, path) if base_root is not None and base_root.is_dir() else None
     if base is None:
         _write(solution, path, theirs)
@@ -142,21 +158,19 @@ def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, or
         return MergeResult(path=path, outcome="conflict", detail=f"{exc}: edit kept as uploaded")
     if conflicted:
         _write(solution, path, theirs)
-        record = f"{CONFLICTS_DIR}/{path}.merge"
-        target = _inside(solution.root, record)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(merged, encoding="utf-8", newline="\n")
-        return MergeResult(path=path, outcome="conflict", detail=record)
+        return MergeResult(path=path, outcome="conflict", detail=_conflict_record(solution, path, merged))
     _write(solution, path, merged.encode("utf-8"))
     return MergeResult(path=path, outcome="merged")
 
 
 def apply_edits(solution: GeneratedSolution, baseline_root: Path | None, edited_root: Path,
-                changes: Iterable[Any], required: set[str], git: str = "git") -> list[MergeResult]:
+                changes: Iterable[Any], required: set[str], git: str = "git",
+                scaffold_changed: bool = False) -> list[MergeResult]:
     """Apply ``changes`` (``path``, ``change``, ``origin``) from ``edited_root`` to the fresh
     generation in ``solution`` (on disk and in ``solution.files``), one result per change in order.
     ``required`` are the scaffold paths (solution and project files) a deletion may not remove when
-    the generation still has them."""
+    the generation still has them. ``scaffold_changed``: the design (or spec) moved since the
+    baseline build, so a model-filled file may sit on a different scaffold (X23)."""
     out: list[MergeResult] = []
     for c in changes:
         path, change = c.path, c.change
@@ -179,7 +193,7 @@ def apply_edits(solution: GeneratedSolution, baseline_root: Path | None, edited_
             _write(solution, path, theirs)
             out.append(MergeResult(path=path, outcome="added"))
         elif change == "modified":
-            out.append(_modified(solution, baseline_root, path, c.origin, theirs, git))
+            out.append(_modified(solution, baseline_root, path, c.origin, theirs, git, scaffold_changed))
         else:
             raise ValueError(f"{path}: unknown change {change!r}")
     return out

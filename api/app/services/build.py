@@ -505,7 +505,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     lang = stack.language
     if edit is not None and edit.infra_only:
         return await _run_infra_only(ctx, build_id, settings, edit, app, design, proc, rules, runtime, out_dir,
-                                     process_id, stack)
+                                     process_id, row.spec_hash, design_row.design_hash, stack)
     # X14a: the worker checks its own toolchain when the build starts (the API pods of a split
     # install have none). A non-.NET stack without its tools fails here, naming them, before any
     # model is paid to write code nothing could compile; .NET keeps building and says "dotnet not
@@ -542,7 +542,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         code_changes = [c for c in edit.changes if not edits_svc.infra_change(c)]
         git = await asyncio.to_thread(git_path)
         hand_results = await asyncio.to_thread(apply_edits, solution, edit.baseline_root, edit.edited_root,
-                                               code_changes, required_scaffold(stack, solution.name), git)
+                                               code_changes, required_scaffold(stack, solution.name), git,
+                                               edit.scaffold_changed(design_row.design_hash, row.spec_hash))
         hand = hand_paths(hand_results)
         solution.files = [f.model_copy(update={"origin": "hand"}) if f.path in hand else f for f in solution.files]
         agent_files = [f for f in solution.files if f.origin == "agent" and not lang.is_test_path(f.path)]
@@ -1057,12 +1058,44 @@ def _copy_baseline(edit: edits_svc.EditBuild, dest: Path) -> list[str]:
     return names
 
 
+def _code_tree_identical(edit: edits_svc.EditBuild, root: Path) -> bool:
+    """Every non-infrastructure file of the baseline is in ``root`` with the bytes its build_files
+    row recorded: the code, tests and their evidence are the baseline's."""
+    for r in edit.baseline_files:
+        if r["origin"] == "infra":
+            continue
+        path = root / r["path"]
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != r["sha256"]:
+            return False
+    return bool(edit.baseline_files)
+
+
+async def _carried_evidence(ctx: JobContext, edit: edits_svc.EditBuild) -> dict[str, Any] | None:
+    """The baseline build's steps, test results, metrics and status (X23), ``None`` without one."""
+    async with ctx.sessionmaker() as s:
+        base = await s.get(Build, edit.baseline_build_id) if edit.baseline_build_id else None
+        if base is None or base.status not in ("passed", "failed"):
+            return None
+        tests = (await s.scalars(select(TestResult).where(TestResult.build_id == base.id))).all()
+        metrics = (await s.scalars(select(Metric).where(Metric.build_id == base.id))).all()
+        return {"id": base.id, "status": base.status, "steps": [dict(x) for x in base.steps or []],
+                "tests": [{c: getattr(t, c) for c in ("name", "display_name", "kind", "rule_key", "ref", "file",
+                                                      "outcome", "duration_ms", "message", "has_body")}
+                          for t in tests],
+                "metrics": [{"name": m.name, "value": m.value, "unit": m.unit, "data": m.data} for m in metrics]}
+
+
 async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, edit: edits_svc.EditBuild, app: Any,
                           design: EngineDesign, proc: Any, rules: list[Any], runtime: str, out_dir: Path,
-                          process_id: str, stack: StackGenerator) -> dict[str, Any]:
-    """An edit set that changes only infrastructure: the baseline build's tree is copied (its code,
-    tests and their build files rows stand), the code stages are recorded as skipped, and the build
-    runs from ``infra`` with the hand edits merged after the infrastructure generation."""
+                          process_id: str, spec_hash: str | None, design_hash: str | None,
+                          stack: StackGenerator) -> dict[str, Any]:
+    """An edit set that changes only infrastructure: the baseline build's tree is copied, and the
+    build runs from ``infra`` with the hand edits merged after the infrastructure generation.
+
+    When the copied code tree is byte-identical to the baseline's and the build uses the same spec
+    and design, the code stages are the baseline's: its steps, test results, metrics (infra
+    validity aside) and status are carried, each marked "carried from build <id>" (X23). Otherwise
+    they are recorded as skipped and the build cannot pass."""
     await ctx.stage(STAGES[1])
     if edit.baseline_root is None:
         raise ValueError("the baseline build's folder is gone: an infrastructure-only resume copies it")
@@ -1079,11 +1112,24 @@ async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, ed
             raise ValueError(f"the baseline build has no {build_file}")
     await ctx.log(f"infrastructure-only edits: copied {len(names)} file(s) of build "
                   f"{(edit.baseline_build_id or '')[:12]} into {out_dir}")
+    carried = None
+    if not edit.scaffold_changed(design_hash, spec_hash) and await asyncio.to_thread(_code_tree_identical, edit,
+                                                                                      out_dir):
+        carried = await _carried_evidence(ctx, edit)
+    if carried is None:
+        await ctx.log("the code tree is not the baseline's (or the baseline has no result): nothing is carried")
+    note = f"carried from build {carried['id']}" if carried else INFRA_ONLY
     steps: list[dict[str, Any]] = []
+    carried_steps = {x.get("name"): x for x in (carried or {}).get("steps", [])}
     for stage in STAGES[2:11]:
         await ctx.stage(stage)
-        await ctx.log(INFRA_ONLY)
-        if stage in ("restore", "build", "format", "test"):
+        await ctx.log(note)
+        if stage not in ("restore", "build", "format", "test"):
+            continue
+        before = carried_steps.get(stage)
+        if before is not None:
+            steps.append({**before, "log": f"{note}\n{before.get('log') or ''}"})
+        else:
             steps.append(_step(stage, False, INFRA_ONLY, time.monotonic(), skipped=True))
 
     await ctx.stage(STAGES[11])
@@ -1102,6 +1148,8 @@ async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, ed
     infra_ok = validation.ok if validation.tools_present and any(validation.tools_present.values()) else None
     metrics = compute_metrics(rules, len(branch_transitions(proc)), TestRun(ok=False, log=INFRA_ONLY),
                               BuildResult(ok=False, files=0, log=INFRA_ONLY), False, infra_ok, process=proc.id)
+    if carried:
+        await ctx.log(f"metrics {note}; infrastructure validity measured here")
 
     await ctx.stage(STAGES[14])
     infra_paths = {f.path for f in infra_files}
@@ -1115,11 +1163,21 @@ async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, ed
     for r in sorted(rows, key=lambda r: r["path"]):
         digest.update(r["path"].encode("utf-8") + b"\0" + r["sha256"].encode("ascii") + b"\0")
     build_hash = digest.hexdigest()
+    # nothing was compiled or tested in this build: without carried evidence it cannot say "passed"
+    status = carried["status"] if carried else "failed"
     async with ctx.sessionmaker() as s:
         b = await s.get(Build, build_id)
         process = await s.get(Process, process_id)
         s.add_all(BuildFile(build_id=build_id, **r) for r in rows)
-        _store_metrics(s, build_id, metrics)
+        if carried:
+            s.add_all(TestResult(build_id=build_id, **t) for t in carried["tests"])
+            infra_metric = metrics.model_dump()["infra_ok"]
+            for m in carried["metrics"]:
+                value = (None if infra_metric is None else float(infra_metric)) if m["name"] == "infra_ok" \
+                    else m["value"]
+                s.add(Metric(build_id=build_id, name=m["name"], value=value, unit=m["unit"], data=m["data"]))
+        else:
+            _store_metrics(s, build_id, metrics)
         vjson = validation.model_dump(mode="json")
         _store_infra_assets(s, build_id, infra_files, vjson)
         b.steps = steps
@@ -1127,23 +1185,29 @@ async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, ed
         b.builder = {"filled": [], "rejections": [], "provider": None, "ai_available": False, "reviewers": [],
                      "test_engineer": {"filled": [], "warnings": [], "rejections": []},
                      "infra_only": True, "hand_edits": [r.model_dump() for r in results]}
+        if carried:
+            b.builder["carried_from"] = carried["id"]
         b.infra_validation = vjson
         b.output_dir = str(out_dir)
         b.build_hash = build_hash
-        b.status = "failed"  # nothing was compiled or tested in this build, so it cannot say "passed"
+        b.status = status
         b.finished_at = utcnow()
         gates = await gate_svc.gate_rows(s, process_id)
         reset = await gate_svc.reset_gates(s, process, gates, "G4", RESET_REASON, gate_svc.SYSTEM,
                                            gate_svc.SYSTEM, {"build_id": build_id, "build_hash": build_hash})
         gate_svc.audit(s, process, gate_svc.SYSTEM, "build finished", actor_kind=gate_svc.SYSTEM,
-                       detail={"build_id": build_id, "status": "failed", "build_hash": build_hash,
-                               "infra_only": True})
+                       detail={"build_id": build_id, "status": status, "build_hash": build_hash,
+                               "infra_only": True, "carried_from": carried["id"] if carried else None})
         await s.commit()
-    await ctx.log(f"stored {len(rows)} file(s); build hash {build_hash[:12]}; infrastructure-only"
+    await ctx.log(f"stored {len(rows)} file(s); build hash {build_hash[:12]}; infrastructure-only; status {status}"
                   + (f"; gates reset: {', '.join(reset)}" if reset else ""))
-    return {"build_id": build_id, "status": "failed", "build_hash": build_hash, "compile_ok": False, "tests": 0,
-            "tests_passed": 0, "restore_ok": False, "infra_ok": validation.ok, "gates_reset": reset,
-            "provider": None, "infra_only": True}
+    tests = (carried or {}).get("tests", [])
+    return {"build_id": build_id, "status": status, "build_hash": build_hash,
+            "compile_ok": bool(carried) and any(x.get("name") == "build" and x.get("ok") for x in steps),
+            "tests": len(tests), "tests_passed": sum(1 for t in tests if t["outcome"] == "passed"),
+            "restore_ok": bool(carried) and any(x.get("name") == "restore" and x.get("ok") for x in steps),
+            "infra_ok": validation.ok, "gates_reset": reset, "provider": None, "infra_only": True,
+            "carried_from": carried["id"] if carried else None}
 
 
 def _rejection(r: Any) -> dict[str, Any]:

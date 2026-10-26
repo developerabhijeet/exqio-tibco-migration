@@ -329,6 +329,13 @@ class EditBuild:
     infra_only: bool
     excluded: frozenset[str] = DOWNLOAD_EXCLUDED
     baseline_files: list[dict[str, Any]] = field(default_factory=list)  # the baseline's build_files rows
+    baseline_design_hash: str | None = None
+    baseline_spec_hash: str | None = None
+
+    def scaffold_changed(self, design_hash: str | None, spec_hash: str | None) -> bool:
+        """Whether this build generates from another design or spec than the baseline did, so a
+        model-filled file may sit on a different scaffold (X23)."""
+        return (self.baseline_design_hash, self.baseline_spec_hash) != (design_hash, spec_hash)
 
 
 def infra_change(change: FileChange) -> bool:
@@ -354,5 +361,7 @@ async def load_edit_build(session: AsyncSession, build: Build) -> EditBuild:
         baseline_root=root if root is not None and root.is_dir() else None, edited_root=edited,
         infra_only=iteration is not None and iteration.resume_phase == "infra",
         excluded=download_excluded(baseline if baseline is not None else build),
+        baseline_design_hash=baseline.design_hash if baseline is not None else None,
+        baseline_spec_hash=baseline.spec_hash if baseline is not None else None,
         baseline_files=[{"path": r.path, "origin": r.origin, "sha256": r.sha256, "size": r.size,
                          "process_id": r.process_id, "tibco_ref": r.tibco_ref} for r in rows])

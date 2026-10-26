@@ -171,3 +171,15 @@ def test_a_model_written_baseline_file_keeps_the_edit(tmp_solution, base_root, e
                       [FileChange(path="src/A.cs", change="modified", origin="ai", sha256="0")], set())
     assert res == [MergeResult(path="src/A.cs", outcome="kept", detail="model-written in the baseline build: edit kept as uploaded")]
     assert (sol.root / "src/A.cs").read_text() == "x\nFILLED\nc\n// hand\n"
+
+
+def test_a_model_written_file_under_a_changed_scaffold_is_a_conflict(tmp_solution, base_root, edited_root):
+    """X23: when the design changed, the regenerated scaffold may differ from the one the model
+    filled: the hand edit is kept and flagged, never silently re-scaffolded."""
+    sol = tmp_solution(ours="x\nNEW SCAFFOLD\nc\n")
+    res = apply_edits(sol, base_root("x\nFILLED\nc\n"), edited_root("x\nFILLED\nc\n// hand\n"),
+                      [FileChange(path="src/A.cs", change="modified", origin="ai", sha256="0")], set(),
+                      scaffold_changed=True)
+    assert res == [MergeResult(path="src/A.cs", outcome="conflict", detail=".exiqo/conflicts/src/A.cs.merge")]
+    assert (sol.root / "src/A.cs").read_text() == "x\nFILLED\nc\n// hand\n"
+    assert "NEW SCAFFOLD" in (sol.root / ".exiqo/conflicts/src/A.cs.merge").read_text()

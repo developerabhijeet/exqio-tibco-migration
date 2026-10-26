@@ -3,10 +3,12 @@
 and the infrastructure-only resume."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import select
 
-from api.app.models import Build, JobEvent
+from api.app.models import Build, EditSet, JobEvent
 from api.app.services import build as build_svc
 from api.app.services import fake_responses
 from api.tests import test_build_verify as build_tests
@@ -130,7 +132,8 @@ async def test_a_normal_build_has_no_hand_edits_stage(client, baseline_build):
 
 
 async def test_an_infra_edit_survives_the_infrastructure_generation(client, baseline_build, engineer, wait_terminal):
-    """Infra-only: the baseline tree is copied, code stages are skipped, the hand Dockerfile wins."""
+    """Infra-only: the baseline tree is copied, the code stages are carried from the baseline build
+    (X23: its test results and G4 evidence), and the hand Dockerfile wins."""
     z = edit(await download(client, baseline_build), {"Dockerfile": lambda t: t + "\n# hand note\n"})
     es = (await post_edits(client, baseline_build, z)).json()
     assert es["resume_phase"] == "infra"
@@ -144,11 +147,49 @@ async def test_an_infra_edit_survives_the_infrastructure_generation(client, base
     assert set(files) == set(base)
     assert (await file_text(client, build_id, TEST_FILE)) == (await file_text(client, baseline_build, TEST_FILE))
     view = (await client.get(f"/builds/{build_id}")).json()
-    skipped = {s["name"]: s for s in view["steps"]}
-    assert all(skipped[n]["skipped"] and "infrastructure-only edits" in skipped[n]["log"]
-               for n in ("restore", "build", "format", "test"))
+    baseline_view = (await client.get(f"/builds/{baseline_build}")).json()
+    assert view["status"] == baseline_view["status"] and view["builder"]["carried_from"] == baseline_build
+    steps = {s["name"]: s for s in view["steps"]}
+    for n in ("restore", "build", "format", "test"):
+        before = next(s for s in baseline_view["steps"] if s["name"] == n)
+        assert (steps[n]["ok"], steps[n]["skipped"]) == (before["ok"], before["skipped"])
+        assert steps[n]["log"].startswith(f"carried from build {baseline_build}")
+    carried = (await client.get(f"/builds/{build_id}/tests")).json()
+    original = (await client.get(f"/builds/{baseline_build}/tests")).json()
+    assert carried["cases"] == original["cases"] and carried["summary"] == original["summary"]
+    assert view["metrics"]["test_pass_rate"] == baseline_view["metrics"]["test_pass_rate"]
     names = await stages(client, job["job_id"])
     assert names.index("infra") > names.index("repair") and "infra validate" in names
+
+
+async def test_infra_only_without_an_identical_code_tree_carries_nothing(client, app, baseline_build, engineer,
+                                                                         wait_terminal):
+    z = edit(await download(client, baseline_build), {"Dockerfile": lambda t: t + "\n# hand note\n"})
+    es = (await post_edits(client, baseline_build, z)).json()
+    async with app.state.sessionmaker() as s:
+        root = (await s.get(Build, baseline_build)).output_dir
+    (Path(root) / AGENT_FILE).write_text("// changed on disk after the build\n", encoding="utf-8")
+    job = (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).json()
+    view = (await client.get(f"/builds/{(await wait_terminal(client, job['job_id']))['build_id']}")).json()
+    assert view["status"] == "failed" and "carried_from" not in view["builder"]
+    steps = {s["name"]: s for s in view["steps"]}
+    assert all(steps[n]["skipped"] and "infrastructure-only edits" in steps[n]["log"]
+               for n in ("restore", "build", "format", "test"))
+
+
+async def test_a_model_written_file_under_a_new_design_is_a_conflict(client, app, edit_set_two_files, engineer,
+                                                                     wait_terminal, baseline_build):
+    """X23: the design moved since the baseline (resume after re-design): the ai file is flagged."""
+    async with app.state.sessionmaker() as s:
+        (await s.get(Build, baseline_build)).design_hash = "f" * 64
+        (await s.get(EditSet, edit_set_two_files)).status = "designing"  # G3 approved again on the new design
+        await s.commit()
+    job = (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()
+    result = await wait_terminal(client, job["job_id"])
+    by_path = {h["path"]: h for h in (await client.get(f"/builds/{result['build_id']}")).json()["builder"]["hand_edits"]}
+    assert by_path[TEST_FILE]["outcome"] == "conflict"
+    assert by_path[TEST_FILE]["detail"] == f".exiqo/conflicts/{TEST_FILE}.merge"
+    assert by_path[AGENT_FILE]["outcome"] == "kept"  # agent files merge against the generator's scaffold
 
 
 async def test_infra_edit_in_a_code_build_is_merged_after_the_infrastructure(client, baseline_build, engineer,
