@@ -43,7 +43,7 @@ from .builder import (
     is_test_path,
     strip_comments,
 )
-from .designer import rules_block
+from .designer import IterationContext, build_iteration_block, rules_block
 from .jsonout import JsonOutputError
 from .prompting import ask_json, memory_block, render_process, render_prompt, wrap_source
 from .provider import MemoryItem, mask_sensitive
@@ -1146,6 +1146,7 @@ async def _fill_file(
     stack: str = "dotnet",
     entries: list[IndexEntry] | None = None,
     test_paths: set[str] | None = None,
+    iteration: IterationContext | None = None,
 ) -> GenFile | None:
     dotnet = stack == "dotnet"
     lang = get_stack(stack).language
@@ -1165,6 +1166,7 @@ async def _fill_file(
         design=_signatures(solution, process, stack, frozenset(test_paths or ())),
         contracts=contracts,
         memory=memory_block(memory_items),
+        iteration=build_iteration_block(iteration),
     )
     accepted: dict[str, str] = {}
     reasons: dict[str, str] = {}
@@ -1265,6 +1267,7 @@ async def fill_test_bodies(
     rejections: list[BuildRejection] | None = None,
     warnings: list[dict[str, str]] | None = None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> list[GenFile]:
     """Write the placeholder bodies of ``<Process>RulesTests.cs`` and ``<Process>BranchTests.cs``
     (another ``stack``: of the rule and branch tests its test index lists).
@@ -1285,7 +1288,7 @@ async def fill_test_bodies(
     test_paths = {f.path for f, _ in targets}
     for f, entries in targets:
         changed = await _fill_file(f, solution, process, rules, scenarios, memory_items, provider,
-                                   rejections, warnings, stack, entries, test_paths)
+                                   rejections, warnings, stack, entries, test_paths, iteration)
         if changed is not None:
             out.append(changed)
     return out

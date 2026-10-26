@@ -15,7 +15,7 @@ from sqlalchemy import cast, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app.models import Iteration, IterationInput, Job, Process, Project
+from api.app.models import Gate, Iteration, IterationInput, Job, Process, Project
 from api.app.services import gates as gate_svc
 from engine.agents.designer import IterationContext, IterationItem
 from engine.agents.provider import mask_sensitive
@@ -224,3 +224,50 @@ async def design_context(session: AsyncSession, process_id: str, n: int) -> Iter
         .order_by(IterationInput.created_at, IterationInput.id))).all()
     return IterationContext(n=n, inputs=[IterationItem.model_validate(i) for i in inputs],
                             requirements=row.requirements or "")
+
+
+#: The status an iteration takes when a phase job of one of its processes starts.
+JOB_STATUS: dict[str, str] = {"design": "designing", "build": "building", "verify": "verifying", "plan": "deploying"}
+DEPLOYED_NOTE = "G6 approved for every process"
+
+
+def status_for_job(kind: str) -> str | None:
+    return JOB_STATUS.get(kind)
+
+
+async def follow_job(session: AsyncSession, kind: str, process_id: str | None, payload: dict) -> Iteration | None:
+    """A phase job of ``process_id`` started: its iteration (the one stamped on the job, else the
+    process's current one) takes the job's status. Iteration 1 and ended iterations stay as they
+    are, as does an iteration that no longer names the process. Flushes; the caller commits."""
+    status = status_for_job(kind)
+    if status is None or process_id is None:
+        return None
+    process = await session.get(Process, process_id)
+    if process is None:
+        return None
+    n = await job_iteration(session, payload, process_id)
+    row = await session.scalar(select(Iteration).where(Iteration.project_id == process.project_id,
+                                                       Iteration.n == n))
+    if (row is None or row.n == 1 or row.status not in ACTIVE_STATUSES or row.status == status
+            or process_id not in (row.process_ids or [])):
+        return None
+    return await set_status(session, row.id, status)
+
+
+async def close_when_deployed(session: AsyncSession, process_id: str) -> list[Iteration]:
+    """G6 was approved for ``process_id``: every active iteration naming it whose processes all have
+    G6 approved now is closed by the system. Flushes; the caller commits."""
+    process = await session.get(Process, process_id)
+    if process is None:
+        return []
+    rows = (await session.scalars(
+        select(Iteration).where(Iteration.project_id == process.project_id, Iteration.n > 1,
+                                Iteration.status.in_(ACTIVE_STATUSES), _naming(process_id)))).all()
+    closed: list[Iteration] = []
+    for row in rows:
+        approved = set((await session.scalars(
+            select(Gate.process_id).where(Gate.process_id.in_(row.process_ids), Gate.gate == "G6",
+                                          Gate.state == "approved"))).all())
+        if set(row.process_ids) <= approved:
+            closed.append(await close(session, row.id, INITIAL_ACTOR, DEPLOYED_NOTE))
+    return closed

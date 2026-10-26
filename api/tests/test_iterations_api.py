@@ -35,10 +35,14 @@ def sme() -> dict[str, str]:
 
 @pytest.fixture
 async def built_and_failed(app, client, monkeypatch) -> tuple[str, str]:
+    return await make_built_and_failed(app, client, monkeypatch)
+
+
+async def make_built_and_failed(app, client, monkeypatch, ir_id: str = build_tests.FSL) -> tuple[str, str]:
     """A designed process (G1-G3 approved) whose build failed (a failed step, a failing test) and
     whose G4 was approved on an earlier build, so the reset has something to move."""
     monkeypatch.setattr(build_svc, "find_dotnet", lambda: None)
-    pid, proc_id, _ = await _designed(client)
+    pid, proc_id, _ = await _designed(client, ir_id)
     async with app.state.sessionmaker() as s:
         proc = await s.get(Process, proc_id)
         build = Build(process_id=proc_id, status="failed",

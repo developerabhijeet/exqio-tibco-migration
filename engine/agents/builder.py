@@ -26,7 +26,7 @@ from engine.ir.models import Process
 from engine.stacks import get_stack
 from engine.stacks.base import ForbiddenPattern, SourceLanguage
 
-from .designer import rules_block
+from .designer import IterationContext, build_iteration_block, rules_block
 from .jsonout import JsonOutputError
 from .prompting import ask_json, memory_block, render_process, render_prompt, wrap_source
 from .provider import MemoryItem, mask_sensitive
@@ -499,6 +499,7 @@ async def _fill_one(
     provider: Any,
     rejections: list[BuildRejection] | None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> GenFile | None:
     system, user = render_prompt(
         "builder", stack,
@@ -508,6 +509,7 @@ async def _fill_one(
         design=contract_text(solution, design),
         rules=rules_block(rules_for(rules, design, t.activities)),
         memory=memory_block(memory_items),
+        iteration=build_iteration_block(iteration),
     )
     reason = ""
     for attempt in (1, 2):
@@ -552,6 +554,7 @@ async def fill_method_bodies(
     rejections: list[BuildRejection] | None = None,
     others: list[tuple[DesignRecord, Process]] | None = None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> list[GenFile]:
     """Fill the placeholder bodies of this process's agent-written files, one model call per file.
 
@@ -580,7 +583,7 @@ async def fill_method_bodies(
         mine: list[BuildRejection] = []
         async with limit:
             filled = await _fill_one(t, solution, design, process, rules, memory_items, provider, mine,
-                                     stack)
+                                     stack, iteration)
         return filled, mine
 
     results = await asyncio.gather(*(fill(t) for t in targets))

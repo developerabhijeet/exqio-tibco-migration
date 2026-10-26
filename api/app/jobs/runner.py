@@ -428,6 +428,7 @@ class JobWorker:
                 async with self.sessionmaker() as s:  # a requeued job continues its sequence
                     ctx._seq = await s.scalar(select(func.max(JobEvent.seq))
                                               .where(JobEvent.job_id == job_id)) or 0
+                await self._follow_iteration(job_id, kind, payload)
                 services = await self._job_services()
                 result = await handler_for(kind)(ctx, services)
             except asyncio.CancelledError:
@@ -461,6 +462,21 @@ class JobWorker:
             self._reasons.pop(job_id, None)
             self._finishing.discard(job_id)
             self._wake.set()  # a slot is free
+
+    async def _follow_iteration(self, job_id: str, kind: str, payload: dict[str, Any]) -> None:
+        """A phase job starts: its process's iteration takes the job's status (design ->
+        designing, build -> building, verify -> verifying, plan -> deploying). Never fails the job."""
+        from api.app.services import iterations  # services import this module
+
+        if iterations.status_for_job(kind) is None:
+            return
+        try:
+            async with self.sessionmaker() as s:
+                process_id = await s.scalar(select(Job.process_id).where(Job.id == job_id))
+                await iterations.follow_job(s, kind, process_id, payload)
+                await s.commit()
+        except Exception:
+            log.exception("job %s: the iteration status could not follow it", job_id)
 
     async def _job_services(self) -> WorkerServices | None:
         """The services for one job: this worker's, with a copy of its settings carrying the

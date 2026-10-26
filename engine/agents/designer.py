@@ -180,6 +180,19 @@ def iteration_block(iteration: IterationContext | None) -> str:
     return "\n".join(lines)
 
 
+#: The inputs the Code Builder, Test Engineer and repair loops read as hints (not plan or parity).
+BUILD_INPUT_KINDS = frozenset({"build_failure", "test_failure", "uploaded_log"})
+
+
+def build_iteration_block(iteration: IterationContext | None) -> str:
+    """The ``Iteration n`` block for the build-side agents: only build failures, failing tests and
+    uploaded logs, and the requirements (empty without an iteration)."""
+    if iteration is None:
+        return ""
+    return iteration_block(iteration.model_copy(update={
+        "inputs": [i for i in iteration.inputs if i.kind in BUILD_INPUT_KINDS]}))
+
+
 def skeleton_text(design: DesignRecord) -> str:
     """The part of the design record code decided, as JSON (the model's advice is left out)."""
     payload = design.model_dump(mode="json", exclude=set(HASH_EXCLUDED), by_alias=True)

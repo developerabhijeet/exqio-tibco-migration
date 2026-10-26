@@ -477,6 +477,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         carried_reviews = kept_findings(previous_build) if previous_build and previous_build.id != build_id else []
         build.design_id = design_row.id
         build.iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
+        # what the iteration brought in (compiler errors, failing tests, logs, requirements): hints
+        iteration_ctx = await iteration_svc.design_context(s, process_id, build.iteration)
         build.spec_hash = row.spec_hash
         build.design_hash = design_row.design_hash
         build.stack = stack.key
@@ -577,7 +579,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             try:
                 written += await fill_test_bodies(solution, target_proc, rules_for, scenarios_for,
                                                   target_design, te_memory, provider, te_rejections,
-                                                  warnings=te_warnings, stack=stack.key)
+                                                  warnings=te_warnings, stack=stack.key,
+                                                  iteration=iteration_ctx if target_proc.id == proc.id else None)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Test Engineer failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, written)
@@ -623,7 +626,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             rules_for = approved_rules if target_proc.id == proc.id else []
             try:
                 filled += await fill_method_bodies(solution, target_design, target_proc, rules_for,
-                                                   memory_items, provider, rejections, stack=stack.key)
+                                                   memory_items, provider, rejections, stack=stack.key,
+                                                   iteration=iteration_ctx if target_proc.id == proc.id else None)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Code Builder failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, filled)
@@ -728,7 +732,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                               + (f"; failing: {', '.join(a.failing[:5])}" if a.failing else ""), tag="ai")
 
             cr = await compile_repair_loop(runner, solution, proc, approved_rules, provider,
-                                           recorder=on_compile_attempt, stack=stack.key)
+                                           recorder=on_compile_attempt, stack=stack.key,
+                                           iteration=iteration_ctx)
             before_errors = len(build_result.errors)
             build_result = cr.final
             compile_notes = [(f"compile repair: {len(cr.attempts)} attempt(s), "
@@ -807,7 +812,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           tag="ai")
 
         result = await repair_loop(runner, solution, proc, approved_rules, provider, recorder=on_attempt,
-                                   stack=stack.key)
+                                   stack=stack.key, iteration=iteration_ctx)
         repair = result.model_dump(mode="json")
         test_run = result.final
         if not result.attempts and not result.final.cases:

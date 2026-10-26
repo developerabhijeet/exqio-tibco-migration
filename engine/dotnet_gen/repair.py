@@ -28,7 +28,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from engine.agents.builder import check_filled_file, focused_process, language
-from engine.agents.designer import rules_block
+from engine.agents.designer import IterationContext, build_iteration_block, rules_block
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.prompting import ask_json, render_process, render_prompt
 from engine.agents.provider import mask_sensitive
@@ -367,6 +367,7 @@ async def repair_loop(
     max_attempts: int = MAX_ATTEMPTS,
     recorder: AttemptRecorder | None = None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> RepairResult:
     """Test, and while tests fail ask for a diff, gate it, apply it, rebuild and retest.
 
@@ -406,6 +407,7 @@ async def repair_loop(
             files=editable,
             rules=rules_block(picked),
             test_rule=TEST_FAILURE_RULE,
+            iteration=build_iteration_block(iteration),
         )
         diff, reason, applied = "", "", False
         try:
@@ -499,6 +501,7 @@ async def compile_repair_loop(
     max_attempts: int = MAX_ATTEMPTS,
     recorder: AttemptRecorder | None = None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> CompileRepairResult:
     """Build, and while it fails ask for a diff, gate it, apply it and rebuild.
 
@@ -522,6 +525,7 @@ async def compile_repair_loop(
             files=_files_block(solution, include_tests=True, stack=stack),
             rules=rules_block(rules),
             test_rule=compile_rule(stack),
+            iteration=build_iteration_block(iteration),
         )
         diff, reason, applied = "", "", False
         try:

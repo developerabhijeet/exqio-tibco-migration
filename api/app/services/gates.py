@@ -346,6 +346,10 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
     if state == "rejected" and gate != GATES[-1]:
         await reset_gates(session, process, rows, GATES[GATES.index(gate) + 1], f"{gate} rejected",
                           user, "user", {"spec_hash": process.spec_hash})
+    if gate == GATES[-1] and state == "approved":
+        from api.app.services import iterations  # it imports this module
+
+        await iterations.close_when_deployed(session, process.id)
     if gate == "G2":
         if state == "approved":
             process.migration_status = "validated"
