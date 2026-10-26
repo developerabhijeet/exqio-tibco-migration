@@ -50,6 +50,10 @@ class DotnetStack:
             dockerfile_context={k: raw[k] for k in ("api_project", "api_assembly", "api_dll", "test_project")},
             contract_file=None)
 
+    def fixture_path(self, process: Any, scenario: Any) -> str:
+        from engine.dotnet_gen import tests_gen
+        return tests_gen.fixture_path(process, scenario)
+
     def generate(self, app: Any, process_ids: list[str], designs: Any, rules: Any, findings: Any,
                  scenarios: list[Any], out_dir: Path, mirrors: Mirrors) -> GeneratedSolution:
         from engine.dotnet_gen.generator import generate_solution

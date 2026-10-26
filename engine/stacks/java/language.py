@@ -17,7 +17,9 @@ PLACEHOLDER = re.compile(r'UnsupportedOperationException\(\s*"agent fills:')
 _TIBCO_COMMENT = re.compile(r"^//\s*TIBCO\b")
 
 # What a Code Builder fill of a production file may not introduce (builder.check_filled_file).
-_ASSERTION = re.compile(r"(?<![\w.$])(?:assert[A-Z]\w*|fail)\s*\(|\bAssertions\s*\.|\borg\.(?:junit|assertj)\b")
+# assertX( / fail( calls, the JUnit and AssertJ APIs, and Java's own ``assert`` statement
+_ASSERTION = re.compile(r"(?<![\w.$])(?:assert[A-Z]\w*|fail)\s*\(|\bAssertions\s*\.|\borg\.(?:junit|assertj)\b"
+                        r"|(?<![\w.$\"'])assert(?=\s|\()")
 _TEST_ANNOTATION = re.compile(r"@(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate|Disabled)\b")
 _SUPPRESS = re.compile(r"@SuppressWarnings\b")
 # A catch that would swallow a TIBCO fault: of ProcessFault or a generated fault exception, or of
@@ -34,7 +36,7 @@ _OUTSIDE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 FORBIDDEN: tuple[ForbiddenPattern, ...] = (
-    ForbiddenPattern(_ASSERTION, "the code contains an assertion (assertThat, assertEquals, fail); assertions "
+    ForbiddenPattern(_ASSERTION, "the code contains an assertion (assert, assertThat, assertEquals, fail); assertions "
                                  "belong to tests", in_code=True),
     ForbiddenPattern(_TEST_ANNOTATION, "the code contains a @Test annotation", in_code=True),
     ForbiddenPattern(_SUPPRESS, "the code introduces @SuppressWarnings", in_code=True),
@@ -198,6 +200,7 @@ def _is_header(segment: str, terminator: str) -> bool:
 
 class JavaLanguage:
     comment_prefix = "//"
+    import_word = "import"
 
     @property
     def forbidden(self) -> tuple[ForbiddenPattern, ...]:

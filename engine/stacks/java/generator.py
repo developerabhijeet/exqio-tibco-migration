@@ -57,7 +57,15 @@ from engine.stacks.java import tests_gen, versions
 from engine.stacks.java.contracts import render as render_contract
 from engine.stacks.java.naming import JavaNaming, kebab, package_name
 from engine.stacks.java.printer import AgentMember, Ctx, JavaProcess, Origin, placeholder, row_layer
-from engine.stacks.java.text import comment, doc, java_string, sort_imports, text_block, tibco
+from engine.stacks.java.text import (
+    comment,
+    doc,
+    java_string,
+    selector_properties,
+    sort_imports,
+    text_block,
+    tibco,
+)
 from engine.stacks.plan import ServicePlan, build_plan
 from engine.stacks.sql import convert_placeholders
 from engine.stacks.testindex import write_index
@@ -82,7 +90,6 @@ _REST_TYPE = {"integer": "Integer", "int": "Integer", "long": "Long", "number": 
               "boolean": "Boolean", "bool": "Boolean"}
 _MAPPINGS = {"GET": "GetMapping", "POST": "PostMapping", "PUT": "PutMapping", "DELETE": "DeleteMapping",
              "PATCH": "PatchMapping"}
-_SELECTOR_ATOM = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*=\s*'([^']*)'\s*$")
 _IMPORT_LINE = re.compile(r"^import ([\w.]+)\.(\w+);$")
 
 
@@ -603,12 +610,11 @@ class _JavaSolution:
         sn = jp.starter_name() or "Start"
         root = jp.message_root()
         origin: Origin = "code"
-        atoms = [_SELECTOR_ATOM.match(a) for a in re.split(r"(?i)\s+and\s+", selector)] if selector else []
+        pairs = selector_properties(selector)
         if not selector:
             match = ["        return true;"]
-        elif all(atoms):
-            checks = " && ".join(f"{java_string(m.group(2))}.equals(properties.get({java_string(m.group(1))}))"
-                                 for m in atoms if m)
+        elif pairs is not None:
+            checks = " && ".join(f"{java_string(v)}.equals(properties.get({java_string(k)}))" for k, v in pairs)
             match = [f"        return {checks};"]
         else:
             origin = "agent"

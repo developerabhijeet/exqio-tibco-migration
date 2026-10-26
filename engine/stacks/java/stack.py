@@ -55,6 +55,10 @@ class JavaStack:
                                 "restore_goals": " ".join(f"'{g}'" if "$" in g else g for g in RESTORE_GOALS)},
             contract_file=CONTRACT_FILE)
 
+    def fixture_path(self, process: Any, scenario: Any) -> str:
+        from engine.stacks.java.tests_gen import scenario_fixture_path
+        return scenario_fixture_path(self._naming.type_name(process.name, "Process"), process, scenario)
+
     def generate(self, app: Any, process_ids: list[str], designs: Any, rules: Any, findings: Any,
                  scenarios: list[Any], out_dir: Path, mirrors: Mirrors) -> GeneratedSolution:
         from engine.stacks.java.generator import generate_java

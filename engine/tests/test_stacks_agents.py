@@ -37,6 +37,7 @@ _DECL = re.compile(r"^(?:public|protected|private)\b[^;=]*\)\s*(?:throws [\w., ]
 
 class JavaLikeLanguage:
     comment_prefix = "//"
+    import_word = "import"
     forbidden = JavaLanguage().forbidden
     placeholder = re.compile(r'UnsupportedOperationException\(\s*"agent fills:')
 
@@ -80,6 +81,10 @@ class JavaLikeStack:
 
     def layout(self, app_name):  # pragma: no cover - not used by the agents
         raise NotImplementedError
+
+    def fixture_path(self, process, scenario):
+        from engine.stacks.java.stack import JavaStack
+        return JavaStack().fixture_path(process, scenario)
 
     def generate(self, *a, **k):  # pragma: no cover
         raise NotImplementedError
@@ -368,6 +373,7 @@ async def test_a_rejection_reason_with_quotes_and_backslashes_stays_one_literal(
 # ---------------------------------------------------------------- indentation languages (Python, Go)
 class PythonLikeLanguage(JavaLikeLanguage):
     comment_prefix = "#"
+    import_word = "import"
 
     def test_placeholder(self, test_id: str) -> str:
         return f'pytest.fail("no test body for {test_id}")'

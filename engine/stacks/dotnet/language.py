@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 class DotnetLanguage:
     comment_prefix = "//"
+    import_word = "using"
 
     @property
     def forbidden(self) -> tuple[ForbiddenPattern, ...]:

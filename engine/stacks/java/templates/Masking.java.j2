@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
 public final class Masking {
     private static final Set<String> SENSITIVE_NAMES = Set.of(
 {% for n in names %}
-            "{{ n }}"{{ "," if not loop.last else "" }}
+            {{ n | java_string }}{{ "," if not loop.last else "" }}
 {% endfor %}
             );
 

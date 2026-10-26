@@ -108,3 +108,18 @@ def convert_placeholders(sql: str, style: PlaceholderStyle) -> str:
     if style == "pyformat":
         return rewrite_placeholders(sql, lambda k: "%s", lambda s: s.replace("%", "%%"))
     raise ValueError(f"unknown placeholder style {style!r}")
+
+
+_TIME_TYPES = {"timestamp", "timestamptz", "date", "time", "timetz"}
+_TIME_JDBC_TYPES = ("91", "92", "93")  # java.sql.Types DATE, TIME, TIMESTAMP
+
+
+def time_columns(settings: object) -> set[str]:
+    """The date and time columns of a JDBC step, from the ``columnMetadata`` of its TIBCO
+    ``settings`` (the activity's ``config["settings"]``), for every stack's tests and fixtures."""
+    cols = settings.get("columnMetadata") if isinstance(settings, dict) else None
+    out = set()
+    for col in cols or []:
+        if str(col.get("typeName") or "").lower() in _TIME_TYPES or str(col.get("dataType")) in _TIME_JDBC_TYPES:
+            out.add(str(col.get("columnName")))
+    return out

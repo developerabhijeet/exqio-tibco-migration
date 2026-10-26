@@ -98,8 +98,9 @@ def test_java_language_checks():
 @needs_maven
 def test_generated_java_builds_formats_and_tests(java_solution_with_tests, test_database_url):
     r = MavenRunner(java_solution_with_tests.root, env={"TEST_DATABASE_URL": test_database_url})
-    assert r.restore().ok and r.build().ok and r.format_check().ok is False  # generated code is not palantir laid out
-    assert r.format_write().ok and r.format_check().ok
+    assert r.restore().ok and r.build().ok
+    assert r.format_write().ok  # the format gate is write-then-check
+    assert r.format_check().ok
     run = r.test()
     assert run.cases and {c.rule_id for c in run.cases if c.rule_id} >= {"R1"} and run.coverage_line is not None
     passed = {c.scenario_id for c in run.cases if c.outcome == "passed"}
@@ -273,6 +274,8 @@ def _fill(body: str) -> str:
 @pytest.mark.parametrize(("body", "reason"), [
     ("        assertThat(input).isNotNull();\n        return input;\n", "assertion"),
     ("        Assertions.fail();\n        return input;\n", "assertion"),
+    ("        assert input != null : \"no input\";\n        return input;\n", "assertion"),
+    ("        assert(input != null);\n        return input;\n", "assertion"),
     ("        return input;\n    }\n\n    @Test\n    void extra() {\n", "@Test"),
     ("        @SuppressWarnings(\"unchecked\") JsonNode x = input;\n        return x;\n", "@SuppressWarnings"),
     ("        try {\n            return input;\n        } catch (RuntimeException ex) {\n            return null;\n        }\n",
@@ -286,7 +289,7 @@ def test_java_fill_may_not_introduce(body, reason):
 
 
 def test_java_fill_may_catch_a_checked_exception_and_mention_assert_in_a_comment():
-    body = ("        // no assertThat( here, and no @Test either\n        try {\n            return TibValue.parse(read());\n"
+    body = ("        // no assertThat( here, no assert statement and no @Test either\n        String note = \"assert nothing\";\n        try {\n            return TibValue.parse(read());\n"
             "        } catch (java.io.IOException ex) {\n            throw new java.io.UncheckedIOException(ex);\n"
             "        }\n")
     assert check_filled_file(MAIN, SCAFFOLD, _fill(body), stack="java") is None
@@ -370,3 +373,41 @@ def test_test_run_joins_surefire_reports_to_the_index(tmp_path, monkeypatch):
     assert cleaned == [reports]
     assert not run.ok and [(c.rule_id, c.outcome) for c in run.cases] == [("R1", "failed")]
     assert run.coverage_line is None
+
+
+# ------------------------------------------------------------------ Task 8 review follow-ups
+def test_compile_rule_speaks_the_stack_language():
+    from engine.dotnet_gen.repair import COMPILE_RULE, compile_rule
+
+    assert compile_rule("dotnet") == COMPILE_RULE  # .NET prompts unchanged
+    java = compile_rule("java")
+    assert "a missing import" in java and "using" not in java
+
+
+def test_the_stack_names_the_fixture_the_test_engineer_shows(java_solution_with_tests, gmf_processes, gmf_scenarios):
+    from engine.agents.test_engineer import _scenarios_block
+
+    stack = get_stack("java")
+    paths = {f.path for f in java_solution_with_tests.files}
+    scenarios = [s for s in gmf_scenarios if s.process_id == FSL]
+    assert scenarios
+    for s in scenarios:
+        assert stack.fixture_path(gmf_processes[FSL], s) in paths
+    block = _scenarios_block(java_solution_with_tests, gmf_processes[FSL], scenarios, "java")
+    assert "src/test/resources/fixtures/FundingStatusLookup/" in block and '"scenario_id"' in block
+
+
+def test_selector_properties_parses_simple_selectors_only():
+    from engine.stacks.java.text import selector_properties
+
+    assert selector_properties("MsgType = 'A' AND Region='EU'") == [("MsgType", "A"), ("Region", "EU")]
+    assert selector_properties("") == [] and selector_properties(None) == []
+    assert selector_properties("Amount > 5") is None
+
+
+def test_test_database_names_are_java_string_literals():
+    from engine.stacks.java.generator import render
+
+    text = render("TestDatabase.java.j2", pkg="com.gmf.x", schemas=['we"ird'], sql_files=["a\\b.sql"],
+                  connections=["connection-strings.db"])
+    assert 'List.of("we\\"ird")' in text and 'List.of("a\\\\b.sql")' in text

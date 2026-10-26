@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from engine.child_env import child_env
+from engine.child_env import child_env, run_captured
 from engine.dotnet_gen.coverage import merge_cobertura
 from engine.dotnet_gen.trx import TestCase, parse_trx
 
@@ -242,15 +242,15 @@ class DotnetRunner:
 
     def _run(self, args: list[str], timeout_s: int | None = None,
              env: dict[str, str] | None = None) -> tuple[int, str]:
+        limit = timeout_s or self.timeout_s
         try:
-            proc = subprocess.run([self.dotnet, *args], cwd=self.root, env=self.env(env), capture_output=True,
-                                  text=True, timeout=timeout_s or self.timeout_s, check=False)
+            code, out, timed_out = run_captured([self.dotnet, *args], cwd=self.root, env=self.env(env),
+                                                timeout_s=limit)
         except FileNotFoundError as exc:
             return 127, f"dotnet not found: {exc}"
-        except subprocess.TimeoutExpired as exc:
-            out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-            return 124, f"{out}\ntimed out after {exc.timeout}s: dotnet {' '.join(args)}"
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        if timed_out:
+            return 124, f"{out}\ntimed out after {limit}s: dotnet {' '.join(args)}"
+        return code, out
 
     # steps
     def restore(self, project: str | None = None, env: dict[str, str] | None = None) -> StepResult:

@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from engine.child_env import child_env
+from engine.child_env import child_env, run_captured
 from engine.dotnet_gen.runner import (
     DEFAULT_TIMEOUT_S,
     BuildResult,
@@ -172,14 +172,12 @@ class MavenRunner:
     def _mvn(self, args: list[str], env: dict[str, str] | None = None, offline: bool = True) -> tuple[int, str]:
         cmd = [self.mvn, *_BASE, *(["-o"] if offline else []), *args]
         try:
-            proc = subprocess.run(cmd, cwd=self.root, env=self.env(env), capture_output=True, text=True,
-                                  timeout=self.timeout_s, check=False)
+            code, out, timed_out = run_captured(cmd, cwd=self.root, env=self.env(env), timeout_s=self.timeout_s)
         except FileNotFoundError as exc:
             return 127, f"mvn not found: {exc}"
-        except subprocess.TimeoutExpired as exc:
-            out = exc.stdout if isinstance(exc.stdout, str) else ""
-            return 124, f"{out}\ntimed out after {exc.timeout}s: mvn {' '.join(args)}"
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        if timed_out:
+            return 124, f"{out}\ntimed out after {self.timeout_s}s: mvn {' '.join(args)}"
+        return code, out
 
     # steps
     def restore(self, env: dict[str, str] | None = None) -> StepResult:

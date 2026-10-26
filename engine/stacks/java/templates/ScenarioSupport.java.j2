@@ -332,9 +332,22 @@ public abstract class ScenarioSupport {
         } catch (NumberFormatException ex) {
             // not numbers
         }
+        OffsetDateTime eo = offsetDate(e);
+        OffsetDateTime ao = offsetDate(a);
+        if (eo != null && ao != null) {
+            return eo.toInstant().equals(ao.toInstant()); // both carry an offset: the same instant
+        }
         TemporalAccessor ed = date(e);
         TemporalAccessor ad = date(a);
         return ed != null && ad != null && LocalDateTime.from(ed).equals(LocalDateTime.from(ad));
+    }
+
+    private static OffsetDateTime offsetDate(String text) {
+        try {
+            return OffsetDateTime.parse(text.replace(' ', 'T'));
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
     }
 
     private static TemporalAccessor date(String text) {

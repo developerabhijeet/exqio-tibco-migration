@@ -104,12 +104,12 @@ caller's `env`.
 
 | Step | Java (Maven) | Go | Python (uv) |
 | --- | --- | --- | --- |
-| restore | `mvn -B -ntp -s .exiqo/maven-settings.xml dependency:go-offline` | `go mod download` | `uv venv .venv --python <python3>` then `uv pip install --require-hashes -r requirements.lock` |
+| restore | `mvn -B -ntp -s .exiqo/maven-settings.xml dependency:resolve dependency:go-offline spotless:apply -DspotlessFiles=^$ surefire:test -DskipTests` (go-offline misses the formatter and Surefire's JUnit Platform provider; the image build and the pipelines use the same goals) | `go mod download` | `uv venv .venv --python <python3>` then `uv pip install --require-hashes -r requirements.lock` |
 | build | `mvn -B -ntp -o -s … -DskipTests package` (jar kept for Verify) | `go build -o .exiqo-bin/server ./cmd/server && go vet ./...` | `python -m compileall -q src` and `ruff check --select E9,F63,F7,F82 src tests` |
 | errors parsed | `[ERROR] <file>:[l,c] <msg>` | `<file>:<l>:<c>: <msg>` | compileall `File "<f>", line <l>` / ruff `<f>:<l>:<c>: <code> <msg>` |
 | format write / check | `spotless:apply` / `spotless:check` (palantir-java-format) | `gofmt -w` / `gofmt -l` (non-empty = fail) | `ruff format` / `ruff format --check` |
-| test | `mvn -o … test` → `target/surefire-reports/TEST-*.xml`, JaCoCo `target/site/jacoco/jacoco.xml` | `go test -json -coverpkg=./internal/... -coverprofile=.exiqo-bin/cover.out ./...` | `pytest --junitxml=.exiqo-bin/junit.xml --cov=src --cov-report=xml:.exiqo-bin/coverage.xml` |
-| run | `java -jar target/<artifact>.jar --server.port=<p>` | `.exiqo-bin/server` with `PORT=<p>` | `.venv/bin/uvicorn <pkg>.main:app --host 127.0.0.1 --port <p>` |
+| test | `mvn -o … -Dmaven.test.failure.ignore=true test` (JaCoCo still reports when a test fails) → `target/surefire-reports/TEST-*.xml`, JaCoCo `target/site/jacoco/jacoco.xml` | `go test -json -coverpkg=./internal/... -coverprofile=.exiqo-bin/cover.out ./...` | `pytest --junitxml=.exiqo-bin/junit.xml --cov=src --cov-report=xml:.exiqo-bin/coverage.xml` |
+| run | `java -jar target/<artifact>.jar --server.port=<p> --server.address=127.0.0.1`, then `GET /health` | `.exiqo-bin/server` with `PORT=<p>` | `.venv/bin/uvicorn <pkg>.main:app --host 127.0.0.1 --port <p>` |
 
 Ruling: Spotless with palantir-java-format, `gofmt`, and `ruff format` are the format gates —
 each is the community default formatter of its language and runs offline once restored — cost

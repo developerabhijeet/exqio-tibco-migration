@@ -272,6 +272,11 @@ COMPILE_RULE = (
 )
 
 
+def compile_rule(stack: str = "dotnet") -> str:
+    """``COMPILE_RULE`` in the stack's words: "a missing using" is C#; Java says "import"."""
+    return COMPILE_RULE.replace("a missing using", f"a missing {language(stack).import_word}")
+
+
 # ------------------------------------------------------------ prompt context
 
 
@@ -516,7 +521,7 @@ async def compile_repair_loop(
             failures=_compile_failures_block(build, previous),
             files=_files_block(solution, include_tests=True, stack=stack),
             rules=rules_block(rules),
-            test_rule=COMPILE_RULE,
+            test_rule=compile_rule(stack),
         )
         diff, reason, applied = "", "", False
         try:

@@ -31,13 +31,13 @@ import org.springframework.test.context.DynamicPropertyRegistry;
  */
 public final class TestDatabase {
     /** Schemas the estate's SQL creates; dropped and recreated on every reset. */
-    public static final List<String> SCHEMAS = List.of({% for s in schemas %}"{{ s }}"{% if not loop.last %}, {% endif %}{% endfor %});
+    public static final List<String> SCHEMAS = List.of({% for s in schemas %}{{ s | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
 
     /** The estate's SQL files, run in this order on every reset. */
-    public static final List<String> SQL_FILES = List.of({% for f in sql_files %}"{{ f }}"{% if not loop.last %}, {% endif %}{% endfor %});
+    public static final List<String> SQL_FILES = List.of({% for f in sql_files %}{{ f | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
 
     /** The connection-string properties the generated service reads; all point at this database. */
-    public static final List<String> CONNECTION_PROPERTIES = List.of({% for c in connections %}"{{ c }}"{% if not loop.last %}, {% endif %}{% endfor %});
+    public static final List<String> CONNECTION_PROPERTIES = List.of({% for c in connections %}{{ c | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
 
     private static TestDatabase instance;
 

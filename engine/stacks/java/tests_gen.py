@@ -36,13 +36,13 @@ from engine.dotnet_gen.models import DesignRecord
 from engine.dotnet_gen.trx import BRANCH_PREFIX, SCENARIO_PREFIX
 from engine.ir.models import Activity, Process
 from engine.parity.models import Scenario
-from engine.stacks.java.text import doc, java_string, one_line
+from engine.stacks.java.text import doc, java_string, one_line, selector_properties
+from engine.stacks.sql import time_columns
 from engine.stacks.testindex import IndexEntry
 
 if TYPE_CHECKING:
     from engine.stacks.plan import ServicePlan
 
-_SELECTOR_ATOM = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*=\s*'([^']*)'\s*$")
 _KEYWORD_SAFE = re.compile(r"\W")
 
 # Imported by every generated test file, used or not: a test body is written against this
@@ -60,7 +60,7 @@ class _TimeColumns:
     (from its TIBCO column metadata), so seeded dates relative to the load time count as noise."""
 
     def time_columns(self, act: Activity) -> set[str]:
-        return dotnet.ProcGen.time_columns(self, act)  # type: ignore[arg-type]  # reads only ``act``
+        return time_columns(act.config.get("settings"))
 
 
 @dataclass
@@ -86,9 +86,15 @@ class JavaTestContext:
                                      sql_texts=self.sql_texts, schemas=self.schemas)
 
 
+def scenario_fixture_path(type_name: str, process: Process, scenario: Scenario) -> str:
+    """The fixture of a scenario of the process whose type is ``type_name``, from the project root
+    (``JavaStack.fixture_path``)."""
+    return f"src/test/resources/fixtures/{type_name}/{tests_gen.scenario_stem(process, scenario)}.json"
+
+
 def fixture_path(ctx: JavaTestContext, scenario: Scenario) -> str:
     """The fixture of a scenario, from the project root."""
-    return f"src/test/resources/fixtures/{ctx.name}/{tests_gen.scenario_stem(ctx.process, scenario)}.json"
+    return scenario_fixture_path(ctx.name, ctx.process, scenario)
 
 
 def _unique(name: str, used: set[str]) -> str:
@@ -134,8 +140,7 @@ class _Driver:
 
 
 def _selector_properties(selector: str | None) -> str:
-    atoms = [_SELECTOR_ATOM.match(a) for a in re.split(r"(?i)\s+and\s+", selector)] if selector else []
-    pairs = [f"{java_string(m.group(1))}, {java_string(m.group(2))}" for m in atoms if m] if all(atoms) else []
+    pairs = [f"{java_string(k)}, {java_string(v)}" for k, v in selector_properties(selector) or []]
     return f"Map.of({', '.join(pairs)})"
 
 

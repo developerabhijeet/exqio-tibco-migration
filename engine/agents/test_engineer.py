@@ -1087,11 +1087,8 @@ def _scenarios_block(solution: GeneratedSolution, process: Process,
     for s in scenarios:
         if s.process_id != process.id:
             continue
-        rel = tests_gen.fixture_path(process, s)
-        if stack == "dotnet":
-            hit = next(((p, c) for p, c in files.items() if p.endswith("/" + rel)), None)
-        else:  # another stack keeps the same Fixtures/<Process>/<scenario>.json tail, in its own case
-            hit = next(((p, c) for p, c in files.items() if p.lower().endswith("/" + rel.lower())), None)
+        rel = get_stack(stack).fixture_path(process, s)
+        hit = next(((p, c) for p, c in files.items() if p == rel or p.endswith("/" + rel)), None)
         fixture = hit[1] if hit else None
         how = (f'ScenarioFixture.Load("{stem}", "{tests_gen.scenario_stem(process, s)}") from {rel}'
                if stack == "dotnet" else f"the generated fixture helper, file {hit[0] if hit else rel}")

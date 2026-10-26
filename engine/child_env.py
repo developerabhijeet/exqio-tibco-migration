@@ -11,6 +11,9 @@ database is given) and adds only what the caller passes explicitly. Everything e
 from __future__ import annotations
 
 import os
+import re
+import signal
+import subprocess
 from collections.abc import Mapping
 
 ALLOWED_NAMES = frozenset({
@@ -41,3 +44,40 @@ def child_env(extra: Mapping[str, str] | None = None,
 
 
 __all__ = ["ALLOWED_NAMES", "ALLOWED_PREFIXES", "allowed", "child_env"]
+
+
+_URL_USERINFO = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.-]*://)[^/\s@'\"<>]+@")
+
+
+def scrub_urls(text: str) -> str:
+    """``scheme://user:password@host`` -> ``scheme://***@host`` everywhere in ``text`` (a mirror URL
+    with credentials echoed by a tool must not reach a stored log)."""
+    return _URL_USERINFO.sub(r"\1***@", text or "")
+
+
+def run_captured(cmd: list[str], *, cwd: str | os.PathLike[str], env: Mapping[str, str],
+                 timeout_s: float) -> tuple[int, str, bool]:
+    """Run ``cmd`` in its own session and return ``(exit code, scrubbed stdout+stderr, timed out)``.
+
+    On timeout the whole process group is killed (a build tool's daemons and forks go with it), the
+    output read so far is kept (decoded, never dropped as bytes) and the code is 124.
+    ``FileNotFoundError`` when the tool does not exist, as ``subprocess.run`` raises it.
+    """
+    proc = subprocess.Popen(cmd, cwd=cwd, env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        out, err = proc.communicate()
+        return 124, scrub_urls(_text(out) + _text(err)), True
+    return proc.returncode, scrub_urls(_text(out) + _text(err)), False
+
+
+def _text(data: bytes | str | None) -> str:
+    if data is None:
+        return ""
+    return data if isinstance(data, str) else data.decode("utf-8", errors="replace")

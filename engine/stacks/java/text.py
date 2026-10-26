@@ -83,3 +83,17 @@ def sort_imports(text: str) -> str:
     plain = [ln for ln in imports if not ln.startswith("import static ")]
     out = static + ([""] if static and plain else []) + plain
     return "\n".join(lines[:first] + out + lines[last + 1:])
+
+
+_SELECTOR_ATOM = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*=\s*'([^']*)'\s*$")
+
+
+def selector_properties(selector: str | None) -> list[tuple[str, str]] | None:
+    """The ``(property, value)`` pairs of a JMS selector made only of ``name = 'value'`` atoms joined
+    with ``AND``; ``[]`` for no selector, ``None`` for anything else (the agent writes the match)."""
+    if not selector:
+        return []
+    atoms = [_SELECTOR_ATOM.match(a) for a in re.split(r"(?i)\s+and\s+", selector)]
+    if not all(atoms):
+        return None
+    return [(m.group(1), m.group(2)) for m in atoms if m]

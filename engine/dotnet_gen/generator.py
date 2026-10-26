@@ -55,6 +55,7 @@ from engine.dotnet_gen.xpath import call as _call
 from engine.ir.models import Activity, Application, Contract, Process, Transition
 from engine.parity.models import Scenario
 from engine.stacks.sql import rewrite_placeholders
+from engine.stacks.sql import time_columns as sql_time_columns
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 RESERVED_FOR_INFRA: tuple[str, ...] = (
@@ -257,7 +258,6 @@ _COLUMN_TYPE = {"int2": "int", "int4": "int", "integer": "int", "serial": "int",
 _JDBC_TYPE = {"4": "int", "5": "int", "-6": "int", "-5": "long", "2": "decimal", "3": "decimal",
               "6": "double", "8": "double", "7": "float", "12": "string", "1": "string", "-1": "string",
               "-9": "string", "16": "bool", "-7": "bool", "91": "DateTime", "93": "DateTime"}
-_TIME_COLUMN = {"timestamp", "timestamptz", "date", "time", "timetz"}
 _REST_PARAM = {"integer": "int", "int": "int", "long": "long", "number": "decimal", "decimal": "decimal",
                "boolean": "bool", "bool": "bool"}
 
@@ -855,12 +855,7 @@ class ProcGen:
         return out
 
     def time_columns(self, act: Activity) -> set[str]:
-        settings = act.config.get("settings") if isinstance(act.config.get("settings"), dict) else {}
-        out = set()
-        for col in settings.get("columnMetadata") or []:
-            if str(col.get("typeName") or "").lower() in _TIME_COLUMN or str(col.get("dataType")) in ("91", "92", "93"):
-                out.add(str(col.get("columnName")))
-        return out
+        return sql_time_columns(act.config.get("settings"))
 
     def sql_params(self, act: Activity) -> list[tuple[str, str, str]]:
         """(parameter name, property, C# type) in placeholder order."""

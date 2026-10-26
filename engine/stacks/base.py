@@ -92,6 +92,7 @@ class SourceLanguage(Protocol):
     """The code-text checks the agents run on generated source (spec section 3)."""
 
     comment_prefix: str
+    import_word: str  # what the language calls bringing a name into scope: "using", "import"
 
     @property
     def forbidden(self) -> tuple[ForbiddenPattern, ...]:
@@ -216,6 +217,12 @@ class StackGenerator(Protocol):
     def naming(self) -> StackNaming: ...
 
     def layout(self, app_name: str) -> StackLayout: ...
+
+    def fixture_path(self, process: Any, scenario: Any) -> str:
+        """Where the generated tests keep ``scenario``'s fixture: a path (or the tail of one, for .NET
+        a path inside the Tests project) that the fixture file's project path equals or ends with
+        after a ``/``. The Test Engineer finds the fixture it shows the model by it."""
+        ...
 
     def generate(self, app: Any, process_ids: list[str], designs: Any, rules: Any, findings: Any,
                  scenarios: list[Any], out_dir: Path, mirrors: Mirrors) -> GeneratedSolution: ...
