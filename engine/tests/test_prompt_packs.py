@@ -72,3 +72,18 @@ def test_pack_renders_without_stray_braces(pack):
 
     for name in STACK_PROMPTS:
         render_prompt(name, pack, process_name="P")
+
+
+@pytest.mark.parametrize("pack", PACKS)
+def test_every_pack_has_the_x9_placeholders(pack):
+    """X9: {references} in each designer, {iteration} in builder, designer, repair and test engineer."""
+    assert "{references}" in (PROMPT_DIR / pack / "designer.md").read_text()
+    for name in ("builder", "designer", "repair", "test_engineer"):
+        assert "{iteration}" in (PROMPT_DIR / pack / f"{name}.md").read_text(), (pack, name)
+
+
+def test_an_absent_iteration_renders_empty():
+    from engine.agents.prompting import render
+
+    assert render("a {iteration}b {other}") == "a b {other}"
+    assert render("{iteration}", iteration="Iteration 2") == "Iteration 2"

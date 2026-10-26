@@ -40,3 +40,5 @@ JSON contracts of this process (the field names and types a response body carrie
 
 Accepted TIBCO to Java patterns (each with its source):
 {memory}
+
+{iteration}

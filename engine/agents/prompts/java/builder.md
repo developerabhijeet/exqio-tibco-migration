@@ -33,3 +33,5 @@ Approved rules carried by these steps:
 
 Accepted TIBCO to Java patterns (each with its source):
 {memory}
+
+{iteration}

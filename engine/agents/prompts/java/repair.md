@@ -25,3 +25,5 @@ Agent-written files you may edit:
 
 Rules the failing tests check:
 {rules}
+
+{iteration}

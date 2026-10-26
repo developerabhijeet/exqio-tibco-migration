@@ -28,8 +28,13 @@ class _SafeDict(dict):
         return "{" + key + "}"
 
 
+#: Placeholders a pack may carry before every caller fills them (X9): rendered empty when absent,
+#: so the literal ``{iteration}`` never reaches a model.
+OPTIONAL_PLACEHOLDERS = {"iteration": ""}
+
+
 def render(template: str, **values: Any) -> str:
-    return template.format_map(_SafeDict(values))
+    return template.format_map(_SafeDict({**OPTIONAL_PLACEHOLDERS, **values}))
 
 
 def split_prompt(text: str) -> tuple[str, str]:
