@@ -292,12 +292,22 @@ async def _classify(w: WorkerServices, repo_id: str, tree: Path, branch: str, co
         row = await s.get(ProjectRepo, repo_id)
         target = f"{full_name(row)}{target}"
         source = {"repo_id": row.id, "branch": branch, "commit": commit}
-        found = manifest_root(tree)
+        # the purpose decides, never the content alone: an estate repository is always an upload (an
+        # SME may pull one), and only a build repository makes edit sets, for its own process
+        found = manifest_root(tree) if row.purpose == "build" else None
+        out: dict[str, Any]
         if found is not None:
-            es = await edits_svc.create_edit_set_from_tree(s, w.settings, row.project_id, found, actor, source)
-            out: dict[str, Any] = {"kind": "edit_set", "id": es.id, "commit": commit}
-            await ctx.log(f"{edits_svc.BASELINE_NAME} names build {es.baseline_build_id}: edit set {es.id} with "
-                          f"{len(es.files or [])} changed file(s)")
+            try:
+                es = await edits_svc.create_edit_set_from_tree(s, w.settings, row.project_id, found, actor, source,
+                                                               row.process_id)
+            except edits_svc.NoChanges:
+                out = {"kind": "none", "id": None, "commit": commit,
+                       "message": f"no changes on {branch} against the build its {edits_svc.BASELINE_NAME} names"}
+                await ctx.log(out["message"])
+            else:
+                out = {"kind": "edit_set", "id": es.id, "commit": commit}
+                await ctx.log(f"{edits_svc.BASELINE_NAME} names build {es.baseline_build_id}: edit set {es.id} with "
+                              f"{len(es.files or [])} changed file(s)")
         elif row.purpose == "estate":
             up = await _upload_from(s, w.settings, row, tree, branch, commit)
             out = {"kind": "upload", "id": up.id, "commit": commit}

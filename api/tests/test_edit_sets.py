@@ -151,7 +151,7 @@ async def test_two_edits_are_exactly_what_is_listed(client, finished_build, engi
 async def test_crlf_resave_is_not_an_edit(client, finished_build, engineer):                      # Review Focus 1
     z = crlf_everything(await download(client, finished_build))
     r = await client.post(f"/builds/{finished_build}/edits", files={"file": ("b.zip", z)}, headers=engineer)
-    assert r.json()["files"] == []
+    assert r.status_code == 422 and r.json()["detail"] == "no changes in the upload"  # nothing changed: refused before any iteration
 
 
 async def test_infra_only_edits_resume_at_infra(client, finished_build, engineer):
@@ -222,8 +222,7 @@ async def test_platform_and_repository_folders_are_never_edits(client, finished_
         ".git/config": b"[core]\n", "src/.git/hooks/post-checkout": b"#!/bin/sh\n", ".exiqo/conflicts/x.merge": b"x",
         "src/GmfCredit.Api/bin/Debug/x.dll": b"\0", "src/GmfCredit.Api/obj/x.json": b"{}"})
     r = await post_edits(client, finished_build, z)
-    assert r.status_code == 201, r.text
-    assert r.json()["files"] == []
+    assert r.status_code == 422 and r.json()["detail"] == "no changes in the upload"
 
 
 async def test_a_wrapping_top_folder_is_stripped(client, finished_build):
@@ -251,7 +250,7 @@ async def test_a_forged_manifest_does_not_change_the_baseline(client, finished_b
         return json.dumps({**m, "files": {k: "0" * 64 for k in m["files"]}}).encode()
 
     r = await post_edits(client, finished_build, rezip(await download(client, finished_build), forge))
-    assert r.json()["files"] == []
+    assert r.status_code == 422 and r.json()["detail"] == "no changes in the upload"
 
 
 # ------------------------------------------------------------------ project route, preview, diff, resume
@@ -395,11 +394,17 @@ async def test_a_manifest_naming_another_build_is_refused_on_the_build_route(cli
     assert r.json()["detail"] == f"the zip's EXIQO_BASELINE.json names build {'b' * 32}, not {finished_build}"
 
 
-async def test_an_upload_without_changes_ends_its_iteration(client, finished_build, engineer):
-    es = (await post_edits(client, finished_build, crlf_everything(await download(client, finished_build)))).json()
-    iteration = (await client.get(f"/iterations/{es['iteration_id']}")).json()
-    assert es["files"] == [] and iteration["status"] == "abandoned" and iteration["note"] == "no changes in the upload"
-    assert (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).status_code == 409
+async def test_an_upload_without_changes_is_refused_and_leaves_the_active_iteration(client, finished_build):  # final I1
+    proc = (await client.get(f"/builds/{finished_build}")).json()["process_id"]
+    opened = await client.post(f"/processes/{proc}/iterations", json={"requirements": "a second approver"},
+                               headers={"X-User": "architect.lee"})
+    assert opened.status_code == 201, opened.text
+    r = await post_edits(client, finished_build, crlf_everything(await download(client, finished_build)))
+    assert r.status_code == 422 and r.json()["detail"] == "no changes in the upload"
+    it = (await client.get(f"/iterations/{opened.json()['id']}")).json()
+    assert it["status"] not in ("abandoned", "closed")
+    project = (await client.get(f"/iterations/{opened.json()['id']}")).json()["project_id"]
+    assert [i["n"] for i in (await client.get(f"/projects/{project}/iterations")).json()] == [1, 2]
 
 
 def test_os_clutter_is_never_an_edit(tmp_path):

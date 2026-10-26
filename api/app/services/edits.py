@@ -197,7 +197,12 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 NO_MANIFEST = "no EXIQO_BASELINE.json: upload the zip to /builds/{id}/edits instead"
 OTHER_PROJECT = "the baseline names a build of another project"
 NO_BUILD = "the baseline names a build that does not exist"
+OTHER_PROCESS = "the branch's EXIQO_BASELINE.json names a build of another process"
 NO_CHANGES = "no changes in the upload"
+
+
+class NoChanges(UploadError):
+    """The tree is the baseline build's (HTTP 422; a repository pull reports it as nothing new)."""
 
 
 class EditRefused(Exception):
@@ -315,19 +320,22 @@ async def create_edit_set(session: AsyncSession, settings: Settings, build_id: s
 
 
 async def create_edit_set_from_tree(session: AsyncSession, settings: Settings, project_id: str, root: Path,
-                                    actor: str, source: dict[str, Any]) -> EditSet:
+                                    actor: str, source: dict[str, Any], process_id: str | None = None) -> EditSet:
     """An edit set from a tree already on disk (a cloned repository branch, sub-project 6 Task 9):
     the baseline is the build ``EXIQO_BASELINE.json`` names (at ``root`` or under its one top
     folder; it must belong to ``project_id``), the iteration is ``kind="repo"`` with ``source``
     (``repo_id``, ``branch``, ``commit``). The tree is used where it is (``root_dir``); nothing is
-    copied. Flushes; the caller commits."""
+    copied. ``process_id``: the process the repository is connected for; a manifest naming a build of
+    another process is refused. Flushes; the caller commits."""
     del settings  # the clone was size-checked by its caller
     tree = root if (root / BASELINE_NAME).is_file() else await asyncio.to_thread(_tree_root, root)
-    return await _edit_set_for_root(session, new_id(), tree, None, project_id, actor, "repo", dict(source))
+    return await _edit_set_for_root(session, new_id(), tree, None, project_id, actor, "repo", dict(source),
+                                    process_id)
 
 
 async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, build_id: str | None,
-                             project_id: str, actor: str, kind: str, source: dict[str, Any]) -> EditSet:
+                             project_id: str, actor: str, kind: str, source: dict[str, Any],
+                             expect_process: str | None = None) -> EditSet:
     """Compare the tree at ``root`` with its baseline build, open the iteration and add the edit set."""
     if build_id is None:
         build_id = await asyncio.to_thread(_manifest_build_id, root)
@@ -341,12 +349,18 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
         raise UploadError(NO_BUILD)
     if process.project_id != project_id:
         raise UploadError(OTHER_PROJECT)
+    if expect_process is not None and process.id != expect_process:
+        raise UploadError(OTHER_PROCESS)
     if build.status in ("queued", "running"):
         raise EditRefused("the baseline build has not finished")
     rows = list((await session.scalars(select(BuildFile).where(BuildFile.build_id == build.id))).all())
     excluded = download_excluded(build)
     baseline = await asyncio.to_thread(baseline_hashes, build, rows)
     changes = await asyncio.to_thread(diff_tree, root, baseline, {r.path: r.origin for r in rows}, excluded)
+    if not changes:
+        # nothing to build, and no iteration is opened: opening one would supersede the process's
+        # active iteration for nothing (final review I1)
+        raise NoChanges(NO_CHANGES)
     phase = decide_resume(changes, build.design_hash, await approved_design_hash(session, process))
     files = [c.model_dump() for c in changes]
     try:
@@ -363,9 +377,6 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
     gate_svc.audit(session, process, actor, "edit set uploaded",
                    detail={"edit_set_id": edit_id, "baseline_build_id": build.id, "iteration": iteration.n,
                            "counts": change_counts(files), **source})
-    if not changes:
-        # nothing to build: the iteration ends at once, so it never blocks another one
-        await iteration_svc.abandon(session, iteration.id, actor, NO_CHANGES)
     return row
 
 

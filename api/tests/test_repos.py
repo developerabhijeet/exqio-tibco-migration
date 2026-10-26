@@ -292,3 +292,40 @@ async def test_estate_upload_has_no_git_folder(client, fake_github, project, eng
     await wait_terminal(client, r.json()["job_id"])
     up = await latest_upload(client, P)
     assert not (Path(up["root_dir"]) / ".git").exists() and (Path(up["root_dir"]) / "a" / "b.txt").is_file()
+
+
+# ------------------------------------------------------------------ final review fixes
+async def test_an_estate_repository_with_a_manifest_is_still_an_upload(client, fake_github, finished_build, sme,
+                                                                       edited_export):  # final I2
+    fake_github.add_repo("gmf/estate", tree=await edited_export(finished_build, {AGENT_FILE: replace_body}))
+    r = await client.post(f"/projects/{P}/repos", json={"repo": "gmf/estate", "branch": "main", "purpose": "estate"},
+                          headers=sme)
+    out = await wait_terminal(client, r.json()["job_id"])
+    assert out["kind"] == "upload"
+    assert [i["kind"] for i in (await client.get(f"/projects/{P}/iterations")).json()] == ["initial"]
+
+
+async def test_a_manifest_naming_another_process_is_refused(client, app, fake_github, finished_build, engineer,
+                                                            edited_export):  # final I2
+    async with app.state.sessionmaker() as s:
+        proc = await s.get(Process, PROC)
+        other = Process(project_id=P, application_id=proc.application_id, upload_id=proc.upload_id, ir_id="x.Other",
+                        name="Other", dialect="bw5", source_path="o.process", ir={}, spec_hash="o" * 64)
+        s.add(other)
+        await s.commit()
+        other_id = other.id
+    fake_github.add_repo("gmf/svc", tree=await edited_export(finished_build, {AGENT_FILE: replace_body}))
+    r = await client.post(f"/projects/{P}/repos", headers=engineer,
+                          json={"repo": "gmf/svc", "branch": "main", "purpose": "build", "process_id": other_id})
+    job = await wait_job(client, r.json()["job_id"])
+    assert job["status"] == "failed" and "names a build of another process" in job["error"]
+
+
+async def test_a_pull_without_changes_opens_no_iteration(client, fake_github, finished_build, engineer,
+                                                         edited_export):  # final I1
+    fake_github.add_repo("gmf/svc", tree=await edited_export(finished_build, {}))
+    r = await client.post(f"/projects/{P}/repos", headers=engineer,
+                          json={"repo": "gmf/svc", "branch": "main", "purpose": "build", "process_id": PROC})
+    out = await wait_terminal(client, r.json()["job_id"])
+    assert out["kind"] == "none" and "no changes" in out["message"]
+    assert [i["kind"] for i in (await client.get(f"/projects/{P}/iterations")).json()] == ["initial"]
