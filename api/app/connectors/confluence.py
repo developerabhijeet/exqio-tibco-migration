@@ -84,11 +84,17 @@ class _Http:
                                       response.status_code, remote)
         return response
 
-    def page_url(self, data: dict[str, Any], v2_base: str) -> str:
+    def page_url(self, data: dict[str, Any], ui_base: str) -> str:
+        """The page's link for people: ``_links.base + webui`` when that is on the configured site,
+        else ``ui_base + webui`` (a link the platform shows must not point anywhere else)."""
         links = data.get("_links") or {}
         webui = str(links.get("webui") or "")
-        base = str(links.get("base") or v2_base)
-        return f"{base}{webui}" if webui else base
+        if webui and not webui.startswith("/"):
+            webui = f"/{webui}"
+        url = f"{links.get('base') or ui_base}{webui}"
+        if url == self.site or url.startswith(f"{self.site}/"):
+            return url
+        return f"{ui_base}{webui}"
 
     async def attach(self, api: str, page_id: str, filename: str, content: bytes) -> None:
         """Upload ``filename`` (a new version of it when the page already has one)."""
@@ -237,6 +243,19 @@ class ConfluencePublisher:
     async def publish(self, ctx: PageContext, *, space_key: str, parent_page_id: str,
                       existing: ConnectorLink | None) -> tuple[str, str, int]:
         """Create or update the page, then attach the design record. ``(page id, url, version)``."""
+        page = await self.write_page(ctx, space_key=space_key, parent_page_id=parent_page_id, existing=existing)
+        await self.attach_design(page[0], ctx)
+        return page
+
+    async def attach_design(self, page_id: str, ctx: PageContext) -> None:
+        """The design record as ``design-<hash 12>.json`` (a new version when already attached)."""
+        self.connector.ready()
+        design_hash = str(ctx.design.get("design_hash") or "")
+        await self.adapter.attach(page_id, attachment_name(design_hash), design_attachment(ctx.design))
+
+    async def write_page(self, ctx: PageContext, *, space_key: str, parent_page_id: str,
+                         existing: ConnectorLink | None) -> tuple[str, str, int]:
+        """Create or update the page only. ``(page id, url, version)``."""
         self.connector.ready()
         if not space_key:
             raise ConnectorError("set the Confluence space key in Settings → Connectors")
@@ -257,6 +276,4 @@ class ConfluencePublisher:
                 page = await self._update(found.id, title, body, found.version, message)
             else:
                 page = await self.adapter.create(space_key, parent_page_id, title, body)
-        design_hash = str(ctx.design.get("design_hash") or "")
-        await self.adapter.attach(page.id, attachment_name(design_hash), design_attachment(ctx.design))
         return page.id, page.url, page.version

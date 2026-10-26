@@ -44,7 +44,14 @@ from api.app.deps import (
 )
 from api.app.models import AuditLog, Build, Process, Setting
 from api.app.schemas.connector import ConnectorsPatch, GithubPushIn, JobAccepted, LinkOut
-from api.app.services.confluence_publish import NO_DESIGN, PUBLISH_KIND, page_link
+from api.app.services.confluence_publish import (
+    LOCK_PREFIX,
+    NO_DESIGN,
+    NO_SPACE,
+    NO_URL,
+    PUBLISH_KIND,
+    page_link,
+)
 from api.app.services.evidence import latest_design
 from api.app.services.github_push import PUSH_KIND
 from api.app.services.settings import load_stored
@@ -230,15 +237,17 @@ async def publish_to_confluence(process_id: str, session: SessionDep, settings: 
         await session.commit()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not connector.config.url("confluence_url"):
-        raise HTTPException(status_code=409, detail="the Atlassian connector has no Confluence URL "
-                                                    "(connectors.atlassian.confluenceUrl)")
+        raise HTTPException(status_code=409, detail=NO_URL)
     if not getattr(connector.config.app, "space_key", ""):
-        raise HTTPException(status_code=409, detail="set the Confluence space key in Settings → Connectors")
+        raise HTTPException(status_code=409, detail=NO_SPACE)
     if await latest_design(session, proc.id) is None:
         raise HTTPException(status_code=409, detail=NO_DESIGN)
-    job_id = await runner.submit(PUBLISH_KIND, {"process_id": proc.id, "actor": principal.actor},
+    job_id = await runner.submit(PUBLISH_KIND, {"process_id": proc.id, "actor": principal.actor,
+                                                "dedupe_key": f"{LOCK_PREFIX}{proc.id}"},
                                  project_id=proc.project_id, process_id=proc.id)
-    return JobAccepted(job_id=job_id or "")
+    if job_id is None:  # a queued publish of this process will render the same, latest data
+        raise HTTPException(status_code=409, detail="a Confluence publish of this process is already queued")
+    return JobAccepted(job_id=job_id)
 
 
 @router.get("/processes/{process_id}/confluence")

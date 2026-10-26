@@ -1,6 +1,12 @@
 """Confluence connector (Task 4): the architecture page renderer and the publisher, Data Center and
 Cloud, against the Confluence fakes (``client_atlassian``). The publish job runs in the app's own
-worker."""
+worker.
+
+The golden page ``golden/confluence_dfr.xhtml`` is rendered from the real DealerFundingRequest design
+skeleton (``engine.dotnet_gen``) of ``samples/synthetic-gmf``. When the design output or the page
+changes on purpose, regenerate it with ``UPDATE_GOLDEN=1 .venv/bin/pytest
+api/tests/test_connector_confluence.py -k golden`` and review the diff before committing it.
+(The layout section's ``<name>.sln`` is .NET-specific: sub-project 5 routes it through a stack hook.)"""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +19,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from api.app.connectors.confluence import ConfluencePublisher, _Http
 from api.app.connectors.confluence_page import (
     SECTIONS,
     PageContext,
@@ -20,6 +27,7 @@ from api.app.connectors.confluence_page import (
     render_architecture_page,
 )
 from api.app.connectors.registry import AtlassianConnector, get_connector
+from api.app.jobs.locks import try_advisory_lock
 from api.app.models import (
     Application,
     AuditLog,
@@ -30,7 +38,7 @@ from api.app.models import (
     Project,
     Upload,
 )
-from api.app.services.confluence_publish import page_context
+from api.app.services.confluence_publish import PUBLISH_KIND, page_context
 from engine.domains import graph as graph_mod
 from engine.dotnet_gen import design as design_mod
 from engine.dotnet_gen.models import Decision, OpenQuestion
@@ -70,7 +78,10 @@ def _dfr_design() -> tuple[dict, str, str, str]:
     return record.model_dump(mode="json", by_alias=True), app.name, proc.id, rel
 
 
-_DFR = _dfr_design()
+@pytest.fixture(scope="module")
+def dfr() -> tuple[dict, str, str, str]:
+    """``(design record, application name, process id, source path)``, built once per module."""
+    return _dfr_design()
 
 
 def _gates(design_hash: str, spec_hash: str) -> list[dict]:
@@ -86,8 +97,8 @@ def _gates(design_hash: str, spec_hash: str) -> list[dict]:
 
 
 @pytest.fixture
-def page_ctx_dfr() -> PageContext:
-    record, app_name, ir_id, rel = _DFR
+def page_ctx_dfr(dfr) -> PageContext:
+    record, app_name, ir_id, rel = dfr
     return PageContext(app_name=app_name, process_name="DealerFundingRequest", ir_id=ir_id, source_path=rel,
                        design=record, design_version=2,
                        gates=_gates(record["design_hash"], record["spec_hash"]),
@@ -108,8 +119,8 @@ def _golden(name: str, text: str) -> None:
 # ------------------------------------------------------------------ app fixtures
 
 
-async def _seed(app, *, with_design: bool = True) -> str:
-    record, app_name, ir_id, rel = _DFR
+async def _seed(app, dfr, *, with_design: bool = True) -> str:
+    record, app_name, ir_id, rel = dfr
     async with app.state.sessionmaker() as s:
         project = Project(name="credit")
         s.add(project)
@@ -137,8 +148,8 @@ async def _seed(app, *, with_design: bool = True) -> str:
 
 
 @pytest.fixture
-async def designed_process(atlassian_app) -> str:
-    return await _seed(atlassian_app)
+async def designed_process(atlassian_app, dfr) -> str:
+    return await _seed(atlassian_app, dfr)
 
 
 @pytest.fixture
@@ -277,12 +288,12 @@ async def test_connection_test_names_the_account(client_atlassian, atlassian_app
 
 
 @pytest.mark.parametrize("flavor", ["datacenter", "cloud"])
-async def test_publish_wire_format(client_atlassian, flavor, designed_process, architect, wait_terminal):
+async def test_publish_wire_format(client_atlassian, flavor, designed_process, architect, wait_terminal, dfr):
     c, fake = client_atlassian(flavor)
     out = await wait_terminal(c, (await c.post(f"/processes/{designed_process}/confluence/publish",
                                                headers=architect)).json()["job_id"])
     page = fake.only_page()
-    record = _DFR[0]
+    record = dfr[0]
     assert out == {"page_id": page.id, "url": out["url"], "version": 1, "title": page.title}
     assert page.title == "gmf.credit · DealerFundingRequest · Architecture" and page.parent == "1001"
     assert out["url"].endswith(f"/pages/{page.id}")
@@ -346,18 +357,74 @@ async def test_failed_publish_is_audited(client_atlassian, published_once, archi
 # ------------------------------------------------------------------ the route
 
 
-async def test_publish_without_design_is_409(client_atlassian, atlassian_app, architect):
+async def test_publish_without_design_is_409(client_atlassian, atlassian_app, architect, dfr):
     c, _ = client_atlassian("datacenter")
-    pid = await _seed(atlassian_app, with_design=False)
+    pid = await _seed(atlassian_app, dfr, with_design=False)
     r = await c.post(f"/processes/{pid}/confluence/publish", headers=architect)
     assert r.status_code == 409 and r.json()["detail"] == "design the process before publishing it"
 
 
-async def test_publish_needs_architect_or_admin(client_atlassian, designed_process):
-    c, _ = client_atlassian("datacenter")
+async def test_publish_needs_architect_or_admin(client_atlassian, designed_process, wait_terminal):
+    c, fake = client_atlassian("datacenter")
     for user, status in (("viewer.val", 403), ("engineer.ravi", 403), ("ops.sam", 202)):
         r = await c.post(f"/processes/{designed_process}/confluence/publish", headers={"X-User": user})
         assert r.status_code == status, (user, r.text)
+    assert (await wait_terminal(c, r.json()["job_id"]))["version"] == 1 and fake.page_count() == 1
+    assert (await _audits(c.app, "connector confluence publish"))[-1].actor == "ops.sam"
+
+
+async def test_connector_off_after_the_202_is_refused_and_audited(client_atlassian, atlassian_app,
+                                                                   designed_process, wait_terminal):
+    """The route accepted the publish; by the time the job runs the install has turned it off."""
+    c, fake = client_atlassian("datacenter")
+    atlassian_app.state.settings.connectors = ""
+    job_id = await atlassian_app.state.runner.submit(PUBLISH_KIND, {"process_id": designed_process,
+                                                                    "actor": "architect.lee"})
+    failed = await wait_terminal(c, job_id, expect="failed")
+    assert "not enabled" in failed["error"] and fake.requests == []
+    row = (await _audits(c.app, "connector confluence publish"))[-1]
+    assert row.detail["outcome"] == "refused" and row.actor == "architect.lee"
+    assert row.process_id == designed_process
+
+
+async def test_attachment_failure_keeps_the_link_and_is_audited(client_atlassian, designed_process, architect,
+                                                               wait_terminal, monkeypatch):
+    c, fake = client_atlassian("datacenter")
+
+    async def broken(self, page_id, ctx):
+        raise RuntimeError(f"upload failed with {fake.token}")
+
+    monkeypatch.setattr(ConfluencePublisher, "attach_design", broken)
+    await wait_terminal(c, (await c.post(f"/processes/{designed_process}/confluence/publish",
+                                         headers=architect)).json()["job_id"], expect="failed")
+    link = (await c.get(f"/processes/{designed_process}/confluence")).json()
+    assert link["remote_id"] == fake.only_page().id
+    row = (await _audits(c.app, "connector confluence publish"))[-1]
+    assert row.detail["outcome"] == "failed" and fake.token not in row.detail["message"]
+    assert "***" in row.detail["message"]
+
+
+async def test_one_publish_per_process_at_a_time(client_atlassian, atlassian_app, designed_process, architect,
+                                                 wait_terminal):
+    """A second publish waits for the lock and then updates the page; a queued one is not doubled."""
+    c, fake = client_atlassian("datacenter")
+    async with try_advisory_lock(atlassian_app.state.sessionmaker, f"confluence:{designed_process}") as got:
+        assert got
+        first = (await c.post(f"/processes/{designed_process}/confluence/publish", headers=architect)).json()
+        await asyncio.sleep(0.6)
+        assert (await c.get(f"/jobs/{first['job_id']}")).json()["status"] == "queued"  # waiting, not failed
+        again = await c.post(f"/processes/{designed_process}/confluence/publish", headers=architect)
+        assert again.status_code == 409 and "already queued" in again.json()["detail"]
+        assert fake.page_count() == 0
+    assert (await wait_terminal(c, first["job_id"]))["version"] == 1 and fake.page_count() == 1
+
+
+def test_page_url_stays_on_the_configured_site():
+    http = _Http(client=None, secrets=[], site="https://wiki.gmf.example")  # type: ignore[arg-type]
+    on = {"_links": {"base": "https://wiki.gmf.example", "webui": "/spaces/G/pages/1"}}
+    off = {"_links": {"base": "https://evil.example", "webui": "/spaces/G/pages/1"}}
+    assert http.page_url(on, "https://wiki.gmf.example") == "https://wiki.gmf.example/spaces/G/pages/1"
+    assert http.page_url(off, "https://wiki.gmf.example") == "https://wiki.gmf.example/spaces/G/pages/1"
 
 
 async def test_disabled_connector_is_409_and_calls_nothing(client_atlassian, atlassian_app, designed_process,
