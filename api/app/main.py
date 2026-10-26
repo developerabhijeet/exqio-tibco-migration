@@ -39,6 +39,7 @@ from api.app.routers import (
     connectors,
     design,
     domains,
+    edits,
     exiqoian,
     gates,
     history,
@@ -212,7 +213,7 @@ def _create_api(settings: Settings) -> FastAPI:
     # ExiQoian: its own guard, so a viewer may POST here (and only here)
     app.include_router(exiqoian.router, dependencies=[Depends(require_chat_user)])
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
-    for module in (verify, infra, readiness, connectors, iterations):  # connectors: AdminDep on its writes
+    for module in (verify, infra, readiness, connectors, iterations, edits):  # connectors: AdminDep on its writes
         app.include_router(module.router, dependencies=guarded)
     for module in (settings_router, history):  # oidc: writing these needs admin
         app.include_router(module.router, dependencies=[*guarded, Depends(require_admin_writes)])

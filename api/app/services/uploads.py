@@ -26,6 +26,10 @@ class UploadError(ValueError):
     """A client error in the upload (bad archive, missing path, too large)."""
 
 
+class UploadTooLarge(UploadError):
+    """The archive holds more bytes than the configured limit."""
+
+
 class UnsafePath(UploadError):
     def __init__(self, entry: str) -> None:
         super().__init__(f"unsafe path: {entry}")
@@ -53,7 +57,7 @@ def _copy_stream(src, dst_path: Path, budget: list[int]) -> None:
         while chunk := src.read(_CHUNK):
             budget[0] -= len(chunk)
             if budget[0] < 0:
-                raise UploadError("upload is larger than the configured limit")
+                raise UploadTooLarge("upload is larger than the configured limit")
             dst.write(chunk)
 
 

@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.app.services.edits import FileChange
 from api.app.services.failures import FailureItem
 from api.app.services.iterations import MAX_REQUIREMENTS
 
@@ -84,3 +85,31 @@ class IterationDetail(IterationOut):
 
 class InputText(BaseModel):
     text: str
+
+
+class EditSetOut(BaseModel):
+    """An uploaded edit set as previewed: what changed against the baseline build and where the
+    iteration resumes (``POST /edit-sets/{id}/resume``)."""
+
+    id: str
+    iteration: int
+    iteration_id: str
+    baseline_build_id: str | None
+    resume_phase: str
+    status: str
+    files: list[FileChange]
+    counts: dict[str, int]
+
+
+class EditDiff(BaseModel):
+    baseline: str
+    edited: str
+
+
+class EditResumed(BaseModel):
+    """The job the resume queued: a ``build`` (with ``build_id``) or a ``design``."""
+
+    job_id: str
+    kind: str
+    edit_set_id: str
+    build_id: str | None = None
