@@ -20,7 +20,7 @@ class JavaStack:
     required_tools: tuple[str, ...] = ("java", "mvn")
     source_suffixes: tuple[str, ...] = (".java",)
     prompt_pack = "java"
-    download_excluded: frozenset[str] = frozenset({"target", ".exiqo"})
+    download_excluded: frozenset[str] = frozenset({"target", ".exiqo/logs"})
     service_process_marker = "java"
 
     def __init__(self) -> None:

@@ -144,6 +144,13 @@ _EXECUTABLE = (".sh",)
 _export_note = export_note  # the name earlier callers and tests import
 
 
+def _is_excluded(rel: Path, excluded: frozenset[str]) -> bool:
+    """A name excludes any path with that part; an entry with a ``/`` (``.exiqo/logs``) excludes
+    that folder or file from the root only."""
+    posix = rel.as_posix()
+    return any(posix == e or posix.startswith(e + "/") if "/" in e else e in rel.parts for e in excluded)
+
+
 def _zip_solution(root: Path, note: str | None = None,
                   excluded: frozenset[str] = DOWNLOAD_EXCLUDED) -> bytes:
     buf = io.BytesIO()

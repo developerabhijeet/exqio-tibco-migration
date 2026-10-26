@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from api.app.models import Build, DesignRecord, ModelCall, Project
 from api.app.models import Process as ProcessRow
 from api.app.routers import stacks as stacks_mod
-from api.app.routers.build import DOWNLOAD_EXCLUDED, _export_note, download_excluded
+from api.app.routers.build import DOWNLOAD_EXCLUDED, _export_note, _zip_solution, download_excluded
 from api.app.services import build as build_svc
 from api.app.services import memory_ingest
 from api.app.services import settings as settings_svc
@@ -197,5 +197,19 @@ def test_export_note_names_the_target_stack():
 def test_download_exclusions_follow_the_stack():
     assert download_excluded("dotnet") == DOWNLOAD_EXCLUDED == stacks.get_stack("dotnet").download_excluded
     assert download_excluded(None) == DOWNLOAD_EXCLUDED
-    assert download_excluded("java") == frozenset({"target", ".exiqo"})
+    assert download_excluded("java") == frozenset({"target", ".exiqo/logs"})
     assert download_excluded("go") == DOWNLOAD_EXCLUDED  # not implemented yet: the default list
+
+
+def test_java_download_keeps_the_maven_settings_but_not_the_logs(tmp_path):
+    """``mvn -s .exiqo/maven-settings.xml`` is how the bundle builds: the zip must carry it."""
+    import io
+    import zipfile
+    for rel in ("pom.xml", ".exiqo/maven-settings.xml", ".exiqo/logs/service-1.log", "target/app.jar",
+                "src/main/java/A.java"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path, None, download_excluded("java")))) as zf:
+        names = set(zf.namelist())
+    assert names == {"pom.xml", ".exiqo/maven-settings.xml", "src/main/java/A.java"}
