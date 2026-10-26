@@ -55,6 +55,11 @@ class BuildInput(BaseModel):
     app_id: str = ""  # IR application id, the prefix of ``substvar:<app id>/<name>``
 
 
+def method_uid(ir_id: str, project: str, cls: str, method: str, *, stack: str) -> str:
+    """The uid of a generated method; ``stack`` is the build's stack (``Build.stack``)."""
+    return f"method:{stack}:{ir_id}/{project}/{cls}.{method}"
+
+
 def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
     ir, stack, design = ref.ir_id, b.stack, b.design
     nodes: dict[str, MemNode] = {}
@@ -117,8 +122,8 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
             add_rel("CONTAINS", file_uids[full], uid)
         return uid
 
-    def method_uid(r: MappingRow) -> str:
-        return f"method:{stack}:{ir}/{r.project}/{r.class_name}.{r.method}"
+    def row_method_uid(r: MappingRow) -> str:
+        return method_uid(ir, r.project, r.class_name, r.method, stack=stack)
 
     rows_by_class: dict[tuple[str, str], list[MappingRow]] = {}
     for r in design.mapping:
@@ -130,7 +135,7 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         cuid = add_class(project, cls, rows[0].file,
                          f"Class {cls} in {project}, implements {ref.name} activities: {names}")
         for r in rows:
-            muid = method_uid(r)
+            muid = row_method_uid(r)
             new("Method", muid, r.method,
                 f"{cls}.{r.method} implements {r.activity_name} ({r.canonical_type}) "
                 f"using {r.pattern}", path=file_path(project, r.file), pattern=r.pattern,
@@ -199,8 +204,8 @@ def project_build(ref: ProcessRef, b: BuildInput) -> ScopedDelta:
         tested[tuid] = []
         if t.rule_key:
             for r in design.mapping:
-                if t.rule_key in r.rule_ids and method_uid(r) not in tested[tuid]:
-                    tested[tuid].append(method_uid(r))
+                if t.rule_key in r.rule_ids and row_method_uid(r) not in tested[tuid]:
+                    tested[tuid].append(row_method_uid(r))
         for muid in tested[tuid]:
             add_rel("TESTS", tuid, muid)
 

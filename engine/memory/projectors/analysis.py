@@ -27,6 +27,14 @@ def slug(text: str) -> str:
     return "-".join(re.findall(r"[a-z0-9]+", text.lower()))[:60].strip("-")
 
 
+def process_uid(ir_id: str) -> str:
+    return f"process:{ir_id}"
+
+
+def activity_uid(ir_id: str, activity_id: str) -> str:
+    return f"activity:{ir_id}/{activity_id}"
+
+
 def chunk_uid(ir_id: str, kind: str, key: str) -> str:
     return f"chunk:{ir_id}:summary" if kind == "summary" else f"chunk:{ir_id}:{kind}:{key}"
 
@@ -34,7 +42,6 @@ def chunk_uid(ir_id: str, kind: str, key: str) -> str:
 def project_analysis(ref: ProcessRef, chunks: list[ChunkInput]) -> ScopedDelta:
     nodes: dict[str, MemNode] = {}
     rels: dict[str, MemRel] = {}
-    process_uid = f"process:{ref.ir_id}"
     for c in chunks:
         uid = chunk_uid(ref.ir_id, c.kind, c.key)
         nodes[uid] = MemNode(
@@ -42,7 +49,7 @@ def project_analysis(ref: ProcessRef, chunks: list[ChunkInput]) -> ScopedDelta:
             text=c.text,
             props={"kind": c.kind, "artifact_type": "analysis", "artifact_id": ref.api_id,
                    "process_id": ref.api_id})
-        targets = [process_uid] + [f"activity:{ref.ir_id}/{a}" for a in c.activity_ids]
+        targets = [process_uid(ref.ir_id)] + [activity_uid(ref.ir_id, a) for a in c.activity_ids]
         for dst in targets:
             rel = MemRel(type="ABOUT", src=uid, dst=dst)
             rels[rel.uid] = rel

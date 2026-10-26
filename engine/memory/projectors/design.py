@@ -3,7 +3,20 @@ from __future__ import annotations
 
 from engine.dotnet_gen.models import DesignRecord
 from engine.memory.model import MemNode, MemRel, ScopedDelta
-from engine.memory.projectors.analysis import ProcessRef, slug
+from engine.memory.projectors.analysis import ProcessRef, process_uid, slug
+
+
+def decision_uid(ir_id: str, title: str, used: set[str] | None = None) -> str:
+    """The uid of a design decision's Chunk. ``used`` holds the keys of the same design's
+    earlier decisions and gains this one's, so a repeated title gets ``-2``, ``-3``, ..."""
+    base = slug(title) or "decision"
+    key, n = base, 1
+    while used is not None and key in used:  # two decisions with one title must not share a uid
+        n += 1
+        key = f"{base[:55]}-{n}"
+    if used is not None:
+        used.add(key)
+    return f"chunk:{ir_id}:design:decision:{key}"
 
 
 def project_design(ref: ProcessRef, design: DesignRecord, design_id: str) -> ScopedDelta:
@@ -18,16 +31,10 @@ def project_design(ref: ProcessRef, design: DesignRecord, design_id: str) -> Sco
                            design.narrative))
     used: set[str] = set()
     for d in design.decisions:
-        base = slug(d.title) or "decision"
-        key, n = base, 1
-        while key in used:  # two decisions with one title must not share a uid
-            n += 1
-            key = f"{base[:55]}-{n}"
-        used.add(key)
         alternatives = ", ".join(d.alternatives) if d.alternatives else "none"
-        nodes.append(chunk(f"chunk:{ref.ir_id}:design:decision:{key}", d.title,
+        nodes.append(chunk(decision_uid(ref.ir_id, d.title, used), d.title,
                            f"{d.title}: {d.choice}. Alternatives: {alternatives}. "
                            f"Reason: {d.reason}"))
-    process_uid = f"process:{ref.ir_id}"
     return ScopedDelta(scope=f"design:{ref.ir_id}", nodes=nodes,
-                       rels=[MemRel(type="ABOUT", src=n.uid, dst=process_uid) for n in nodes])
+                       rels=[MemRel(type="ABOUT", src=n.uid, dst=process_uid(ref.ir_id))
+                             for n in nodes])
