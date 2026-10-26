@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from engine.agents.provider import mask_credentials, mask_sensitive
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.build import STACK
 from engine.memory.projectors.util import MESSAGE_MAX, clean, error_node
@@ -52,6 +53,16 @@ class IterationIngest(BaseModel):
     stack: str = STACK
 
 
+#: Field names masked on top of the write path's own masking (it masks ``SENSITIVE_FIELDS`` only):
+#: requirements and logs are free text people paste secrets into.
+SECRET_FIELDS = ("password", "pwd", "secret", "token", "api_key", "access_key", "authorization")
+
+
+def secret_free(text: str) -> str:
+    # the credential first: masking the ``authorization`` field would hide the scheme it follows
+    return mask_sensitive(mask_credentials(text or ""), SECRET_FIELDS)
+
+
 def requirement_uid(ir_id: str, n: int) -> str:
     return f"chunk:{ir_id}:requirement:{n}"
 
@@ -74,14 +85,15 @@ def project_iteration(meta: IterationIngest) -> list[ScopedDelta]:
         if p.requirements.strip():
             uid = requirement_uid(p.ir_id, meta.n)
             nodes[uid] = MemNode(label="Chunk", uid=uid, name=f"requirements of iteration {meta.n}",
-                                 text=p.requirements, props={"kind": "requirement", **common})
+                                 text=secret_free(p.requirements), props={"kind": "requirement", **common})
             add_rel("ABOUT", uid, process_uid)
         for i in p.inputs:
             uid = f"error:iteration:{p.ir_id}:{i.id}"
             kind = ERROR_KIND.get(i.kind, "build")
-            nodes[uid] = error_node(uid, i.title, kind, (i.text or i.title)[:MESSAGE_MAX],
+            nodes[uid] = error_node(uid, secret_free(i.title), kind, secret_free(i.text or i.title)[:MESSAGE_MAX],
                                     artifact_type="iteration", artifact_id=meta.iteration_id,
-                                    process_id=p.api_id, iteration=meta.n, input_kind=i.kind, ref=i.ref,
+                                    process_id=p.api_id, iteration=meta.n, input_kind=i.kind,
+                                    ref=secret_free(i.ref) if i.ref else None,
                                     path=i.path)
             add_rel("ABOUT", uid, process_uid)
             if i.path:

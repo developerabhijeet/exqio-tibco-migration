@@ -9,6 +9,7 @@ and handed to the designer inside ``<source>``.
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -240,13 +241,18 @@ async def open_iteration(process_id: str, request: Request, principal: OpenerDep
     except Exception as exc:
         await session.rollback()
         log.exception("opening an iteration of %s failed", process_id)
+        if unique_logs:  # the stored logs belong to an iteration that was never opened
+            shutil.rmtree(settings.data_dir.resolve() / "iterations" / row.id, ignore_errors=True)
         raise HTTPException(status_code=503, detail=QUEUE_FAILED) from exc
     wake_local_workers(request.app.state.sessionmaker)
     # what the iteration brought in, as one memory revision of that iteration (no-op without Neo4j)
-    await memory_ingest.enqueue_ingest(
-        request.app.state.sessionmaker, settings, project_id=process.project_id, phase="iteration",
-        scope=f"iteration:{row.n}", source={"iteration_id": row.id, "process_id": process_id},
-        actor=principal.actor, ingest_key=f"iteration:{row.id}", iteration=row.n)
+    try:
+        await memory_ingest.enqueue_ingest(
+            request.app.state.sessionmaker, settings, project_id=process.project_id, phase="iteration",
+            scope=f"iteration:{row.n}", source={"iteration_id": row.id, "process_id": process_id},
+            actor=principal.actor, ingest_key=f"iteration:{row.id}", iteration=row.n)
+    except Exception:  # the iteration is open and designing: memory catches up on a re-ingest
+        log.exception("memory ingest of iteration %s not queued", row.id)
     return IterationOut.model_validate(row).model_copy(update={"job_id": job_id})
 
 

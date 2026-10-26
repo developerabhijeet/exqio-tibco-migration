@@ -415,7 +415,7 @@ def load_seed() -> list[dict[str, Any]]:
 def named_path(text: str, paths: list[str]) -> str | None:
     """The build file an input names: a path that appears whole in ``text``, else the one file
     whose base name appears as a word (``Svc.cs(3,1): error``)."""
-    whole = [p for p in paths if p in text]
+    whole = [p for p in paths if re.search(rf"(?<![\w./-]){re.escape(p)}(?![\w])", text)]
     if whole:
         return max(whole, key=len)
     by_name: dict[str, list[str]] = {}
@@ -585,7 +585,7 @@ async def blocking_job(s: AsyncSession) -> str | None:
 PREREQUISITE: dict[str, Phase] = {
     "analysis": "discover", "design": "discover", "build": "discover", "gate": "discover",
     "decision": "discover", "curation": "discover", "verify": "build", "deploy": "build",
-    "iteration": "discover",
+    "iteration": "build",  # its Errors and the edit-set note point at the build's CodeFiles
 }
 _FAMILY = {"discover": "estate", "build": "build"}
 
@@ -614,6 +614,9 @@ async def _prerequisite(s: AsyncSession, phase: str, project_id: str,
         build_id = source.get("build_id")
         if not build_id and source.get("plan_id"):
             build_id = await s.scalar(select(Plan.build_id).where(Plan.id == source["plan_id"]))
+        if not build_id and phase == "iteration" and process_id:  # the latest build the inputs name files of
+            latest = await evidence_svc.latest_build(s, process_id)
+            build_id = latest.id if latest is not None else None
         build = await s.get(Build, build_id) if build_id else None
         if not process_id or build is None or build.process_id != process_id:
             return None

@@ -116,3 +116,16 @@ async def test_retrieval_prefers_the_iteration_within_the_floor(memory_graph):
     assert {h.uid for h in plain} == {h.uid for h in preferred}
     assert preferred[0].uid == REQUIREMENT_UID
     assert await hybrid(memory_graph, P, "capital of France", labels=("Chunk",), prefer_iteration=2) == []
+
+
+async def test_secrets_never_reach_memory(memory_graph):  # review M1
+    ingest = sample_ingest()
+    ingest.processes[0].requirements = "Use password=hunter2 for the second approver"
+    ingest.processes[0].inputs[1].text = "[ERROR] Authorization: Bearer abc.def.ghi refused"
+    ingest.processes[0].inputs[1].title = "token ghp_secret123456"
+    await memory_graph.apply_revision(meta("estate"), [process_node()])
+    await memory_graph.apply_revision(meta("it2", phase="iteration", iteration=2), project_iteration(ingest))
+    sub = await memory_graph.subgraph(P, uid=f"process:{IR}", depth=1)
+    dump = repr([(n.name, n.text, n.props) for n in sub.nodes])
+    assert "hunter2" not in dump and "abc.def.ghi" not in dump and "ghp_secret123456" not in dump
+    assert "second approver" in dump

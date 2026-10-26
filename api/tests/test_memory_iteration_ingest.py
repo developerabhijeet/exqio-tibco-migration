@@ -3,6 +3,7 @@ that iteration, revisions carry and filter by iteration, the requirement is sear
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
 from api.app.models import Process
 from api.tests import test_iterations_api as it_api
@@ -63,3 +64,46 @@ async def test_a_later_design_revision_is_stamped_with_the_iteration(memory_clie
     revs = (await memory_client.get(f"/memory/{pid}/revisions", params={"iteration": 2})).json()["revisions"]
     assert design.payload.get("iteration") in (1, 2)  # the first design (iteration 1) or the re-entry's
     assert {r["phase"] for r in revs} >= {"iteration"}
+
+
+# ------------------------------------------------------------------ review fix round 1
+async def test_the_iteration_ingest_waits_for_the_build_ingest(memory_client, memory_app, architect, monkeypatch):  # I1
+    """The iteration's Errors point at the build's CodeFiles: opened while the build's ingest is still
+    queued, its ingest waits for it, then every FAILED_AT and ABOUT edge lands."""
+    from api.app.models import BuildFile
+    from api.app.services import build as build_svc
+    from api.app.services import memory_ingest as mi
+    from api.tests.test_build_verify import _built
+    from api.tests.test_memory_ingest import fast_forward, held_ingest, wait_log, wait_terminal
+
+    real = mi.followup_payload
+    monkeypatch.setattr(mi, "followup_payload", lambda kind, *a: None if kind == "build" else real(kind, *a))
+    monkeypatch.setattr(build_svc, "find_dotnet", lambda: None)
+    pid, proc, build_id, _ = await _built(memory_client, monkeypatch)
+    build_ingest = await held_ingest(memory_app, pid, real("build", "held-build", pid, proc, {"build_id": build_id}),
+                                     process_id=proc)
+    async with memory_app.state.sessionmaker() as s:
+        path = next(p for p in (await s.scalars(select(BuildFile.path).where(BuildFile.build_id == build_id))).all()
+                    if p.endswith("Service.cs"))
+    r = await memory_client.post(f"/processes/{proc}/iterations", data={"body": "{}"}, headers=architect,
+                                 files={"logs": ("ci.log", f"{path}(3,1): error CS0103: x missing\n".encode())})
+    assert r.status_code == 201, r.text
+    ingest = await wait_kind(memory_app, pid, "memory.ingest", status="queued", phase="iteration")
+    await wait_log(memory_app, ingest.id, "waiting for the build memory")
+    await fast_forward(memory_app, build_ingest)
+    assert (await wait_terminal(memory_app, build_ingest)).status == "done"
+    await fast_forward(memory_app, ingest.id)
+    done = await wait_terminal(memory_app, ingest.id)
+    assert done.status == "done", done.error
+    assert done.result["dangling"] == 0
+    sub = await memory_app.state.memory.subgraph(pid, uid=f"codefile:dotnet:{it_api.build_tests.FSL}/{path}", depth=1)
+    assert any(e.type == "FAILED_AT" and e.src.startswith("error:iteration:") for e in sub.edges)
+
+
+def test_named_path_needs_a_boundary():  # M3
+    from api.app.services.memory_ingest import named_path
+
+    paths = ["Program.cs", "src/Api/Program.cs", "src/Core/MyProgram.cs"]
+    assert named_path("src/Core/MyProgram.cs(3,1): error", paths) == "src/Core/MyProgram.cs"
+    assert named_path("MyProgram.cs(3,1): error", ["Program.cs"]) is None
+    assert named_path("at Program.cs:12", ["Program.cs", "src/Core/MyProgram.cs"]) == "Program.cs"

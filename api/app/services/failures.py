@@ -20,7 +20,7 @@ from api.app.config import Settings
 from api.app.models import Build, FieldDiff, Plan, Scenario, ScenarioRun, TestResult
 from api.app.services.text_safety import MASKED_FIELDS, one_line
 from api.app.services.uploads import UploadError
-from engine.agents.provider import mask_sensitive
+from engine.agents.provider import mask_credentials, mask_sensitive
 from engine.memory.model import KnowledgeError, guard_text
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
@@ -63,11 +63,11 @@ def clean(text: str) -> str:
     """``text`` without control characters (newlines and tabs stay) or literal citation markers,
     masked. Control characters go first so one inside a secret cannot dodge the masker; the
     markers are stripped until none is left (``[[S1]S2]`` must not leave ``[S2]``)."""
-    out = mask_sensitive(_CONTROL.sub("", text or ""), MASKED_FIELDS)
+    out = mask_sensitive(mask_credentials(_CONTROL.sub("", text or "")), MASKED_FIELDS)
     while True:
         stripped = _MARKER.sub("", out)
         if stripped == out:
-            return mask_sensitive(out, MASKED_FIELDS)
+            return mask_sensitive(mask_credentials(out), MASKED_FIELDS)
         out = stripped
 
 

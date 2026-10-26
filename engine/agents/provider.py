@@ -210,6 +210,18 @@ _TOKEN_WORD = re.compile(r"(?P<head>\btoken\s+)(?=[A-Za-z0-9._~+/\-]*\d)"
                          r"(?P<val>[A-Za-z0-9._~+/\-]{12,}=*)", re.IGNORECASE)
 
 
+_CREDENTIAL = re.compile(r"(?i)\b(bearer|basic|token)(\s+)[A-Za-z0-9._~+/=-]{6,}")
+
+
+def mask_credentials(text: str) -> str:
+    """``text`` with the credential of an ``Authorization``-style value (``Bearer <token>``,
+    ``Basic <base64>``, ``token <pat>``) masked: logs carry them in headers ``mask_sensitive``'s
+    ``key: value`` forms do not reach (the value after the scheme)."""
+    if not text:
+        return text
+    return _CREDENTIAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
+
+
 def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:
     """Mask SSNs and the values of sensitive fields before text reaches a log, a trace, a tag
     or an embedding, plus credentials (passwords, secrets, API keys, tokens, bearer/basic

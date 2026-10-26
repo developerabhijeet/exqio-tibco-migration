@@ -226,3 +226,8 @@ async def test_same_named_tests_are_one_item(session, proc):
     session.add_all([TestResult(build_id=build.id, name="T.same", outcome="failed", message=m) for m in "ab"])
     await session.commit()
     assert len([i for i in await collect_failures(session, proc.id) if i.kind == "test_failure"]) == 1
+
+
+def test_clean_masks_authorization_credentials():  # T5 review M1: a log line carries a header
+    out = clean("curl -H 'Authorization: Bearer abc.def.ghi' failed; git: token ghp_secret123456 refused")
+    assert "abc.def.ghi" not in out and "ghp_secret123456" not in out and "Bearer ***" in out
