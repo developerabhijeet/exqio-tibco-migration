@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { expect, request, type Locator, type Page } from "@playwright/test";
 import { unzipSync, zipSync } from "fflate";
 import { SAMPLE_ZIP } from "./global-setup";
@@ -220,8 +222,8 @@ async function approveThroughG3(page: Page): Promise<void> {
 
 /**
  * A fresh project scanned, FundingStatusLookup approved through G3 and built once; the Build tab
- * is left open as the user who was acting when it was called. The e2e API runs with the build
- * toolchain off (BUILD_TOOLCHAIN=false): restore is recorded as skipped and the build as failed.
+ * is left open as the user who was acting when it was called. The build passes or fails depending
+ * on the toolchain and NuGet: openFailedBuild makes the outcome deterministic.
  */
 async function buildOnce(page: Page): Promise<string> {
   const user = await currentUser(page);
@@ -243,9 +245,27 @@ async function buildOnce(page: Page): Promise<string> {
   return buildId;
 }
 
-/** buildOnce, asserting the build failed (the toolchain is off in the e2e API). */
+const ROOT = join(__dirname, "..", "..");
+
+/**
+ * buildOnce, then the build recorded as failed (a compiler error and a failing test, by
+ * scripts/e2e_fail_build.py against the e2e API's database), whatever the toolchain or NuGet did:
+ * the iteration tests need a failed build every time.
+ */
 export async function openFailedBuild(page: Page): Promise<string> {
   const id = await buildOnce(page);
+  execFileSync(join(ROOT, ".venv", "bin", "python"), ["scripts/e2e_fail_build.py", id], {
+    cwd: ROOT,
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL ?? "postgresql+asyncpg://exiqo:exiqo@localhost:5432/exiqo" },
+  });
+  // Reopen the Build tab of that process (the deep link Readiness uses), so it reads the build again.
+  const ctx = await request.newContext();
+  try {
+    const build = (await (await ctx.get(`${apiUrl}/builds/${id}`)).json()) as { process_id: string };
+    await page.goto(`/?step=build&process=${build.process_id}`);
+  } finally {
+    await ctx.dispose();
+  }
   await expect(page.getByTestId("build-status")).toContainText("failed");
   return id;
 }

@@ -3,9 +3,8 @@ import { actAs, editedZipFixture, openFailedBuild, openFinishedBuild } from "./h
 
 // The iteration loop (sub-project 6) on the real API: re-entering Design from a failed build, an
 // edited copy of a build's download uploaded and previewed, and what a viewer and an SME may do.
-// Run with BUILD_TOOLCHAIN=false (passed to the e2e API by playwright.config.ts): every build is
-// then generated, filled and stored, records restore as skipped and fails. Without it the tests
-// that need a failed build are skipped with that reason.
+// A failed build is made deterministic by openFailedBuild (scripts/e2e_fail_build.py records the
+// build as failed with a compiler error and a failing test), whatever the toolchain or NuGet did.
 // The repository panel (Tasks 9-10) is driven through routed answers, so it is covered whether or
 // not this API has the repository routes yet.
 
@@ -13,12 +12,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
-/** The tests that need a failed build: the API must run with the toolchain off. */
-const TOOLCHAIN_OFF = process.env.BUILD_TOOLCHAIN === "false";
-const NEEDS_OFF = "needs BUILD_TOOLCHAIN=false (the e2e API then records every build as failed)";
-
 test("architect re-enters design from a failed build", async ({ page }) => {
-  test.skip(!TOOLCHAIN_OFF, NEEDS_OFF);
   test.setTimeout(420_000);
   await actAs(page, "architect.lee"); await openFailedBuild(page);
   await page.getByTestId("reenter-design").click();
@@ -43,7 +37,6 @@ test("engineer uploads an edited zip and sees exactly the edits", async ({ page 
 });
 
 test("viewer sees iteration controls disabled", async ({ page }) => {
-  test.skip(!TOOLCHAIN_OFF, NEEDS_OFF);
   test.setTimeout(420_000);
   await actAs(page, "viewer.val"); await openFailedBuild(page);
   await expect(page.getByTestId("reenter-design")).toBeDisabled();
@@ -52,7 +45,6 @@ test("viewer sees iteration controls disabled", async ({ page }) => {
 });
 
 test("an SME re-enters design with requirements only, as JSON", async ({ page }) => {
-  test.skip(!TOOLCHAIN_OFF, NEEDS_OFF);
   test.setTimeout(420_000);
   await actAs(page, "sme.vicky"); await openFailedBuild(page);
   await page.getByTestId("reenter-design").click();

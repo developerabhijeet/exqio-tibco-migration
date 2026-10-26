@@ -55,12 +55,14 @@ mirrors, so a remote run is ``full`` unless ``--mode offline`` is given.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
 import sys
 import time
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,6 +106,13 @@ NUGET_INDEX = "https://api.nuget.org/v3/index.json"
 REGISTRIES = {"opentofu": "https://registry.opentofu.org/.well-known/terraform.json",
               "terraform": "https://registry.terraform.io/.well-known/terraform.json"}
 JOB_TIMEOUT = {"scan": 300, "discover": 300, "analyse": 600, "design": 600, "build": 1500, "verify": 900}
+ITERATION_REQUIREMENT = "Funding over 50k needs a second approver before it is booked."
+HAND_EDIT = "\n// acceptance run: a hand edit\n"
+#: Per stack: the source suffix the iteration step edits and the comment it appends.
+EDIT_TARGET = {"dotnet": (".cs", HAND_EDIT), "java": (".java", HAND_EDIT), "go": (".go", HAND_EDIT),
+               "python": (".py", "\n# acceptance run: a hand edit\n")}
+#: Iteration statuses at or after its design job started.
+DESIGNING_OR_LATER = ("designing", "building", "verifying", "deploying", "closed")
 MASKED_SSN = re.compile(r"^(\*{3}-\*{2}-\d{4}|\*+)$")  # last four kept, or fully masked
 RAW_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 
@@ -601,6 +610,56 @@ class Flow:
                  if c.get("citation")] if ask.status_code == 200 else []
         self.run.check(s, "ask cites memory", len(cites) > 0, cites[0] if cites else f"HTTP {ask.status_code}")
 
+    def iteration(self) -> None:
+        """Re-enter Design on the first target with a requirement, then bring one hand edit back:
+        G3 pending again, the iteration designing or later, the edit set lists exactly the edited
+        file, and (memory configured) a revision of iteration 2 or later."""
+        s = "iteration"
+        name = TARGETS[0]
+        pid = self.process_ids[name]
+        r = self.post(f"/processes/{pid}/iterations", json={"requirements": ITERATION_REQUIREMENT},
+                      headers={"X-User": ARCHITECT})
+        it = r.json() if r.status_code == 201 else {}
+        self.run.check(s, f"iteration opened by {self.actor or ARCHITECT}", r.status_code == 201 and it.get("n", 0) >= 2,
+                       f"iteration {it.get('n')}" if r.status_code == 201 else f"HTTP {r.status_code}: {_first_line(r.text)}",
+                       fatal=True)
+        n = it["n"]
+        if it.get("job_id"):
+            self.job_ok(s, self.wait_job(it["job_id"], "design"))
+        gates = {g["gate"]: g["state"] for g in self.get(f"/processes/{pid}/gates").json()}
+        self.run.check(s, "G3 pending again", gates.get("G3") == "pending", f"G3 {gates.get('G3')}")
+        detail = self.get(f"/iterations/{it['id']}").json()
+        self.run.check(s, "iteration designing or later", detail.get("status") in DESIGNING_OR_LATER,
+                       f"status {detail.get('status')}, {len(detail.get('inputs') or [])} input(s)")
+        build_id = self.builds.get(name)
+        self.run.check(s, "a build to edit", bool(build_id), build_id or "no build of the first target", fatal=True)
+        dl = self.get(f"/builds/{build_id}/download")
+        self.run.check(s, "build downloaded", dl.status_code == 200, f"HTTP {dl.status_code}, {len(dl.content)} bytes",
+                       fatal=True)
+        agent = {f["path"] for f in self.get(f"/builds/{build_id}/files", params={"origin": "agent,ai"}).json()["files"]}
+        edited, path = _edit_one(dl.content, agent, *EDIT_TARGET.get(self.stack, EDIT_TARGET["dotnet"]))
+        self.run.check(s, "one agent file edited", path is not None, path or "no agent file in the download",
+                       fatal=True)
+        up = self.post(f"/builds/{build_id}/edits", headers={"X-User": ENGINEER},
+                       files={"file": ("edited.zip", edited, "application/zip")})
+        es = up.json() if up.status_code == 201 else {}
+        paths = [f["path"] for f in es.get("files") or []]
+        self.run.check(s, "preview lists exactly that file", up.status_code == 201 and paths == [path],
+                       f"{paths}, resume from {es.get('resume_phase')}" if up.status_code == 201
+                       else f"HTTP {up.status_code}: {_first_line(up.text)}")
+        st = self.get(f"/memory/{self.project_id}/status")
+        if st.status_code != 200 or not st.json().get("available"):
+            self.run.notes.append("iteration: memory not configured, the iteration revision is not checked")
+            return
+        found, deadline = [], time.monotonic() + 120
+        while time.monotonic() < deadline and not found:
+            revs = self.get(f"/memory/{self.project_id}/revisions", params={"iteration": n}).json().get("revisions")
+            found = [r for r in revs or [] if r.get("iteration") == n]
+            if not found:
+                time.sleep(1.5)
+        self.run.check(s, f"memory revision of iteration {n}", bool(found),
+                       ", ".join(f"{r['n']} {r['phase']}" for r in found[:4]) or "none within 120 s")
+
     def connectors(self) -> None:
         """Connection tests for the enabled connectors; with ``--publish`` one push, one page and
         one issue. Off by default on an install, which is a pass, not a failure."""
@@ -705,6 +764,25 @@ def _lineage_uids(entry: dict[str, Any]) -> list[str]:
     return [u for u in (edge.get("dst"), edge.get("src"), other.get("uid")) if isinstance(u, str)]
 
 
+def _edit_one(data: bytes, agent: set[str], suffix: str = ".cs",
+              comment: str = HAND_EDIT) -> tuple[bytes, str | None]:
+    """The download with a comment appended to its first agent-written source file (the zip's own
+    folder prefix, if any, kept) and that file's build path."""
+    src = zipfile.ZipFile(io.BytesIO(data))
+    names = src.namelist()
+    target = next((n for n in sorted(names) if n.endswith(suffix) and any(n == p or n.endswith("/" + p)
+                                                                        for p in agent)), None)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            body = src.read(info)
+            if info.filename == target:
+                body = body + comment.encode()
+            dst.writestr(info, body)
+    path = next((p for p in agent if target == p or (target or "").endswith("/" + p)), None) if target else None
+    return out.getvalue(), path
+
+
 def _first_line(text: str | None) -> str:
     for line in (text or "").splitlines():
         if line.strip():
@@ -749,7 +827,7 @@ def print_table(run: Run, header: list[str]) -> None:
 
 def build_steps(flow: Flow) -> list[tuple[str, Callable[[], None], bool]]:
     """(name, function, later steps depend on it): a failure in a step others depend on stops the
-    run; infra, verify, plan and evidence only end their own step."""
+    run; infra, verify, plan, evidence, memory, exiqoian, iteration and connectors only end their own step."""
     steps: list[tuple[str, Callable[[], None], bool]] = [
         ("preflight", flow.preflight, True), ("upload", flow.upload, True), ("scan", flow.scan, True),
         ("discover", flow.discover, False)]
@@ -763,6 +841,7 @@ def build_steps(flow: Flow) -> list[tuple[str, Callable[[], None], bool]]:
     steps.append(("evidence", flow.evidence, False))
     steps.append(("memory", flow.memory, False))
     steps.append(("exiqoian", flow.exiqoian, False))
+    steps.append(("iteration", flow.iteration, False))  # after memory: it re-enters the first target
     steps.append(("connectors", flow.connectors, False))
     return steps
 
