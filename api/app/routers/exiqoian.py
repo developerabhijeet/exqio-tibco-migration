@@ -160,6 +160,7 @@ async def post_message(project_id: str, conversation_id: str, body: MessageIn, r
     else:
         persona = service.resolve_persona(principal, None)
     await service.check_rate(session, principal.actor)
+    await session.close()  # the request's connection goes back to the pool before the stream starts
     choice = build_provider(settings)
     if choice.provider is not None:
         choice.provider.recorder = model_call_recorder(

@@ -45,6 +45,7 @@ TITLE_CHARS = 80
 AUDIT_QUESTION_CHARS = 500
 CONVERSATION_LIST = 50
 NOT_CONFIGURED = "memory not configured"
+LOCK_NAMESPACE = 0x45584951  # "EXIQ": the first key of the two-int advisory lock, so owners cannot collide with other users of hashtext
 
 _lexicon_cache: dict[str, tuple[float, tuple[frozenset[str], dict[str, str], SuggestionNames]]] = {}
 
@@ -161,7 +162,7 @@ async def check_rate(session: AsyncSession, owner: str, *, lock: bool = False) -
     ``lock`` it first takes the owner's transaction-scoped advisory lock, so a check followed by an
     insert in the same transaction cannot interleave with another request of that owner."""
     if lock:
-        await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(owner))))
+        await session.execute(select(func.pg_advisory_xact_lock(LOCK_NAMESPACE, func.hashtext(owner))))
     since = func.now() - timedelta(seconds=RATE_WINDOW_S)
     count = (await session.execute(
         select(func.count()).select_from(ChatMessage)
