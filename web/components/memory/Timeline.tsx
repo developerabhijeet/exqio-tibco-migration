@@ -241,7 +241,7 @@ export function Timeline({
             );
           })}
         </div>
-        <ul className="hidden shrink-0 grid-cols-2 gap-x-4 gap-y-0.5 self-end pb-4 text-xs leading-4 text-slate lg:grid" aria-label="Phases">
+        <ul className="hidden shrink-0 grid-cols-4 gap-x-4 gap-y-0.5 self-end pb-4 text-xs leading-4 text-slate lg:grid" aria-label="Phases">
           {phases.slice(0, 6).map((p) => (
             <li key={p} className="inline-flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-sm" style={{ background: phaseCss(p) }} aria-hidden />
