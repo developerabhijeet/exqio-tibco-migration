@@ -20,7 +20,7 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db neo4j neo4j-test api worker web test test-all e2e demo-check toolchain samples samples-zip nuget-cache \
+.PHONY: setup db neo4j neo4j-test api worker web test test-all neo4j-test-reset e2e demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
 	azure-validate pipeline-lint kind-tools kind-e2e
 
@@ -65,6 +65,12 @@ neo4j-test:
 			$(PORT_OPEN) 7688 || { echo "neo4j-test: port 7688 is still unreachable; restart Docker Desktop"; exit 1; }; \
 		fi; \
 	else echo "$(NEO4J_NOTE)"; fi
+
+# Clean slate for the memory tests: removes the container and its anonymous data volume, then starts
+# a fresh neo4j-test and waits until it is healthy.
+neo4j-test-reset:
+	docker compose --profile test rm -sfv neo4j-test
+	$(MAKE) neo4j-test
 
 # A port left busy by an earlier session shows up as uvicorn's bare "[Errno 48] Address already in
 # use", which says nothing about what to do; name the holder and the override instead.

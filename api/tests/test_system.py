@@ -74,6 +74,18 @@ async def test_gating_off_keeps_ready(app, client, neo4j_failing):
     assert (await client.get("/readyz")).status_code == 200
 
 
+async def test_unreachable_neo4j_is_degraded_with_the_real_driver(app, client):
+    """No mock: the real driver against a closed port is degraded, well inside the probe timeout."""
+    from api.app.routers import system
+
+    app.state.settings = app.state.settings.model_copy(update={"neo4j_uri": "bolt://127.0.0.1:1"})
+    app.state.neo4j_down_since = None
+    started = time.monotonic()
+    r = await client.get("/readyz")
+    assert time.monotonic() - started < system.CHECK_TIMEOUT_S + 2
+    assert r.status_code == 200 and r.json()["neo4j"].startswith("degraded: ")
+
+
 async def test_neo4j_ok_resets_the_down_clock(app, client, monkeypatch):
     from api.app.routers import system
 

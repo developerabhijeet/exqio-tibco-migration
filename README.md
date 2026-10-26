@@ -106,6 +106,7 @@ shows each provider as configured or missing and never shows a value.
 | `make web`         | the web dev server on `WEB_PORT` (default 3000), pointed at `API_URL`; refuses a busy port, since a dev server left from an earlier session keeps calling the port it was started with |
 | `make test`        | engine and API test suites (pytest)                                                                                                                                                    |
 | `make test-all`    | everything, including `slow` tests (the 20 000-node ingest); `make test` deselects them (`PYTEST_MARK`) |
+| `make neo4j-test-reset` | clean slate for the memory tests: removes the `neo4j-test` container and its data volume, then starts it healthy |
 | `make e2e`         | Playwright through the seven tabs; starts its own API and web on two free ports                                                                                                        |
 | `make demo-check`  | the acceptance run (below)                                                                                                                                                             |
 | `make samples`     | regenerate the synthetic estate                                                                                                                                                        |

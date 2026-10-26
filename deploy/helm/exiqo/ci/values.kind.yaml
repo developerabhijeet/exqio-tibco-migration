@@ -88,6 +88,7 @@ neo4j:
     # the subchart's minimum container size is 2Gi; the JVM is kept far below it
     server.memory.heap.initial_size: 256m
     server.memory.heap.max_size: 256m
+    db.memory.transaction.total.max: "180m"  # about 70% of the heap
     server.memory.pagecache.size: 64m
   # No CSI driver in kind: the auth Secret is created by the CI job.
   additionalVolumes:

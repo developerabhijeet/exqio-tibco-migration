@@ -34,7 +34,9 @@ Through the ingress they are under `/api`: `https://<host>/api/healthz`, `/api/r
 A 503 removes that pod from the Service; if every api pod is unready the ingress answers 503. The
 message never carries a value or a URL, only the check and the exception class. A `neo4j: degraded`
 is expected for about a minute during the nightly backup and is not an incident by itself; only
-`down` (past the grace) takes the pod out of service.
+`down` (past the grace) takes the pod out of service. A pod that starts during a Neo4j outage is
+ready for up to `NEO4J_READY_GRACE_SECONDS`, after which all api pods go unready together; a backup
+that runs longer than the grace therefore flips readiness.
 
 `/system/status` adds: `version`, `role`, `auth_mode`, `deploy_credential_mode`, `image_digests`
 (what is running, by digest), `egress_allowlist`, `brand_name`, `support_contact` and the same

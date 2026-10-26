@@ -235,8 +235,8 @@ migration:
     limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 512Mi}
 
 # Nightly neo4j-admin dump to a GMF Blob container. Neo4j holds the project memory, so the bundled
-# Neo4j needs this on (with storageAccount) or a non-empty disabledReason (the chart refuses
-# neither). Community edition dumps only a stopped database, so this job
+# Neo4j needs this on (with storageAccount) or a non-empty disabledReason (the chart refuses to
+# render when neither is set). Community edition dumps only a stopped database, so this job
 # stops Neo4j (StatefulSet to 0), dumps the store, starts Neo4j and uploads: Neo4j is down for the
 # stop-dump-start window (about a minute while the graph is small). Enterprise has online backup.
 # Retention is the storage account's lifecycle policy. Needs networkPolicy.kubeApiCidrs.
@@ -291,7 +291,7 @@ neo4j:
   config:
     server.config.strict_validation.enabled: "false"
     dbms.usage_report.enabled: "false"
-    db.memory.transaction.total.max: "2g"
+    db.memory.transaction.total.max: "1g"  # about 70% of the heap
     server.memory.heap.initial_size: 1500m
     server.memory.heap.max_size: 1500m
     server.memory.pagecache.size: 1g

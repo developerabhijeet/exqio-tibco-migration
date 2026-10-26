@@ -594,9 +594,9 @@ neo4j:
   image:
     customImage: gmfacr.azurecr.io/neo4j:5.26.32@sha256:adaa077a3ab023015143b8f73f7076a7d053f12985f5b06f4c6a128c3a2f7240
 neo4jBackup:
-  enabled: true            # or a non-empty disabledReason; the chart refuses neither
+  enabled: true            # the chart refuses to render when neither this nor disabledReason is set
   storageAccount: stgmfexiqobackup
-  disabledReason: ""
+  # disabledReason: "why the backup is off"   # only with enabled: false
 ```
 
 - Neo4j: see the next subsection. An external Neo4j sets `neo4j.enabled` to false with
@@ -612,7 +612,9 @@ neo4jBackup:
   `neo4j.readyGraceSeconds` (default 900; still ready, so the nightly backup window or a restart
   does not take the API out of service) and `down: <class>` after that, which fails readiness.
   `neo4j.gatesReadiness: false` makes it informational. The chart sets `db.memory.transaction.total.max`
-  to 2g so one large ingest cannot exhaust the heap.
+  to 1g, about 70% of the 1500m heap, so one very large ingest fails with a transaction-memory
+  error (retried with backoff) instead of exhausting the heap. Keep it near 70% of the heap if you
+  change `server.memory.heap.max_size`.
 
 - **Credentials.** The Neo4j chart reads its initial password from the Kubernetes Secret
   `exiqo-neo4j-auth`, which the CSI driver syncs from the Key Vault object
