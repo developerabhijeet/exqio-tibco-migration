@@ -290,7 +290,7 @@ delete from chat_conversations where updated_at < now() - interval '180 days';
 whatever the verdict. `detail` carries `conversation_id`, `message_id`, `verdict`, `rule` (the guard
 rule that decided, if any), `persona`, `used_model`, `provider`, `sources`, `cited`,
 `dropped_sources` and `question` (masked, cut to 500 characters). An `injection` verdict also logs
-a warning on `api.exiqoian` with the rule name, never the text.
+a warning on the ExiQoian logger (`logging.getLogger("api.exiqoian")`) with the rule name, never the text.
 
 ```sql
 select ts, actor, project_id, detail->>'verdict' as verdict, detail->>'rule' as rule,
@@ -459,7 +459,7 @@ reason, with secrets removed.
 |---|---|
 | 409 "the GitHub connector is not enabled" | Off in the install or in Settings. Enable it as under "Connectors". Nothing was sent. |
 | 502 on connect or pull | The connector could not read the repository or branch (`head`): wrong `owner/name` or branch, or the token lacks `contents:read`. The message is the connector's; use the "Connectors" troubleshooting table. |
-| The job fails with a timeout | Egress to the GitHub host from the **worker** pod: check `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` lists the host's `cidrs`, the Azure Firewall FQDN rule and private DNS. Cloning runs in the worker, not the api, so test from `deploy/exiqo-worker`. |
+| The job fails with a timeout | Egress to the GitHub host from the **worker** pod: check `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` lists the host's `cidrs`, the Azure Firewall FQDN rule and private DNS. Cloning runs in the worker, not the api, so test from the worker pod (`kubectl -n exiqo exec deploy/exiqo-worker -- ...`). |
 | Fails with a size message | The checkout is larger than `upload_max_bytes`. Point at a branch that holds the estate or the exported build only, not a monorepo. |
 | 422 on connect | The repository name must be `owner/name` (letters, digits, `_`, `.`, `-`) and the branch a valid branch name. |
 | A pull answers `{"changed": false}` | The branch head equals the last fetched commit. Nothing runs. Push the reviewer's commit first. |

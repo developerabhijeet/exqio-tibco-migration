@@ -31,7 +31,8 @@ def test_main_hands_the_stack_to_the_flow(monkeypatch, capsys) -> None:
     class Stub:
         project_id = ""
 
-        def __init__(self, run, client, mode, zip_path, token=False, stack="dotnet") -> None:
+        def __init__(self, run, client, mode, zip_path, token=False, publish=False, github_repo="",
+                     stack="dotnet") -> None:
             Stub.stack = stack
             run.check("stub", "constructed", True)
 
