@@ -205,3 +205,14 @@ async def test_design_job_builds_for_the_project_stack(client, app, monkeypatch)
     r = await client.post(f"/processes/{proc_id}/design")
     job = await _wait_job(client, r.json()["job_id"])
     assert job["status"] == "done" and seen == ["java"]
+
+
+async def test_default_stack_that_is_no_longer_enabled_falls_back(client, app, caplog):
+    """An admin set java as the default; the chart later drops it: new projects use dotnet, not 422."""
+    app.state.settings.default_stack = "java"
+    app.state.settings.enabled_stacks = "dotnet,go"
+    r = await client.post("/projects", json={"name": "a"})
+    assert r.status_code == 201 and r.json()["target_stack"] == "dotnet"
+    assert "java" in caplog.text and "not enabled" in caplog.text
+    # an explicit choice of a disabled stack is still refused
+    assert (await client.post("/projects", json={"name": "b", "target_stack": "java"})).status_code == 422
