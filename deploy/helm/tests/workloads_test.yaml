@@ -102,6 +102,9 @@ tests:
       - equal: {path: data.CORS_ORIGINS, value: https://exiqo.apps.gmfinancial.example}
       - equal: {path: data.DEPLOY_CREDENTIAL_MODE, value: workload_identity}
       - equal: {path: data.NEO4J_URI, value: bolt://exiqo-neo4j:7687}
+      - equal: {path: data.NEO4J_DATABASE, value: neo4j}
+      - equal: {path: data.NEO4J_READY_GRACE_SECONDS, value: "900"}
+      - equal: {path: data.NEO4J_GATES_READINESS, value: "true"}
       - equal: {path: data.LANGFUSE_ENABLED, value: "false"}
       - equal: {path: data.JOB_STALE_SECONDS, value: "90"}
       - equal: {path: data.JOB_MAX_ATTEMPTS, value: "2"}

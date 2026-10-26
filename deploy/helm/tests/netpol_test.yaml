@@ -40,6 +40,15 @@ tests:
           path: spec.ingress[0].from[0]
           value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}
       - equal: {path: "spec.ingress[0].ports", value: [{port: 3000, protocol: TCP}]}
+  - it: api and worker may reach the bundled Neo4j on 7687
+    documentSelector: {path: metadata.name, value: exiqo-neo4j-egress}
+    asserts:
+      - equal:
+          path: spec.podSelector.matchExpressions
+          value: [{key: app.kubernetes.io/component, operator: In, values: [api, worker]}]
+      - equal:
+          path: spec.egress
+          value: [{to: [{podSelector: {matchLabels: {app: exiqo-neo4j}}}], ports: [{port: 7687, protocol: TCP}]}]
   - it: neo4j bolt admits api, worker and backup only
     documentSelector: {path: metadata.name, value: exiqo-neo4j-ingress}
     asserts:

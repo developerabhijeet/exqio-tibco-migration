@@ -74,6 +74,7 @@ data:
 
 neo4jBackup:
   enabled: false
+  disabledReason: "kind CI"
 
 neo4j:
   volumes:

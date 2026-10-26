@@ -234,13 +234,15 @@ migration:
     requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
     limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 512Mi}
 
-# Nightly neo4j-admin dump to a GMF Blob container: off until sub-project 2, which puts data in
-# Neo4j and picks the backup strategy. Community edition dumps only a stopped database, so this job
+# Nightly neo4j-admin dump to a GMF Blob container. Neo4j holds the project memory, so the bundled
+# Neo4j needs this on (with storageAccount) or a non-empty disabledReason (the chart refuses
+# neither). Community edition dumps only a stopped database, so this job
 # stops Neo4j (StatefulSet to 0), dumps the store, starts Neo4j and uploads: Neo4j is down for the
 # stop-dump-start window (about a minute while the graph is small). Enterprise has online backup.
 # Retention is the storage account's lifecycle policy. Needs networkPolicy.kubeApiCidrs.
 neo4jBackup:
   enabled: false
+  disabledReason: ""    # required when enabled is false and neo4j.enabled is true (e.g. "kind CI")
   schedule: "30 2 * * *"
   storageAccount: ""
   container: neo4j-backups
@@ -261,6 +263,11 @@ neo4j:
   enabled: true
   uri: ""                # default bolt://exiqo-neo4j:7687
   externalCidrs: []      # with enabled: false, for the NetworkPolicy (port 7687)
+  # Readiness: /readyz includes Neo4j. A Neo4j that is down is reported "degraded" (still ready) for
+  # readyGraceSeconds, so the nightly stop-dump-start window does not take the API out of service;
+  # after that it is "down" and the pod is not ready. gatesReadiness: false leaves it informational.
+  readyGraceSeconds: 900
+  gatesReadiness: true
   # ---- subchart values (https://neo4j.com/docs/operations-manual/5/kubernetes/) ----
   fullnameOverride: exiqo-neo4j
   disableLookups: true   # the auth Secret is synced by the CSI driver at pod start, after render
@@ -284,6 +291,7 @@ neo4j:
   config:
     server.config.strict_validation.enabled: "false"
     dbms.usage_report.enabled: "false"
+    db.memory.transaction.total.max: "2g"
     server.memory.heap.initial_size: 1500m
     server.memory.heap.max_size: 1500m
     server.memory.pagecache.size: 1g

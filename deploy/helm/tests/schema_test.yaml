@@ -11,6 +11,30 @@ tests:
     asserts:
       - hasDocuments: {count: 1}
         template: templates/api-deployment.yaml
+  - it: rejects neither neo4j.enabled nor neo4j.uri
+    set:
+      neo4j.enabled: false
+      neo4j.uri: ""
+      neo4j.externalCidrs: [10.60.0.0/28]
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "neo4j.enabled or neo4j.uri"
+  - it: rejects the bundled Neo4j with no backup and no disabledReason
+    set:
+      neo4jBackup.enabled: false
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "neo4jBackup.disabledReason"
+  - it: accepts the bundled Neo4j with the backup off for a stated reason
+    set:
+      neo4jBackup.enabled: false
+      neo4jBackup.disabledReason: "dev cluster"
+    template: templates/configmap.yaml
+    asserts:
+      - equal: {path: "data.NEO4J_GATES_READINESS", value: "true"}
+        documentIndex: 0
   - it: rejects AUTH_MODE dev outside the CI overlay
     set:
       auth.mode: dev

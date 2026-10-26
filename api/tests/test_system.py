@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import httpx
@@ -41,15 +42,49 @@ async def test_readyz_ok_and_neo4j_disabled(client):
     assert r.json() == {"postgres": "ok", "neo4j": "disabled", "secrets": "ok"}
 
 
-async def test_readyz_reports_neo4j_down_but_stays_ready(app, client):
-    # Controller ruling: nothing uses Neo4j until sub-project 2, so a stopped Neo4j (the nightly
-    # Community dump stops it) is reported, never a reason to take the API out of service.
-    app.state.settings.neo4j_uri = "bolt://127.0.0.1:1"
+@pytest.fixture
+def neo4j_failing(app, monkeypatch):
+    from neo4j.exceptions import ServiceUnavailable
+
+    from api.app.routers import system
+
+    async def boom(settings):
+        raise ServiceUnavailable("x")
+
+    monkeypatch.setattr(system, "_probe_neo4j", boom)
+    app.state.settings = app.state.settings.model_copy(update={"neo4j_uri": "bolt://x:1"})
+    app.state.neo4j_down_since = None
+
+
+async def test_neo4j_down_is_degraded_within_grace(client, neo4j_failing):
     r = await client.get("/readyz")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["neo4j"].startswith("down: ")
-    assert body["postgres"] == "ok" and body["secrets"] == "ok"
+    assert r.status_code == 200 and r.json()["neo4j"].startswith("degraded: ServiceUnavailable")
+    assert r.json()["postgres"] == "ok" and r.json()["secrets"] == "ok"
+
+
+async def test_neo4j_down_past_grace_fails_readiness(app, client, neo4j_failing):
+    app.state.neo4j_down_since = time.monotonic() - 901
+    r = await client.get("/readyz")
+    assert r.status_code == 503 and r.json()["neo4j"] == "down: ServiceUnavailable"
+
+
+async def test_gating_off_keeps_ready(app, client, neo4j_failing):
+    app.state.settings = app.state.settings.model_copy(update={"neo4j_gates_readiness": False})
+    app.state.neo4j_down_since = time.monotonic() - 901
+    assert (await client.get("/readyz")).status_code == 200
+
+
+async def test_neo4j_ok_resets_the_down_clock(app, client, monkeypatch):
+    from api.app.routers import system
+
+    async def fine(settings):
+        return None
+
+    app.state.settings = app.state.settings.model_copy(update={"neo4j_uri": "bolt://x:1"})
+    app.state.neo4j_down_since = time.monotonic() - 100
+    monkeypatch.setattr(system, "_probe_neo4j", fine)
+    assert (await client.get("/readyz")).json()["neo4j"] == "ok"
+    assert app.state.neo4j_down_since is None
 
 
 async def test_readyz_reports_unreadable_secret_file(app, client, monkeypatch, tmp_path):

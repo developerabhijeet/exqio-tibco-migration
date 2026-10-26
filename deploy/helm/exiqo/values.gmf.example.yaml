@@ -85,7 +85,7 @@ egress:
 
 networkPolicy:
   ingressNamespaces: [ingress-nginx]
-  kubeApiCidrs: [10.50.0.4/32]   # the API server address, for the Neo4j backup when enabled
+  kubeApiCidrs: [10.50.0.4/32]   # the API server address, for the Neo4j backup
 
 providers:
   azureOpenAI:
@@ -104,8 +104,10 @@ mirrors:
       }
     }
 
-# The Neo4j backup stays off until sub-project 2 (see neo4jBackup in values.yaml). To turn it on:
-# neo4jBackup:
-#   enabled: true
-#   storageAccount: stgmfexiqobackup
-#   container: neo4j-backups
+# Neo4j holds the project memory: the nightly dump to Blob is on. Neo4j is stopped for the
+# stop-dump-start window (about a minute while small); /readyz reports it "degraded" meanwhile
+# (neo4j.readyGraceSeconds, default 900).
+neo4jBackup:
+  enabled: true
+  storageAccount: stgmfexiqobackup
+  container: neo4j-backups

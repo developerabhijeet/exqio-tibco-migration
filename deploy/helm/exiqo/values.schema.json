@@ -842,6 +842,9 @@
         },
         "resources": {
           "$ref": "#/definitions/resources"
+        },
+        "disabledReason": {
+          "type": "string"
         }
       }
     },
@@ -872,6 +875,13 @@
               "pattern": "@sha256:[0-9a-f]{64}$"
             }
           }
+        },
+        "readyGraceSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gatesReadiness": {
+          "type": "boolean"
         }
       },
       "if": {
@@ -883,13 +893,9 @@
       },
       "then": {
         "required": [
-          "uri",
           "externalCidrs"
         ],
         "properties": {
-          "uri": {
-            "minLength": 1
-          },
           "externalCidrs": {
             "minItems": 1
           }

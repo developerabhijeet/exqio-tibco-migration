@@ -191,7 +191,7 @@ which would otherwise win over the entries above it.
 {{- if .Values.neo4j.enabled -}}
 {{ .Values.neo4j.uri | default "bolt://exiqo-neo4j:7687" }}
 {{- else -}}
-{{ required "neo4j.uri is required when neo4j.enabled is false" .Values.neo4j.uri }}
+{{ required "set neo4j.enabled or neo4j.uri (the memory store is required)" .Values.neo4j.uri }}
 {{- end -}}
 {{- end -}}
 

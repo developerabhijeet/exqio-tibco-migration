@@ -1,4 +1,4 @@
-# The Neo4j backup is off by default; its tests turn it on.
+# The GMF example already turns the Neo4j backup on; this keeps the backup tests explicit.
 neo4jBackup:
   enabled: true
   storageAccount: stgmfexiqobackup

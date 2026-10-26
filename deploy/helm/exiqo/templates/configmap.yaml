@@ -18,6 +18,9 @@ ConfigMap: hooks run before release resources exist.
 {{- $digests := dict "exiqo-platform" (include "exiqo.image" (dict "ctx" . "which" "platform"))
     "exiqo-web" (include "exiqo.image" (dict "ctx" . "which" "web")) -}}
 {{- if $v.neo4j.enabled }}{{ $_ := set $digests "neo4j" $v.neo4j.image.customImage }}{{ end -}}
+{{- if and $v.neo4j.enabled (not $v.neo4jBackup.enabled) (not $v.neo4jBackup.disabledReason) -}}
+{{- fail "the bundled Neo4j holds the memory: set neo4jBackup.enabled: true (with storageAccount) or give neo4jBackup.disabledReason" -}}
+{{- end -}}
 {{- $egress := $v.egress.fqdns | default list -}}
 {{- if $v.postgres.host }}{{ $egress = append $egress $v.postgres.host }}{{ end -}}
 {{- $aoai := $v.providers.azureOpenAI -}}
@@ -44,6 +47,9 @@ data:
   EGRESS_ALLOWLIST: {{ $egress | uniq | toJson | quote }}
   NEO4J_URI: {{ include "exiqo.neo4jUri" . | quote }}
   NEO4J_USER: neo4j
+  NEO4J_DATABASE: neo4j
+  NEO4J_READY_GRACE_SECONDS: {{ $v.neo4j.readyGraceSeconds | int | toString | quote }}
+  NEO4J_GATES_READINESS: {{ $v.neo4j.gatesReadiness | toString | quote }}
   {{- if $v.providers.claude.enabled }}
   PROVIDER: auto
   {{- else if $aoai.endpoint }}

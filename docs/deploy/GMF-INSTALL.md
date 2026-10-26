@@ -60,7 +60,7 @@ In the subscription (create with `deploy/azure` or bring your own):
   databases `exiqo` and `exiqo_test`, and an administrator login that may create extensions and
   databases (the parity step creates one `exiqo_scn_<project>_test` database per project).
 - [ ] An Azure Files Premium share for `DATA_DIR` (uploads and generated solutions).
-- [ ] A Blob container for Neo4j dumps, only if you turn the backup on (section 9).
+- [ ] A Blob container for Neo4j dumps (section 9): the backup is on by default, since Neo4j holds the project memory.
 - [ ] An Azure OpenAI resource with deployments for the strong, standard and efficient tiers.
 - [ ] A DNS name for the ingress host and a TLS certificate as a Secret in the namespace
   (`ingress.tlsSecretName`).
@@ -594,7 +594,9 @@ neo4j:
   image:
     customImage: gmfacr.azurecr.io/neo4j:5.26.32@sha256:adaa077a3ab023015143b8f73f7076a7d053f12985f5b06f4c6a128c3a2f7240
 neo4jBackup:
-  enabled: false
+  enabled: true            # or a non-empty disabledReason; the chart refuses neither
+  storageAccount: stgmfexiqobackup
+  disabledReason: ""
 ```
 
 - Neo4j: see the next subsection. An external Neo4j sets `neo4j.enabled` to false with
@@ -605,11 +607,13 @@ neo4jBackup:
 - The chart installs one Community-edition instance (`neo4j.enabled`, default true). High
   availability clustering needs a Neo4j Enterprise licence held by GMF; the chart does not provide
   one.
-- **Nothing writes to Neo4j yet.** The platform checks connectivity only; the graph memory arrives
-  in a later release. `GET /readyz` reports Neo4j as `ok`, `down: <exception class>` or `disabled`,
-  but does not fail readiness on it.
-- The pod runs as UID 7474 with a read-only root filesystem and a Premium SSD volume
-  (`managed-csi-premium`, 64 Gi).
+- **Neo4j holds the project memory** (what the agents and Ask read). `GET /readyz` includes it:
+  `ok`, `disabled` (no URI), `degraded: <class> (down <s> s)` while it has been down for less than
+  `neo4j.readyGraceSeconds` (default 900; still ready, so the nightly backup window or a restart
+  does not take the API out of service) and `down: <class>` after that, which fails readiness.
+  `neo4j.gatesReadiness: false` makes it informational. The chart sets `db.memory.transaction.total.max`
+  to 2g so one large ingest cannot exhaust the heap.
+
 - **Credentials.** The Neo4j chart reads its initial password from the Kubernetes Secret
   `exiqo-neo4j-auth`, which the CSI driver syncs from the Key Vault object
   `keyVault.secrets.neo4jAuth` while a pod mounts it. That puts the password in etcd, hence the
@@ -623,13 +627,15 @@ neo4jBackup:
   and set `neo4j.uri` to `bolt+s://exiqo-neo4j:7687`. The API must trust the certificate (use a
   certificate its image already trusts, or `bolt+ssc://` for a self-signed one). This path has not
   been exercised.
-- **Backups are off by default** (`neo4jBackup.enabled`). Neo4j Community can dump only a stopped
-  database, so the CronJob scales the StatefulSet to 0, runs `neo4j-admin database dump`, scales it
-  back to 1 and uploads the dump to Blob with Workload Identity. Neo4j is down for that
-  stop-dump-start window (about a minute while the graph is small), and `GET /readyz` shows
-  `neo4j: down` during it without failing. Turn it on when a release starts storing data in Neo4j
-  (section 9). If the backup pod dies between stop and start, run
-  `kubectl -n exiqo scale statefulset exiqo-neo4j --replicas=1` (or run the next `helm upgrade`).
+- **The backup is on** (`neo4jBackup.enabled: true`, section 9). With the bundled Neo4j the chart
+  refuses `neo4jBackup.enabled: false` unless `neo4jBackup.disabledReason` says why. Neo4j Community
+  can dump only a stopped database, so the CronJob scales the StatefulSet to 0, runs
+  `neo4j-admin database dump`, scales it back to 1 and uploads the dump to Blob with Workload
+  Identity. Neo4j is down for that stop-dump-start window (about a minute while the graph is small);
+  `GET /readyz` shows `neo4j: degraded` during it and stays ready. If the backup pod dies between
+  stop and start, run `kubectl -n exiqo scale statefulset exiqo-neo4j --replicas=1` (or run the
+  next `helm upgrade`).
+- Neither `neo4j.enabled` nor `neo4j.uri`: the chart refuses to render.
 
 ## 7. Install and upgrade
 
@@ -749,7 +755,7 @@ kubectl -n exiqo get pods -l app.kubernetes.io/name=exiqo
 curl -fsS https://<ingress.host>/api/readyz
 ```
 
-`readyz` answers `{"postgres": "ok", "neo4j": "ok", "secrets": "ok"}` when healthy. In the app,
+`readyz` answers `{"postgres": "ok", "neo4j": "ok", "secrets": "ok"}` when healthy (`neo4j` may read `degraded: ...` for up to 15 minutes after a Neo4j restart and the pod stays ready). In the app,
 the About panel (admin role, Help & Support) shows the same checks, the image digests, the auth
 mode and the egress allowlist, from `GET /api/system/status`.
 
@@ -791,7 +797,8 @@ session cookie, not a bearer. The run is `full` mode by default against an insta
 ## 9. Backup and restore
 
 Postgres holds everything the platform stores today. The `DATA_DIR` share holds uploaded estates and
-generated solutions. Neo4j holds nothing yet.
+generated solutions. Neo4j holds the project memory (the graph the agents and Ask read); the
+old Postgres `knowledge` schema is retired as `knowledge_retired` (`RUNBOOK.md`, "Memory (Neo4j)").
 
 ### Postgres (Flexible Server point-in-time restore)
 
@@ -818,7 +825,7 @@ files under `/data/uploads` and `/data/builds`.
 
 ### Neo4j (dump and load)
 
-Enable the backup when a release starts storing data in Neo4j:
+The backup is on in the example values:
 
 ```yaml values
 neo4jBackup:
@@ -833,7 +840,9 @@ networkPolicy:
 The CronJob stops Neo4j, dumps the store, starts Neo4j and uploads
 `neo4j/<UTC timestamp>/neo4j.dump` to the container using `identity.backupClientId` (default: the
 platform identity, which needs Storage Blob Data Contributor on the container; `deploy/azure`
-grants it). Retention is the storage account's lifecycle policy. It needs the API server address in
+grants it). The window is the schedule (`30 2 * * *` UTC by default); pick one outside working
+hours, since the memory is unavailable for about a minute (readiness shows `degraded`, ingest
+jobs retry). Retention is the storage account's lifecycle policy. It needs the API server address in
 `networkPolicy.kubeApiCidrs` and the account's blob host in `egress.fqdns`.
 
 To restore, download the dump (`az storage blob download --auth-mode login`), scale Neo4j to 0
@@ -842,6 +851,10 @@ image and the claim `data-exiqo-neo4j-0` mounted at `/data` (subPath `data`), th
 `/backup/neo4j.dump`, as UID 7474, running `neo4j-admin database load neo4j --from-path=/backup
 --overwrite-destination=true`, then scale Neo4j back to 1. `RUNBOOK.md` repeats this as a drill.
 The procedure follows the Neo4j 5 manuals and has not been exercised in this repository.
+
+After a restore the graph is as old as the dump. Bring it up to date by re-ingesting every project
+(`RUNBOOK.md`, "Memory (Neo4j)": `python -m api.app.memory_admin reingest --project <id>`); the
+ingest is idempotent, so a project that is already current is a no-op.
 
 ## 10. Secret rotation
 
@@ -903,7 +916,8 @@ exception class, never a value:
 |---|---|
 | `postgres: error: <class>` | the database is unreachable or refuses the login: firewall, NetworkPolicy, `postgres.cidrs`, a wrong password in `DATABASE_URL` |
 | `secrets: error: unreadable <names>` | a `_FILE` secret is missing or unreadable: the CSI mount failed |
-| `neo4j: down: <class>` | reported only; does not fail readiness |
+| `neo4j: degraded: <class> (down <s> s)` | Neo4j is not answering but has been down for less than `neo4j.readyGraceSeconds` (900 s): still ready. Expected during the nightly backup |
+| `neo4j: down: <class>` | down longer than the grace: the pod is not ready (unless `neo4j.gatesReadiness` is false). `kubectl -n exiqo get pods exiqo-neo4j-0`, its logs, NetworkPolicy to 7687 |
 
 | Symptom | Likely cause and where to look |
 |---|---|
@@ -922,5 +936,7 @@ exception class, never a value:
 | Plan fails with "Workload Identity is not configured for this pod" | The worker pod lacks the Workload Identity token (`AZURE_FEDERATED_TOKEN_FILE`): check the pod label `azure.workload.identity/use` and the add-on. |
 | Plan fails with "deploy environment ... is no longer declared" | The environment is not in `deploy.environments`, or was renamed after the plan was queued. |
 | Plan fails with an authorization error from Azure | The environment's identity lacks a role on the target subscription (`DEPLOY-STEP-SECRETS.md`), or the federated credential's subject does not name `exiqo-worker` in this namespace. |
+| Memory unavailable: agents or Ask answer "memory unavailable: <class>" | Neo4j is down or unreachable. Check `/readyz`, the `exiqo-neo4j-0` pod and its volume, then `NEO4J_URI` and the password (`exiqo-neo4j-password` must match `exiqo-neo4j-auth`). Reads recover on their own once Neo4j answers. |
+| Memory ingest jobs fail ("memory unavailable after 10 attempts: <reason>") | Neo4j was unreachable through all retries. Fix Neo4j, then `python -m api.app.memory_admin reingest --project <id>` (`RUNBOOK.md`, "Memory (Neo4j)"). The failed job's result names the reason. |
 | A job is stuck or reports "worker lost" | `RUNBOOK.md`, "A stuck job" and "worker lost". |
 | Uploads fail on large estates | The ingress body limit (`ingress.api.annotations`) or, with AGIC, the gateway's WAF and request limits. |

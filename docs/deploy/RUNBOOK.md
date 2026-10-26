@@ -12,7 +12,7 @@ Three endpoints describe health, and they answer different questions.
 | Endpoint | Who may call it | Question |
 |---|---|---|
 | `/healthz` | anyone (probes) | Is the process alive? No dependency is touched, so a slow database never gets a pod killed. |
-| `/readyz` | anyone (probes) | Can this pod serve traffic? Checks Postgres and that every configured secret file is readable. |
+| `/readyz` | anyone (probes) | Can this pod serve traffic? Checks Postgres, that every configured secret file is readable and Neo4j. |
 | `/system/status` | admin role | What is installed and how is it doing? The About panel's data. |
 
 Through the ingress they are under `/api`: `https://<host>/api/healthz`, `/api/readyz` and
@@ -29,12 +29,12 @@ Through the ingress they are under `/api`: `https://<host>/api/healthz`, `/api/r
 |---|---|---|
 | `postgres` | `ok`, `error: <exception class>` | yes |
 | `secrets` | `ok`, `error: unreadable <names>` | yes |
-| `neo4j` | `ok`, `down: <exception class>`, `disabled` (no `NEO4J_URI`) | no: reported only |
+| `neo4j` | `ok`, `degraded: <class> (down <s> s)`, `down: <exception class>`, `disabled` (no `NEO4J_URI`) | yes, unless `NEO4J_GATES_READINESS` is false; `degraded` (down less than `NEO4J_READY_GRACE_SECONDS`, 900) still counts as ready |
 
 A 503 removes that pod from the Service; if every api pod is unready the ingress answers 503. The
-message never carries a value or a URL, only the check and the exception class. A `neo4j: down`
-is expected for about a minute during the nightly backup (when it is on) and is not an incident by
-itself; nothing writes to Neo4j yet.
+message never carries a value or a URL, only the check and the exception class. A `neo4j: degraded`
+is expected for about a minute during the nightly backup and is not an incident by itself; only
+`down` (past the grace) takes the pod out of service.
 
 `/system/status` adds: `version`, `role`, `auth_mode`, `deploy_credential_mode`, `image_digests`
 (what is running, by digest), `egress_allowlist`, `brand_name`, `support_contact` and the same
@@ -144,7 +144,7 @@ the step again. A job requeued by a drain keeps its event sequence and continues
 
 What is backed up where is in `GMF-INSTALL.md`, section 9: Postgres (Flexible Server
 point-in-time restore), the `exiqo-data` share (Azure Backup snapshots) and Neo4j (the CronJob,
-off until a release stores data in it). A backup is untested until restored, so run a drill each
+on by default: it holds the project memory). A backup is untested until restored, so run a drill each
 quarter and after any change to the backup configuration. Record the elapsed time of each step.
 
 **Postgres drill.**
@@ -179,6 +179,47 @@ docker run --rm -v "$PWD/backup":/backup -v exiqo-drill:/data <neo4j image from 
 Start that Neo4j and check that it opens. A real recovery uses the one-off pod procedure in
 `GMF-INSTALL.md`, section 9. These steps follow the Neo4j 5 manuals and have not been exercised
 in this repository, so a first drill is also the test of the procedure.
+
+## Memory (Neo4j)
+
+Neo4j holds each project's memory as a bitemporal graph; Postgres keeps the event log
+(`memory_events`) and the job queue. Ingest runs as `memory.ingest` jobs after each phase and gate.
+The commands below run in an api or worker pod with `NEO4J_URI` set (exit 2 without it):
+
+```sh
+kubectl -n exiqo exec deploy/exiqo-api -- python -m api.app.memory_admin <command>
+```
+
+| Command | Use |
+|---|---|
+| `reingest --project <id>` | queue one ingest per scope (estate, each process's analysis, design, build/verify, deploy and gates, every decision, seeds). Idempotent: unchanged content is a no-op. Use after a Neo4j restore, or after an ingest failed. |
+| `reembed --project <id> [--wait]` | recompute the vectors of the current versions with the active embeddings backend and record it. Run it for every project after changing `EMBEDDINGS_BACKEND`. |
+| `migrate [--wait]` | queue the one-time migration (below) again; `--wait` exits 1 if the job failed. |
+
+**Reading ingest results.** Each ingest is a job (`memory.ingest`); its result has the revision
+number and counts. A job that ends "memory unavailable after 10 attempts: <reason>" means Neo4j was
+unreachable through every retry: fix Neo4j, then `reingest`. The explorer's History shows revisions
+and what changed per key.
+
+**Migration from the Postgres knowledge store.** On the first start with `NEO4J_URI` set after an
+upgrade from the Postgres store, the API queues `memory.migrate`. It copies memory items into
+`memory_events`, re-derives the graph through the same projectors as live ingest, reuses old vectors
+when the embeddings backend is unchanged, checks that every item and chunk text is present in
+Neo4j, and only then renames the schema (`knowledge` to `knowledge_retired`) and stamps
+`neo4j_migrated_at`. Ingest waits while it runs. If verification fails the job fails with
+"migration incomplete for <project>: <ids>" and nothing is renamed.
+
+**Rollback.** The old data is still in `knowledge_retired`. To return to the Postgres store's data
+(for example to re-run the migration or to inspect it), run in the Postgres database:
+
+```sql
+ALTER SCHEMA knowledge_retired RENAME TO knowledge;
+```
+
+The lifespan does not re-queue the migration while `knowledge.meta` carries `neo4j_migrated_at`;
+re-migrate with `memory_admin migrate` (it is safe to repeat: copied events are skipped and the
+ingest key makes the second apply a no-op). The running release no longer reads the `knowledge`
+schema, so a rollback to the previous release (`helm rollback`) also needs the rename.
 
 ## Secret rotation
 

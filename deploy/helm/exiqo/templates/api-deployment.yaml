@@ -1,7 +1,7 @@
 {{- /*
 The HTTP API (EXIQO_ROLE=api) on 8000, mounted at /api (API_BASE_PATH); the probes are the outer
-app's /healthz (no dependencies) and /readyz (Postgres and secret files; Neo4j is reported in
-the body but does not gate readiness until sub-project 2) at the root.
+app's /healthz (no dependencies) and /readyz (Postgres, secret files and Neo4j: a Neo4j that
+is down is "degraded", still ready, for NEO4J_READY_GRACE_SECONDS, then fails readiness) at the root.
 */ -}}
 apiVersion: apps/v1
 kind: Deployment
