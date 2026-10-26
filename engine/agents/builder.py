@@ -24,7 +24,7 @@ from engine.dotnet_gen.generator import GeneratedSolution, GenFile, ident
 from engine.dotnet_gen.models import DesignRecord
 from engine.ir.models import Process
 from engine.stacks import get_stack
-from engine.stacks.base import SourceLanguage
+from engine.stacks.base import ForbiddenPattern, SourceLanguage
 
 from .designer import rules_block
 from .jsonout import JsonOutputError
@@ -229,6 +229,24 @@ def _introduced(pattern: re.Pattern[str], original: str, new: str) -> bool:
     return len(pattern.findall(new)) > len(pattern.findall(original))
 
 
+# What a C# fill may not introduce, in the order check_filled_file reports it (DotnetLanguage.forbidden).
+# The catch clauses are the TIBCO fault handlers: code writes one per handler, already filtered on
+# the fault name, and the generated typed exceptions derive from ProcessFaultException so those
+# filters match them. A fill that adds another catch puts it above the generated one, where it
+# swallows the fault without carrying it onto the state, and the reply mapping then returns an
+# empty message with the wrong status. Fill the body of the handler that is there; never add one.
+CATCH_REASON = ("the code adds a catch clause; the fault handlers are generated from the TIBCO "
+                "process, so fill the body of the one that is there")
+OUTSIDE_REASON = "the code references a file outside the solution"
+CSHARP_FORBIDDEN: tuple[ForbiddenPattern, ...] = (
+    ForbiddenPattern(_ASSERT, "the code contains Assert; assertions belong to tests"),
+    ForbiddenPattern(_TEST_ATTR, "the code contains a [Fact] or [Theory] test attribute"),
+    ForbiddenPattern(_PRAGMA, "the code introduces #pragma warning disable"),
+    ForbiddenPattern(_CATCH, CATCH_REASON, in_code=True),
+    ForbiddenPattern(_OUTSIDE, OUTSIDE_REASON),
+)
+
+
 def check_filled_file(
     path: str, original: str, new: str, require_filled: bool = True, allow_tests: bool = False,
     scaffold: str | None = None, stack: str = "dotnet",
@@ -237,8 +255,9 @@ def check_filled_file(
 
     The file must keep every declaration with a parameter list and every ``// TIBCO`` comment of
     the original, must not introduce ``Assert``, ``[Fact]``/``[Theory]``, ``#pragma warning
-    disable``, a further ``catch`` clause or a reference to a file outside the solution, and must
-    not be a test file. With ``require_filled`` no ``agent fills`` placeholder may remain.
+    disable``, a further ``catch`` clause or a reference to a file outside the solution (on .NET;
+    each stack lists its own in ``SourceLanguage.forbidden``), and must not be a test file. With
+    ``require_filled`` no ``agent fills`` placeholder may remain.
 
     ``allow_tests`` is set only by the compile repair loop, for a test file that will not build.
     The checks below still apply to it, and the ones that matter most here are the two that keep a
@@ -269,23 +288,12 @@ def check_filled_file(
     lost = [c for c in lang.tibco_comments(protected) if c not in kept]
     if lost:
         return f"the TIBCO expression comment is missing: {lost[0]}"
-    if _introduced(_ASSERT, original, new):
-        return "the code contains Assert; assertions belong to tests"
-    if _introduced(_TEST_ATTR, original, new):
-        return "the code contains a [Fact] or [Theory] test attribute"
-    if _introduced(_PRAGMA, original, new):
-        return "the code introduces #pragma warning disable"
-    if _introduced(_CATCH, lang.strip_comments(original), lang.strip_comments(new)):
-        # The catch clauses are the TIBCO fault handlers: code writes one per handler, already
-        # filtered on the fault name, and the generated typed exceptions derive from
-        # ProcessFaultException so those filters match them. A fill that adds another catch puts it
-        # above the generated one, where it swallows the fault without carrying it onto the state,
-        # and the reply mapping then returns an empty message with the wrong status. Fill the body
-        # of the handler that is there; never add one.
-        return ("the code adds a catch clause; the fault handlers are generated from the TIBCO "
-                "process, so fill the body of the one that is there")
-    if _introduced(_OUTSIDE, original, new):
-        return "the code references a file outside the solution"
+    for rule in lang.forbidden:
+        if rule.in_code:
+            if _introduced(rule.pattern, lang.strip_comments(original), lang.strip_comments(new)):
+                return rule.reason
+        elif _introduced(rule.pattern, original, new):
+            return rule.reason
     if require_filled and lang.placeholder.search(new):
         return "an agent fills placeholder is still in the file"
     return None

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -76,11 +76,28 @@ class StackRunner(Protocol):
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]: ...
 
 
+class ForbiddenPattern(NamedTuple):
+    """Something a Code Builder fill may not introduce into a production file
+    (``builder.check_filled_file``): the fill is refused with ``reason`` when ``pattern`` matches
+    more often in the new text than in the original. ``in_code`` counts the matches on
+    ``SourceLanguage.strip_comments`` of both texts, so a mention in a comment does not count."""
+
+    pattern: re.Pattern[str]
+    reason: str
+    in_code: bool = False
+
+
 @runtime_checkable
 class SourceLanguage(Protocol):
     """The code-text checks the agents run on generated source (spec section 3)."""
 
     comment_prefix: str
+
+    @property
+    def forbidden(self) -> tuple[ForbiddenPattern, ...]:
+        """What a fill of a production file may not introduce, checked in order (assertions, test
+        annotations, warning suppression, an extra fault handler, a file outside the project)."""
+        ...
 
     @property
     def placeholder(self) -> re.Pattern[str]: ...

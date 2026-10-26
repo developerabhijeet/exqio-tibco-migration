@@ -97,7 +97,9 @@ def test_every_mapping_row_exists_in_the_tree(java_solution, java_designs):  # s
 
 
 def test_untranslatable_step_keeps_tibco_and_placeholder(java_solution):  # Review Focus 1
-    agent = [f for f in java_solution.files if f.origin == "agent"]
+    agent = [f for f in java_solution.files if f.origin == "agent" and not f.path.startswith("src/test/")]
+    tests = [f for f in java_solution.files if f.origin == "agent" and f.path.startswith("src/test/")]
+    assert tests and all("no test body for" in f.content for f in tests)  # rule tests wait for the Test Engineer
     assert agent and all('UnsupportedOperationException("agent fills:' in f.content and "// TIBCO" in f.content
                          for f in agent)
     cond = _file(java_solution, "DealerFundingRequestConditions.java")
@@ -232,18 +234,18 @@ def test_java_stack_is_registered_with_its_contract():
     layout = stack.layout("GmfCredit")
     assert layout.solution_file == "pom.xml" and layout.api_entry == "target/gmfcredit.jar"
     assert layout.contract_file == CONTRACT_FILE and layout.test_root == "src/test/java/com/gmf/gmfcredit"
-    with pytest.raises(NotImplementedError, match="Task 8"):
-        stack.runner(Path("."))
-    with pytest.raises(NotImplementedError, match="Task 8"):
-        _ = stack.language
+    from engine.stacks.java.language import JavaLanguage
+    from engine.stacks.java.runner import MavenRunner
+    assert isinstance(stack.runner(Path(".")), MavenRunner) and isinstance(stack.language, JavaLanguage)
 
 
-def test_service_contract_and_empty_test_index(java_solution):
+def test_service_contract_and_test_index(java_solution):
     contract = json.loads(_file(java_solution, CONTRACT_FILE).content)
     assert contract == {"connections": ["GMFFundingDB"], "clients": [],
                         "secrets": [{"name": "ConnectionStrings--GMFFundingDB", "key": "ConnectionStrings__GMFFundingDB"}],
                         "plain_keys": [], "port_env": None, "health": "/health"}
-    assert json.loads(_file(java_solution, INDEX_PATH).content) == []
+    index = json.loads(_file(java_solution, INDEX_PATH).content)
+    assert index and all(e["path"].startswith("src/test/java/com/gmf/gmfcredit/") for e in index)
 
 
 def test_layout_and_starters(java_solution):
@@ -368,7 +370,9 @@ def test_the_whole_sample_application_generates(tmp_path, gmf_app):
             f = files[f"{r.project}/{r.file}"]
             assert f" {r.method}(" in f.content and re.search(rf"\b(class|record|interface) {r.class_name}\b", f.content)
     for f in sol.files:
-        if f.origin == "agent":
+        if f.origin == "agent" and f.path.startswith("src/test/"):
+            assert "no test body for" in f.content, f.path
+        elif f.origin == "agent":
             assert 'UnsupportedOperationException("agent fills:' in f.content and "// TIBCO" in f.content, f.path
         if f.path.endswith(".java"):
             rel = f.path.split("/java/", 1)[1]

@@ -2,8 +2,8 @@
 check, and the Code Builder, Test Engineer, review panel and repair gate reading their text checks
 through ``get_stack(stack).language``.
 
-Java is not registered yet (Tasks 7 and 8), so a small Java-like stack is registered here for the
-duration of a test; its language is what Task 8's ``JavaLanguage`` will provide.
+A small Java-like stack (and Python- and Go-like ones) is registered here for the duration of a
+test, so the agents' stack handling is checked independently of the real ``JavaLanguage``.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from engine.dotnet_gen.models import DesignRecord, MappingRow, ProjectLayout, So
 from engine.dotnet_gen.repair import check_diff
 from engine.ir.models import Activity, Complexity, Process, Transition
 from engine.stacks.generic_checks import check_generic_test_body
+from engine.stacks.java.language import JavaLanguage
 from engine.stacks.testindex import IndexEntry, write_index
 
 # ---------------------------------------------------------------- a Java-like stack for the tests
@@ -36,6 +37,7 @@ _DECL = re.compile(r"^(?:public|protected|private)\b[^;=]*\)\s*(?:throws [\w., ]
 
 class JavaLikeLanguage:
     comment_prefix = "//"
+    forbidden = JavaLanguage().forbidden
     placeholder = re.compile(r'UnsupportedOperationException\(\s*"agent fills:')
 
     def test_placeholder(self, test_id: str) -> str:

@@ -229,6 +229,8 @@ class JavaNaming:
                      "tibco/TibText.java", "tibco/ProcessState.java", "tibco/ProcessFlow.java",
                      "tibco/ProcessResult.java"},
             "infrastructure": {"messaging/InMemoryMessageBus.java", "messaging/ServiceBusMessageBus.java"},
+            "tests": {f"{process}RulesTests.java", f"{process}BranchTests.java", f"{process}ScenarioTests.java",
+                      "support/TestDatabase.java", "support/Fixtures.java", "support/ScenarioSupport.java"},
         }
         if patterns & JDBC_PATTERNS:
             files["infrastructure"].add("DataSources.java")

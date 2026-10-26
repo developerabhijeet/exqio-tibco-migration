@@ -1,22 +1,17 @@
-"""``JavaStack``: Java 21, Spring Boot 3.5 and Maven behind the ``StackGenerator`` protocol.
-
-The runner (``MavenRunner``) and the agents' source checks (``JavaLanguage``) arrive with Task 8;
-until then ``runner`` and ``language`` raise ``NotImplementedError`` naming what is missing, so a
-build that reaches them fails with a clear job error instead of a wrong one.
-"""
+"""``JavaStack``: Java 21, Spring Boot 3.5 and Maven behind the ``StackGenerator`` protocol:
+``generate_java`` (tests first, ``tests_gen``), ``MavenRunner`` and ``JavaLanguage``."""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from engine.stacks.base import Mirrors, ProjectFolder, StackKey, StackLayout
+from engine.stacks.java.language import JavaLanguage
 from engine.stacks.java.naming import JavaNaming
 
 if TYPE_CHECKING:
     from engine.dotnet_gen.generator import GeneratedSolution
-    from engine.stacks.base import SourceLanguage, StackRunner
-
-_PENDING = "the Java {what} is not implemented yet (target stacks Task 8)"
+    from engine.stacks.java.runner import MavenRunner
 
 
 class JavaStack:
@@ -30,14 +25,15 @@ class JavaStack:
 
     def __init__(self) -> None:
         self._naming = JavaNaming()
+        self._language = JavaLanguage()
 
     @property
     def naming(self) -> JavaNaming:
         return self._naming
 
     @property
-    def language(self) -> SourceLanguage:
-        raise NotImplementedError(_PENDING.format(what="source language checks (JavaLanguage)"))
+    def language(self) -> JavaLanguage:
+        return self._language
 
     def layout(self, app_name: str) -> StackLayout:
         from engine.stacks.java.generator import CONTRACT_FILE, layout_paths
@@ -57,5 +53,10 @@ class JavaStack:
 
     def runner(self, root: Path, *, env: dict[str, str] | None = None,
                coverage_scope: set[str] | None = None, timeout_s: int | None = None,
-               api_entry: str | None = None) -> StackRunner:
-        raise NotImplementedError(_PENDING.format(what="runner (MavenRunner)"))
+               api_entry: str | None = None) -> MavenRunner:
+        """A ``MavenRunner``; ``api_entry`` is the jar (``layout(app).api_entry``), the single one
+        under ``target`` when omitted."""
+        from engine.dotnet_gen.runner import DEFAULT_TIMEOUT_S
+        from engine.stacks.java.runner import MavenRunner
+        return MavenRunner(root, env=env, coverage_scope=coverage_scope, timeout_s=timeout_s or DEFAULT_TIMEOUT_S,
+                           api_entry=api_entry)

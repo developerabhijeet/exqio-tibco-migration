@@ -1,0 +1,87 @@
+package {{ pkg }}.support;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.MissingNode;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Parity scenario fixtures (src/test/resources/fixtures/&lt;process&gt;/&lt;scenario&gt;.json): the
+ * scenario input, the request it becomes, and the expected output, fault and side effects derived
+ * from the TIBCO model. Paths listed as noise (wall-clock values) are not compared; the fixture
+ * says why in noise_reasons.
+ */
+public final class Fixtures {
+    /** One JSON mapper for fixtures, responses and messages. */
+    public static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
+
+    private Fixtures() {}
+
+    /** The fixture of {@code scenario} (its file stem) of {@code process}. */
+    public static Fixture load(String process, String scenario) {
+        String name = "fixtures/" + process + "/" + scenario + ".json";
+        try (InputStream in = Fixtures.class.getClassLoader().getResourceAsStream(name)) {
+            if (in == null) {
+                throw new IllegalStateException("fixture " + name + " is missing");
+            }
+            JsonNode root = JSON.readTree(in);
+            return new Fixture(root.path("scenario_id").asText(scenario), root);
+        } catch (IOException ex) {
+            throw new IllegalStateException("reading fixture " + name + " failed", ex);
+        }
+    }
+
+    /** A row inserted after the reset: schema-qualified table and column values as text. */
+    public record SeedRow(String table, Map<String, String> row) {}
+
+    /** One loaded fixture. */
+    public record Fixture(String scenarioId, JsonNode root) {
+        /** {@code expected.<name>}: output, fault or side_effects (a missing node when absent). */
+        public JsonNode expected(String name) {
+            return root.path("expected").path(name);
+        }
+
+        /** The expected fault ({@code name}, {@code data}), or null when the run must not fault. */
+        public JsonNode fault() {
+            JsonNode fault = expected("fault");
+            return fault.isObject() ? fault : null;
+        }
+
+        /** Output paths not compared (wall-clock values). */
+        public Set<String> outputNoise() {
+            Set<String> out = new HashSet<>();
+            expected("output_noise").forEach(n -> out.add(n.asText()));
+            return out;
+        }
+
+        /** The scenario input (a JMS message body, a REST request's parameters and body). */
+        public JsonNode input() {
+            return root.path("input");
+        }
+
+        /** The HTTP request the generator resolved from the REST starter, or a missing node. */
+        public JsonNode request() {
+            JsonNode request = root.get("request");
+            return request == null ? MissingNode.getInstance() : request;
+        }
+
+        public List<SeedRow> seedRows() {
+            List<SeedRow> out = new ArrayList<>();
+            for (JsonNode item : root.path("seed_state")) {
+                Map<String, String> row = new LinkedHashMap<>();
+                item.path("row").fields().forEachRemaining(e -> row.put(e.getKey(), e.getValue().isNull()
+                        ? null
+                        : e.getValue().isValueNode() ? e.getValue().asText() : e.getValue().toString()));
+                out.add(new SeedRow(item.path("table").asText(), row));
+            }
+            return out;
+        }
+    }
+}

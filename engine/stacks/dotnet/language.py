@@ -6,10 +6,19 @@ the stack registry without a cycle.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from engine.stacks.base import ForbiddenPattern
 
 
 class DotnetLanguage:
     comment_prefix = "//"
+
+    @property
+    def forbidden(self) -> tuple[ForbiddenPattern, ...]:
+        from engine.agents.builder import CSHARP_FORBIDDEN
+        return CSHARP_FORBIDDEN
 
     @property
     def placeholder(self) -> re.Pattern[str]:

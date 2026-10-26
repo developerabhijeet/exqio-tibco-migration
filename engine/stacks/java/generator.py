@@ -22,8 +22,8 @@ Layout (``<app>`` = the application's lower-case alphanumerics)::
 
 The runtime contract (spec section 5) is the .NET one: ``/health``, ``/auth/dev-token``, the
 ``/_bus`` endpoints, faults as problem+json, and ``__``-separated environment names bound by
-``EnvBinding``. Tests are generated first by Task 8 (``tests_gen``); this module writes an empty
-test index.
+``EnvBinding``. The tests are generated first (``tests_gen``), with the test index that names
+them.
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from engine.ir.models import Activity, Application, Process
 from engine.parity.models import Scenario
 from engine.stacks.base import Mirrors
 from engine.stacks.contracts import contract_model, ident, plan_contracts
-from engine.stacks.java import versions
+from engine.stacks.java import tests_gen, versions
 from engine.stacks.java.contracts import render as render_contract
 from engine.stacks.java.naming import JavaNaming, kebab, package_name
 from engine.stacks.java.printer import AgentMember, Ctx, JavaProcess, Origin, placeholder, row_layer
@@ -145,7 +145,8 @@ class _Files:
             process_id: str | None = None) -> None:
         if any(path == r or path.startswith(r) for r in RESERVED_FOR_INFRA):
             raise ValueError(f"{path} is reserved for the infrastructure generator")
-        if path.endswith(".java"):
+        if path.endswith(".java") and not path.startswith("src/test/"):
+            # test files keep their whole vocabulary (tests_gen): a body is written against it later
             content = prune_imports(content)
         if path in self.files:  # a file two processes need: the first writer wins
             f = self.files[path]
@@ -186,7 +187,7 @@ def generate_java(app: Application, process_ids: list[str], designs: Any, rules:
     rules_map = dotnet._as_map(rules, process_ids, cited)
     findings_map = dotnet._as_map(findings, process_ids, cited)
     records, cards = _designs(app, process_ids, designs, rules_map, findings_map)
-    gen = _JavaSolution(app, process_ids, records, cards, findings_map, mirrors)
+    gen = _JavaSolution(app, process_ids, records, cards, findings_map, mirrors, rules_map, list(scenarios or []))
     files = gen.generate()
     ordered = [files[k] for k in sorted(files)]
     digest = hashlib.sha256()
@@ -200,8 +201,11 @@ def generate_java(app: Application, process_ids: list[str], designs: Any, rules:
 
 class _JavaSolution:
     def __init__(self, app: Application, process_ids: list[str], designs: dict[str, DesignRecord],
-                 cards: dict[str, Any], findings: dict[str, list[Finding]], mirrors: Mirrors) -> None:
+                 cards: dict[str, Any], findings: dict[str, list[Finding]], mirrors: Mirrors,
+                 rules: dict[str, list[Rule]] | None = None, scenarios: list[Scenario] | None = None) -> None:
         self.app = app
+        self.rules = rules or {}
+        self.scenarios = scenarios or []
         self.pids = process_ids
         self.designs = designs
         self.cards = cards
@@ -254,6 +258,7 @@ class _JavaSolution:
         self.infrastructure_files()
         self.api_files()
         self.config_files(printers)
+        self.test_files(printers)
         return self.out.files
 
     def project_files(self) -> None:
@@ -265,7 +270,6 @@ class _JavaSolution:
         add("src/main/resources/META-INF/spring.factories", render("META-INF/spring.factories.j2", **self.ctx()))
         self.template("Application.java", "Application.java.j2")
         self.template("config/EnvBinding.java", "EnvBinding.java.j2")
-        add(write_index([]).path, write_index([]).content)
 
     def runtime_files(self) -> None:
         for name in ("TibValue", "TibText", "ProcessState", "ProcessFlow", "ProcessResult"):
@@ -713,6 +717,32 @@ class _JavaSolution:
     def api_files(self) -> None:
         for name in ("SecurityConfig", "DevTokenController", "FaultHandler", "BusDevController"):
             self.template(f"api/{name}.java", f"{name}.java.j2")
+
+    # -------------------------------------------------------------- tests (written before the bodies)
+    def test_files(self, printers: list[JavaProcess]) -> None:
+        """The tests of every process, the shared test support, the estate SQL and the test index."""
+        sql_texts: dict[str, str] = {}
+        estate = dotnet._estate_root(self.app)
+        for rel in self.app.sql_files:
+            path = (estate / rel) if estate else None
+            if path and path.is_file():
+                sql_texts[PurePosixPath(rel).name] = path.read_text(encoding="utf-8")
+        schemas = sorted({m.lower() for t in sql_texts.values()
+                          for m in re.findall(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?([A-Za-z_]\w*)\.", t)})
+        folder = self.paths["tests"]
+        for f in tests_gen.generate_test_support(self.pkg, folder, schemas, sql_texts, sorted(set(self.connections.values()))):
+            self.out.add(f.path, f.content, f.origin)
+        entries = []
+        for jp in printers:
+            ctx = tests_gen.JavaTestContext(pkg=self.pkg, app=self.app_name, process=jp.p, name=jp.name,
+                                            test_folder=folder, sql_texts=sql_texts, schemas=schemas)
+            files, found = tests_gen.generate_java_tests(jp.plan, self.rules.get(jp.p.id, []), self.scenarios,
+                                                         jp.design, ctx)
+            for f in files:
+                self.out.add(f.path, f.content, f.origin, f.activity_id, process_id=jp.p.id)
+            entries += found
+        index = write_index(entries)
+        self.out.add(index.path, index.content)
 
     # -------------------------------------------------------------- configuration
     def config_files(self, printers: list[JavaProcess]) -> None:
