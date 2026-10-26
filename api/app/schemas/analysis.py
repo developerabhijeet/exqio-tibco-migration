@@ -78,6 +78,7 @@ class RuleOut(BaseModel):
     owner: str | None
     memory_refs: list[str]
     challenge: ChallengeOut | None
+    source: str | None = None  # "iteration <n>" for a rule an iteration proposed
     updated_by: str | None
     updated_at: str | None
     # ``text`` with a span per cited activity. ``cited.text`` is the MASKED text and the spans

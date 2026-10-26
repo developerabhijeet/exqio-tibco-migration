@@ -15,8 +15,9 @@ from sqlalchemy import cast, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.app.models import Iteration, Job, Process, Project
+from api.app.models import Iteration, IterationInput, Job, Process, Project
 from api.app.services import gates as gate_svc
+from engine.agents.designer import IterationContext, IterationItem
 from engine.agents.provider import mask_sensitive
 
 ITERATION_STATUSES: tuple[str, ...] = ("open", "designing", "building", "verifying", "deploying", "closed",
@@ -96,12 +97,13 @@ async def job_iteration(session: AsyncSession, payload: dict, process_id: str) -
 async def open_iteration(session: AsyncSession, project_id: str, process_ids: list[str], kind: str, *,
                          actor: str, requirements: str | None = None, resume_phase: str = "design",
                          baseline_build_id: str | None = None, source: dict | None = None,
-                         note: str | None = None) -> Iteration:
+                         note: str | None = None, audit_detail: dict | None = None) -> Iteration:
     """Open iteration ``max + 1`` naming ``process_ids``. Each of them that sits in an earlier
     active iteration moves to the new one: it is removed from that iteration's ``process_ids``, and
     an iteration left with no process is abandoned ("superseded by iteration <n>"); the processes it
     keeps stay in it. A moved process with a design or build queued or running raises
-    :class:`IterationBusy`, and nothing changes."""
+    :class:`IterationBusy`, and nothing changes. ``audit_detail`` joins the ``iteration opened``
+    audit line (which always names ``iteration``: the new ``n``)."""
     if kind not in KINDS or kind == "initial":
         raise ValueError(f"kind must be one of: {', '.join(k for k in KINDS if k != 'initial')}")
     if resume_phase not in RESUME_PHASES:
@@ -143,7 +145,8 @@ async def open_iteration(session: AsyncSession, project_id: str, process_ids: li
             _end(old, "abandoned", f"superseded by iteration {n}")
             _audit(session, old, actor, "iteration abandoned", {"superseded_by": row.id})
     _audit(session, row, actor, "iteration opened",
-           {"kind": kind, "resume_phase": resume_phase, "baseline_build_id": baseline_build_id})
+           {"iteration": n, "kind": kind, "resume_phase": resume_phase, "baseline_build_id": baseline_build_id,
+            **(audit_detail or {})})
     await session.flush()
     return row
 
@@ -202,3 +205,22 @@ async def close(session: AsyncSession, iteration_id: str, actor: str, note: str 
 
 async def abandon(session: AsyncSession, iteration_id: str, actor: str, note: str | None = None) -> Iteration:
     return await _finish(session, iteration_id, "abandoned", actor, note)
+
+
+async def design_context(session: AsyncSession, process_id: str, n: int) -> IterationContext | None:
+    """What iteration ``n`` brings to a Design job of ``process_id``: its inputs for the process
+    and its requirements. ``None`` for iteration 1 and for an iteration that does not name the
+    process."""
+    process = await session.get(Process, process_id)
+    if process is None or n <= 1:
+        return None
+    row = await session.scalar(select(Iteration).where(Iteration.project_id == process.project_id,
+                                                       Iteration.n == n))
+    if row is None or process_id not in (row.process_ids or []):
+        return None
+    inputs = (await session.scalars(
+        select(IterationInput).where(IterationInput.iteration_id == row.id,
+                                     (IterationInput.process_id == process_id) | IterationInput.process_id.is_(None))
+        .order_by(IterationInput.created_at, IterationInput.id))).all()
+    return IterationContext(n=n, inputs=[IterationItem.model_validate(i) for i in inputs],
+                            requirements=row.requirements or "")

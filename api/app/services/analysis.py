@@ -515,6 +515,42 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
                 "coverage_total": coverage.total}
 
 
+# ------------------------------------------------------------------ rules an iteration proposes
+async def store_proposed_rules(session: AsyncSession, process: Process, proposals: list[Any], n: int,
+                               job_id: str | None = None) -> list[str]:
+    """Store the designer's ``proposed_rules`` of iteration ``n`` as draft rules (no citations,
+    confidence 0, ``source = "iteration n"``) for the SME to decide; a proposal whose text an
+    existing rule already has is skipped. Keys continue above every key the process used (its rules
+    and the latest analysis's high-water mark, which is raised so a re-analysis never reuses them).
+    Drafts are outside the spec hash, so nothing is reset until one is approved. Returns the keys."""
+    rules = await gate_svc.load_rules(session, process.id)
+    analysis = await gate_svc.latest_analysis(session, process.id)
+    marks = dict(((analysis.summary or {}).get("key_marks") or {}) if analysis else {})
+    next_n = max([int(marks.get("rule", 0)), *(gate_svc.key_number(r.rule_key) for r in rules)]) + 1
+    known = {norm(t) for r in rules for t in (r.text, r.original_text) if t}
+    source = f"iteration {n}"
+    keys: list[str] = []
+    for proposal in proposals:
+        text = str(getattr(proposal, "text", "") or "").strip()
+        if not text or norm(text) in known:
+            continue
+        known.add(norm(text))
+        key = f"R{next_n}"
+        next_n += 1
+        session.add(Rule(process_id=process.id, analysis_id=analysis.id if analysis else None, rule_key=key,
+                         text=text, original_text=text, citations=[], confidence=0.0, status="draft",
+                         source=source, memory_refs=[]))
+        keys.append(key)
+        gate_svc.audit(session, process, gate_svc.SYSTEM, "rule proposed", actor_kind=gate_svc.SYSTEM,
+                       detail={"rule_key": key, "text": text, "rationale": getattr(proposal, "rationale", ""),
+                               "iteration": n, "job_id": job_id})
+    if keys and analysis is not None:
+        analysis.summary = {**(analysis.summary or {}),
+                            "key_marks": {**marks, "rule": next_n - 1}}  # a new dict for the JSONB change
+    await session.flush()
+    return keys
+
+
 # ------------------------------------------------------------------ checks after a decision
 async def refresh_checks(session: AsyncSession, process: Process, analysis: AnalysisRun | None,
                          rules: list[Rule]) -> tuple[Any, Any]:
@@ -654,7 +690,8 @@ def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process,
     return {"id": r.id, "rule_key": r.rule_key, "text": r.text, "original_text": r.original_text,
             "original_text_masked": mask(r.original_text) if r.original_text else None,
             "citations": cits, "confidence": r.confidence, "status": r.status, "owner": r.owner,
-            "memory_refs": r.memory_refs or [], "challenge": r.challenge, "updated_by": r.updated_by,
+            "memory_refs": r.memory_refs or [], "challenge": r.challenge, "source": r.source,
+            "updated_by": r.updated_by,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             "cited": cite_rule(r, process, citations=cits, names=names)}
 

@@ -83,13 +83,17 @@ DATA_KEYS = frozenset({
     "source", "process_name", "rules", "findings", "memory", "design", "targets", "code",
     "failures", "files", "references",
 })
+# Data blocks a template may leave out: wrapped like ``DATA_KEYS`` when given, empty when not (the
+# ``{iteration}`` block of an iteration's failures, logs and requirements).
+OPTIONAL_DATA_KEYS = frozenset({"iteration"})
 _SOURCE_TAG = re.compile(r"<\s*(/?)\s*source\s*>", re.IGNORECASE)
 
 
 def render_prompt(name: str, stack: str = "dotnet", **values: Any) -> tuple[str, str]:
     system, user = load_prompt(name, stack)
     wrapped = {
-        k: (wrap_source(str(v), inline=(k == "process_name")) if k in DATA_KEYS else v)
+        k: (wrap_source(str(v), inline=(k == "process_name")) if k in DATA_KEYS
+            else (wrap_source(str(v)) if v else "") if k in OPTIONAL_DATA_KEYS else v)
         for k, v in values.items()
     }
     return render(system, **wrapped), render(user, **wrapped)

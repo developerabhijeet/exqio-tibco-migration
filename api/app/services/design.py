@@ -8,7 +8,8 @@ Designer (a model) only writes the narrative, decisions and open questions, whic
 design hash; with no provider the record is stored without them and the job says so.
 
 A new record whose design hash differs from the previous one resets G3 to G6 (``design record
-changed``).
+changed``). In an iteration (sub-project 6) the designer also reads the iteration's inputs and
+updated requirements, and the rules it proposes are stored as drafts for the SME.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from api.app.config import Settings
 from api.app.connectors.jira import question_id
 from api.app.jobs.runner import JobContext
 from api.app.models import DesignRecord, Process, Project
+from api.app.services import analysis as analysis_svc
 from api.app.services import evidence
 from api.app.services import figma_sync as figma_svc
 from api.app.services import gates as gate_svc
@@ -31,7 +33,7 @@ from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.process_views import io_card_for
 from api.app.services.providers import build_provider, model_call_recorder, stage_of
-from engine.agents.designer import DesignHashChanged, design_narrative
+from engine.agents.designer import DesignHashChanged, ProposedRule, design_with_proposals
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
 from engine.agents.routing import ModelCallRecord
@@ -77,6 +79,9 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         project_id = row.project_id
         project = await s.get(Project, project_id)
         stack = project.target_stack if project is not None else "dotnet"
+        iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
+        iteration_ctx = await iteration_svc.design_context(s, process_id, iteration)
+        await s.commit()  # iteration 1 may have just been created
 
     await ctx.stage(STAGES[0])
     design = await asyncio.to_thread(build_design_skeleton, proc, app, rules, findings, card, spec, stack)
@@ -110,12 +115,19 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
 
     await ctx.stage(STAGES[2])
     ai_error: str | None = None
+    proposed: list[ProposedRule] = []
+    if iteration_ctx is not None:
+        await ctx.log(f"iteration {iteration}: {len(iteration_ctx.inputs)} input(s)"
+                      + (" and updated requirements" if iteration_ctx.requirements else "")
+                      + (" passed to the designer" if provider is not None else ", not read: no model configured"))
     if provider is None:
         await ctx.log(SKIPPED, tag="ai")
     else:
         try:
-            design = await design_narrative(design, proc, rules, findings, memory_items, provider,
-                                            app.contracts, references=references, stack=design.stack)
+            result = await design_with_proposals(design, proc, rules, findings, memory_items, provider,
+                                                 app.contracts, references=references, iteration=iteration_ctx,
+                                                 stack=design.stack)
+            design, proposed = result.design, result.proposed_rules
             if references:
                 await ctx.log(f"{len(references)} Figma design reference(s) passed to the designer")
             await ctx.log(f"Solution Designer wrote the narrative, {len(design.decisions)} decision(s) and "
@@ -131,7 +143,6 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         previous = await evidence.latest_design(s, process_id)
         version = (await s.scalar(select(func.max(DesignRecord.version))
                                   .where(DesignRecord.process_id == process_id)) or 0) + 1
-        iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
         record = DesignRecord(process_id=process_id, version=version, iteration=iteration, job_id=ctx.job_id,
                               spec_hash=design.spec_hash, design_hash=design.design_hash,
                               record=design.model_dump(mode="json", by_alias=True),
@@ -146,14 +157,20 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         gate_svc.audit(s, process, gate_svc.SYSTEM, "design generated", actor_kind=gate_svc.SYSTEM,
                        detail={"version": version, "iteration": iteration, "design_hash": design.design_hash,
                                "spec_hash": design.spec_hash, "job_id": ctx.job_id})
+        proposed_keys = (await analysis_svc.store_proposed_rules(s, process, proposed, iteration, ctx.job_id)
+                         if proposed else [])
         await s.commit()
         design_id = record.id
     await ctx.log(f"stored design record v{version}" + (f"; gates reset: {', '.join(reset)}" if reset else ""))
+    if iteration_ctx is not None and provider is not None and ai_error is None:
+        await ctx.log(f"{len(proposed_keys)} rule(s) proposed by iteration {iteration} stored as draft"
+                      + (f": {', '.join(proposed_keys)}" if proposed_keys else ""), tag="ai")
     return {"design_id": design_id, "version": version, "iteration": iteration, "design_hash": design.design_hash,
             "spec_hash": design.spec_hash, "mapping_rows": len(design.mapping), "agent_rows": agent_rows,
             "decisions": len(design.decisions), "open_questions": len(design.open_questions),
             "ai_available": provider is not None and ai_error is None,
-            "ai_reason": choice.reason or ai_error, "provider": choice.name, "gates_reset": reset}
+            "ai_reason": choice.reason or ai_error, "provider": choice.name, "gates_reset": reset,
+            "proposed_rules": len(proposed_keys)}
 
 
 async def answer_open_question(session: AsyncSession, process: Process, index: int,

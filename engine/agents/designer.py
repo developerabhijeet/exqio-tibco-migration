@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from engine.analysis.models import Finding, Rule
 from engine.dotnet_gen.models import (
     HASH_EXCLUDED,
@@ -22,11 +24,14 @@ from engine.dotnet_gen.models import (
 from engine.ir.models import Contract, Process
 
 from .prompting import ask_json, memory_block, render_process, render_prompt
-from .provider import MemoryItem
+from .provider import MemoryItem, mask_sensitive
 
 log = logging.getLogger(__name__)
 
 NOT_A_DECISION = "not a decision"
+MAX_PROPOSED_RULES = 10
+PROPOSED_RULE_LIMIT = 1000
+_MARKER = re.compile(r"\[S\d+\]")
 
 DESIGN_SCHEMA: dict = {
     "type": "object",
@@ -59,6 +64,45 @@ DESIGN_SCHEMA: dict = {
     },
     "required": ["narrative", "decisions", "open_questions"],
 }
+# Only asked for (and only read) when the design runs in an iteration.
+PROPOSED_RULES_SCHEMA: dict = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}, "rationale": {"type": "string"}},
+        "required": ["text", "rationale"],
+    },
+}
+
+
+class IterationItem(BaseModel):
+    """One input of an iteration as the designer reads it (an ``api`` ``FailureItem`` or an
+    ``iteration_inputs`` row validates into it by attribute)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    kind: str
+    ref: str | None = None
+    title: str
+    text: str = ""
+
+
+class IterationContext(BaseModel):
+    """What an iteration brings to the Design job: what failed and the updated requirements."""
+
+    n: int
+    inputs: list[IterationItem] = Field(default_factory=list)
+    requirements: str = ""
+
+
+class ProposedRule(BaseModel):
+    text: str
+    rationale: str = ""
+
+
+class DesignResult(BaseModel):
+    design: DesignRecord
+    proposed_rules: list[ProposedRule] = Field(default_factory=list)
 
 
 class DesignHashChanged(RuntimeError):
@@ -109,6 +153,33 @@ def references_block(references: list[dict[str, Any]] | None) -> str:
     return "\n".join(lines) or "(none)"
 
 
+def _data(text: Any) -> str:
+    """Untrusted text for the iteration block: literal citation markers stripped (until none is
+    left, so ``[[S1]S2]`` cannot leave one) and masked again."""
+    out = str(text or "")
+    while True:
+        stripped = _MARKER.sub("", out)
+        if stripped == out:
+            return mask_sensitive(out)
+        out = stripped
+
+
+def iteration_block(iteration: IterationContext | None) -> str:
+    """The ``Iteration n`` block (empty without an iteration): each input with its kind, title and
+    excerpt, then the updated requirements. ``render_prompt`` wraps it in ``<source>``."""
+    if iteration is None:
+        return ""
+    lines = [f"Iteration {iteration.n}", "", "What failed (from the previous iteration and uploaded logs):"]
+    for i, item in enumerate(iteration.inputs, 1):
+        ref = f" ref={_ref_line(_data(item.ref), 120)}" if item.ref else ""
+        lines.append(f"- input {i} kind={_ref_line(item.kind, 40)}{ref}: {_ref_line(_data(item.title), 200)}")
+        lines += [f"    {line}" for line in _data(item.text).splitlines()]
+    if not iteration.inputs:
+        lines.append("(none)")
+    lines += ["", "Updated requirements:", _data(iteration.requirements).strip() or "(none)"]
+    return "\n".join(lines)
+
+
 def skeleton_text(design: DesignRecord) -> str:
     """The part of the design record code decided, as JSON (the model's advice is left out)."""
     payload = design.model_dump(mode="json", exclude=set(HASH_EXCLUDED), by_alias=True)
@@ -155,6 +226,27 @@ def _open_questions(raw: Any) -> list[OpenQuestion]:
     return out
 
 
+def _proposed_rules(raw: Any) -> list[ProposedRule]:
+    """At most ``MAX_PROPOSED_RULES``, each text on one line, masked and at most
+    ``PROPOSED_RULE_LIMIT`` characters (a longer one is dropped, not cut: half a rule is another
+    rule); duplicates by text are dropped."""
+    out: list[ProposedRule] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        text = mask_sensitive(_text(_data(item.get("text"))))
+        rationale = mask_sensitive(_text(_data(item.get("rationale"))))[:PROPOSED_RULE_LIMIT]
+        if not text or len(text) > PROPOSED_RULE_LIMIT or text.lower() in seen:
+            log.info("designer: dropped a proposed rule that is empty, too long or repeated")
+            continue
+        seen.add(text.lower())
+        out.append(ProposedRule(text=text, rationale=rationale))
+        if len(out) == MAX_PROPOSED_RULES:
+            break
+    return out
+
+
 # ------------------------------------------------------------ agent
 
 
@@ -168,12 +260,33 @@ async def design_narrative(
     contracts: list[Contract] | None = None,
     references: list[dict[str, Any]] | None = None,
     stack: str = "dotnet",
+    iteration: IterationContext | None = None,
 ) -> DesignRecord:
-    """Return a copy of ``design`` with ``narrative``, ``decisions`` and ``open_questions`` filled.
+    """Return a copy of ``design`` with ``narrative``, ``decisions`` and ``open_questions`` filled
+    (see :func:`design_with_proposals`, which also returns the proposed rules)."""
+    result = await design_with_proposals(design, process, rules, findings, memory_items, provider,
+                                         contracts, references, iteration, stack=stack)
+    return result.design
+
+
+async def design_with_proposals(
+    design: DesignRecord,
+    process: Process,
+    rules: list[Rule],
+    findings: list[Finding],
+    memory_items: list[MemoryItem],
+    provider: Any,
+    contracts: list[Contract] | None = None,
+    references: list[dict[str, Any]] | None = None,
+    iteration: IterationContext | None = None,
+    stack: str = "dotnet",
+) -> DesignResult:
+    """The narrated design and, in an iteration, the rules the designer proposes.
 
     The mapping and every other field code decided are carried over unchanged; the design hash is
     recomputed and compared, and :class:`DesignHashChanged` is raised if it moved. ``stack`` picks
-    the prompt pack (the design's own ``stack``)."""
+    the prompt pack (the design's own ``stack``). ``iteration`` adds the ``Iteration n`` block
+    (inside ``<source>``) and asks for ``proposed_rules``."""
     before = compute_design_hash(design)
     if design.design_hash and design.design_hash != before:
         raise DesignHashChanged(
@@ -188,9 +301,14 @@ async def design_narrative(
         findings=findings_block(findings),
         memory=memory_block(memory_items),
         references=references_block(references),
+        iteration=iteration_block(iteration),
     )
+    schema = DESIGN_SCHEMA
+    if iteration is not None:
+        schema = {**DESIGN_SCHEMA, "properties": {**DESIGN_SCHEMA["properties"],
+                                                  "proposed_rules": PROPOSED_RULES_SCHEMA}}
     data, _ = await ask_json(
-        provider, "design", process, system, user, DESIGN_SCHEMA,
+        provider, "design", process, system, user, schema,
         tags={"stage": "design", "process": process.id},
     )
     narrative = str(data.get("narrative") or "").strip() or None
@@ -202,4 +320,5 @@ async def design_narrative(
     after = compute_design_hash(out)
     if after != before or out.mapping != design.mapping:
         raise DesignHashChanged(f"the narrative changed the design of {design.process_id}")
-    return out
+    proposed = _proposed_rules(data.get("proposed_rules")) if iteration is not None else []
+    return DesignResult(design=out, proposed_rules=proposed)
