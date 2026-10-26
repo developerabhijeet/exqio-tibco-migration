@@ -382,7 +382,7 @@ An iteration is one numbered pass of the loop that re-enters Design with error l
 requirements, resumes from an edited copy of a downloaded build, or starts from a GitHub branch.
 The counter is per project; iteration 1 always exists. The architect opens one from the Build,
 Verify, Deploy or Design tab ("Re-enter design"), an engineer uploads an edited zip on the Build
-tab ("Upload edited build"), and the Repository panel on the Upload and Build tabs connects a
+tab ("Upload an edited copy"), and the Repository panel on the Upload and Build tabs connects a
 branch (it shows only when the GitHub connector is on, see "Connectors"). Opening an iteration
 resets G3 to G6 of the process with an audit line naming the iteration. Roles: architect or admin
 open and close (an SME may open with requirements only); engineer or admin upload edits and
@@ -436,7 +436,7 @@ hand edit always wins and is kept as uploaded; the Build tab's "hand edits" stag
 as `kept`, `merged`, `conflict`, `added`, `deleted` or `restored`, and the merge output with both
 versions is in the build folder at `.exiqo/conflicts/<path>.merge`. To resolve one, take the
 generated improvement by hand, download the new build, and upload it again as the next edit set.
-Files marked with the "hand" badge are protected: the code builder, test engineer and both repair
+Files marked with the "hand edit" badge are protected: the code builder, test engineer and both repair
 loops leave them alone, and the review panel still reads them.
 
 | Resume message | Meaning and fix |
@@ -466,7 +466,7 @@ reason, with secrets removed.
 
 The clone runs with a scrubbed environment, no prompts, no submodules, no Git LFS download and no
 hooks, and only over https; generated code is never run by it. To retry after a timeout, press
-"Pull latest" (or `POST /api/repos/<id>/pull`); a repository that holds a TIBCO estate creates an
+"Pull" (or `POST /api/repos/<id>/pull`); a repository that holds a TIBCO estate creates an
 upload and a scan, and one that holds an exported build creates an edit set against that build.
 Pushing an iteration's build back (`POST /api/repos/<id>/push`) goes to the branch
 `exiqo/<process slug>/iteration-<n>` and opens a pull request when asked.

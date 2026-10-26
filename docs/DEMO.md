@@ -83,9 +83,9 @@ is not part of this build.
   works. Every persona may use it, `viewer.val` included.
 - **Iterations.** After a failed or finished build, act as `architect.lee` and press Re-enter
   design: the dialog lists the failures collected from Build, Verify and Deploy, takes log files and
-  a requirements text, and "Open iteration 2" resets G3 to G6 and reruns Design with them. The
+  a requirements text, and "Open iteration" resets G3 to G6 and reruns Design with them. The
   strip under the stepper shows `Iteration 2`. As `engineer.ravi`, download the build, change one
-  generated file, and drop the zip on Upload edited build: the preview lists exactly that file and
+  generated file, and drop the zip on "Upload an edited copy": the preview lists exactly that file and
   Resume builds from it with the hand edit kept and badged.
 - **Test data with masking.** Open `CreditApplicationIntake` (Credit Origination domain) on
   Verify, test data panel: inputs generated from the schemas, enumerations and branch predicates,

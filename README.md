@@ -237,12 +237,12 @@ over. Each pass is a numbered iteration, and every memory revision carries its n
    behaviour comes back as a draft rule marked "from iteration n" for the SME to approve, which is
    the one path to a behaviour change.
 2. **Resume from edited code.** An engineer downloads a build (the zip carries `EXIQO_BASELINE.json`),
-   edits it and drops it on Upload edited build. The preview lists exactly the modified, added and
-   deleted files; Resume builds from them with a three-way merge, keeps hand edits (badged "hand"
+   edits it and drops it on "Upload an edited copy". The preview lists exactly the modified, added and
+   deleted files; Resume builds from them with a three-way merge, keeps hand edits (badged "hand edit"
    and protected from the agents), and lists conflicts, where the hand edit wins.
 3. **GitHub as a source.** With the GitHub connector on, the Repository panel connects an
    `owner/name` branch: a TIBCO estate becomes an upload and a scan, an exported build with edits
-   becomes an edit set. "Pull latest" fetches later commits; an iteration's build can be pushed back
+   becomes an edit set. "Pull" fetches later commits; an iteration's build can be pushed back
    to `exiqo/<process>/iteration-<n>`.
 
 `make demo-check` has an `iteration` step after `memory`: as `architect.lee` it opens iteration 2
