@@ -66,6 +66,10 @@ def _dfr_design() -> tuple[dict, str, str, str]:
     apps = scan_folder(GMF).applications
     graph = graph_mod.build_graph(apps)
     proc, app = next((p, a) for a in apps for p in a.processes if p.name == "DealerFundingRequest")
+    rel = Path(proc.source_path).resolve().relative_to(GMF.resolve()).as_posix()
+    # The scanner records the absolute path, which the spec and design hashes cover: relative to the
+    # sample, the golden page is the same in every checkout (a worktree at another path included).
+    proc = proc.model_copy(update={"source_path": rel})
     record = design_mod.build_design_skeleton(proc, app, [], [], graph_mod.io_card(proc, app, graph))
     record.narrative = ("The dealer funding request arrives on a queue and is checked against the dealer "
                         "and the deal before a funding row is written.\n\nA duplicate request is logged & "
@@ -76,7 +80,6 @@ def _dfr_design() -> tuple[dict, str, str, str]:
         question="Should inactive dealers be rejected <before> the deal lookup?",
         recommendation="Yes, as TIBCO does", decision="answered", answer="Yes", decided_by="architect.lee",
         decided_at="2026-10-20T09:30:00+00:00")]
-    rel = Path(proc.source_path).resolve().relative_to(GMF.resolve()).as_posix()
     return record.model_dump(mode="json", by_alias=True), app.name, proc.id, rel
 
 
