@@ -186,20 +186,25 @@ export function groupCss(side: Side, part: "fill" | "border" | "strong", alpha?:
 
 export const PHASES = ["discover", "analysis", "design", "build", "verify", "deploy", "gate", "curation"] as const;
 
-/** One colour per phase, for the timeline's ticks and legend (readable on white). */
-export const PHASE_HEX: Record<string, string> = {
-  seed: "#8A94A6",
-  discover: "#20063B",
-  analysis: "#7E3FCB",
-  design: "#2F5BD3",
-  build: "#0F766E",
-  verify: "#1E7B3C",
-  deploy: "#0E7490",
-  gate: "#B45309",
-  decision: "#9A5E0A",
-  curation: "#D32238",
+/** One colour token (lib/theme.css) per phase, with an optional alpha, for the timeline's ticks
+ * and legend; readable on the surface in both themes. */
+export const PHASE_TOKEN: Record<string, [token: string, alpha?: number]> = {
+  seed: ["slate", 0.6],
+  discover: ["heading"],
+  analysis: ["accent-ink"],
+  design: ["accent"],
+  build: ["ai"],
+  verify: ["gate"],
+  deploy: ["ai", 0.55],
+  gate: ["decision"],
+  decision: ["decision", 0.6],
+  curation: ["coral-dk"],
 };
-export const phaseHex = (phase: string) => PHASE_HEX[phase] ?? "#425466";
+/** A phase's colour as a CSS colour over its token, for inline styles (follows the theme). */
+export function phaseCss(phase: string): string {
+  const [token, alpha] = PHASE_TOKEN[phase] ?? ["slate"];
+  return alpha === undefined ? `rgb(var(--c-${token}))` : `rgb(var(--c-${token}) / ${alpha})`;
+}
 
 /** A relationship's uid is `TYPE:src->dst` (engine/memory/model.py). */
 export function parseRelUid(uid: string): { type: string; src: string; dst: string } | null {

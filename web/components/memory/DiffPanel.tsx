@@ -10,7 +10,7 @@ import { LabelChip } from "./SearchRail";
 import {
   displayName,
   parseRelUid,
-  phaseHex,
+  phaseCss,
   relativeTime,
   sideOfLabel,
   type ChangedRef,
@@ -176,7 +176,7 @@ export function DiffPanel({ n, diff, loading, error, onSelect, onClose, selected
               Revision {n}
               {diff ? (
                 <span className="inline-flex items-center gap-1.5 text-sm font-medium text-slate">
-                  <span className="h-2 w-2 rounded-full" style={{ background: phaseHex(diff.revision.phase) }} aria-hidden />
+                  <span className="h-2 w-2 rounded-full" style={{ background: phaseCss(diff.revision.phase) }} aria-hidden />
                   {diff.revision.phase}
                 </span>
               ) : null}

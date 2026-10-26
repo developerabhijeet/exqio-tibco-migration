@@ -6,7 +6,7 @@
 // "Show changes" opens what the active revision added, changed and removed.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronsLeft, GitCompareArrows, History, Loader2, RotateCcw } from "lucide-react";
-import { phaseHex, relativeTime, type RevisionOut } from "@/lib/memory";
+import { phaseCss, relativeTime, type RevisionOut } from "@/lib/memory";
 
 export interface TimelineProps {
   /** Any order; drawn oldest first. */
@@ -102,7 +102,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           {shown ? (
             <>
               <span className="inline-flex items-center gap-1.5 font-semibold text-heading">
-                <span className="h-2 w-2 rounded-full" style={{ background: phaseHex(shown.phase) }} aria-hidden />
+                <span className="h-2 w-2 rounded-full" style={{ background: phaseCss(shown.phase) }} aria-hidden />
                 Revision {shown.n} · {shown.phase}
               </span>
               <span className="hidden truncate xl:inline">
@@ -156,7 +156,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           {ordered.length === 0 ? <p className="self-center text-sm text-slate">No revisions yet.</p> : null}
           {ordered.map((r) => {
             const on = r.n === active;
-            const colour = phaseHex(r.phase);
+            const colour = phaseCss(r.phase);
             return (
               <button
                 key={r.n}
@@ -195,7 +195,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
         <ul className="hidden shrink-0 grid-cols-2 gap-x-4 gap-y-0.5 self-end pb-4 text-xs leading-4 text-slate lg:grid" aria-label="Phases">
           {phases.slice(0, 6).map((p) => (
             <li key={p} className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm" style={{ background: phaseHex(p) }} aria-hidden />
+              <span className="h-2 w-2 rounded-sm" style={{ background: phaseCss(p) }} aria-hidden />
               {p}
             </li>
           ))}
