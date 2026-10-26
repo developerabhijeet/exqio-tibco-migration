@@ -22,11 +22,14 @@ ROLE_CHANGE = re.compile(
     r"|\bpretend\s+(?:to\s+be|you\s+are|that\s+you)\b"
     r"|\brole\s*-?\s*play\s+as\b"
     r"|\bfrom\s+now\s+on,?\s+you\b"
-    r"|\bnew\s+persona\b|\bdeveloper\s+mode\b|\bdan\s+mode\b|\bdo\s+anything\s+now\b|\bjail\s*break")
+    r"|\bnew\s+persona\b|\bdeveloper\s+mode\b|\bdan\s+(?:mode|prompt|jailbreak)\b|\b(?:act|behave|respond|reply)\s+(?:like|as)\s+dan\b|\byou(?:'re|\s+are)\s+dan\b|^\s*dan\s*[.!?]*\s*$|\bdo\s+anything\s+now\b|\bjail\s*break")
 
 PROMPT_EXFILTRATION = re.compile(
     r"\b(?:show|print|reveal|repeat|output|display|tell|give|leak|dump)\s+(?:me\s+)?(?:your|the)\s+"
-    r"(?:system|hidden|initial|original|secret)\s+(?:prompt|instructions?|rules)\b")
+    r"(?:system|hidden|initial|original|secret)\s+(?:prompt|instructions?|rules)\b"
+    # "your" addressed to the assistant, with or without an adjective
+    r"|\b(?:show|print|reveal|repeat|output|display|tell|give|leak|dump)\s+(?:me\s+)?your\s+(?:\w+\s+)?(?:prompt|instructions|rules)\b"
+    r"|\bwhat\s+(?:is|are|were)\s+your\s+(?:\w+\s+)?(?:prompt|instructions|rules|guidelines)\b")
 
 DELIMITER_FORGERY = re.compile(
     r"<\s*/?\s*(?:source|history|system|question)\b"
