@@ -44,7 +44,8 @@ test("no request leaves the web or API origin on the explorer", async ({ page })
   await openNode(page, SAMPLE_PROCESS_NAME);
   await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-node-count", /^[1-9]\d*$/);
   await page.getByRole("radio", { name: "Lineage" }).click();
-  await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-mode", "lineage");
+  // Laid out as a lineage scene: the elkjs chunk has loaded and placed it.
+  await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-laid-out", "lineage");
   await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-node-count", /^[1-9]\d*$/);
   await page.waitForLoadState("networkidle");
   expect(outside).toEqual([]);

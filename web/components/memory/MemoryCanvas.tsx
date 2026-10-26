@@ -256,6 +256,8 @@ const STYLE = [
       "transition-duration": 150,
     },
   },
+  // Labels kept when zoomed out (keyLabels sizes them for the zoom).
+  { selector: "node.key-label", style: { "min-zoomed-font-size": 0, "text-margin-y": 3 } },
   {
     selector: "node.focus",
     style: {
@@ -521,8 +523,8 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
   const moved = useRef(false);
   const handlers = useRef({ onSelect, onExpand });
   handlers.current = { onSelect, onExpand };
-  const classes = useRef({ selected, lineage, highlight });
-  classes.current = { selected, lineage, highlight };
+  const classes = useRef({ selected, lineage, highlight, focus });
+  classes.current = { selected, lineage, highlight, focus };
 
   const built = useMemo(() => canvasElements(graph, mode, focus), [graph, mode, focus]);
   // A scene is laid out once: a neighbourhood per focus (expansions and filter changes update it
@@ -543,8 +545,11 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
         if (mode === "lineage") current.edges().addClass("lineage-mode");
         const c = classes.current;
         applyClasses(current, c.selected, c.lineage, c.highlight);
+        keyLabels(current, c);
         return;
       }
+      // Test and tooling hook: which scene is laid out (empty while one is being laid out).
+      if (box.current) box.current.dataset.laidOut = "";
       const { default: cytoscape } = await import("cytoscape");
       const positions =
         mode === "lineage" && built.nodeCount > 0 ? await lineagePositions(graph, built.elements).catch(() => null) : null;
@@ -571,9 +576,13 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
           inst.center();
         }
       };
+      const laidOut = () => {
+        if (box.current) box.current.dataset.laidOut = mode;
+      };
       if (positions) {
         inst.layout({ name: "preset", positions: (n: { id: () => string }) => positions[n.id()] ?? { x: 0, y: 0 }, fit: false } as never).run();
         fit();
+        laidOut();
       } else {
         // A focused neighbourhood of up to 60 nodes sits in rings around its focus, nearest hops
         // first: calm, and round enough to fit any canvas shape (a ring of hundreds would not).
@@ -613,9 +622,16 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
         layout.one("layoutstop", () => {
           if (!hops && mode !== "lineage") landscape(inst);
           fit();
+          laidOut();
         });
         layout.run();
       }
+      // Zoomed out past where labels hide, the nodes that matter keep theirs.
+      let zoomFrame = 0;
+      inst.on("zoom", () => {
+        cancelAnimationFrame(zoomFrame);
+        zoomFrame = requestAnimationFrame(() => keyLabels(inst, classes.current));
+      });
       inst.on("tap", "node", (evt) => handlers.current.onSelect(evt.target.id()));
       inst.on("dbltap", "node", (evt) => handlers.current.onExpand(evt.target.id()));
       cy.current = inst;
@@ -623,6 +639,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
       moved.current = false;
       const c = classes.current;
       applyClasses(inst, c.selected, c.lineage, c.highlight);
+      keyLabels(inst, c);
       // A new scene fades in rather than popping.
       const ms = motion();
       if (ms && box.current) {
@@ -701,6 +718,7 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
     const inst = cy.current;
     if (!inst) return;
     applyClasses(inst, selected, lineage, highlight);
+    keyLabels(inst, classes.current);
     keepInView(inst, selected);
   }, [selected, lineage, highlight]);
 
@@ -873,6 +891,47 @@ function keepInView(inst: Core, selected: string | undefined) {
   const ms = motion();
   if (ms) inst.animate({ center: { eles: n } }, { duration: ms, easing: "ease-out-cubic" });
   else inst.center(n);
+}
+
+/** Below this zoom the 11.5 px labels fall under the 6 px minimum and hide. */
+const LABEL_ZOOM = 0.55;
+/** The rendered size key labels keep when zoomed out. */
+const KEY_LABEL_PX = 9.5;
+
+/**
+ * Zoomed out below LABEL_ZOOM (a fitted ring of 20 nodes), the focus, its direct neighbours, the
+ * selected node and its lineage chain keep a readable label; the rest appear on zoom-in. The
+ * label is sized in model units so it renders at KEY_LABEL_PX at the current zoom.
+ */
+function keyLabels(
+  inst: Core,
+  c: { focus?: string | null; selected?: string; lineage?: Subgraph },
+) {
+  const zoom = inst.zoom();
+  inst.batch(() => {
+    const was = inst.nodes(".key-label");
+    if (zoom >= LABEL_ZOOM) {
+      was.removeClass("key-label").removeStyle("font-size text-max-width");
+      return;
+    }
+    const keep = new Set<string>();
+    const add = (id: string | null | undefined) => {
+      if (id && inst.getElementById(id).nonempty()) keep.add(id);
+    };
+    add(c.focus);
+    if (c.focus) inst.getElementById(c.focus).neighborhood("node").forEach((n) => void keep.add(n.id()));
+    add(c.selected);
+    c.lineage?.nodes.forEach((n) => add(n.uid));
+    was.forEach((n) => {
+      if (!keep.has(n.id())) n.removeClass("key-label").removeStyle("font-size text-max-width");
+    });
+    for (const id of keep) {
+      inst
+        .getElementById(id)
+        .addClass("key-label")
+        .style({ "font-size": KEY_LABEL_PX / zoom, "text-max-width": `${Math.round(110 / zoom)}px` });
+    }
+  });
 }
 
 function applyClasses(
