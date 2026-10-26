@@ -21,6 +21,7 @@ import type {
   Project,
   ScanReport,
   ScenarioSet,
+  StackStatus,
   UploadResult,
 } from "./types";
 import type { Brand } from "./brand";
@@ -181,7 +182,11 @@ export const api = {
   health: () => json<{ status: string; provider: string }>("/health"),
 
   listProjects: () => json<Project[]>("/projects"),
-  createProject: (name: string) => json<Project>("/projects", post({ name })),
+  createProject: (name: string, targetStack?: string) =>
+    json<Project>("/projects", post(targetStack ? { name, target_stack: targetStack } : { name })),
+  patchProject: (projectId: string, body: { target_stack: string }) =>
+    json<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  stacks: () => json<{ default: string; stacks: StackStatus[] }>("/stacks"),
 
   uploadZip: (projectId: string, file: Blob, filename: string) => {
     const form = new FormData();

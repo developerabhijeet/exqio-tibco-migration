@@ -1,5 +1,7 @@
 "use client";
 
+import { StackBadge } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -20,6 +22,7 @@ import { TestDataPanel } from "./TestDataPanel";
 export function VerifyTab() {
   const qc = useQueryClient();
   const { projectId, processId } = useAppState();
+  const projectStack = useProjectStack();
   useScrollToHash();
   const processes = useProcesses(projectId);
   const gates = useGates(processId);
@@ -47,7 +50,9 @@ export function VerifyTab() {
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 6</p>
-          <h2 className="panel-title">Verify</h2>
+          <h2 className="panel-title flex items-center gap-2">Verify
+          <StackBadge stack={projectStack} />
+          </h2>
           <p className="mt-1 max-w-[760px] text-md text-slate">
             The scenarios run through the platform&apos;s model of the TIBCO process; expected values are derived from the TIBCO
             model, not from a TIBCO runtime. The same inputs then go to the running .NET service. Every field is compared; a

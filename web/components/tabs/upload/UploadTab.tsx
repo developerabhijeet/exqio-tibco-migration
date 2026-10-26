@@ -10,6 +10,8 @@ import { usePermission } from "@/lib/personas";
 import { RoleLock } from "@/components/shell/RoleNotice";
 import type { ProcessSummary } from "@/lib/types";
 import { ErrorNote } from "@/components/ui/Empty";
+import { StackPicker } from "./StackPicker";
+import { useProjectStack, useStackPermission } from "@/lib/stacks";
 import { DropZone, sourceToUpload, type UploadSource } from "./DropZone";
 import { FileTree } from "./FileTree";
 import { ValidationPanel } from "./ValidationPanel";
@@ -24,6 +26,12 @@ export function UploadTab() {
   const report = useReport(projectId);
   const processes = useProcesses(projectId);
   const [lastUpload, setLastUpload] = useState<string | null>(null);
+  const stack = useProjectStack();
+  const stackPermission = useStackPermission();
+  const changeStack = useMutation({
+    mutationFn: (key: string) => api.patchProject(projectId!, { target_stack: key }),
+    onSuccess: (p) => qc.invalidateQueries({ queryKey: ["projects"], exact: true }).then(() => p),
+  });
 
   const upload = useMutation({
     mutationFn: (s: UploadSource) => sourceToUpload(projectId!, s),
@@ -50,11 +58,17 @@ export function UploadTab() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="upload-tab">
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0">
         <p className="eyebrow">Step 1</p>
         <h2 className="panel-title">Upload the estate</h2>
       </div>
+      <StackPicker
+        value={stack}
+        onChange={(key) => changeStack.mutate(key)}
+        disabledReason={projectId ? stackPermission.reason : "create a project first"}
+      />
+      {changeStack.error ? <ErrorNote error={changeStack.error} /> : null}
       <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
       {upload.isPending ? (
         <p className="flex items-center gap-2 text-md text-slate">

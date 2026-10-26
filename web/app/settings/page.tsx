@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, Play, Save, Trash2 } from "lucide-react";
 import { SecondaryScreen } from "@/components/shell/SecondaryScreen";
 import { ConnectorsTab } from "@/components/settings/ConnectorsTab";
+import { StackPanel } from "@/components/settings/StackPanel";
 import { IdentityPanel } from "@/components/settings/IdentityPanel";
 import { SettingsTabs } from "@/components/settings/SettingsTabs";
 import { Panel, errorText } from "@/components/tabs/build/Panel";
@@ -376,7 +377,7 @@ function Evaluation() {
 }
 
 function Toolchains({ s }: { s: SettingsView }) {
-  const order = ["dotnet", "terraform", "terragrunt", "docker", "az", "node"];
+  const order = ["dotnet", "java", "mvn", "go", "python3", "uv", "terraform", "terragrunt", "docker", "az", "node"];
   const names = [...order.filter((n) => s.toolchains[n]), ...Object.keys(s.toolchains).filter((n) => !order.includes(n))];
   return (
     <Panel title="Toolchains" eyebrow="Detected on the API host" testId="toolchains">
@@ -553,6 +554,7 @@ function GeneralSettings() {
       ) : (
         <div className="space-y-8">
           <Providers s={s} />
+          <StackPanel s={s} onSaved={onSaved} />
           <Models key={JSON.stringify(s.models.tiers)} s={s} onSaved={onSaved} />
           <AzureKeys key={s.azure_openai.source + s.azure_openai.endpoint} s={s} onSaved={onSaved} />
           <Routing key={JSON.stringify(s.routing.bands) + s.langfuse.enabled} s={s} onSaved={onSaved} />

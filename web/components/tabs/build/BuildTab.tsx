@@ -1,5 +1,7 @@
 "use client";
 
+import { StackBadge } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Hammer, History, Loader2 } from "lucide-react";
@@ -34,6 +36,7 @@ export const BUILD_QUERIES = ["build", "build-files", "build-tests", "build-revi
 export function BuildTab() {
   const qc = useQueryClient();
   const { projectId, processId } = useAppState();
+  const projectStack = useProjectStack();
   const may = usePermission("build");
   useScrollToHash();
   const processes = useProcesses(projectId);
@@ -106,7 +109,9 @@ export function BuildTab() {
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 5</p>
-          <h2 className="panel-title">Build</h2>
+          <h2 className="panel-title flex items-center gap-2">Build
+          <StackBadge stack={projectStack} />
+          </h2>
           <p className="mt-1 max-w-[760px] text-md text-slate">
             Code writes the solution and its tests from the approved design record before any body, the Code Builder fills
             what is left, then dotnet restores, builds, formats and tests. Infrastructure is generated and validated in the

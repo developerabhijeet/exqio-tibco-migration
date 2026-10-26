@@ -76,6 +76,23 @@ export async function openNode(page: Page, name: string): Promise<void> {
   await expect(page.getByTestId("node-drawer")).toBeVisible();
 }
 
+/** A fresh empty project (no upload), left open. */
+export async function newProject(page: Page, name: string): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByLabel("Project name").fill(name);
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
+}
+
+/** Open an existing project by name through the project selector. */
+export async function openProject(page: Page, name: string): Promise<void> {
+  await page.goto("/");
+  const select = page.getByTestId("project-select");
+  await select.selectOption({ label: name });
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(name);
+}
+
 /** A gate card, once visible. */
 export async function gate(page: Page, name: string): Promise<Locator> {
   const g = page.getByTestId(`gate-${name}`);

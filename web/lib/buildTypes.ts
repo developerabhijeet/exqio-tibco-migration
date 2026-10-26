@@ -1,11 +1,12 @@
 // Shapes of the Build, Verify, Deploy, Settings, History and Readiness routes (Task 19 API).
 import type { CitedText } from "./citations-model";
-import type { Gate } from "./types";
+import type { Gate, StackStatus } from "./types";
 
 export interface BuildSummary {
   id: string;
   status: "queued" | "running" | "passed" | "failed" | string;
   runtime: string;
+  stack?: string;
   build_hash: string | null;
   job_id: string | null;
   created_at: string | null;
@@ -94,6 +95,7 @@ export interface BuildView {
   job_id: string | null;
   status: string;
   runtime: string;
+  stack?: string;
   build_hash: string | null;
   spec_hash: string | null;
   design_hash: string | null;
@@ -398,6 +400,8 @@ export interface SettingsView {
   };
   routing: { bands: Record<string, [number, number]>; fallback: string; complexity: string };
   toolchains: Record<string, ToolInfo>;
+  stacks: StackStatus[];
+  default_stack: string;
   langfuse: { enabled: boolean; host: string | null; keys_configured: boolean };
   /** Bring your own Azure OpenAI key. The key itself is never sent to the browser. */
   azure_openai: {
@@ -412,6 +416,7 @@ export interface SettingsView {
 }
 
 export interface SettingsPatch {
+  default_stack?: string;
   models?: Record<string, string>;
   routing_bands?: Record<string, [number, number]>;
   langfuse_enabled?: boolean;

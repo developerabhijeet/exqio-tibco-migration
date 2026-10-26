@@ -1,5 +1,7 @@
 "use client";
 
+import { StackBadge } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
 import { useState } from "react";
 import { ScrollRegion } from "@/components/ui/ScrollRegion";
 import { useQuery } from "@tanstack/react-query";
@@ -66,6 +68,7 @@ function Json({ value }: { value: unknown }) {
 
 export function DesignTab() {
   const { projectId, processId } = useAppState();
+  const projectStack = useProjectStack();
   const may = usePermission("design");
   const processes = useProcesses(projectId);
   const analysis = useAnalysis(processId);
@@ -105,7 +108,9 @@ export function DesignTab() {
       <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 4</p>
-          <h2 className="panel-title">Design</h2>
+          <h2 className="panel-title flex items-center gap-2">Design
+          <StackBadge stack={projectStack} />
+          </h2>
           <p className="mt-1 max-w-[720px] text-md text-slate">
             Code maps every TIBCO step to a C# file, class and method from the pattern catalog. The designer model writes
             the narrative. An architect approves the record (G3).

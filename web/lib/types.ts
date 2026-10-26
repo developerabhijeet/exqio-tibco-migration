@@ -21,9 +21,19 @@ export interface StepState {
   evidence: EvidenceRef[];
 }
 
+export interface StackStatus {
+  key: string;
+  label: string;
+  available: boolean;
+  reason: string | null;
+  required_tools: string[];
+  default: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;
+  target_stack: string;
   created_at: string;
 }
 
