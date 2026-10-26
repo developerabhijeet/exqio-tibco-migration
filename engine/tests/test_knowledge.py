@@ -229,11 +229,13 @@ POSTGRES_KNOWLEDGE = re.compile(
 
 def test_no_module_reads_the_postgres_knowledge_schema():
     """Ruling R5: no application module queries the old ``knowledge`` schema (only the one-off
-    migration, Task 11's ``memory_migrate.py``, may)."""
+    migration, ``api/app/services/memory_migrate.py``, may, and it does)."""
     roots = [REPO_ROOT / "api" / "app", REPO_ROOT / "engine"]
+    allowed = REPO_ROOT / "api" / "app" / "services" / "memory_migrate.py"
     offenders = [str(p.relative_to(REPO_ROOT)) for root in roots for p in root.rglob("*.py")
-                 if "tests" not in p.parts and p.name != "memory_migrate.py"
+                 if "tests" not in p.parts and p != allowed
                  and POSTGRES_KNOWLEDGE.search(p.read_text(encoding="utf-8"))]
     assert offenders == []
+    assert POSTGRES_KNOWLEDGE.search(allowed.read_text(encoding="utf-8"))
     gone = ["store.py", "schema.sql", "search.py"]
     assert [f for f in gone if (REPO_ROOT / "engine" / "knowledge" / f).exists()] == []

@@ -81,6 +81,18 @@ async def project_id(client: httpx.AsyncClient) -> str:
     return r.json()["id"]
 
 
+LEGACY_SCHEMAS = ("knowledge", "knowledge_retired")
+
+
+async def drop_legacy_knowledge(engine) -> None:
+    """Drop the Postgres knowledge schema of earlier releases (and its retired copy)."""
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        for schema in LEGACY_SCHEMAS:
+            await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+
+
 @pytest.fixture
 async def memory_app(memory_settings: Settings, monkeypatch: pytest.MonkeyPatch):
     """The app with the test Neo4j as its memory: the test Neo4j is reset first, and embeddings use
@@ -92,6 +104,7 @@ async def memory_app(memory_settings: Settings, monkeypatch: pytest.MonkeyPatch)
     engine = make_engine(memory_settings.database_url)
     try:
         await reset_schema(engine)
+        await drop_legacy_knowledge(engine)  # else the lifespan would queue memory.migrate
     except Exception as exc:  # noqa: BLE001  no database: skip, do not fail the suite
         await engine.dispose()
         pytest.skip(f"Postgres is not available: {exc}")

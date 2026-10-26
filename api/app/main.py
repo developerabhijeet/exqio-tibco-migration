@@ -30,7 +30,7 @@ from api.app.deps import require_admin_writes, require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.listener import JobListener
 from api.app.jobs.registry import WorkerServices
-from api.app.jobs.runner import JobRunner, JobWorker, worker_name
+from api.app.jobs.runner import JobRunner, JobWorker, enqueue, worker_name
 from api.app.routers import (
     analysis,
     ask,
@@ -53,6 +53,7 @@ from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
 from api.app.services.memory_ingest import open_memory
+from api.app.services.memory_migrate import MIGRATE_KIND, legacy_pending
 from api.app.services.settings import apply_stored, load_stored
 from api.app.services.verify import clear_stale_runs
 
@@ -140,6 +141,9 @@ def _create_api(settings: Settings) -> FastAPI:
             await runner.start()
             async with sessionmaker() as s:
                 apply_stored(settings, await load_stored(s))
+                migrate = bool(settings.neo4j_uri) and await legacy_pending(s)
+            if migrate:  # the Postgres knowledge schema of an earlier release: copy it once
+                await enqueue(sessionmaker, MIGRATE_KIND, {}, dedupe_key=MIGRATE_KIND)
             app.state.settings_loaded_at = time.monotonic()
             if settings.exiqo_role == "all":  # role api never hosts: the workers clear their own
                 cleared = await clear_stale_runs(sessionmaker)

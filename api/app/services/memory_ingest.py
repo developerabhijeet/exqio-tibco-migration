@@ -16,6 +16,9 @@ connection (busy: back to the queue in 2 s, the attempt not counted), loads the 
 the ``load_*`` functions, calls the phase's projector and applies the delta as one revision.
 Neo4j being unreachable raises ``RetryLater`` with backoff ``min(600, 15 * 2 ** (attempt - 1))``;
 after the last attempt the job fails with ``memory unavailable after <n> attempts: <class>``.
+While the one-time ``memory.migrate`` job (``services.memory_migrate``) is queued or running,
+an ingest goes back to the queue (5 s, the attempt not counted), so the migration is each
+legacy project's revision 1.
 """
 from __future__ import annotations
 
@@ -81,6 +84,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 INGEST_KIND = "memory.ingest"
+MIGRATE_KIND = "memory.migrate"
+MIGRATION_WAIT_S = 5
 SYSTEM_ACTOR = "system"
 LOCK_BUSY_DELAY_S = 2
 BACKOFF_BASE_S = 15
@@ -470,6 +475,19 @@ def _backoff(attempt: int) -> float:
     return min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** (max(1, attempt) - 1))
 
 
+def unavailable_retry(attempt: int, exc: BaseException) -> RetryLater:
+    """The retry of a memory job whose Neo4j call failed with ``exc`` (one of ``UNAVAILABLE``)."""
+    cls = type(exc).__name__
+    return RetryLater(_backoff(attempt), f"memory unavailable: {cls}",
+                      give_up=f"memory unavailable after {{attempts}} attempts: {cls}")
+
+
+async def migration_pending(s: AsyncSession) -> bool:
+    """A ``memory.migrate`` job is queued or running."""
+    return await s.scalar(select(Job.id).where(Job.kind == MIGRATE_KIND,
+                                               Job.status.in_(("queued", "running"))).limit(1)) is not None
+
+
 async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     p = ctx.payload
     if w.memory is None:
@@ -480,6 +498,8 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         raise ValueError(f"memory phase {phase!r} has no projector")
     source = p.get("source") or {}
     async with w.sessionmaker() as s:
+        if await migration_pending(s):
+            raise RetryLater(MIGRATION_WAIT_S, "waiting for the memory migration", count_attempt=False)
         project_id = await _project_id(s, p)
     async with try_advisory_lock(w.sessionmaker, f"memory:{project_id}") as locked:
         if not locked:
@@ -500,9 +520,7 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                                 iteration=iteration)
             result = await w.memory.apply_revision(meta, projected.deltas)
         except UNAVAILABLE as exc:
-            cls = type(exc).__name__
-            raise RetryLater(_backoff(ctx.attempt), f"memory unavailable: {cls}",
-                             give_up=f"memory unavailable after {{attempts}} attempts: {cls}") from exc
+            raise unavailable_retry(ctx.attempt, exc) from exc
     scopes = [d.scope for d in projected.deltas]
     out = result.model_dump() | {"phase": phase, "scope": scopes[0] if len(scopes) == 1 else scopes}
     await ctx.log(f"memory {phase} ({out['scope']}): revision {result.revision}"

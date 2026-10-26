@@ -539,3 +539,30 @@ META_SET = (
     "MERGE (m:MemoryMeta {key: 'embedding_backend'}) ON CREATE SET m.value = $value "
     "RETURN m.value AS value"
 )
+# Replaces the recorded backend after a re-embed (MemoryGraph.reembed; install-wide, R22).
+META_REPLACE = (
+    "MERGE (m:MemoryMeta {key: 'embedding_backend'}) SET m.value = $value RETURN m.value AS value"
+)
+
+# ------------------------------------------------------------------ maintenance
+# The current versions of one label with their text (the migration's verification).
+
+
+def _render_current_texts(label: str) -> str:
+    return (
+        f"MATCH (n:Mem:{label} {{project_id: $project_id}}) USING INDEX SEEK n:Mem(project_id, uid) "
+        "WHERE n.uid IS NOT NULL AND n.valid_to = $open RETURN n.uid AS uid, n.text AS text"
+    )
+
+
+CURRENT_TEXTS: dict[str, str] = {label: _render_current_texts(label) for label in NODE_LABELS}
+# The current versions of the embedded labels that carry text (MemoryGraph.reembed).
+CURRENT_EMBEDDED = (
+    "MATCH (n:Mem {project_id: $project_id}) USING INDEX SEEK n:Mem(project_id, uid) "
+    "WHERE n.uid IS NOT NULL AND n.valid_to = $open AND n.text <> '' "
+    "AND any(label IN labels(n) WHERE label IN $labels) RETURN n.vid AS vid, n.text AS text"
+)
+SET_EMBEDDINGS = (
+    "UNWIND $rows AS row MATCH (n:Mem {project_id: $project_id, vid: row.vid}) "
+    "USING INDEX SEEK n:Mem(vid) SET n.embedding = row.embedding RETURN count(n) AS set"
+)

@@ -22,6 +22,7 @@ from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
 from api.app.services import infra as infra_svc
 from api.app.services import memory_ingest as memory_ingest_svc
+from api.app.services import memory_migrate as memory_migrate_svc
 from api.app.services import providers as provider_svc
 from api.app.services import scan as scan_svc
 from api.app.services import verify as verify_svc
@@ -115,3 +116,16 @@ async def eval_(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
 async def memory_ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Project one phase's Postgres state into the memory graph (``services.memory_ingest``)."""
     return await memory_ingest_svc.ingest(ctx, w)
+
+
+@job(memory_migrate_svc.MIGRATE_KIND, max_attempts="memory_ingest_max_attempts")
+async def memory_migrate(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """The one-time copy of the Postgres ``knowledge`` schema into the memory graph
+    (``services.memory_migrate``)."""
+    return await memory_migrate_svc.migrate_job(ctx, w)
+
+
+@job(memory_migrate_svc.REEMBED_KIND, max_attempts="memory_ingest_max_attempts")
+async def memory_reembed(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Re-embed one project's memory with the active embedding backend."""
+    return await memory_migrate_svc.reembed_job(ctx, w)

@@ -141,6 +141,37 @@ class MemoryGraph:
             except _NoChange as nothing:
                 return nothing.result
 
+    # -------------------------------------------------------------- maintenance
+    async def current_texts(self, project_id: str, label: str) -> dict[str, str]:
+        """uid -> text of the current versions of ``label`` in the project."""
+        if label not in NODE_LABELS:
+            raise ValueError(f"unknown node label {label!r}")
+        rows = await self._read(_rows, cypher.CURRENT_TEXTS[label],
+                                {"project_id": project_id, "open": OPEN_VALID_TO})
+        return {r["uid"]: r["text"] or "" for r in rows}
+
+    async def reembed(self, project_id: str) -> int:
+        """Re-embed every current version of the embedded labels of the project with the active
+        backend, and record that backend; returns how many vectors were written. Run it for each
+        project after the embedding backend changed (``memory_admin reembed``)."""
+        backend = embeddings.backend_name()
+        rows = await self._read(_rows, cypher.CURRENT_EMBEDDED, {
+            "project_id": project_id, "open": OPEN_VALID_TO, "labels": list(EMBEDDED_LABELS)})
+        texts = [r["text"] for r in rows]
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), EMBED_BATCH):
+            vectors += await asyncio.to_thread(embeddings.embed, texts[i:i + EMBED_BATCH])
+        out = [{"vid": r["vid"], "embedding": v} for r, v in zip(rows, vectors, strict=True)]
+
+        async def write(tx: AsyncManagedTransaction) -> int:
+            written = await _total(tx, cypher.SET_EMBEDDINGS, "rows", out, "set",
+                                   project_id=project_id)
+            await (await tx.run(cypher.META_REPLACE, value=backend)).consume()
+            return written
+
+        async with self._driver.session(database=self.database) as session:
+            return await session.execute_write(write)
+
     # MemoryRetriever: hybrid search (engine.memory.search) as a method.
     retrieve = hybrid
 
