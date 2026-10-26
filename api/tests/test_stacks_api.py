@@ -22,6 +22,7 @@ from api.tests.test_auth import (  # noqa: F401  fixtures and helper
     oidc_settings,
     signer,
 )
+from engine.tests.stack_helpers import unimplement
 
 ADMIN = {"X-User": "ops.sam"}
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,7 +36,8 @@ async def test_create_project_defaults_to_settings_default(client):
     assert (await client.get(f"/projects/{p['id']}")).json()["target_stack"] == "dotnet"
 
 
-async def test_unavailable_stack_is_refused_with_reason(client):
+async def test_unavailable_stack_is_refused_with_reason(client, monkeypatch):
+    unimplement(monkeypatch, "python")
     r = await client.post("/projects", json={"name": "a", "target_stack": "python"})
     assert r.status_code == 422 and r.json()["detail"] == "python is not available: not implemented yet"
     r = await client.put("/settings", json={"default_stack": "python"}, headers=ADMIN)
@@ -50,6 +52,7 @@ async def test_not_enabled_stack_is_refused(client, app):
 
 
 async def test_toolchain_presence_is_not_checked_on_the_api(client, monkeypatch):
+    unimplement(monkeypatch, "go")
     monkeypatch.setattr(settings_svc, "detect_toolchains", dict)
     p = await client.post("/projects", json={"name": "a", "target_stack": "dotnet"})
     assert p.status_code == 201
@@ -103,7 +106,8 @@ async def test_patch_stack_changes_it_and_audits_old_and_new(client, project_id,
     assert audit[0]["actor"] == "architect.lee"
 
 
-async def test_patch_stack_refuses_unavailable_and_unknown(client, project_id):
+async def test_patch_stack_refuses_unavailable_and_unknown(client, project_id, monkeypatch):
+    unimplement(monkeypatch, "python")
     lee = {"X-User": "architect.lee"}
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "python"}, headers=lee)
     assert r.status_code == 422 and r.json()["detail"] == "python is not available: not implemented yet"
@@ -127,7 +131,8 @@ async def test_viewer_cannot_patch_in_oidc(oidc_client):  # noqa: F811
     assert r.status_code == 200
 
 
-async def test_stacks_endpoint_lists_four_with_status(client):
+async def test_stacks_endpoint_lists_four_with_status(client, monkeypatch):
+    unimplement(monkeypatch, "python")
     body = (await client.get("/stacks")).json()
     assert body["default"] == "dotnet"
     assert [s["key"] for s in body["stacks"]] == ["dotnet", "java", "go", "python"]

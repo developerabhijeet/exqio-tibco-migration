@@ -18,6 +18,7 @@ from api.app.services import settings as settings_svc
 from api.tests.test_build_verify import ARCHITECT, _built, _designed, _wait_job
 from engine import stacks
 from engine.dotnet_gen.generator import GenFile
+from engine.tests.stack_helpers import unimplement
 from engine.tests.test_stacks_agents import JAVA_TESTS, TESTS, JavaLikeStack, _index
 
 
@@ -43,7 +44,8 @@ async def test_build_refused_when_design_stack_differs(client, approved_g3_dotne
     assert (await client.get(f"/processes/{proc}/builds")).json() == []
 
 
-async def test_build_refused_for_a_stack_this_install_cannot_build(client, app, approved_g3_dotnet):
+async def test_build_refused_for_a_stack_this_install_cannot_build(client, app, approved_g3_dotnet, monkeypatch):
+    unimplement(monkeypatch, "python")
     pid, proc = await approved_g3_dotnet()
     async with app.state.sessionmaker() as s:
         project = await s.get(Project, pid)

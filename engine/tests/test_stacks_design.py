@@ -24,6 +24,7 @@ from engine.dotnet_gen.patterns import PATTERNS
 from engine.stacks import all_stacks, get_stack
 from engine.stacks.base import StackNaming
 from engine.tests.conftest import DFR, PROCESS_IDS
+from engine.tests.stack_helpers import unimplement
 
 GOLDEN = Path(__file__).resolve().parent / "golden"
 UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
@@ -279,10 +280,11 @@ def test_dotnet_skeleton_is_unchanged(gmf_app, gmf_processes, rules, findings, c
     assert dumped == before
 
 
-def test_skeleton_takes_the_stack(gmf_app, gmf_processes, rules, findings, cards):
+def test_skeleton_takes_the_stack(gmf_app, gmf_processes, rules, findings, cards, monkeypatch):
     rec = build_design_skeleton(gmf_processes[DFR], gmf_app, rules[DFR], findings[DFR], cards[DFR],
                                 stack="dotnet")
     assert rec.stack == "dotnet"
+    unimplement(monkeypatch, "python")
     with pytest.raises(KeyError, match="not implemented yet"):
         build_design_skeleton(gmf_processes[DFR], gmf_app, rules[DFR], findings[DFR], cards[DFR], stack="python")
 

@@ -9,6 +9,7 @@ from engine.dotnet_gen.generator import generate_solution
 from engine.dotnet_gen.runner import DotnetRunner
 from engine.stacks import all_stacks, get_stack, stack_status
 from engine.stacks.base import Mirrors, StackRunner
+from engine.tests.stack_helpers import unimplement
 
 
 def test_registry_has_dotnet_and_rejects_unknown():
@@ -57,7 +58,8 @@ def test_dotnet_layout_derives_from_solution_layout():
     assert layout.test_root == raw["projects"]["tests"]["folder"]
 
 
-def test_get_stack_names_a_known_stack_that_is_not_implemented():
+def test_get_stack_names_a_known_stack_that_is_not_implemented(monkeypatch):
+    unimplement(monkeypatch, "python")
     with pytest.raises(KeyError, match="stack 'python' is not implemented yet"):
         get_stack("python")
 
