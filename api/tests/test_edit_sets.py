@@ -181,7 +181,7 @@ async def test_qa_cannot_upload_edits(client, finished_build, qa):
     (zip_with("src\\..\\..\\evil.cs", b"x"), "unsafe path"),
     (zip_with("link", b"/etc/passwd", mode=stat.S_IFLNK | 0o777), "unsafe path: link"),
     (zip_of([("src/A.cs", b"1"), ("src/A.cs", b"2")]), "src/A.cs appears more than once in the archive"),
-    (zip_of([("src/A.cs", b"1"), ("SRC/a.cs", b"2")]), "SRC/a.cs and src/A.cs differ only in case"),
+    (zip_of([("src/A.cs", b"1"), ("SRC/a.cs", b"2")]), "SRC/a.cs and src/A.cs differ only in case or Unicode normalisation"),
     (zip_of([("big.txt", b"\0" * (3 * 1024 * 1024))]), "big.txt expands more than 200 times"),
     (b"not a zip", "not a zip file"),
 ])
@@ -349,3 +349,61 @@ def test_diff_tree_sorted_and_skips_excluded(tmp_path):
     baseline = {"a.cs": text_sha256(b"a\n"), "b.cs": text_sha256(b"B\n"), "c.cs": text_sha256(b"c\n")}
     out = diff_tree(tmp_path, baseline, {"a.cs": "code", "c.cs": "tests"}, frozenset({"obj"}))
     assert [(c.path, c.change, c.origin) for c in out] == [("a.cs", "modified", "code"), ("c.cs", "deleted", "tests")]
+
+
+# ------------------------------------------------------------------ review fix round 1
+VIEWER = {"X-User": "viewer.val"}
+SME = {"X-User": "sme.vicky"}
+
+
+@pytest.mark.parametrize("who", [VIEWER, SME, QA])
+async def test_only_engineers_upload_and_resume(client, finished_build, who):
+    assert (await post_edits(client, finished_build, b"", headers=who)).status_code == 403
+    es = (await post_edits(client, finished_build, edit(await download(client, finished_build),
+                                                         {AGENT_FILE: replace_body}))).json()
+    r = await client.post(f"/edit-sets/{es['id']}/resume", headers=who)
+    assert r.status_code == 403
+    assert r.json()["detail"] == ("viewer is read only" if who is VIEWER else "this needs one of: engineer, admin")
+
+
+async def test_upload_is_audited(client, app, finished_build):                                   # I7
+    from api.app.models import AuditLog
+
+    es = (await post_edits(client, finished_build, edit(await download(client, finished_build),
+                                                         {AGENT_FILE: replace_body}))).json()
+    async with app.state.sessionmaker() as s:
+        rows = (await s.scalars(select(AuditLog).where(AuditLog.action == "edit set uploaded"))).all()
+    assert len(rows) == 1 and rows[0].actor == "engineer.ravi" and rows[0].process_id
+    assert rows[0].detail == {"edit_set_id": es["id"], "baseline_build_id": finished_build, "iteration": es["iteration"],
+                              "counts": {"modified": 1, "added": 0, "deleted": 0}}
+
+
+async def test_a_zip_of_one_subfolder_is_not_shifted(client, finished_build):
+    """Only a top folder holding the build (its manifest or solution) is stripped: a zip of ``src/``
+    alone keeps its paths, so nothing reads as deleted-and-added under another name."""
+    z = rezip(await download(client, finished_build), lambda n, b: b if n.startswith("src/") else None)
+    files = (await post_edits(client, finished_build, z)).json()["files"]
+    assert files and all(f["change"] == "deleted" and not f["path"].startswith("src/") for f in files)
+
+
+async def test_a_manifest_naming_another_build_is_refused_on_the_build_route(client, app, finished_build):
+    def other(name: str, b: bytes) -> bytes:
+        return json.dumps({**json.loads(b), "build_id": "b" * 32}).encode() if name == "EXIQO_BASELINE.json" else b
+
+    r = await post_edits(client, finished_build, rezip(await download(client, finished_build), other))
+    assert r.status_code == 422
+    assert r.json()["detail"] == f"the zip's EXIQO_BASELINE.json names build {'b' * 32}, not {finished_build}"
+
+
+async def test_an_upload_without_changes_ends_its_iteration(client, finished_build, engineer):
+    es = (await post_edits(client, finished_build, crlf_everything(await download(client, finished_build)))).json()
+    iteration = (await client.get(f"/iterations/{es['iteration_id']}")).json()
+    assert es["files"] == [] and iteration["status"] == "abandoned" and iteration["note"] == "no changes in the upload"
+    assert (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).status_code == 409
+
+
+def test_os_clutter_is_never_an_edit(tmp_path):
+    for name in (".DS_Store", "src/Thumbs.db", "src/desktop.ini", "__MACOSX/x"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    assert diff_tree(tmp_path, {}, {}, frozenset()) == []

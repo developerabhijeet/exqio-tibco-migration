@@ -19,9 +19,10 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from engine.analysis.models import Finding, Rule
-from engine.dotnet_gen.generator import GeneratedSolution, ident
+from engine.dotnet_gen.generator import GeneratedSolution, GenFile, ident
 from engine.dotnet_gen.models import DesignRecord
 from engine.ir.models import Process
+from engine.stacks import get_stack
 
 from .builder import language
 from .designer import findings_block, rules_block, skeleton_text
@@ -64,14 +65,38 @@ class ReviewFinding(BaseModel):
     triage: Triage
 
 
+#: Hand-edited files the panel reads (sub-project 6): the stack's source files (its
+#: ``source_suffixes``), text, at most this size.
+HAND_REVIEW_MAX_BYTES = 64 * 1024
+
+
+def hand_review_suffixes(stack: str = "dotnet") -> tuple[str, ...]:
+    """The suffixes of the hand-edited files the panel reads: the stack's source files."""
+    return get_stack(stack).source_suffixes
+
+
+def _hand_source(f: GenFile, stack: str = "dotnet") -> bool:
+    return (f.origin == "hand" and not language(stack).is_test_path(f.path)
+            and f.path.endswith(hand_review_suffixes(stack))
+            and "\x00" not in f.content and "\ufffd" not in f.content)
+
+
 def reviewed_files(solution: GeneratedSolution, stack: str = "dotnet") -> dict[str, str]:
-    """The agent-written production files (what a model changed) and the hand-edited ones (what a
-    person changed, sub-project 6: the panel still reviews them)."""
+    """The agent-written production files (what a model changed) and the hand-edited source files
+    a person changed (sub-project 6: the panel still reviews them) within ``HAND_REVIEW_MAX_BYTES``;
+    project files, assets and larger files are not sent (:func:`skipped_hand_files`)."""
     lang = language(stack)
     return {
         f.path: f.content for f in solution.files
-        if f.origin in ("agent", "hand") and not lang.is_test_path(f.path)
+        if (f.origin == "agent" and not lang.is_test_path(f.path))
+        or (_hand_source(f, stack) and len(f.content.encode("utf-8")) <= HAND_REVIEW_MAX_BYTES)
     }
+
+
+def skipped_hand_files(solution: GeneratedSolution, stack: str = "dotnet") -> list[str]:
+    """Hand-edited source files too large for the panel, sorted."""
+    return sorted(f.path for f in solution.files
+                  if _hand_source(f, stack) and len(f.content.encode("utf-8")) > HAND_REVIEW_MAX_BYTES)
 
 
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")

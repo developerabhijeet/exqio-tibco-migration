@@ -222,3 +222,41 @@ def test_stages_for_a_normal_build_are_unchanged():
     assert build_svc.STAGES == ["design check", "generate", "tests", "test engineer", "builder", "review", "restore",
                                 "build", "format", "test", "repair", "infra", "infra validate", "metrics", "persist"]
     assert build_svc.EDIT_STAGES == [*build_svc.STAGES[:2], "hand edits", *build_svc.STAGES[2:]]
+
+
+# ------------------------------------------------------------------ review fix round 1
+async def test_an_earlier_edit_build_keeps_its_hand_files(client, edit_set_two_files, engineer, wait_terminal,
+                                                          recording_provider):                     # I1, I2
+    """A baseline that is itself an edit build: its hand files the engineer did not touch again are
+    carried verbatim and stay protected (the Dockerfile through the infrastructure generation too)."""
+    async with client._transport.app.state.sessionmaker() as s:
+        es1 = await s.get(EditSet, edit_set_two_files)
+        base_id = es1.baseline_build_id
+    z1 = edit(await download(client, base_id), {AGENT_FILE: lambda t: t + EDIT_LINE,
+                                                "Dockerfile": lambda t: t + "\n# hand note\n"})
+    first = (await post_edits(client, base_id, z1)).json()
+    b1 = (await wait_terminal(client, (await client.post(f"/edit-sets/{first['id']}/resume",
+                                                         headers=engineer)).json()["job_id"]))["build_id"]
+    agent_text = await file_text(client, b1, AGENT_FILE)
+    z2 = edit(await download(client, b1), {TEST_FILE: lambda t: t + "\n// second pass\n"})
+    second = (await post_edits(client, b1, z2)).json()
+    assert [f["path"] for f in second["files"]] == [TEST_FILE]
+    recording_provider.clear()
+    b2 = (await wait_terminal(client, (await client.post(f"/edit-sets/{second['id']}/resume",
+                                                         headers=engineer)).json()["job_id"]))["build_id"]
+    files = {f["path"]: f["origin"] for f in (await client.get(f"/builds/{b2}/files")).json()["files"]}
+    assert files[AGENT_FILE] == files["Dockerfile"] == files[TEST_FILE] == "hand"
+    assert await file_text(client, b2, AGENT_FILE) == agent_text
+    assert (await file_text(client, b2, "Dockerfile")).endswith("\n# hand note\n")
+    assert AGENT_FILE not in recording_provider.files_sent_to("builder")
+    hand = {h["path"]: h for h in (await client.get(f"/builds/{b2}")).json()["builder"]["hand_edits"]}
+    assert hand[AGENT_FILE]["detail"] == "hand-edited in the baseline build: edit kept as uploaded"
+
+
+def test_infra_change_follows_the_path_whatever_the_origin():                                     # I1
+    from api.app.services.edits import FileChange, infra_change
+
+    assert infra_change(FileChange(path="Dockerfile", change="modified", origin="hand", sha256="0"))
+    assert infra_change(FileChange(path="RUN_LOCALLY.md", change="modified", origin="hand", sha256="0"),
+                        frozenset({"RUN_LOCALLY.md"}))
+    assert not infra_change(FileChange(path=AGENT_FILE, change="modified", origin="hand", sha256="0"))

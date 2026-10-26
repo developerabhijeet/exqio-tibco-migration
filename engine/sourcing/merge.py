@@ -5,8 +5,11 @@ generation, theirs = the edited file (``git merge-file -p --diff3``). Fresh equa
 the edited file verbatim (``kept``); a clean merge is written (``merged``); a conflict keeps the
 edited file verbatim and writes the merge output, both sides marked, to
 ``.exiqo/conflicts/<path>.merge`` (``conflict``): the engineer's edit is the newest human decision.
-A file a model filled in the baseline (``ai``) merges against the baseline's filled file (X23):
-the edit is kept, and flagged as a ``conflict`` when the design changed since the baseline. ``added`` files are copied; ``deleted`` files are removed unless they are a required scaffold the
+A file a model filled in the baseline (``ai``, or ``agent`` changed by a repair), or a person
+edited in an earlier edit build (``hand``), merges against the baseline's file (X23): the edit is
+kept, and flagged as a ``conflict`` when the design changed since the baseline. "Unchanged"
+ignores layout (the baseline was formatted, the fresh generation not); a clean merge keeps the
+edit's line endings; an ``added`` file over a path the generation now writes is a ``conflict``. ``added`` files are copied; ``deleted`` files are removed unless they are a required scaffold the
 fresh generation still has (``restored``). Every outcome but ``deleted`` is a ``hand`` path the
 agents leave alone (:func:`hand_paths`).
 
@@ -16,9 +19,10 @@ API's ``FileChange``. Each path is checked to stay inside the trees it reads and
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -32,6 +36,10 @@ TMP_DIR = ".exiqo/tmp"
 MERGE_TIMEOUT_S = 60
 NO_BASELINE = "baseline folder missing: edit kept as uploaded"
 MODEL_WRITTEN = "model-written in the baseline build: edit kept as uploaded"
+HAND_WRITTEN = "hand-edited in the baseline build: edit kept as uploaded"
+ADDED_OVER = ("# The generation now writes this path too: the added hand file was kept.\n"
+              "# Below is what the generation wrote; carry its changes over by hand.")
+_WS = re.compile(r"\s+")
 SCAFFOLD_NOTE = ("# The design changed since the baseline build: the hand edit (a model-filled file) was kept.\n"
                  "# Below is the scaffold the new design generates for this file; carry its changes over by hand.")
 #: conflict markers name the three sides
@@ -121,17 +129,29 @@ def _conflict_record(solution: GeneratedSolution, path: str, text: str) -> str:
     return record
 
 
+def _same_code(a: str, b: str) -> bool:
+    """Equal but for layout: the baseline folder went through ``dotnet format`` and a fresh
+    generation has not, so indentation and line breaks alone are not a generated change."""
+    return _WS.sub("", a) == _WS.sub("", b)
+
+
+def _crlf_like(theirs: bytes, text: str) -> bytes:
+    """``text`` with the edited file's line endings (CRLF when the edit used them)."""
+    data = text.encode("utf-8")
+    return data.replace(b"\n", b"\r\n") if b"\r\n" in theirs else data
+
+
 def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, origin: str, theirs: bytes,
-              git: str, scaffold_changed: bool) -> MergeResult:
-    if origin == "ai":
-        # X23: the merge base of a model-filled file is the baseline's filled file, not the fresh
-        # unfilled scaffold (merging against that would put the placeholders back). With the
-        # design unchanged that is a clean merge to the edit. With a new design the scaffold may
-        # have moved under the fill: the edit is kept and flagged, never silently re-scaffolded.
+              git: str, scaffold_changed: bool, model_written: bool) -> MergeResult:
+    if origin in ("ai", "hand") or model_written:
+        # X23: the merge base of a file a model (or, in an earlier edit build, a person) wrote is the
+        # baseline's file, not the fresh scaffold (merging against that would put the placeholders
+        # back). With the design unchanged that is a clean merge to the edit. With a new design the
+        # scaffold may have moved under it: the edit is kept and flagged, never silently re-scaffolded.
         fresh_bytes = _read(solution.root, path)
         _write(solution, path, theirs)
         if not scaffold_changed:
-            return MergeResult(path=path, outcome="kept", detail=MODEL_WRITTEN)
+            return MergeResult(path=path, outcome="kept", detail=HAND_WRITTEN if origin == "hand" else MODEL_WRITTEN)
         fresh = (fresh_bytes or b"").decode("utf-8", "replace")
         record = _conflict_record(solution, path, f"{SCAFFOLD_NOTE}\n{fresh}")
         return MergeResult(path=path, outcome="conflict", detail=record)
@@ -144,7 +164,7 @@ def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, or
         _write(solution, path, theirs)
         return MergeResult(path=path, outcome="kept", detail="no longer generated: edit kept as uploaded")
     texts = [_text(b) for b in (base, ours, theirs)]
-    unchanged = texts[0] == texts[1] if texts[0] is not None and texts[1] is not None else ours == base
+    unchanged = _same_code(texts[0], texts[1]) if texts[0] is not None and texts[1] is not None else ours == base
     if unchanged:
         _write(solution, path, theirs)  # the generation did not move: the edit verbatim
         return MergeResult(path=path, outcome="kept")
@@ -159,18 +179,20 @@ def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, or
     if conflicted:
         _write(solution, path, theirs)
         return MergeResult(path=path, outcome="conflict", detail=_conflict_record(solution, path, merged))
-    _write(solution, path, merged.encode("utf-8"))
+    _write(solution, path, _crlf_like(theirs, merged))
     return MergeResult(path=path, outcome="merged")
 
 
 def apply_edits(solution: GeneratedSolution, baseline_root: Path | None, edited_root: Path,
                 changes: Iterable[Any], required: set[str], git: str = "git",
-                scaffold_changed: bool = False) -> list[MergeResult]:
+                scaffold_changed: bool = False, model_written: Collection[str] = ()) -> list[MergeResult]:
     """Apply ``changes`` (``path``, ``change``, ``origin``) from ``edited_root`` to the fresh
     generation in ``solution`` (on disk and in ``solution.files``), one result per change in order.
     ``required`` are the scaffold paths (solution and project files) a deletion may not remove when
     the generation still has them. ``scaffold_changed``: the design (or spec) moved since the
-    baseline build, so a model-filled file may sit on a different scaffold (X23)."""
+    baseline build, so a model-filled file may sit on a different scaffold (X23). ``model_written``:
+    baseline paths of origin ``agent`` that a model changed anyway (an applied repair), merged like
+    ``ai`` files."""
     out: list[MergeResult] = []
     for c in changes:
         path, change = c.path, c.change
@@ -190,10 +212,16 @@ def apply_edits(solution: GeneratedSolution, baseline_root: Path | None, edited_
         if theirs is None:
             raise ValueError(f"{path} is listed as {change} but is not in the edited tree")
         if change == "added":
+            fresh = _read(solution.root, path)
             _write(solution, path, theirs)
-            out.append(MergeResult(path=path, outcome="added"))
+            if fresh is not None and fresh != theirs:
+                record = _conflict_record(solution, path, f"{ADDED_OVER}\n{fresh.decode('utf-8', 'replace')}")
+                out.append(MergeResult(path=path, outcome="conflict", detail=record))
+            else:
+                out.append(MergeResult(path=path, outcome="added"))
         elif change == "modified":
-            out.append(_modified(solution, baseline_root, path, c.origin, theirs, git, scaffold_changed))
+            out.append(_modified(solution, baseline_root, path, c.origin, theirs, git, scaffold_changed,
+                                  path in model_written))
         else:
             raise ValueError(f"{path}: unknown change {change!r}")
     return out

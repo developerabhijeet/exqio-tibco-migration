@@ -21,6 +21,7 @@ import hashlib
 import json
 import unicodedata
 import zipfile
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -31,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import new_id
-from api.app.models import Build, BuildFile, DesignRecord, EditSet, Iteration, Process
+from api.app.models import Build, BuildFile, DesignRecord, EditSet, InfraAsset, Iteration, Process
 from api.app.services import gates as gate_svc
 from api.app.services import iterations as iteration_svc
 from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files
@@ -116,8 +117,9 @@ def diff_tree(root: Path, baseline: dict[str, str], origins: dict[str, str],
               excluded: frozenset[str]) -> list[FileChange]:
     """What changed under ``root`` against ``baseline`` (path → ``text_sha256``), sorted by path;
     unchanged files are left out, and so are ``.git``, the excluded folders, symbolic links,
-    ``EXPORTED_FROM.md`` and ``EXIQO_BASELINE.json``."""
-    edited = tree_hashes(root, excluded)
+    ``EXPORTED_FROM.md``, ``EXIQO_BASELINE.json`` and operating-system clutter (``.DS_Store``,
+    ``Thumbs.db``, ``desktop.ini``, ``__MACOSX``)."""
+    edited = {p: sha for p, sha in tree_hashes(root, excluded).items() if not _clutter(p)}
     out: list[FileChange] = []
     for path, sha in edited.items():
         if path not in baseline:
@@ -130,6 +132,16 @@ def diff_tree(root: Path, baseline: dict[str, str], origins: dict[str, str],
     return sorted(out, key=lambda c: c.path)
 
 
+#: Files an operating system leaves in a folder it showed: never a person's edit.
+CLUTTER_NAMES = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
+CLUTTER_DIRS = frozenset({"__macosx"})
+
+
+def _clutter(path: str) -> bool:
+    parts = [p.lower() for p in path.split("/")]
+    return parts[-1] in CLUTTER_NAMES or any(p in CLUTTER_DIRS for p in parts[:-1])
+
+
 def _excluded(path: str, excluded: frozenset[str]) -> bool:
     return any(part in excluded or part.lower() == ".git" for part in path.split("/"))
 
@@ -137,6 +149,21 @@ def _excluded(path: str, excluded: frozenset[str]) -> bool:
 def _origin(origins: dict[str, str], path: str) -> str:
     origin = origins.get(path, "code")
     return origin if origin in ("code", "agent", "ai", "infra", "tests", "hand") else "code"
+
+
+def repaired_paths(build: Build | None) -> set[str]:
+    """Paths an applied repair diff of ``build`` changed (``Build.repair`` attempts)."""
+    from engine.dotnet_gen.repair import PatchError, parse_unified_diff
+
+    out: set[str] = set()
+    for attempt in ((build.repair or {}).get("attempts") or []) if build is not None else []:
+        if not attempt.get("applied"):
+            continue
+        try:
+            out |= {p.path for p in parse_unified_diff(attempt.get("diff") or "")}
+        except PatchError:
+            continue
+    return out
 
 
 def infra_path(path: str) -> bool:
@@ -163,6 +190,7 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 NO_MANIFEST = "no EXIQO_BASELINE.json: upload the zip to /builds/{id}/edits instead"
 OTHER_PROJECT = "the baseline names a build of another project"
 NO_BUILD = "the baseline names a build that does not exist"
+NO_CHANGES = "no changes in the upload"
 
 
 class EditRefused(Exception):
@@ -196,13 +224,24 @@ def check_archive(archive: Path, dest: Path, max_bytes: int) -> None:
             names.add(name)
             key = unicodedata.normalize("NFC", name).casefold()
             if key in folded:
-                raise UploadError(f"{name} and {folded[key]} differ only in case")
+                raise UploadError(f"{name} and {folded[key]} differ only in case or Unicode normalisation")
             folded[key] = name
             if info.file_size > RATIO_MIN_BYTES and info.file_size > MAX_RATIO * max(info.compress_size, 1):
                 raise UploadError(f"{info.filename} expands more than {MAX_RATIO} times: refused as a "
                                   "possible zip bomb")
         if _declared_size(infos) > max_bytes:
             raise UploadTooLarge("upload is larger than the configured limit")
+
+
+def _tree_root(dest: Path) -> Path:
+    """The extracted build: the single top folder when it holds the build (its manifest or a
+    solution file), else ``dest``. A zip of one sub-folder such as ``src/`` is not shifted."""
+    top = single_root(dest) if dest.is_dir() else ""
+    if top:
+        folder = dest / top
+        if (folder / BASELINE_NAME).is_file() or any(p.suffix == ".sln" for p in folder.iterdir() if p.is_file()):
+            return folder
+    return dest
 
 
 def _manifest_build_id(root: Path) -> str:
@@ -261,8 +300,7 @@ async def create_edit_set(session: AsyncSession, settings: Settings, build_id: s
     await asyncio.to_thread(check_archive, archive, dest, settings.upload_max_bytes)
     try:
         await asyncio.to_thread(extract_zip, archive, dest, settings.upload_max_bytes)
-        top = single_root(dest) if dest.is_dir() else ""
-        root = dest / top if top else dest
+        root = await asyncio.to_thread(_tree_root, dest)
         return await _edit_set_for_root(session, edit_id, root, build_id, project_id, actor, "edits", {})
     except BaseException:
         remove_tree(dest)
@@ -277,8 +315,7 @@ async def create_edit_set_from_tree(session: AsyncSession, settings: Settings, p
     (``repo_id``, ``branch``, ``commit``). The tree is used where it is (``root_dir``); nothing is
     copied. Flushes; the caller commits."""
     del settings  # the clone was size-checked by its caller
-    top = single_root(root) if root.is_dir() else ""
-    tree = root / top if top and not (root / BASELINE_NAME).is_file() else root
+    tree = root if (root / BASELINE_NAME).is_file() else await asyncio.to_thread(_tree_root, root)
     return await _edit_set_for_root(session, new_id(), tree, None, project_id, actor, "repo", dict(source))
 
 
@@ -287,6 +324,10 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
     """Compare the tree at ``root`` with its baseline build, open the iteration and add the edit set."""
     if build_id is None:
         build_id = await asyncio.to_thread(_manifest_build_id, root)
+    elif (root / BASELINE_NAME).is_file():
+        named = await asyncio.to_thread(_manifest_build_id, root)
+        if named != build_id:
+            raise UploadError(f"the zip's {BASELINE_NAME} names build {named}, not {build_id}")
     build = await session.get(Build, build_id)
     process = await session.get(Process, build.process_id) if build is not None else None
     if build is None or process is None:
@@ -312,6 +353,12 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
                   root_dir=str(root), created_by=actor, status="previewed")
     session.add(row)
     await session.flush()
+    gate_svc.audit(session, process, actor, "edit set uploaded",
+                   detail={"edit_set_id": edit_id, "baseline_build_id": build.id, "iteration": iteration.n,
+                           "counts": change_counts(files), **source})
+    if not changes:
+        # nothing to build: the iteration ends at once, so it never blocks another one
+        await iteration_svc.abandon(session, iteration.id, actor, NO_CHANGES)
     return row
 
 
@@ -331,6 +378,13 @@ class EditBuild:
     baseline_files: list[dict[str, Any]] = field(default_factory=list)  # the baseline's build_files rows
     baseline_design_hash: str | None = None
     baseline_spec_hash: str | None = None
+    #: the baseline's infrastructure asset paths (its infrastructure generation's files)
+    infra_paths: frozenset[str] = frozenset()
+    #: baseline ``agent`` files a model changed anyway (an applied repair diff): merged like ``ai``
+    model_written: frozenset[str] = frozenset()
+
+    def is_infra(self, change: FileChange) -> bool:
+        return infra_change(change, self.infra_paths)
 
     def scaffold_changed(self, design_hash: str | None, spec_hash: str | None) -> bool:
         """Whether this build generates from another design or spec than the baseline did, so a
@@ -338,9 +392,11 @@ class EditBuild:
         return (self.baseline_design_hash, self.baseline_spec_hash) != (design_hash, spec_hash)
 
 
-def infra_change(change: FileChange) -> bool:
-    """A change the infrastructure generation owns: merged after it, not before."""
-    return change.origin == "infra" or (change.origin == "new" and infra_path(change.path))
+def infra_change(change: FileChange, infra_paths: Collection[str] = frozenset()) -> bool:
+    """A change the infrastructure generation owns (merged after it, not before): an
+    infrastructure path, or a file the baseline's infrastructure generation wrote, whatever its
+    origin now (an earlier edit build makes it ``hand``)."""
+    return change.origin == "infra" or infra_path(change.path) or change.path in infra_paths
 
 
 async def load_edit_build(session: AsyncSession, build: Build) -> EditBuild:
@@ -355,9 +411,19 @@ async def load_edit_build(session: AsyncSession, build: Build) -> EditBuild:
     root = Path(baseline.output_dir) if baseline is not None and baseline.output_dir else None
     rows = [] if baseline is None else list((await session.scalars(
         select(BuildFile).where(BuildFile.build_id == baseline.id).order_by(BuildFile.path))).all())
+    changes = [FileChange.model_validate(f) for f in row.files or []]
+    # A baseline that is itself an edit build: its hand files nobody touched again are carried
+    # over as they are (a merge would regenerate and refill them), and stay protected.
+    listed = {c.path for c in changes}
+    for r in rows:
+        if r.origin == "hand" and r.path not in listed and (edited / r.path).is_file():
+            changes.append(FileChange(path=r.path, change="modified", origin="hand", sha256=r.sha256))
+    infra = [] if baseline is None else list((await session.scalars(
+        select(InfraAsset.path).where(InfraAsset.build_id == baseline.id))).all())
     return EditBuild(
         edit_set_id=row.id, baseline_build_id=row.baseline_build_id,
-        changes=[FileChange.model_validate(f) for f in row.files or []],
+        changes=sorted(changes, key=lambda c: c.path),
+        infra_paths=frozenset(infra), model_written=frozenset(repaired_paths(baseline)),
         baseline_root=root if root is not None and root.is_dir() else None, edited_root=edited,
         infra_only=iteration is not None and iteration.resume_phase == "infra",
         excluded=download_excluded(baseline if baseline is not None else build),

@@ -112,7 +112,7 @@ def test_disjoint_generated_and_hand_changes_are_merged(tmp_solution, base_root,
     sol = tmp_solution(ours="A\nb\nc\nd\n")
     res = apply_edits(sol, base_root("a\nb\nc\nd\n"), edited_root("a\r\nb\r\nc\r\nD\r\n"), [mod("src/A.cs")], set())
     assert res == [MergeResult(path="src/A.cs", outcome="merged")]
-    assert (sol.root / "src/A.cs").read_text() == "A\nb\nc\nD\n"
+    assert (sol.root / "src/A.cs").read_bytes() == b"A\r\nb\r\nc\r\nD\r\n"  # the edit's line endings
 
 
 def test_missing_baseline_folder_keeps_the_edit(tmp_solution, edited_root, tmp_path):
@@ -183,3 +183,65 @@ def test_a_model_written_file_under_a_changed_scaffold_is_a_conflict(tmp_solutio
     assert res == [MergeResult(path="src/A.cs", outcome="conflict", detail=".exiqo/conflicts/src/A.cs.merge")]
     assert (sol.root / "src/A.cs").read_text() == "x\nFILLED\nc\n// hand\n"
     assert "NEW SCAFFOLD" in (sol.root / ".exiqo/conflicts/src/A.cs.merge").read_text()
+
+
+# ------------------------------------------------------------------ review fix round 1
+def test_a_baseline_hand_file_keeps_the_new_edit(tmp_solution, base_root, edited_root):         # I2
+    """A file a person edited in the baseline (an earlier edit build) merges against that file,
+    not the placeholder scaffold: the placeholders never come back."""
+    sol = tmp_solution(ours="x\nPLACEHOLDER\nc\n")
+    res = apply_edits(sol, base_root("x\nOLD HAND\nc\n"), edited_root("x\nOLD HAND\nc\n// again\n"),
+                      [FileChange(path="src/A.cs", change="modified", origin="hand", sha256="0")], set())
+    assert res[0].outcome == "kept" and "hand-edited in the baseline build" in res[0].detail
+    assert (sol.root / "src/A.cs").read_text() == "x\nOLD HAND\nc\n// again\n"
+
+
+def test_a_repair_touched_agent_file_is_treated_as_model_written(tmp_solution, base_root, edited_root):  # I4
+    sol = tmp_solution(ours="x\nPLACEHOLDER\nc\n")
+    change = FileChange(path="src/A.cs", change="modified", origin="agent", sha256="0")
+    res = apply_edits(sol, base_root("x\nREPAIRED\nc\n"), edited_root("x\nREPAIRED\nc\n// hand\n"), [change], set(),
+                      model_written={"src/A.cs"})
+    assert res[0].outcome == "kept" and (sol.root / "src/A.cs").read_text().endswith("// hand\n")
+    res = apply_edits(tmp_solution(ours="x\nPLACEHOLDER\nc\n"), base_root("x\nREPAIRED\nc\n"),
+                      edited_root("x\nREPAIRED\nc\n// hand\n"), [change], set(), scaffold_changed=True,
+                      model_written={"src/A.cs"})
+    assert res[0].outcome == "conflict"
+
+
+def test_a_formatted_baseline_still_counts_as_an_unchanged_generation(tmp_solution, base_root, edited_root):  # I3
+    """The baseline folder went through dotnet format; the fresh generation did not. Layout alone is
+    not a generated change: the edit is kept verbatim."""
+    sol = tmp_solution(ours="class A {\n  void M() { int x = 1; }\n}\n")
+    formatted = "class A\n{\n    void M()\n    {\n        int x = 1;\n    }\n}\n"
+    res = apply_edits(sol, base_root(formatted), edited_root(formatted.replace("1;", "2;")), [mod("src/A.cs")], set())
+    assert res == [MergeResult(path="src/A.cs", outcome="kept")]
+    assert (sol.root / "src/A.cs").read_text() == formatted.replace("1;", "2;")
+
+
+def test_an_added_file_over_a_fresh_one_is_a_conflict(tmp_solution, base_root, edited_root):
+    sol = tmp_solution(extra={"src/New.cs": "generated\n"})
+    res = apply_edits(sol, base_root(), edited_root(extra={"src/New.cs": "hand\n"}),
+                      [FileChange(path="src/New.cs", change="added", origin="new", sha256="0")], set())
+    assert res == [MergeResult(path="src/New.cs", outcome="conflict", detail=".exiqo/conflicts/src/New.cs.merge")]
+    assert (sol.root / "src/New.cs").read_text() == "hand\n"
+    assert "generated" in (sol.root / ".exiqo/conflicts/src/New.cs.merge").read_text()
+
+
+def test_a_clean_merge_keeps_the_edited_line_endings(tmp_solution, base_root, edited_root):
+    sol = tmp_solution(ours="A\nb\nc\nd\n")
+    apply_edits(sol, base_root("a\nb\nc\nd\n"), edited_root("a\r\nb\r\nc\r\nD\r\n"), [mod("src/A.cs")], set())
+    assert (sol.root / "src/A.cs").read_bytes() == b"A\r\nb\r\nc\r\nD\r\n"
+
+
+
+def test_review_panel_gets_hand_source_files_only_within_the_cap():                              # I6
+    from engine.agents.reviewers import HAND_REVIEW_MAX_BYTES, reviewed_files, skipped_hand_files
+
+    files = [GenFile(path="src/A.cs", content="class A {}\n", origin="hand"),
+             GenFile(path="src/Big.cs", content="x" * (HAND_REVIEW_MAX_BYTES + 1), origin="hand"),
+             GenFile(path="src/App.Core/App.Core.csproj", content="<Project/>", origin="hand"),
+             GenFile(path="assets/logo.png", content="\ufffdPNG", origin="hand"),
+             GenFile(path="src/B.cs", content="class B {}\n", origin="agent")]
+    sol = GeneratedSolution(root=Path("/x"), name="App", files=files, build_hash="h")
+    assert set(reviewed_files(sol)) == {"src/A.cs", "src/B.cs"}
+    assert skipped_hand_files(sol) == ["src/Big.cs"]

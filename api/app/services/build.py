@@ -79,7 +79,15 @@ from api.app.services.providers import build_provider, model_call_recorder
 from engine.agents.builder import BuildRejection, fill_method_bodies
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
-from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
+from engine.agents.reviewers import (
+    HAND_REVIEW_MAX_BYTES,
+    REVIEWERS,
+    TEST_REVIEWER,
+    review_panel,
+    reviewed_files,
+    reviewed_test_files,
+    skipped_hand_files,
+)
 from engine.agents.test_engineer import fill_test_bodies, placeholder_methods
 from engine.dotnet_gen import runner as dotnet_runner
 from engine.dotnet_gen.generator import GeneratedSolution, GenFile
@@ -539,11 +547,12 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     hand_results: list[MergeResult] = []
     if edit is not None:
         await ctx.stage(HAND_EDITS)
-        code_changes = [c for c in edit.changes if not edits_svc.infra_change(c)]
+        code_changes = [c for c in edit.changes if not edit.is_infra(c)]
         git = await asyncio.to_thread(git_path)
         hand_results = await asyncio.to_thread(apply_edits, solution, edit.baseline_root, edit.edited_root,
                                                code_changes, required_scaffold(stack, solution.name), git,
-                                               edit.scaffold_changed(design_row.design_hash, row.spec_hash))
+                                               edit.scaffold_changed(design_row.design_hash, row.spec_hash),
+                                               edit.model_written)
         hand = hand_paths(hand_results)
         solution.files = [f.model_copy(update={"origin": "hand"}) if f.path in hand else f for f in solution.files]
         agent_files = [f for f in solution.files if f.origin == "agent" and not lang.is_test_path(f.path)]
@@ -678,7 +687,11 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log("skipped: no agent-written code or tests to review", tag="ai")
     else:
         # without code the builder filled (or a person edited) there is nothing for the production reviewers
-        reviewed_code = bool(filled_paths) or any(not lang.is_test_path(p) for p in hand)
+        reviewed_code = bool(filled_paths) or bool(hand & set(reviewed_files(solution, stack.key)))
+        too_large = skipped_hand_files(solution, stack.key)
+        if too_large:
+            await ctx.log(f"not sent to the review panel (hand edits over {HAND_REVIEW_MAX_BYTES // 1024} KB): "
+                          + ", ".join(too_large), tag="ai")
         panel = [*REVIEWERS, TEST_REVIEWER] if reviewed_code else [TEST_REVIEWER]
         if not reviewed_code:
             await ctx.log("no agent-written production code: only the test reviewer runs, over the rule and "
@@ -1039,11 +1052,12 @@ def apply_infra_edits(edit: edits_svc.EditBuild, root: Path, name: str, infra_fi
                       git: str) -> tuple[list[GenFile], list[MergeResult]]:
     """The edit set's infrastructure changes merged into the fresh infrastructure generation (after
     it, so the generator does not write over them)."""
-    changes = [c for c in edit.changes if edits_svc.infra_change(c)]
+    changes = [c for c in edit.changes if edit.is_infra(c)]
     if not changes:
         return infra_files, []
     infra = GeneratedSolution(root=root, name=name, files=list(infra_files), build_hash="")
-    results = apply_edits(infra, edit.baseline_root, edit.edited_root, changes, set(), git)
+    results = apply_edits(infra, edit.baseline_root, edit.edited_root, changes, set(), git,
+                          model_written=edit.model_written)
     return infra.files, results
 
 

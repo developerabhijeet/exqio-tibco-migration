@@ -18,6 +18,7 @@ from starlette.requests import ClientDisconnect
 from api.app.auth.roles import Principal
 from api.app.db import new_id
 from api.app.deps import RunnerDep, SessionDep, SettingsDep, require_roles
+from api.app.jobs.locks import advisory_lock
 from api.app.models import Build, EditSet, Iteration, Process, Project
 from api.app.routers.iterations import _capped
 from api.app.schemas.iteration import EditDiff, EditResumed, EditSetOut
@@ -36,6 +37,7 @@ MAX_DIFF_BYTES = 1024 * 1024
 MULTIPART_SLACK = 1024 * 1024
 ALREADY = "the edit set was already resumed"
 DESIGN_MOVED = "the approved design changed since these edits were uploaded: upload them again"
+DESIGN_QUEUE_FAILED = "the design job could not be queued: resume the edit set again"
 QUEUE_FAILED = "the build could not be queued: resume the edit set again"
 DESIGN_FIRST = "the design must be approved again (G3) before the edits are built"
 
@@ -172,9 +174,16 @@ async def _queue_design(session, runner, settings, principal: Principal, row: Ed
     gate_svc.audit(session, process, principal.actor, "edit set resumed",
                    detail={"edit_set_id": row.id, "iteration": iteration.n, "phase": "design"})
     await session.commit()
-    job_id = await runner.submit("design", {"process_id": process.id, "provider": settings.resolved_provider(),
-                                            "iteration": iteration.n},
-                                 project_id=process.project_id, process_id=process.id)
+    try:
+        job_id = await runner.submit("design", {"process_id": process.id, "provider": settings.resolved_provider(),
+                                                "iteration": iteration.n},
+                                     project_id=process.project_id, process_id=process.id)
+    except Exception as exc:
+        # G3 stays reset (audited); the edit set goes back so resuming again queues the design
+        await session.rollback()
+        row.status = "previewed"
+        await session.commit()
+        raise HTTPException(status_code=503, detail=DESIGN_QUEUE_FAILED) from exc
     return EditResumed(job_id=job_id, kind="design", edit_set_id=row.id)
 
 
@@ -218,12 +227,20 @@ async def _queue_build(session, runner, principal: Principal, row: EditSet, iter
 
 
 @router.post("/edit-sets/{edit_set_id}/resume", status_code=202, response_model=EditResumed)
-async def resume(edit_set_id: str, principal: EngineerDep, session: SessionDep, runner: RunnerDep,
-                 settings: SettingsDep) -> EditResumed:
+async def resume(edit_set_id: str, request: Request, principal: EngineerDep, session: SessionDep,
+                 runner: RunnerDep, settings: SettingsDep) -> EditResumed:
     """Build the edits (``resume_phase`` build or infra), or, when the approved design moved on
     since the baseline build, re-enter Design first (G3-G6 reset, design job queued); once G3 is
-    approved again, resuming once more queues the build. 409 when already resumed."""
-    row = await _edit_set(session, edit_set_id)
+    approved again, resuming once more queues the build. 409 when already resumed. One resume per
+    edit set at a time (a double click queues one job)."""
+    await _edit_set(session, edit_set_id)
+    async with advisory_lock(request.app.state.sessionmaker, f"edit-set:{edit_set_id}"):
+        row = await _edit_set(session, edit_set_id)
+        await session.refresh(row)  # read again under the lock: another resume may have committed
+        return await _resume(session, runner, settings, principal, row)
+
+
+async def _resume(session, runner, settings, principal: Principal, row: EditSet) -> EditResumed:
     if row.status == "resumed":
         raise HTTPException(status_code=409, detail=ALREADY)
     iteration = await session.get(Iteration, row.iteration_id)
