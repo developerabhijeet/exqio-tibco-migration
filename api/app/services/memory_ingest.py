@@ -20,6 +20,15 @@ While the one-time ``memory.migrate`` job (``services.memory_migrate``) or a ``m
 job is queued or running, an ingest goes back to the queue (5 s, the attempt not counted): the
 migration is then each legacy project's revision 1, and no ingest meets a re-embed half done (the
 recorded backend changes only after its last project).
+
+Ruling R32: an ingest also waits (5 s, the attempt not counted) for its prerequisite family, so
+no relationship into a later-applied scope is dropped as dangling: analysis, design, build, gate,
+decision and curation wait for ``estate`` (the ``discover`` ingest of the project); verify and
+deploy wait for ``build`` (a build ingest of the process). "Applied" is read from the job history:
+a ``done`` prerequisite ingest (an empty delta writes no Revision, so Neo4j cannot tell). It waits
+while one is queued or running; with none at all it queues one and waits; when the prerequisite
+has no source rows (no process or application, no build) or its ingests only failed, it does not
+wait. Any apply that reports dangling relationships logs a warning with the count.
 """
 from __future__ import annotations
 
@@ -496,6 +505,74 @@ async def blocking_job(s: AsyncSession) -> str | None:
                           .order_by(Job.kind).limit(1))
 
 
+# Ruling R32: phase -> the phase whose ingest must have been applied first.
+PREREQUISITE: dict[str, Phase] = {
+    "analysis": "discover", "design": "discover", "build": "discover", "gate": "discover",
+    "decision": "discover", "curation": "discover", "verify": "build", "deploy": "build",
+}
+_FAMILY = {"discover": "estate", "build": "build"}
+
+
+@dataclass
+class _Prerequisite:
+    phase: Phase
+    scope: str
+    source: dict[str, Any]
+    where: Any  # the filter on ``Job`` naming this project's / process's ingests of ``phase``
+
+
+async def _prerequisite(s: AsyncSession, phase: str, project_id: str,
+                        source: dict[str, Any]) -> _Prerequisite | None:
+    """The prerequisite ingest of ``phase``, or ``None`` when there is none or it has no source
+    rows (then it would never be applied and waiting for it would never end)."""
+    need = PREREQUISITE.get(phase)
+    if need == "discover":
+        has_source = await s.scalar(select(Process.id).where(Process.project_id == project_id).limit(1)) \
+            or await s.scalar(select(Application.id).where(Application.project_id == project_id).limit(1))
+        if not has_source:
+            return None
+        return _Prerequisite("discover", "estate", {}, Job.project_id == project_id)
+    if need == "build":
+        process_id = source.get("process_id")
+        build_id = source.get("build_id")
+        if not build_id and source.get("plan_id"):
+            build_id = await s.scalar(select(Plan.build_id).where(Plan.id == source["plan_id"]))
+        build = await s.get(Build, build_id) if build_id else None
+        if not process_id or build is None or build.process_id != process_id:
+            return None
+        return _Prerequisite("build", f"build:{process_id}",
+                             {"process_id": process_id, "build_id": build.id},
+                             Job.process_id == process_id)
+    return None
+
+
+async def prerequisite_wait(s: AsyncSession, w: WorkerServices, ctx: JobContext, phase: str,
+                            project_id: str, source: dict[str, Any]) -> str | None:
+    """Why this ingest must wait for its prerequisite family (ruling R32), or ``None``."""
+    pre = await _prerequisite(s, phase, project_id, source)
+    if pre is None:
+        return None
+    statuses = set((await s.execute(
+        select(Job.status).where(Job.kind == INGEST_KIND, Job.id != ctx.job_id, pre.where,
+                                 Job.payload["phase"].astext == pre.phase)
+        .distinct())).scalars())
+    family = _FAMILY[pre.phase]
+    reason = f"waiting for the {family} memory"
+    if statuses & {"queued", "running"}:
+        return reason
+    if "done" in statuses:
+        return None
+    if "failed" in statuses:
+        log.warning("memory %s ingest %s: every %s ingest failed; applied without it",
+                    phase, ctx.job_id, family)
+        return None
+    # never queued (e.g. scanned before memory was configured): queue it, then wait for it
+    await enqueue_ingest(w.sessionmaker, w.settings, project_id=project_id, phase=pre.phase,
+                         scope=pre.scope, source=pre.source, actor=SYSTEM_ACTOR,
+                         ingest_key=f"{pre.phase}:for-{ctx.job_id}")
+    return reason
+
+
 async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     p = ctx.payload
     if w.memory is None:
@@ -510,6 +587,9 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         if blocking is not None:
             raise RetryLater(MIGRATION_WAIT_S, BLOCKING_KINDS[blocking], count_attempt=False)
         project_id = await _project_id(s, p)
+        waiting = await prerequisite_wait(s, w, ctx, phase, project_id, source)
+        if waiting is not None:
+            raise RetryLater(MIGRATION_WAIT_S, waiting, count_attempt=False)
     async with try_advisory_lock(w.sessionmaker, f"memory:{project_id}") as locked:
         if not locked:
             raise RetryLater(LOCK_BUSY_DELAY_S, "memory of this project is being written",
@@ -531,6 +611,10 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         except UNAVAILABLE as exc:
             raise unavailable_retry(ctx.attempt, exc) from exc
     scopes = [d.scope for d in projected.deltas]
+    if result.dangling:
+        log.warning("memory %s %s (%s): %d relationships dangling (an endpoint is not in the graph)",
+                    project_id, phase, ", ".join(scopes), result.dangling)
+        await ctx.log(f"warning: {result.dangling} relationships dangling")
     out = result.model_dump() | {"phase": phase, "scope": scopes[0] if len(scopes) == 1 else scopes}
     await ctx.log(f"memory {phase} ({out['scope']}): revision {result.revision}"
                   + (" (already applied)" if result.skipped else "")

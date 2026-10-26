@@ -497,3 +497,108 @@ async def test_schema_is_ensured_by_the_first_ingest_after_a_failed_start(memory
     async with memory._driver.session(database=memory.database) as session:
         names = [r["name"] async for r in await session.run("SHOW CONSTRAINTS YIELD name RETURN name")]
     assert "rev_ikey" in names
+
+
+# ------------------------------------------------------------------ prerequisite scopes (R32)
+async def held_ingest(app, pid: str, payload: dict[str, Any], process_id: str | None = None) -> str:
+    """A queued ingest no worker claims until :func:`fast_forward`."""
+    async with app.state.sessionmaker() as s:
+        job = Job(kind=KIND, status="queued", project_id=pid, process_id=process_id, payload=payload,
+                  not_before=utcnow() + timedelta(hours=1))
+        s.add(job)
+        await s.commit()
+        return job.id
+
+
+async def wait_log(app, job_id: str, text: str, timeout: float = 60.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not any(text in line for line in await log_lines(app, job_id)):
+            await asyncio.sleep(0.05)
+
+
+async def test_analysis_ingest_waits_for_the_estate(memory_client, memory_app, sample_upload,
+                                                    monkeypatch):
+    """Ruling R32: analysis queued before the estate waits; its ABOUT rels then all land."""
+    app = memory_app
+    real = mi.followup_payload
+    monkeypatch.setattr(mi, "followup_payload",  # the scan queues no estate ingest of its own
+                        lambda kind, *a: None if kind in ("scan", "discover") else real(kind, *a))
+    pid = await scan_sample(memory_client, sample_upload)
+    await idle(app, pid)  # the seed
+    proc = next(p for p in await processes(memory_client, pid) if p["ir_id"] == DFR)
+    estate = await held_ingest(app, pid, real("scan", "held-scan", pid, None, {}))
+    async with app.state.sessionmaker() as s:
+        run = AnalysisRun(process_id=proc["id"], summary={"text": "funding summary"})
+        s.add(run)
+        await s.flush()
+        s.add(Rule(process_id=proc["id"], analysis_id=run.id, rule_key="R1", status="approved",
+                   text="a dealer is funded once"))
+        await s.commit()
+    analysis = await enqueue_ingest_for(app, pid, proc["id"], 0)
+    await wait_log(app, analysis, "retry in 5 s: waiting for the estate memory")
+    job = await get_job(app, analysis)
+    assert job.status == "queued" and job.attempts == 0
+    await fast_forward(app, estate)
+    assert (await wait_terminal(app, estate)).status == "done"
+    await fast_forward(app, analysis)
+    done = await wait_terminal(app, analysis)
+    assert done.status == "done", done.error
+    assert done.result["dangling"] == 0 and done.result["added"] > 0
+    assert done.result["revision"] > (await get_job(app, estate)).result["revision"]
+    sub = await app.state.memory.subgraph(pid, uid=f"process:{DFR}", depth=1)
+    assert any(e.type == "ABOUT" and e.dst == f"process:{DFR}" for e in sub.edges)
+
+
+async def test_an_ingest_never_queued_estate_is_queued_and_awaited(memory_client, memory_app,
+                                                                   sample_upload, monkeypatch):
+    app = memory_app
+    real = mi.followup_payload
+    monkeypatch.setattr(mi, "followup_payload",
+                        lambda kind, *a: None if kind in ("scan", "discover") else real(kind, *a))
+    pid = await scan_sample(memory_client, sample_upload)
+    await idle(app, pid)
+    proc = next(p for p in await processes(memory_client, pid) if p["ir_id"] == DFR)
+    job = await wait_terminal(app, await enqueue_ingest_for(app, pid, proc["id"], 0))
+    assert job.status == "done", job.error
+    estate = [j for j in await jobs_of_kind(app, pid, KIND) if j.payload["phase"] == "discover"]
+    assert len(estate) == 1 and estate[0].status == "done"
+    assert estate[0].payload["ingest_key"] == f"discover:for-{job.id}"
+
+
+async def test_no_wait_when_the_prerequisite_has_no_source(memory_client, memory_app):
+    """A project with no processes or applications has no estate to wait for: no deadlock."""
+    app = memory_app
+    pid = (await memory_client.post("/projects", json={"name": "empty"})).json()["id"]
+    await idle(app, pid)
+    async with app.state.sessionmaker() as s:
+        event = MemoryEvent(project_id=pid, kind="decision", text="estate comes later",
+                            context={"kind": "decision"}, actor="sme.vicky")
+        s.add(event)
+        await s.commit()
+    job_id = await mi.enqueue_ingest(app.state.sessionmaker, app.state.settings, project_id=pid,
+                                     phase="decision", scope=f"decision:{event.id}",
+                                     source={"event_id": event.id}, actor="test", ingest_key="decision:t")
+    job = await wait_terminal(app, job_id, timeout=30)
+    assert job.status == "done", job.error
+    assert not any("waiting for" in line for line in await log_lines(app, job_id))
+    assert [j.payload["phase"] for j in await jobs_of_kind(app, pid, KIND)] == ["seed", "decision"]
+
+
+async def test_verify_ingest_waits_for_the_build(memory_app, phase_rows):
+    app, r = memory_app, phase_rows
+    build = await held_ingest(app, r.pid, mi.followup_payload(
+        "build", "held-build", r.pid, r.proc, {"process_id": r.proc, "build_id": r.build}), r.proc)
+    verify = await mi.enqueue_ingest(app.state.sessionmaker, app.state.settings, project_id=r.pid,
+                                     phase="verify", scope=f"verify:{r.proc}",
+                                     source={"process_id": r.proc, "build_id": r.build}, actor="test",
+                                     ingest_key="verify:wait-test")
+    await wait_log(app, verify, "retry in 5 s: waiting for the build memory")
+    assert (await get_job(app, verify)).attempts == 0
+    await fast_forward(app, build)
+    assert (await wait_terminal(app, build)).status == "done"
+    await fast_forward(app, verify)
+    done = await wait_terminal(app, verify)
+    assert done.status == "done", done.error
+    assert done.result["dangling"] == 0
+    err = f"error:parity:{r.ir}:happy/amount"
+    assert ("FAILED_AT", f"method:dotnet:{r.ir}/Api/Flow.Run") in await _edges_from(app, r.pid, err)
