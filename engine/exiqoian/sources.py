@@ -64,10 +64,14 @@ def retrieval_query(question: str, previous_question: str | None) -> str:
 
 
 async def gather_sources(retriever: MemoryRetriever, project_id: str, query: str, persona: PersonaKey,
-                         process_ids: dict[str, str]) -> tuple[list[Source], int]:
-    """Up to MAX_SOURCES sources and the number of hits dropped for carrying an injection."""
+                         process_ids: dict[str, str],
+                         prefer_iteration: int | None = None) -> tuple[list[Source], int]:
+    """Up to MAX_SOURCES sources and the number of hits dropped for carrying an injection.
+    ``prefer_iteration`` (the project's current iteration, sub-project 6) puts that iteration's
+    hits first in each group (no score is boosted)."""
+    extra = {"prefer_iteration": prefer_iteration} if prefer_iteration is not None else {}
     results = await asyncio.gather(*(
-        retriever.retrieve(project_id, query, labels=labels, k=k, min_terms=2, include_obsolete=False)
+        retriever.retrieve(project_id, query, labels=labels, k=k, min_terms=2, include_obsolete=False, **extra)
         for _, labels, k in GROUPS), return_exceptions=True)
     failed = [r for r in results if isinstance(r, BaseException)]
     if len(failed) == len(results):

@@ -188,3 +188,19 @@ def test_prompt_masks_credentials_and_configured_fields() -> None:
         masking.configure([])
     for secret in ("hunter2", "4321", "abc.def", "sk-123"):
         assert secret not in user
+
+
+async def test_the_current_iteration_is_preferred_in_every_group():
+    seen: list[object] = []
+
+    class Recording(FakeRetriever):
+        async def retrieve(self, project_id, query, *, labels=(), **kw):
+            seen.append(kw.get("prefer_iteration"))
+            return await super().retrieve(project_id, query, labels=labels, **kw)
+
+    await gather_sources(Recording(hits=[]), "proj", "dealer funding", "sme", {}, prefer_iteration=2)
+    assert seen and set(seen) == {2}
+
+
+def test_every_persona_orders_the_iteration_phase():
+    assert all("iteration" in p.phase_order for p in PERSONAS.values())

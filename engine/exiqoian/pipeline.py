@@ -173,9 +173,10 @@ def validate_answer(answer: str, sources: list[Source], canary: str,
 async def respond(*, retriever: MemoryRetriever, project_id: str, question: str, persona: PersonaKey,
                   lexicon: frozenset[str], process_ids: dict[str, str], history: list[Turn],
                   provider: RoutedProvider | None, target_stack: str = DEFAULT_STACK,
-                  on_stage: Callable[[str], Awaitable[None]] | None = None) -> Reply:
+                  on_stage: Callable[[str], Awaitable[None]] | None = None,
+                  prefer_iteration: int | None = None) -> Reply:
     """One question through the layers; the first that decides ends it. ``MemoryUnavailable``
-    from the retriever propagates."""
+    from the retriever propagates. ``prefer_iteration``: the current iteration's sources first."""
     async def stage(name: str) -> None:
         if on_stage is not None:
             await on_stage(name)
@@ -189,7 +190,7 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
     await stage("searching")
     previous = next((t.text for t in reversed(history) if t.role == "user"), None)
     sources, dropped = await gather_sources(
-        retriever, project_id, retrieval_query(question, previous), persona, process_ids)
+        retriever, project_id, retrieval_query(question, previous), persona, process_ids, prefer_iteration)
     if not sources:
         return _fixed("not_covered", dropped=dropped)
     refs = [s.ref for s in sources]

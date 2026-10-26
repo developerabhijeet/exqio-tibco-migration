@@ -21,19 +21,19 @@ def _p(key: PersonaKey, label: str, order: str, line: str) -> Persona:
 
 
 PERSONAS: dict[PersonaKey, Persona] = {p.key: p for p in (
-    _p("sme", "TIBCO SME", "validate discover design verify build deploy memory",
+    _p("sme", "TIBCO SME", "validate discover iteration design verify build deploy memory",
        "The reader is the TIBCO SME: lead with business rules, findings and process behaviour, name activities."),
-    _p("architect", "Solution architect", "design validate build discover verify deploy memory",
+    _p("architect", "Solution architect", "design iteration validate build discover verify deploy memory",
        "The reader is the solution architect: lead with design decisions, mappings and their reasons."),
-    _p("engineer", "Engineer", "build design verify validate discover deploy memory",
+    _p("engineer", "Engineer", "build iteration design verify validate discover deploy memory",
        "The reader is the engineer: lead with generated code, classes, methods, tests and build errors."),
-    _p("qa", "QA lead", "verify build validate design discover deploy memory",
+    _p("qa", "QA lead", "verify iteration build validate design discover deploy memory",
        "The reader is the QA lead: lead with scenarios, parity results, differences and the findings behind them."),
-    _p("ops", "Operations", "deploy build verify design discover validate memory",
+    _p("ops", "Operations", "deploy build verify iteration design discover validate memory",
        "The reader is operations: lead with the deployment plan, infrastructure and configuration."),
-    _p("admin", "Administrator", "discover validate design build verify deploy memory",
+    _p("admin", "Administrator", "discover validate design build verify deploy iteration memory",
        "The reader administers the platform: give a balanced overview."),
-    _p("viewer", "Viewer", "discover validate design build verify deploy memory",
+    _p("viewer", "Viewer", "discover validate design build verify deploy iteration memory",
        "The reader is a stakeholder with read-only access: use plain language and avoid code detail unless asked."),
 )}
 

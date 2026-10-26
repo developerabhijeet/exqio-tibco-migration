@@ -8,7 +8,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
-UiPhase = Literal["upload", "discover", "validate", "design", "build", "verify", "deploy", "memory"]
+UiPhase = Literal["upload", "discover", "validate", "design", "build", "verify", "deploy", "memory", "iteration"]
 UI_PHASES: tuple[str, ...] = get_args(UiPhase)
 
 LABEL_MAX = 60

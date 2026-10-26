@@ -20,6 +20,7 @@ MEMORY_PHASE_TO_UI: dict[str, UiPhase] = {
     "curation": "memory",
     "migration": "memory",
     "reingest": "memory",
+    "iteration": "iteration",  # sub-project 6: failures, logs and requirements an iteration brought in
 }
 # The step each gate guards; a gate decision's phase is its gate's step (uid `gate:<ir>:<G>`).
 GATE_STEP: dict[str, UiPhase] = {
@@ -46,6 +47,7 @@ _QUALIFIED_LABELS = frozenset({"CodeFile", "Class", "Method", "Test", "Error"})
 _ARTIFACT_STEP: dict[str, UiPhase] = {
     "process": "discover", "analysis": "validate", "design": "design", "build": "build",
     "build_file": "build", "verify_run": "verify", "plan": "deploy",
+    "iteration": "design",  # an iteration's inputs are read on Design, where the re-entry resumes
 }
 _GATE_UID = re.compile(r"^gate:[^:]+:(G[1-6])$")
 
@@ -95,7 +97,7 @@ def _target(hit: MemoryHit, phase: UiPhase, process_ids: dict[str, str]) -> Cite
     elif hit.label == "Process":
         step = "discover"
     else:
-        step = _ARTIFACT_STEP.get(c.artifact_type, phase if phase != "memory" else "discover")
+        step = _ARTIFACT_STEP.get(c.artifact_type, {"memory": "discover", "iteration": "design"}.get(phase, phase))
     return CiteTarget(kind="step", step=step, process_id=process_id)
 
 

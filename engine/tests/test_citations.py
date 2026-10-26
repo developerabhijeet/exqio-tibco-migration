@@ -133,7 +133,7 @@ def test_gate_phase_comes_from_the_uid(uid, step):
     ("discover", "discover"), ("analysis", "validate"), ("decision", "validate"),
     ("design", "design"), ("build", "build"), ("verify", "verify"), ("deploy", "deploy"),
     ("seed", "memory"), ("curation", "memory"), ("migration", "memory"),
-    ("reingest", "memory"),
+    ("reingest", "memory"), ("iteration", "iteration"),
 ])
 def test_every_memory_phase_maps(phase, ui):
     r = cite_ref(hit("memory:x", "Memory", phase=phase, artifact_type="memory"), "c1", {})
@@ -157,3 +157,8 @@ def test_artifact_targets():
     cls = cite_ref(hit("class:dotnet:p1/api/Svc", "Class", phase="build",
                        artifact_type="build_file", path="src/Svc.cs"), "c1", {})
     assert cls.target.kind == "file" and cls.kind == "code" and cls.label == "Class Svc"
+
+
+def test_an_iteration_hit_opens_design():
+    r = cite_ref(hit("iteration:p:2", "Chunk", phase="iteration", artifact_type="iteration"), "c1", {})
+    assert r.phase == "iteration" and r.target.kind == "step" and r.target.step == "design"

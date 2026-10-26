@@ -19,6 +19,7 @@ from api.app.models import (
     DesignRecord,
     Domain,
     Finding,
+    Iteration,
     Process,
     Project,
     Rule,
@@ -244,12 +245,15 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
         await on_event("meta", {"user_message_id": user.id, "persona": persona})
     lexicon, process_ids, _ = await project_lexicon(session, project_id)
     stack = await _stack_label(session, project_id)
+    # sub-project 6: the project's newest iteration's sources first (none before a re-entry)
+    newest = await session.scalar(select(func.max(Iteration.n)).where(Iteration.project_id == project_id))
+    prefer_iteration = newest if newest and newest > 1 else None
     await session.commit()  # end the read transaction: no connection idles through the model call
     try:
         reply = await respond(
             retriever=retriever, project_id=project_id, question=masked, persona=persona, lexicon=lexicon,
             process_ids=process_ids, history=history_turns(prior), provider=provider, target_stack=stack,
-            on_stage=on_stage)
+            on_stage=on_stage, prefer_iteration=prefer_iteration)
     except (MemoryUnavailable, KnowledgeUnavailable) as exc:
         reply = _unavailable(exc)
         if on_event is not None:

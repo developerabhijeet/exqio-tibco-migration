@@ -6,7 +6,7 @@
 // index by (ruling X13): every slice goes through `sliceCodePoints`, so an emoji or astral character
 // before a cited sentence does not shift its span.
 
-export type UiPhase = "upload" | "discover" | "validate" | "design" | "build" | "verify" | "deploy" | "memory";
+export type UiPhase = "upload" | "discover" | "validate" | "design" | "build" | "verify" | "deploy" | "memory" | "iteration";
 
 export interface CiteTarget {
   /** page: a screen that is no phase (/settings, /history); `path` is its route (ruling X18). */
@@ -61,6 +61,7 @@ export const PHASE_LABEL: Record<UiPhase, string> = {
   verify: "Verify",
   deploy: "Deploy",
   memory: "Memory",
+  iteration: "Iteration",
 };
 
 /** Chip colours per phase: a tinted background, the phase colour for text and a faint ring. */
@@ -73,6 +74,7 @@ export const PHASE_TONE: Record<UiPhase, string> = {
   verify: "bg-gate-bg text-gate ring-gate/20",
   deploy: "bg-decision-bg text-decision ring-decision/20",
   memory: "bg-heading/[0.06] text-heading ring-heading/20",
+  iteration: "bg-decision-bg text-decision ring-decision/20",
 };
 
 /** An unverified ref, whatever its phase. */
