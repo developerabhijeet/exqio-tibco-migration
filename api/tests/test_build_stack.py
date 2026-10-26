@@ -241,7 +241,8 @@ def test_alembic_has_one_head_and_it_is_the_stacks_revision():
     script = ScriptDirectory.from_config(cfg)
     # X25a: one head; SP3's chat migration (0013) sits on the stacks revision and SP6's
     # iterations (0014) on it.
-    assert script.get_heads() == ["0014_iterations"]
+    assert script.get_heads() == ["0015_expert_rules"]
+    assert script.get_revision("0015_expert_rules").down_revision == "0014_iterations"
     assert script.get_revision("0014_iterations").down_revision == "0013"
     assert script.get_revision("0013").down_revision == "0011_target_stack"
     assert script.get_revision("0011_target_stack").down_revision == "0010"

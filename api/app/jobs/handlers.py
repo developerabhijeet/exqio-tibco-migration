@@ -7,6 +7,8 @@ or the local decrypted secret), so a secret never sits in the ``jobs`` table.
 from __future__ import annotations
 
 import asyncio
+import functools
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +23,7 @@ from api.app.services import confluence_publish as confluence_svc
 from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
+from api.app.services import expert_rules as expert_rules_svc
 from api.app.services import figma_sync as figma_svc
 from api.app.services import github_push as github_push_svc
 from api.app.services import infra as infra_svc
@@ -32,6 +35,21 @@ from api.app.services import repos as repos_svc
 from api.app.services import scan as scan_svc
 from api.app.services import verify as verify_svc
 
+Handler = Callable[[JobContext, WorkerServices], Awaitable[dict[str, Any]]]
+
+
+def with_expert_rules(fn: Handler) -> Handler:
+    """Run a phase handler with its project's enabled expert rules in scope, so each phase prompt
+    carries the rules of its phase (``engine.agents.expert_rules``)."""
+    kind = fn.__name__
+
+    @functools.wraps(fn)
+    async def wrapper(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+        async with expert_rules_svc.job_scope(ctx.sessionmaker, ctx.job_id, ctx.payload, kind):
+            return await fn(ctx, w)
+
+    return wrapper
+
 
 @job("scan")
 async def scan(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
@@ -40,27 +58,32 @@ async def scan(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
 
 
 @job("discover")
+@with_expert_rules
 async def discover(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return await domains_svc.naming_job(ctx.payload["project_id"], w.settings)(ctx)
 
 
 @job("analyse")
+@with_expert_rules
 async def analyse(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return await analysis_svc.analyse_job(ctx.payload["process_id"], w.settings, w.knowledge)(ctx)
 
 
 @job("design")
+@with_expert_rules
 async def design(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return await design_svc.design_job(ctx.payload["process_id"], w.settings, w.knowledge)(ctx)
 
 
 @job("build")
+@with_expert_rules
 async def build(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return await build_svc.build_job(ctx.payload["build_id"], w.settings, w.knowledge,
                                      scenario_lock(w.sessionmaker))(ctx)
 
 
 @job("verify")
+@with_expert_rules
 async def verify(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     return await verify_svc.run_verify(ctx, ctx.payload["build_id"], w.settings, w.hosting,
                                        scenario_lock(w.sessionmaker))
@@ -75,6 +98,7 @@ async def service_start(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
 
 
 @job("plan")
+@with_expert_rules
 async def plan(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     p = ctx.payload
     try:

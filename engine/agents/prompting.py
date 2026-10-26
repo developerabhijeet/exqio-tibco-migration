@@ -15,6 +15,7 @@ from typing import Any
 
 from engine.ir.models import Contract, Process
 
+from .expert_rules import prompt_section
 from .jsonout import JsonOutputError, missing_required, parse_json_block
 from .provider import LLMRequest, LLMResponse, Tier
 
@@ -96,7 +97,11 @@ def render_prompt(name: str, stack: str = "dotnet", **values: Any) -> tuple[str,
             else (wrap_source(str(v)) if v else "") if k in OPTIONAL_DATA_KEYS else v)
         for k, v in values.items()
     }
-    return render(system, **wrapped), render(user, **wrapped)
+    system = render(system, **wrapped)
+    extra = prompt_section(name)  # the project's expert rules for this phase; "" when none
+    if extra:
+        system = f"{system}\n\n{extra}" if system else extra
+    return system, render(user, **wrapped)
 
 
 def wrap_source(text: str, inline: bool = False) -> str:

@@ -5,6 +5,7 @@ from api.app.models.chat import ChatConversation, ChatMessage
 from api.app.models.connector import ConnectorLink
 from api.app.models.design import DesignRecord
 from api.app.models.domain import Domain, GraphEdge, GraphNode
+from api.app.models.expert_rule import ExpertRule
 from api.app.models.gate import AuditLog, Gate
 from api.app.models.infra import AzureConnection, InfraAsset, Plan
 from api.app.models.iteration import EditSet, Iteration, IterationInput, ProjectRepo
@@ -31,6 +32,7 @@ __all__ = [
     "Domain",
     "EditSet",
     "Eval",
+    "ExpertRule",
     "FieldDiff",
     "File",
     "Finding",
