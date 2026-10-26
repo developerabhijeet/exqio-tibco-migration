@@ -251,7 +251,7 @@ const STYLE = [
       "text-margin-y": 6,
       "text-wrap": "ellipsis",
       "text-max-width": "140px",
-      "min-zoomed-font-size": 7,
+      "min-zoomed-font-size": 6,
       "transition-property": "opacity, border-width, background-color",
       "transition-duration": 150,
     },
@@ -420,39 +420,134 @@ function ToolButton({
   );
 }
 
-export function MemoryCanvas({
-  graph,
-  mode,
-  selected,
-  highlight,
-  lineage,
-  focus,
-  filtered,
-  onSelect,
-  onExpand,
-}: MemoryCanvasProps) {
+/** Short transitions (layout, fit, selection), none for a reader who asked for reduced motion. */
+const MOTION_MS = 280;
+function motion(): number {
+  if (typeof window === "undefined" || !window.matchMedia) return MOTION_MS;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : MOTION_MS;
+}
+
+type Point = { x: number; y: number };
+
+/**
+ * Bring a live instance in step with `els` without a new layout: elements no longer wanted go,
+ * existing ones take the new data and classes in place (a renamed or newly curated node), and new
+ * nodes start at the node they hang off and spread around it, so nothing that was already on the
+ * canvas moves. Returns the nodes added.
+ */
+function syncElements(inst: Core, els: ElementDefinition[], fallbackAnchor: string | null | undefined): number {
+  const want = new Map(els.map((e) => [String(e.data.id), e]));
+  const isEdge = (e: ElementDefinition) => "source" in e.data;
+  const fresh = els.filter((e) => inst.getElementById(String(e.data.id)).empty());
+  const freshNodes = fresh.filter((e) => !isEdge(e));
+  const freshEdges = fresh.filter(isEdge);
+  const ms = motion();
+
+  inst.batch(() => {
+    inst.elements().forEach((ele) => {
+      if (!want.has(ele.id())) inst.remove(ele);
+    });
+    for (const [id, def] of want) {
+      const ele = inst.getElementById(id);
+      if (ele.empty()) continue;
+      ele.data(def.data);
+      ele.classes(def.classes ?? "");
+    }
+  });
+  if (freshNodes.length === 0) {
+    if (freshEdges.length) inst.add(freshEdges);
+    return 0;
+  }
+
+  // Each new node hangs off an existing neighbour (or the focus); spread each family on a ring
+  // around its anchor, opening away from the middle of the graph.
+  const freshIds = new Set(freshNodes.map((n) => String(n.data.id)));
+  const anchorOf = new Map<string, string>();
+  for (const e of freshEdges) {
+    const [s, t] = [String(e.data.source), String(e.data.target)];
+    if (freshIds.has(t) && !freshIds.has(s) && !anchorOf.has(t)) anchorOf.set(t, s);
+    if (freshIds.has(s) && !freshIds.has(t) && !anchorOf.has(s)) anchorOf.set(s, t);
+  }
+  const bb = inst.nodes().length ? inst.nodes().boundingBox({}) : { x1: 0, y1: 0, w: 0, h: 0 };
+  const middle: Point = { x: bb.x1 + bb.w / 2, y: bb.y1 + bb.h / 2 };
+  const anchorPos = (id: string | undefined): Point => {
+    const a = id ? inst.getElementById(id) : null;
+    if (a && a.nonempty()) return { ...a.position() };
+    const f = fallbackAnchor ? inst.getElementById(fallbackAnchor) : null;
+    return f && f.nonempty() ? { ...f.position() } : middle;
+  };
+  const families = new Map<string, string[]>();
+  for (const id of freshIds) {
+    const a = anchorOf.get(id) ?? "";
+    families.set(a, [...(families.get(a) ?? []), id]);
+  }
+  const start = new Map<string, Point>();
+  const target = new Map<string, Point>();
+  for (const [anchor, ids] of families) {
+    const at = anchorPos(anchor || undefined);
+    const away = Math.atan2(at.y - middle.y, at.x - middle.x) || 0;
+    // A fan facing away from the middle, widening with the family up to a full ring; families
+    // of more than 14 continue on outer rings.
+    const perRing = Math.min(ids.length, 14);
+    const fan = Math.min(Math.PI * 2, Math.max(Math.PI / 2, perRing * 0.45));
+    const step = perRing <= 1 ? 0 : fan >= Math.PI * 2 ? fan / perRing : fan / (perRing - 1);
+    ids.forEach((id, i) => {
+      const r = 130 + Math.floor(i / 14) * 70;
+      const angle = away - (perRing <= 1 ? 0 : fan / 2) + step * (i % 14);
+      start.set(id, at);
+      target.set(id, { x: at.x + r * Math.cos(angle), y: at.y + r * Math.sin(angle) });
+    });
+  }
+  const added = inst.add(freshNodes.map((n) => ({ ...n, position: start.get(String(n.data.id)) ?? middle })));
+  inst.add(freshEdges);
+  added.forEach((n) => {
+    const to = target.get(n.id());
+    if (!to) return;
+    if (ms) n.animate({ position: to }, { duration: ms, easing: "ease-out-cubic" });
+    else n.position(to);
+  });
+  // Keep the newcomers in view.
+  if (ms) inst.animate({ fit: { eles: inst.elements(), padding: 48 } }, { duration: ms, easing: "ease-out-cubic" });
+  else inst.fit(undefined, 48);
+  return added.length;
+}
+
+export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus, filtered, onSelect, onExpand }: MemoryCanvasProps) {
   const box = useRef<HTMLDivElement>(null);
   const cy = useRef<Core | null>(null);
+  const scene = useRef<string | null>(null);
+  // Whether the reader has panned or zoomed since the scene was laid out: until they do, a
+  // resize (the drawer opening) re-fits the graph; after, their viewport is left alone.
+  const moved = useRef(false);
   const handlers = useRef({ onSelect, onExpand });
   handlers.current = { onSelect, onExpand };
+  const classes = useRef({ selected, lineage, highlight });
+  classes.current = { selected, lineage, highlight };
 
-  const built = useMemo(
-    () => canvasElements(graph, mode, focus),
-    [graph, mode, focus],
-  );
-  const key = useMemo(
-    () => `${mode}|${built.elements.map((e) => e.data.id).join("|")}`,
-    [built, mode],
-  );
+  const built = useMemo(() => canvasElements(graph, mode, focus), [graph, mode, focus]);
+  // A scene is laid out once: a neighbourhood per focus (expansions and filter changes update it
+  // in place), a lineage view per element set (elk places the whole chain).
+  const sceneKey =
+    mode === "lineage"
+      ? `lineage|${built.elements.map((e) => e.data.id).join("|")}`
+      : `neighbourhood|${focus ?? ""}`;
 
   useEffect(() => {
     let live = true;
     (async () => {
+      const current = cy.current;
+      // In place when most of what is wanted is already drawn; a mostly new set is a new scene.
+      const kept = current ? built.elements.filter((e) => !("source" in e.data) && current.getElementById(String(e.data.id)).nonempty()).length : 0;
+      if (current && scene.current === sceneKey && kept * 2 >= built.nodeCount) {
+        syncElements(current, built.elements, focus);
+        if (mode === "lineage") current.edges().addClass("lineage-mode");
+        const c = classes.current;
+        applyClasses(current, c.selected, c.lineage, c.highlight);
+        return;
+      }
       const { default: cytoscape } = await import("cytoscape");
       const positions =
-        mode === "lineage" && built.nodeCount > 0
-          ? await lineagePositions(graph, built.elements).catch(() => null)
-          : null;
+        mode === "lineage" && built.nodeCount > 0 ? await lineagePositions(graph, built.elements).catch(() => null) : null;
       if (!live || !box.current) return;
       cy.current?.destroy();
       const inst = cytoscape({
@@ -477,87 +572,185 @@ export function MemoryCanvas({
         }
       };
       if (positions) {
-        inst
-          .layout({
-            name: "preset",
-            positions: (n: { id: () => string }) =>
-              positions[n.id()] ?? { x: 0, y: 0 },
-            fit: false,
-          } as never)
-          .run();
+        inst.layout({ name: "preset", positions: (n: { id: () => string }) => positions[n.id()] ?? { x: 0, y: 0 }, fit: false } as never).run();
         fit();
       } else {
-        const layout = inst.layout({
-          name: mode === "lineage" ? "breadthfirst" : "cose",
-          animate: false,
-          fit: false,
-          randomize: true,
-          nodeRepulsion: () => 9000,
-          idealEdgeLength: () => 90,
-          gravity: 0.5,
-          componentSpacing: 80,
-          nodeDimensionsIncludeLabels: true,
-          boundingBox: {
-            x1: 0,
-            y1: 0,
-            w: box.current.clientWidth || 900,
-            h: box.current.clientHeight || 560,
-          },
-        } as never);
-        layout.one("layoutstop", fit);
+        // A focused neighbourhood of up to 60 nodes sits in rings around its focus, nearest hops
+        // first: calm, and round enough to fit any canvas shape (a ring of hundreds would not).
+        // Larger ones and the overview use cose, turned to landscape when it comes out tall.
+        const hops = focus && built.nodeCount <= 60 && inst.getElementById(focus).nonempty() ? hopsFrom(inst, focus) : null;
+        const layout = inst.layout(
+          (mode === "lineage"
+            ? { name: "breadthfirst", animate: false, fit: false, directed: true, spacingFactor: 1.1 }
+            : hops
+              ? {
+                  name: "concentric",
+                  animate: false,
+                  fit: false,
+                  concentric: (n: { id: () => string }) => 10 - Math.min(9, hops.get(n.id()) ?? 9),
+                  levelWidth: () => 1,
+                  // Spacing, not label widths: labels sit under their nodes and a ring sized
+                  // for 140 px labels fits the canvas at an unreadable zoom.
+                  minNodeSpacing: 46,
+                  avoidOverlap: true,
+                  nodeDimensionsIncludeLabels: false,
+                  startAngle: (3 / 2) * Math.PI,
+                }
+              : {
+                  name: "cose",
+                  animate: false,
+                  fit: false,
+                  randomize: true,
+                  nodeRepulsion: () => 4500,
+                  idealEdgeLength: () => 70,
+                  gravity: 0.8,
+                  componentSpacing: 60,
+                  nodeDimensionsIncludeLabels: true,
+                  // No bounding box: the canvas may be about to change shape (the drawer
+                  // opening), and a layout squeezed into the old shape fits the new one badly.
+                }) as never,
+        );
+        layout.one("layoutstop", () => {
+          if (!hops && mode !== "lineage") landscape(inst);
+          fit();
+        });
         layout.run();
       }
-      inst.on("tap", "node", (evt) =>
-        handlers.current.onSelect(evt.target.id()),
-      );
-      inst.on("dbltap", "node", (evt) =>
-        handlers.current.onExpand(evt.target.id()),
-      );
+      inst.on("tap", "node", (evt) => handlers.current.onSelect(evt.target.id()));
+      inst.on("dbltap", "node", (evt) => handlers.current.onExpand(evt.target.id()));
       cy.current = inst;
-      applyClasses(inst, selected, lineage, highlight);
+      scene.current = sceneKey;
+      moved.current = false;
+      const c = classes.current;
+      applyClasses(inst, c.selected, c.lineage, c.highlight);
+      // A new scene fades in rather than popping.
+      const ms = motion();
+      if (ms && box.current) {
+        box.current.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: ms, easing: "ease-out" });
+      }
     })();
     return () => {
       live = false;
     };
-  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [built, sceneKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => cy.current?.destroy(), []);
+  useEffect(
+    () => () => {
+      cy.current?.destroy();
+      cy.current = null;
+    },
+    [],
+  );
 
-  // Selection, chain and diff outlines change without a new layout.
+  // The drawer opening or closing (or the window) resizes the canvas: keep cytoscape's viewport
+  // in step so taps land on the nodes drawn under them.
   useEffect(() => {
-    if (cy.current) applyClasses(cy.current, selected, lineage, highlight);
-  }, [selected, lineage, highlight, key]);
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const inst = cy.current;
+        if (!inst) return;
+        inst.resize();
+        if (!moved.current && inst.nodes().length) {
+          inst.stop();
+          inst.fit(undefined, 48);
+          if (inst.zoom() > 1.3) {
+            inst.zoom(1.3);
+            inst.center();
+          }
+        } else {
+          keepInView(inst, classes.current.selected);
+        }
+      });
+    });
+    ro.observe(el);
+    // A wheel or a drag is the reader taking over the viewport; a tap (selecting) is not.
+    let down: { x: number; y: number } | null = null;
+    const touched = () => {
+      moved.current = true;
+    };
+    const press = (e: PointerEvent) => {
+      down = { x: e.clientX, y: e.clientY };
+    };
+    const drag = (e: PointerEvent) => {
+      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) moved.current = true;
+    };
+    const release = () => {
+      down = null;
+    };
+    el.addEventListener("wheel", touched, { passive: true });
+    el.addEventListener("pointerdown", press);
+    el.addEventListener("pointermove", drag);
+    window.addEventListener("pointerup", release);
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+      el.removeEventListener("wheel", touched);
+      el.removeEventListener("pointerdown", press);
+      el.removeEventListener("pointermove", drag);
+      window.removeEventListener("pointerup", release);
+    };
+  }, []);
+
+  // Selection, chain and diff outlines change without a new layout; a selected node off screen is
+  // brought into view.
+  useEffect(() => {
+    const inst = cy.current;
+    if (!inst) return;
+    applyClasses(inst, selected, lineage, highlight);
+    keepInView(inst, selected);
+  }, [selected, lineage, highlight]);
 
   const zoomBy = (f: number) => {
     const inst = cy.current;
     if (!inst) return;
-    inst.zoom({
-      level: inst.zoom() * f,
-      renderedPosition: { x: inst.width() / 2, y: inst.height() / 2 },
-    });
+    const level = Math.min(inst.maxZoom(), Math.max(inst.minZoom(), inst.zoom() * f));
+    const at = { x: inst.width() / 2, y: inst.height() / 2 };
+    const ms = motion();
+    if (ms) inst.animate({ zoom: { level, renderedPosition: at } } as never, { duration: 180 });
+    else inst.zoom({ level, renderedPosition: at });
   };
-  const fitAll = () => cy.current?.fit(undefined, 48);
+  const fitAll = () => {
+    const inst = cy.current;
+    if (!inst) return;
+    const ms = motion();
+    if (ms) inst.animate({ fit: { eles: inst.elements(), padding: 48 } }, { duration: ms, easing: "ease-out-cubic" });
+    else inst.fit(undefined, 48);
+  };
   const centreSelected = () => {
     const inst = cy.current;
     if (!inst || !selected) return;
     const n = inst.getElementById(selected);
-    if (n.nonempty())
-      inst.animate(
-        { center: { eles: n }, zoom: Math.max(inst.zoom(), 1) },
-        { duration: 200 },
-      );
+    if (n.empty()) return;
+    const ms = motion();
+    if (ms) inst.animate({ center: { eles: n }, zoom: Math.max(inst.zoom(), 1) }, { duration: ms, easing: "ease-out-cubic" });
+    else inst.center(n);
   };
 
-  const sides = useMemo(
-    () => [...new Set(graph.nodes.map((n) => n.side))],
-    [graph],
-  );
+  const sides = useMemo(() => [...new Set(graph.nodes.map((n) => n.side))], [graph]);
+  // Why some links are dashed or missing: the filters hid nodes, or the 400-node limit cut them.
+  const hidden = filtered ? "the filters hide" : "not shown";
+  const hint =
+    built.indirect > 0
+      ? `${fmt(built.indirect)} linked via nodes ${hidden}`
+      : built.dropped > 0
+        ? `${fmt(built.dropped)} links to nodes ${hidden}`
+        : null;
+  const hintTitle = filtered
+    ? "Label or side filters hide the nodes these paths run through."
+    : "These paths run through nodes beyond the ones shown here.";
+  const focusName = graph.nodes.find((n) => n.uid === (mode === "lineage" ? graph.nodes[0]?.uid : focus));
 
   return (
     <div className="relative h-full w-full">
       <div
         ref={box}
         className="absolute inset-0"
+        role="img"
+        aria-label={`Memory graph, ${mode} view${focusName ? ` of ${displayName(focusName)}` : ""}: ${fmt(built.nodeCount)} nodes`}
         data-testid="memory-canvas"
         data-node-count={built.nodeCount}
         data-mode={mode}
@@ -568,8 +761,7 @@ export function MemoryCanvas({
           data-testid="memory-truncated"
           className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-decision-bg px-4 py-1.5 text-[13px] font-medium text-decision shadow-card ring-1 ring-inset ring-decision/20"
         >
-          Showing {fmt(graph.nodes.length)} of {fmt(graph.total)}: narrow the
-          filters
+          Showing {fmt(graph.nodes.length)} of {fmt(graph.total)}: narrow the filters
         </div>
       ) : null}
 
@@ -577,9 +769,7 @@ export function MemoryCanvas({
         <div className="absolute inset-0 flex items-center justify-center">
           <p className="max-w-sm text-center text-[14.5px] text-slate">
             Nothing to show here{filtered ? " with these filters" : ""}.{" "}
-            {filtered
-              ? "Clear a filter or search for a node."
-              : "Search for a node to explore around it."}
+            {filtered ? "Clear a filter or search for a node." : "Search for a node to explore around it."}
           </p>
         </div>
       ) : null}
@@ -591,10 +781,7 @@ export function MemoryCanvas({
             <span key={s} className="inline-flex items-center gap-1.5">
               <span
                 className="h-2.5 w-2.5 rounded-full ring-1"
-                style={{
-                  background: GROUP_HEX[s].fill,
-                  boxShadow: `inset 0 0 0 1.5px ${GROUP_HEX[s].border}`,
-                }}
+                style={{ background: GROUP_HEX[s].fill, boxShadow: `inset 0 0 0 1.5px ${GROUP_HEX[s].border}` }}
               />
               {GROUP_LABEL[s]}
             </span>
@@ -615,16 +802,10 @@ export function MemoryCanvas({
               </span>
             </>
           ) : null}
-          {built.indirect > 0 || built.dropped > 0 ? (
-            <span
-              className="inline-flex items-center gap-1.5"
-              data-testid="memory-filtered-hint"
-              title="The filters hide nodes these paths run through."
-            >
+          {hint ? (
+            <span className="inline-flex items-center gap-1.5" data-testid="memory-filtered-hint" title={hintTitle}>
               <span className="h-0 w-5 border-t border-dashed border-line-dk" />
-              {built.indirect > 0
-                ? `${built.indirect} via hidden nodes`
-                : `${built.dropped} edges to hidden nodes`}
+              {hint}
             </span>
           ) : null}
         </div>
@@ -641,10 +822,7 @@ export function MemoryCanvas({
           <Maximize size={15} aria-hidden />
         </ToolButton>
         {selected ? (
-          <ToolButton
-            label="Centre on the selected node"
-            onClick={centreSelected}
-          >
+          <ToolButton label="Centre on the selected node" onClick={centreSelected}>
             <Focus size={15} aria-hidden />
           </ToolButton>
         ) : null}
@@ -653,8 +831,49 @@ export function MemoryCanvas({
   );
 }
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat("en-US").format(n).replace(/,/g, " ");
+const fmt = (n: number) => n.toLocaleString("en-US");
+
+/** Hops from `focus` over the drawn edges (dashed "filtered path" links count as one). */
+function hopsFrom(inst: Core, focus: string): Map<string, number> {
+  const hops = new Map<string, number>([[focus, 0]]);
+  let frontier = [focus];
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      inst.getElementById(id).neighborhood("node").forEach((n) => {
+        if (!hops.has(n.id())) {
+          hops.set(n.id(), (hops.get(id) ?? 0) + 1);
+          next.push(n.id());
+        }
+      });
+    }
+    frontier = next;
+  }
+  return hops;
+}
+
+/** Turn a layout that came out taller than wide on its side, so it fills a landscape canvas. */
+function landscape(inst: Core) {
+  const bb = inst.nodes().boundingBox({});
+  if (bb.h <= bb.w * 1.15) return;
+  inst.nodes().positions((n) => {
+    const p = n.position();
+    return { x: p.y, y: p.x };
+  });
+}
+
+/** Pan (briefly animated) so the selected node is on screen, when it is not. */
+function keepInView(inst: Core, selected: string | undefined) {
+  if (!selected) return;
+  const n = inst.getElementById(selected);
+  if (n.empty()) return;
+  const p = n.renderedPosition();
+  const margin = 40;
+  if (p.x >= margin && p.y >= margin && p.x <= inst.width() - margin && p.y <= inst.height() - margin) return;
+  const ms = motion();
+  if (ms) inst.animate({ center: { eles: n } }, { duration: ms, easing: "ease-out-cubic" });
+  else inst.center(n);
+}
 
 function applyClasses(
   inst: Core,

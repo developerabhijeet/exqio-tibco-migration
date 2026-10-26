@@ -38,7 +38,37 @@ test("no request leaves the web or API origin on the explorer", async ({ page })
     const u = new URL(r.url());
     if (u.protocol.startsWith("http") && ![WEB_ORIGIN, API_ORIGIN].includes(u.origin)) outside.push(r.url());
   });
-  await page.goto("/memory");
+  // Exercise everything the explorer loads: search, the cytoscape canvas, the drawer and the
+  // elkjs lineage layout (each a lazily loaded chunk).
+  await uploadSample(page);
+  await openNode(page, SAMPLE_PROCESS_NAME);
+  await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-node-count", /^[1-9]\d*$/);
+  await page.getByRole("radio", { name: "Lineage" }).click();
+  await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-mode", "lineage");
+  await expect(page.getByTestId("memory-canvas")).toHaveAttribute("data-node-count", /^[1-9]\d*$/);
   await page.waitForLoadState("networkidle");
   expect(outside).toEqual([]);
+});
+
+test("Clear resets every filter in one go", async ({ page }) => {
+  await uploadSample(page);
+  await page.goto("/memory?labels=Process,Activity&side=old&phase=discover");
+  await expect(page.getByTestId("memory-status")).toContainText(/Revision \d+/, { timeout: 60_000 });
+  await page.getByRole("button", { name: "Clear" }).click();
+  await expect(page).not.toHaveURL(/labels=|side=|phase=/);
+  await expect(page.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("the drawer keeps its tab, closes on Escape and gives focus back", async ({ page }) => {
+  await uploadSample(page);
+  await openNode(page, SAMPLE_PROCESS_NAME);
+  await expect(page.getByTestId("node-drawer")).toBeFocused();
+  await page.getByRole("tab", { name: "History" }).click();
+  // Another result (one of the process's activities): the drawer follows, on the same tab.
+  await page.getByTestId("memory-results").getByRole("button").nth(1).click();
+  await expect(page).toHaveURL(/uid=activity%3A/);
+  await expect(page.getByRole("tab", { name: "History" })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("node-drawer")).toHaveCount(0);
+  await expect(page.getByTestId("memory-results").getByRole("button").first()).toBeFocused();
 });

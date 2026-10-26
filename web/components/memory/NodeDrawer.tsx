@@ -2,7 +2,7 @@
 
 // The selected node, on the right: Overview, History, Knowledge and Lineage (Curate joins them in
 // Task 15). Everything is read as of the explorer's revision.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Copy, Crosshair, Loader2, X } from "lucide-react";
 import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
@@ -250,7 +250,36 @@ function Lineage({ lineage, onSelect }: { lineage: LineageOut[]; onSelect(uid: s
 }
 
 export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }: NodeDrawerProps) {
+  // The tab stays put as the selection moves from node to node.
   const [tab, setTab] = useState<DrawerTab>("Overview");
+  const panel = useRef<HTMLElement>(null);
+
+  // Opening moves focus into the drawer; closing gives it back to whatever opened it (a search
+  // result, a lineage row), when that is still on the page.
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    panel.current?.focus({ preventScroll: true });
+    return () => {
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    };
+  }, []);
+
+  // Escape closes it from anywhere but a text field outside it (Escape in the search box clears
+  // the search, not the drawer).
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const at = document.activeElement;
+      const typing = at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement || at instanceof HTMLSelectElement;
+      if (typing && !panel.current?.contains(at)) return;
+      e.preventDefault();
+      close.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   const detail = useMemoryNode(projectId, uid, asOf);
   const d = detail.data;
   const counts: Partial<Record<DrawerTab, number>> = d
@@ -258,7 +287,13 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }:
     : {};
 
   return (
-    <aside data-testid="node-drawer" className="card flex min-h-0 w-[440px] shrink-0 flex-col overflow-hidden" aria-label="Node detail">
+    <aside
+      ref={panel}
+      tabIndex={-1}
+      data-testid="node-drawer"
+      className="card flex min-h-0 w-[440px] shrink-0 flex-col overflow-hidden outline-none"
+      aria-label="Node detail"
+    >
       <div className="border-b border-line/80 px-6 pb-0 pt-5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">

@@ -25,6 +25,8 @@ export interface SearchRailProps {
   onSide(side: Side | null): void;
   phase: string | null;
   onPhase(phase: string | null): void;
+  /** Labels, side and phase back to none, in one URL update. */
+  onClear(): void;
   counts: Record<string, number>;
   hits: MemoryHit[] | undefined;
   searching: boolean;
@@ -120,17 +122,30 @@ function ScoreBar({ score }: { score: number }) {
 }
 
 export function SearchRail(props: SearchRailProps) {
-  const { q, onQ, labels, onLabels, side, onSide, phase, onPhase, counts, hits, searching, error, selected, onPick } = props;
+  const { q, onQ, labels, onLabels, side, onSide, phase, onPhase, onClear, counts, hits, searching, error, selected, onPick } = props;
   const [text, setText] = useState(q);
   const [filtersOpen, setFiltersOpen] = useState(labels.length > 0 || side !== null || phase !== null);
   const onQRef = useRef(onQ);
   onQRef.current = onQ;
 
-  // Keep the box in step when the URL changes underneath it (back, a shared link).
-  useEffect(() => setText(q), [q]);
+  const input = useRef<HTMLInputElement>(null);
+  // The last query the box itself wrote to the URL.
+  const sent = useRef(q);
+
+  // Keep the box in step when the URL changes underneath it (back, a shared link), but never over
+  // what someone is typing: a change the box made itself, or any while it has focus, is left be.
+  useEffect(() => {
+    if (q === sent.current) return;
+    sent.current = q;
+    if (typeof document !== "undefined" && document.activeElement === input.current) return;
+    setText(q);
+  }, [q]);
   useEffect(() => {
     if (text === q) return;
-    const t = window.setTimeout(() => onQRef.current(text), 250);
+    const t = window.setTimeout(() => {
+      sent.current = text;
+      onQRef.current(text);
+    }, 250);
     return () => window.clearTimeout(t);
   }, [text, q]);
 
@@ -143,6 +158,7 @@ export function SearchRail(props: SearchRailProps) {
           <span className="sr-only">Search memory</span>
           <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate/70" aria-hidden />
           <input
+            ref={input}
             data-testid="memory-search"
             type="search"
             className="input py-2.5 pl-10 pr-9"
@@ -170,9 +186,7 @@ export function SearchRail(props: SearchRailProps) {
               type="button"
               className="inline-flex items-center gap-1 text-[12.5px] font-medium text-purple hover:underline"
               onClick={() => {
-                onLabels([]);
-                onSide(null);
-                onPhase(null);
+                onClear();
               }}
             >
               <X size={13} aria-hidden /> Clear

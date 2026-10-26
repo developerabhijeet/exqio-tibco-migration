@@ -51,15 +51,23 @@ function useView() {
     mode: (params.get("mode") === "lineage" ? "lineage" : "neighbourhood") as GraphMode,
     phase: params.get("phase") || null,
   };
+  // Several updates in one tick (Clear resets three filters) must build on each other, not each
+  // on the params of the last render: `pending` holds the URL written but not yet rendered.
+  const pending = useRef<string | null>(null);
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const rendered = params.toString();
+  useEffect(() => {
+    pending.current = null;
+  }, [rendered]);
   const set = useCallback(
     (patch: Partial<Record<"uid" | "rev" | "q" | "labels" | "side" | "mode" | "phase", string | null>>, push = false) => {
-      const next = new URLSearchParams(paramsRef.current.toString());
+      const next = new URLSearchParams(pending.current ?? paramsRef.current.toString());
       for (const [k, v] of Object.entries(patch)) {
         if (v === null || v === "" || (k === "mode" && v === "neighbourhood")) next.delete(k);
         else next.set(k, v);
       }
+      pending.current = next.toString();
       const url = `${pathname}${next.size ? `?${next.toString()}` : ""}`;
       if (push) router.push(url, { scroll: false });
       else router.replace(url, { scroll: false });
@@ -68,6 +76,10 @@ function useView() {
   );
   return { view, set };
 }
+
+/** useQueries' combine, stable at module level so its result is structurally shared between
+ * renders: the merged graph is rebuilt only when an expansion's data changes. */
+const graphsOnly = (results: { data?: Subgraph }[]) => results.map((r) => r.data);
 
 function mergeGraphs(base: Subgraph, more: (Subgraph | undefined)[]): Subgraph {
   const extra = more.filter((g): g is Subgraph => !!g);
@@ -192,24 +204,30 @@ export function MemoryExplorer() {
     mode,
   };
   const graph = useMemoryGraph(projectId, graphQuery, ready);
+  // While a new focus loads, the canvas still shows the previous focus's graph
+  // (keepPreviousData): pair it with the focus it was read around, not the one requested.
+  const settledFocus = useRef<string | null>(focus);
+  useEffect(() => {
+    if (graph.data && !graph.isPlaceholderData) settledFocus.current = graphQuery.uid;
+  });
+  const canvasFocus = graph.isPlaceholderData ? settledFocus.current : focus;
   // The selected node's lineage chain, for the canvas highlight (lineage mode draws it already).
   const chain = useMemoryGraph(
     projectId,
     { uid: view.uid, depth: 1, labels: [], side: null, asOf: view.rev, mode: "lineage" },
     ready && mode === "neighbourhood" && !!view.uid,
   );
-  const more = useQueries({
+  const moreData = useQueries({
+    combine: graphsOnly,
     queries: expanded.map((uid) => ({
       queryKey: ["memory-graph", projectId, { ...graphQuery, uid, depth: 1 as const, mode: "neighbourhood" as const }],
       queryFn: () => memoryApi.graph(projectId!, { ...graphQuery, uid, depth: 1, mode: "neighbourhood" }),
       enabled: ready && mode === "neighbourhood",
     })),
   });
-  const moreData = more.map((m) => m.data);
   const shown = useMemo(
     () => (graph.data ? mergeGraphs(graph.data, mode === "neighbourhood" ? moreData : []) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graph.data, mode, ...moreData],
+    [graph.data, mode, moreData],
   );
 
   // A selection the canvas does not show (a shared link, back, a drawer link) becomes the focus.
@@ -259,7 +277,7 @@ export function MemoryExplorer() {
   const focusNode = shown?.nodes.find((n) => n.uid === (mode === "lineage" ? view.uid : focus));
 
   return (
-    <div className="flex h-[calc(100vh-13.5rem)] min-h-[640px] flex-col gap-5">
+    <div className="flex h-[calc(100vh-13.5rem)] min-h-[780px] flex-col gap-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <Link href="/" className="inline-flex items-center gap-1.5 text-[13.5px] font-medium text-purple hover:underline">
@@ -301,6 +319,7 @@ export function MemoryExplorer() {
               onSide={(s) => set({ side: s })}
               phase={view.phase}
               onPhase={(p) => set({ phase: p })}
+              onClear={() => set({ labels: null, side: null, phase: null })}
               counts={counts}
               hits={search.data ? rankHits(search.data, view.q) : undefined}
               searching={search.isFetching}
@@ -311,7 +330,7 @@ export function MemoryExplorer() {
 
             <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Memory graph">
               <div className="flex flex-wrap items-center gap-3 border-b border-line/80 px-5 py-3">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[120px] flex-1">
                   <p className="label">{mode === "lineage" ? "Lineage of" : focus ? "Around" : "Project overview"}</p>
                   <p className="truncate text-[15px] font-semibold text-plum">
                     {focusNode ? focusNode.name || focusNode.uid : focus ? focus : "Domains, applications and solutions"}
@@ -356,7 +375,7 @@ export function MemoryExplorer() {
                     mode={mode}
                     selected={view.uid ?? undefined}
                     lineage={mode === "neighbourhood" ? chain.data : undefined}
-                    focus={mode === "neighbourhood" ? focus : null}
+                    focus={mode === "neighbourhood" ? canvasFocus : null}
                     filtered={filtered}
                     onSelect={select}
                     onExpand={expand}
@@ -374,7 +393,6 @@ export function MemoryExplorer() {
 
             {view.uid ? (
               <NodeDrawer
-                key={view.uid}
                 projectId={projectId}
                 uid={view.uid}
                 asOf={view.rev}

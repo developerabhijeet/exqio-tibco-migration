@@ -39,7 +39,7 @@ export function TopBar() {
       <div className="flex h-16 w-full items-center gap-5 px-6">
         <Link href="/" className="flex shrink-0 items-center gap-3">
           <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
-          <span className="leading-tight">
+          <span className="leading-tight max-xl:hidden">
             <span className="block font-display text-[16.5px] font-semibold tracking-[-0.01em] text-white">
               {brand_name} Migrate
             </span>
@@ -48,22 +48,31 @@ export function TopBar() {
         </Link>
         <div className="h-8 w-px bg-white/15" />
         <ProjectSelector />
-        <PhasePill />
-        <nav className="ml-auto flex items-center gap-0.5" aria-label="Secondary">
+        <div className="max-xl:hidden">
+          <PhasePill />
+        </div>
+        {/* Narrower than 1600 px the links keep their icons and drop their labels (still their
+            accessible names, and a tooltip); below 1280 px the brand line and the phase pill go
+            too. If even that does not fit, the nav scrolls on its own rather than pushing the
+            user menu off the bar. */}
+        <nav className="ml-auto flex min-w-0 items-center gap-0.5 overflow-x-auto" aria-label="Secondary">
           {LINKS.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
-              className={`flex items-center gap-1.5 whitespace-nowrap rounded-btn px-2.5 py-1.5 text-[13.5px] font-medium transition-colors ${
+              title={label}
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-btn px-2.5 py-1.5 text-[13.5px] font-medium transition-colors ${
                 path === href || path.startsWith(`${href}/`) ? "bg-white/15 text-white shadow-inset" : "text-lilac hover:bg-white/10 hover:text-white"
               }`}
             >
               <Icon size={16} aria-hidden />
-              {label}
+              <span className="max-[1599px]:sr-only">{label}</span>
             </Link>
           ))}
         </nav>
-        <UserMenu />
+        <div className="shrink-0">
+          <UserMenu />
+        </div>
       </div>
     </header>
   );
