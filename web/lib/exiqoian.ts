@@ -50,22 +50,24 @@ export const INTRO =
 const base = (projectId: string) => `/exiqoian/${projectId}`;
 
 // Every key carries the signed-in persona: profile, conversations and personas differ per user.
-export const useExiqoianProfile = (projectId: string | null) => {
+// `open`: the panel is open. Closed, it asks nothing: every project screen mounts it, and an API
+// call it made there would count against (or, signed out, redirect) a page that never used it.
+export const useExiqoianProfile = (projectId: string | null, open = true) => {
   const { user } = useAppState();
   return useQuery({
     queryKey: ["exiqoian", projectId, user, "profile"],
     queryFn: () => json<Profile>(`${base(projectId!)}/profile`),
-    enabled: !!projectId,
+    enabled: !!projectId && open,
     staleTime: 60_000,
   });
 };
 
-export const useConversations = (projectId: string | null) => {
+export const useConversations = (projectId: string | null, open = true) => {
   const { user } = useAppState();
   return useQuery({
     queryKey: ["exiqoian", projectId, user, "conversations"],
     queryFn: async () => (await json<{ conversations: Conversation[] }>(`${base(projectId!)}/conversations`)).conversations,
-    enabled: !!projectId,
+    enabled: !!projectId && open,
   });
 };
 

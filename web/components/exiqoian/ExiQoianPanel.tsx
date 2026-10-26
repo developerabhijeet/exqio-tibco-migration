@@ -44,8 +44,8 @@ export function ExiQoianPanel() {
   const { projectId, chatOpen, setChatOpen, user } = useAppState();
   const qc = useQueryClient();
   const projects = useProjects();
-  const profile = useExiqoianProfile(projectId);
-  const conversations = useConversations(projectId);
+  const profile = useExiqoianProfile(projectId, chatOpen);
+  const conversations = useConversations(projectId, chatOpen);
   const create = useCreateConversation(projectId);
   const remove = useDeleteConversation(projectId);
   const [activeId, setActiveId] = useState<string | null>(null);
