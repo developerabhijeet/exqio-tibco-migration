@@ -192,7 +192,7 @@ _DEFAULT_PATTERN = _field_pattern(SENSITIVE_FIELDS)
 # Credentials (X24): masked wherever the text goes, with no configuration. Same key/value and
 # element handling as the sensitive fields; "password" in prose has no separator, so it stays.
 CREDENTIAL_FIELDS = ("password", "passwd", "pwd", "secret", "client_secret", "api_key",
-                     "apikey", "token", "access_token", "accountkey", "sharedaccesskey",
+                     "apikey", "token", "access_token", "access_key", "accountkey", "sharedaccesskey",
                      "sharedaccesssignature")
 _CRED_PATTERN = _field_pattern(CREDENTIAL_FIELDS)
 _PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
@@ -208,18 +208,6 @@ _BEARER = re.compile(r"(?P<head>\b(?:bearer|basic)\s+)(?P<val>[A-Za-z0-9._~+/\-]
 # "token <credential>": a long value containing a digit, so "token expires" stays prose.
 _TOKEN_WORD = re.compile(r"(?P<head>\btoken\s+)(?=[A-Za-z0-9._~+/\-]*\d)"
                          r"(?P<val>[A-Za-z0-9._~+/\-]{12,}=*)", re.IGNORECASE)
-
-
-_CREDENTIAL = re.compile(r"(?i)\b(bearer|basic|token)(\s+)[A-Za-z0-9._~+/=-]{6,}")
-
-
-def mask_credentials(text: str) -> str:
-    """``text`` with the credential of an ``Authorization``-style value (``Bearer <token>``,
-    ``Basic <base64>``, ``token <pat>``) masked: logs carry them in headers ``mask_sensitive``'s
-    ``key: value`` forms do not reach (the value after the scheme)."""
-    if not text:
-        return text
-    return _CREDENTIAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
 
 
 def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:

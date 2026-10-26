@@ -43,7 +43,7 @@ NO_URL = "the Atlassian connector has no Confluence URL (connectors.atlassian.co
 NO_SPACE = "set the Confluence space key in Settings → Connectors"
 LOCK_PREFIX = "confluence:"  # the advisory lock and the queue's dedupe key, per process
 LOCK_BUSY_DELAY_S = 2.0
-DEFAULT_ITERATION = 1  # until iterations exist (sub-project 6)
+DEFAULT_ITERATION = 1  # a design or build from before iterations (sub-project 6)
 
 
 def dedupe_key(process_id: str, create_again: bool) -> str:
@@ -84,7 +84,8 @@ async def page_context(session: AsyncSession, proc: Process) -> PageContext:
                 "spec_hash": g.spec_hash, "design_hash": g.design_hash, "build_hash": g.build_hash,
                 "evidence_hash": g.evidence_hash} for g in gates],
         build=({"id": build.id, "status": build.status, "build_hash": build.build_hash} if build else None),
-        stack=str((build.stack if build else None) or record.get("stack") or "dotnet"), iteration=DEFAULT_ITERATION,
+        stack=str((build.stack if build else None) or record.get("stack") or "dotnet"),
+        iteration=int((build.iteration if build else None) or design.iteration or DEFAULT_ITERATION),
         figma=[{"name": (f.detail or {}).get("name") or f.remote_id, "url": f.remote_url} for f in figma])
 
 

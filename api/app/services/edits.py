@@ -36,8 +36,7 @@ from api.app.db import new_id
 from api.app.models import Build, BuildFile, DesignRecord, EditSet, InfraAsset, Iteration, Process
 from api.app.services import gates as gate_svc
 from api.app.services import iterations as iteration_svc
-from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files
-from api.app.services.build_tree import download_excluded as stack_download_excluded
+from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files, download_excluded
 from api.app.services.uploads import (
     UploadError,
     UploadTooLarge,
@@ -56,12 +55,6 @@ DEFAULT_STACK = "dotnet"
 
 def build_stack(build: Build) -> str:
     return getattr(build, "stack", None) or DEFAULT_STACK
-
-
-def download_excluded(build: Build) -> frozenset[str]:
-    """The folders a build's download (and the edit diff) leaves out: its stack's
-    ``download_excluded``."""
-    return stack_download_excluded(build.stack)
 
 
 def text_sha256(data: bytes) -> str:
@@ -249,13 +242,18 @@ def check_archive(archive: Path, dest: Path, max_bytes: int) -> None:
             raise UploadTooLarge("upload is larger than the configured limit")
 
 
+#: The root build file of a non-.NET stack (Java, Go, Python); .NET has its ``.sln``.
+STACK_ROOT_FILES = frozenset({"pom.xml", "go.mod", "pyproject.toml"})
+
+
 def _tree_root(dest: Path) -> Path:
-    """The extracted build: the single top folder when it holds the build (its manifest or a
-    solution file), else ``dest``. A zip of one sub-folder such as ``src/`` is not shifted."""
+    """The extracted build: the single top folder when it holds the build (its manifest, a
+    solution file or a stack's root build file), else ``dest``. A zip of one sub-folder such as ``src/`` is not shifted."""
     top = single_root(dest) if dest.is_dir() else ""
     if top:
         folder = dest / top
-        if (folder / BASELINE_NAME).is_file() or any(p.suffix == ".sln" for p in folder.iterdir() if p.is_file()):
+        if (folder / BASELINE_NAME).is_file() or any(p.suffix == ".sln" or p.name in STACK_ROOT_FILES
+                                                     for p in folder.iterdir() if p.is_file()):
             return folder
     return dest
 
@@ -286,7 +284,7 @@ def baseline_hashes(build: Build, rows: list[BuildFile]) -> dict[str, str]:
     content, written with ``\n`` line endings)."""
     root = Path(build.output_dir) if build.output_dir else None
     if root is not None and root.is_dir():
-        return tree_hashes(root, download_excluded(build))
+        return tree_hashes(root, download_excluded(build.stack))
     return {r.path: r.sha256 for r in rows}
 
 
@@ -358,7 +356,7 @@ async def _edit_set_for_root(session: AsyncSession, edit_id: str, root: Path, bu
     if build.status in ("queued", "running"):
         raise EditRefused("the baseline build has not finished")
     rows = list((await session.scalars(select(BuildFile).where(BuildFile.build_id == build.id))).all())
-    excluded = download_excluded(build)
+    excluded = download_excluded(build.stack)
     baseline = await asyncio.to_thread(baseline_hashes, build, rows)
     # a repository branch keeps the repository's own files (README, LICENSE, .github/) beside the build
     ignore = repository_kept if kind == "repo" else None
@@ -450,7 +448,7 @@ async def load_edit_build(session: AsyncSession, build: Build) -> EditBuild:
         infra_paths=frozenset(infra), model_written=frozenset(repaired_paths(baseline)),
         baseline_root=root if root is not None and root.is_dir() else None, edited_root=edited,
         infra_only=iteration is not None and iteration.resume_phase == "infra",
-        excluded=download_excluded(baseline if baseline is not None else build),
+        excluded=download_excluded((baseline or build).stack),
         baseline_design_hash=baseline.design_hash if baseline is not None else None,
         baseline_spec_hash=baseline.spec_hash if baseline is not None else None,
         baseline_files=[{"path": r.path, "origin": r.origin, "sha256": r.sha256, "size": r.size,

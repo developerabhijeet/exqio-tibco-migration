@@ -44,7 +44,7 @@ from api.app.services import edits as edits_svc
 from api.app.services import gates as gate_svc
 from api.app.services import github_push as github_push_svc
 from api.app.services import uploads
-from api.app.services.build_tree import DOWNLOAD_EXCLUDED, export_note
+from api.app.services.build_tree import download_excluded, export_note
 from engine.child_env import child_env
 
 if TYPE_CHECKING:
@@ -401,7 +401,7 @@ async def push_build(session: AsyncSession, sessionmaker, settings: Settings, ro
     gh = await github(session, settings)
     root = Path(build.output_dir)
     extras = {github_push_svc.EXPORT_NOTE: export_note(build, proc).encode(),
-              edits_svc.BASELINE_NAME: edits_svc.baseline_file(build, proc, root, DOWNLOAD_EXCLUDED)}
+              edits_svc.BASELINE_NAME: edits_svc.baseline_file(build, proc, root, download_excluded(build.stack))}
     lease = await known_head(session, row, branch)
     async with try_advisory_lock(sessionmaker, github_push_svc.dedupe_key(build.id, repo, branch)) as locked:
         if not locked:
@@ -412,7 +412,7 @@ async def push_build(session: AsyncSession, sessionmaker, settings: Settings, ro
         commit = await _audited(session, actor, "push", target, row.project_id, row.process_id,
                                 lambda: gh.push_build(root, repo, branch, message,
                                                       base_branch=base_name if base_exists else None,
-                                                      extra_files=extras, excluded=DOWNLOAD_EXCLUDED,
+                                                      extra_files=extras, excluded=download_excluded(build.stack),
                                                       lease=lease, mirror=True),
                                 repo=repo, branch=branch, build_id=build.id, iteration=build.iteration)
     out: dict[str, Any] = {"branch": branch, "commit": commit, "pull_request": None}

@@ -129,9 +129,16 @@ def _conflict_record(solution: GeneratedSolution, path: str, text: str) -> str:
     return record
 
 
-def _same_code(a: str, b: str) -> bool:
-    """Equal but for layout: the baseline folder went through ``dotnet format`` and a fresh
-    generation has not, so indentation and line breaks alone are not a generated change."""
+#: Files whose whitespace is meaning (Python blocks, YAML nesting, Makefile tabs): compared exactly.
+WHITESPACE_SIGNIFICANT = (".py", ".yml", ".yaml", "Makefile", ".mk")
+
+
+def _same_code(a: str, b: str, path: str = "") -> bool:
+    """Equal but for layout: the baseline folder went through the stack's formatter and a fresh
+    generation has not, so indentation and line breaks alone are not a generated change, except
+    in a file where whitespace is meaning (:data:`WHITESPACE_SIGNIFICANT`), compared line by line."""
+    if path.endswith(WHITESPACE_SIGNIFICANT):
+        return a.splitlines() == b.splitlines()
     return _WS.sub("", a) == _WS.sub("", b)
 
 
@@ -164,7 +171,7 @@ def _modified(solution: GeneratedSolution, base_root: Path | None, path: str, or
         _write(solution, path, theirs)
         return MergeResult(path=path, outcome="kept", detail="no longer generated: edit kept as uploaded")
     texts = [_text(b) for b in (base, ours, theirs)]
-    unchanged = _same_code(texts[0], texts[1]) if texts[0] is not None and texts[1] is not None else ours == base
+    unchanged = _same_code(texts[0], texts[1], path) if texts[0] is not None and texts[1] is not None else ours == base
     if unchanged:
         _write(solution, path, theirs)  # the generation did not move: the edit verbatim
         return MergeResult(path=path, outcome="kept")

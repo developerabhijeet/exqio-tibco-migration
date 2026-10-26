@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from engine.agents.provider import mask_credentials, mask_sensitive
+from engine.agents.provider import mask_sensitive
 from engine.memory.model import MemNode, MemRel, ScopedDelta
 from engine.memory.projectors.build import STACK
 from engine.memory.projectors.util import MESSAGE_MAX, clean, error_node
@@ -53,14 +53,10 @@ class IterationIngest(BaseModel):
     stack: str = STACK
 
 
-#: Field names masked on top of the write path's own masking (it masks ``SENSITIVE_FIELDS`` only):
-#: requirements and logs are free text people paste secrets into.
-SECRET_FIELDS = ("password", "pwd", "secret", "token", "api_key", "access_key", "authorization")
-
-
 def secret_free(text: str) -> str:
-    # the credential first: masking the ``authorization`` field would hide the scheme it follows
-    return mask_sensitive(mask_credentials(text or ""), SECRET_FIELDS)
+    """Requirements and logs are free text people paste secrets into: the shared masking (X24:
+    sensitive fields and every credential form) before the text reaches memory."""
+    return mask_sensitive(text or "")
 
 
 def requirement_uid(ir_id: str, n: int) -> str:

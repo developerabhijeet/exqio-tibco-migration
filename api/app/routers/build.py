@@ -154,8 +154,8 @@ _export_note = export_note  # the name earlier callers and tests import
 
 
 def _zip_solution(root: Path, note: str | None = None,
-                  baseline: Callable[[dict[str, str]], dict[str, Any]] | None = None,
-                  excluded: Iterable[str] = DOWNLOAD_EXCLUDED) -> bytes:
+                  excluded: Iterable[str] = DOWNLOAD_EXCLUDED,
+                  baseline: Callable[[dict[str, str]], dict[str, Any]] | None = None) -> bytes:
     """The shipped files of ``root`` as a zip, with ``note`` as ``EXPORTED_FROM.md`` and, when
     ``baseline`` is given, ``EXIQO_BASELINE.json``: ``baseline(files)`` where ``files`` maps every
     zipped path (the note and the manifest aside) to the ``text_sha256`` of the bytes zipped."""
@@ -190,7 +190,7 @@ async def download(build_id: str, session: SessionDep) -> Response:
     proc = await session.get(Process, build.process_id)
     note = export_note(build, proc)
     data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note,
-                                   partial(baseline_manifest, build, proc), download_excluded(build.stack))
+                                   download_excluded(build.stack), partial(baseline_manifest, build, proc))
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", proc.name) if proc and proc.name else "build"
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{stem}-{build_id[:12]}.zip"'})
