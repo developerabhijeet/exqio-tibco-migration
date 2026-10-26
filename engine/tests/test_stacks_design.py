@@ -359,3 +359,16 @@ def test_plan_contracts_takes_the_stack_naming(gmf_app):
         assert plan.namespace.startswith("gmfcredit.") and plan.file.endswith(".x")
         assert plan.record_names == neutral[cid].record_names
     assert len({p.file for p in other.values()}) == len(other)
+
+
+def test_gmf_fixture_source_paths_are_relative_so_goldens_ignore_the_checkout(gmf_processes):
+    from engine.ir.spec_hash import spec_hash
+
+    proc = gmf_processes[DFR]
+    assert not Path(proc.source_path).is_absolute()
+    here = spec_hash(proc.model_dump(mode="json"), [], [])
+    moved = proc.model_copy(update={"source_path": proc.source_path})  # same relative path, any checkout
+    assert spec_hash(moved.model_dump(mode="json"), [], []) == here
+    # source_path is part of the identity (production semantics unchanged): an absolute prefix moves the hash
+    elsewhere = proc.model_copy(update={"source_path": "/other/checkout/" + proc.source_path})
+    assert spec_hash(elsewhere.model_dump(mode="json"), [], []) != here

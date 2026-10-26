@@ -110,7 +110,7 @@
     }
   ],
   "decisions": [],
-  "design_hash": "58eef3cf77467c1e230a49a4528615fbfeb32f6926e1aeec3ab416e1748bddbf",
+  "design_hash": "866df318d071abde5d848d9dc0cc077ab6f859485a481405f97389ce0359c9b0",
   "expected_differences": [],
   "mapping": [
     {
@@ -481,7 +481,7 @@
       }
     ]
   },
-  "spec_hash": "47500ee3da939fb1f73d7281a15240a15a7c74315e5b925c303148dbfb1f3d98",
+  "spec_hash": "b28eb1f27a0ded4e08db5b49beec66805c72b7134b4c39afa2ab2d32bb944122",
   "views": {
     "classes": [
       {

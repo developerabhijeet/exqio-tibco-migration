@@ -115,7 +115,14 @@ def hand_rules() -> "dict[str, list[Rule]]":
 @pytest.fixture(scope="module")
 def gmf_apps():
     from engine.tibco_parser.scanner import scan_folder
-    return {a.id: a for a in scan_folder(GMF).applications}
+    apps = {a.id: a for a in scan_folder(GMF).applications}
+    # scan_folder records absolute paths, and source_path is inside the spec hash (and so the design
+    # hash and every golden that carries one): make it relative to the samples root so a golden does
+    # not depend on where the checkout lives.
+    for app in apps.values():
+        for proc in app.processes:
+            proc.source_path = Path(proc.source_path).relative_to(GMF).as_posix()
+    return apps
 
 
 @pytest.fixture(scope="module")
