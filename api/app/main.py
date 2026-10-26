@@ -48,6 +48,7 @@ from api.app.routers import (
     system,
     verify,
 )
+from api.app.routers import memory as memory_router
 from api.app.routers import settings as settings_router
 from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
@@ -181,7 +182,7 @@ def _create_api(settings: Settings) -> FastAPI:
                        allow_methods=["*"], allow_headers=["*"])
     # oidc: a signed-in user with a role for everything but the public routes (dev: a no-op)
     guarded = [Depends(require_signed_in)]
-    for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build):
+    for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build, memory_router):
         app.include_router(module.router, dependencies=guarded)
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
     for module in (verify, infra, readiness):

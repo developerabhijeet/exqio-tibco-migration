@@ -183,6 +183,11 @@ class MemoryGraph:
             await (await session.run(cypher.META_REPLACE, value=backend)).consume()
         return backend
 
+    @property
+    def embedding_backend(self) -> str:
+        """The active embedding backend's name (what new vectors are made with)."""
+        return embeddings.backend_name()
+
     # MemoryRetriever: hybrid search (engine.memory.search) as a method.
     retrieve = hybrid
 

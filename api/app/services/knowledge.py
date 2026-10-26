@@ -126,6 +126,10 @@ class Knowledge:
             log.exception("memory read failed")
             raise KnowledgeUnavailable(f"memory unavailable: {type(exc).__name__}") from exc
 
+    async def read(self, work: Callable[[MemoryGraph], Awaitable[T]]) -> T:
+        """Run ``work`` on the memory graph; failures read as ``KnowledgeUnavailable``."""
+        return await self._read(work)
+
     # ------------------------------------------------------------ reads
     async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[MemoryItem]:
         """The ``k`` best current ``Memory`` nodes for ``query`` (obsolete ones left out)."""
