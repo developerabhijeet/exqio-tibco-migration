@@ -66,13 +66,6 @@ _NOT_A_DECISION = "A recommendation, not a decision: the architect decides at G3
 
 
 # ------------------------------------------------------------------- helpers
-def _ident(name: str, fallback: str = "Step") -> str:
-    p = pascal(name)
-    if not p:
-        return fallback
-    return f"{fallback}{p}" if p[0].isdigit() else p
-
-
 def _find_resource(app: Application, ref: Any) -> Resource | None:
     if not isinstance(ref, str) or not ref:
         return None
@@ -140,14 +133,15 @@ class _Ctx:
         self.p = process
         self.naming = naming
         self.app = app
-        self.app_name = _ident(app.id, "App")
-        self.proc_name = _ident(process.name, "Process")
-        self.module = _ident(process.module or app.id, "Module")
+        # Placeholders and keys come from the stack's naming, which takes the raw TIBCO words.
+        self.app_name = naming.type_name(app.id, "App")
+        self.proc_name = naming.type_name(process.name, "Process")
+        self.module_words = process.module or app.id
         self.starter = process.starter
         self.starter_kind = process.starter.kind if process.starter else None
         acts = {a.id: a for a in process.activities}
         st_act = acts.get(process.starter.activity_id) if process.starter else None
-        self.starter_name = _ident(st_act.name if st_act else "Execute")
+        self.starter_name = naming.type_name(st_act.name if st_act else "Execute", "Step")
         self.calls = {c.activity_id: c.target_process for c in process.calls}
         # node id -> [(rule or finding id, citation)] in input order
         self.rule_cits: dict[str, list[tuple[str, Citation]]] = defaultdict(list)
@@ -179,25 +173,27 @@ class _Ctx:
         return self.naming.layer_folder(kind, self.app_name)
 
     def values(self, act: Activity | None, name: str) -> dict[str, str]:
+        """The ``patterns.TEMPLATE_KEYS`` placeholders of a row, each named by the stack's naming."""
+        type_name = self.naming.type_name
         resource = name
-        fault = _ident(name)
+        fault_words = name
         target = ""
         destination = ""
         if act is not None:
             res = _find_resource(self.app, act.config.get("resource_ref"))
             raw = res.name if res else str(act.config.get("resource_ref") or name).rsplit(".", 1)[-1]
-            resource = _ident(raw)
+            resource = type_name(raw, "Step")
             if resource.endswith("Client") and len(resource) > len("Client"):
                 resource = resource[: -len("Client")]
             if act.config.get("fault_name"):
-                fault = _ident(str(act.config["fault_name"]))
+                fault_words = str(act.config["fault_name"])
             tgt = self.calls.get(act.id) or act.config.get("sub_process") or act.config.get("subprocess") or ""
-            target = _ident(str(tgt).rsplit(".", 1)[-1]) if tgt else ""
+            target = type_name(str(tgt).rsplit(".", 1)[-1], "Step") if tgt else ""
             destination = _destination(act)
-        exception = fault if fault.endswith("Exception") else f"{fault}Exception"
-        return {"app": self.app_name, "process": self.proc_name, "activity": _ident(name),
-                "starter": self.starter_name, "resource": resource, "fault": fault,
-                "exception": exception, "target": target, "destination": destination}
+        return {"app": self.app_name, "process": self.proc_name, "activity": type_name(name, "Step"),
+                "starter": self.starter_name, "resource": resource, "fault": type_name(fault_words, "Step"),
+                "exception": self.naming.exception_name(fault_words), "target": target,
+                "destination": destination}
 
     def row(self, node_id: str, name: str, ctype: str, pattern: str, spec: PatternSpec,
             act: Activity | None, origin: str | None = None) -> MappingRow:
@@ -288,8 +284,11 @@ def _substvar_module(name: str, source_path: str) -> tuple[str | None, str]:
 
 
 _ENGINE_VAR = re.compile(r"^BW\.", re.IGNORECASE)
-_ENGINE_REASON = ("BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET "
-                  "equivalent, so it is not written to appsettings.json.")
+
+
+def _engine_reason(naming: StackNaming) -> str:
+    return ("BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no "
+            f"{naming.platform} equivalent, so it is not written to {naming.config_file}.")
 
 
 def _config(ctx: _Ctx, resources: list[Resource]) -> tuple[list[ConfigMap], list[IgnoredConfig]]:
@@ -302,18 +301,18 @@ def _config(ctx: _Ctx, resources: list[Resource]) -> tuple[list[ConfigMap], list
         precedence = 1 if sv.name.startswith("//") else 0  # application level overrides module level
         if name not in chosen or precedence > chosen[name][0]:
             chosen[name] = (precedence, sv.value)
-    ignored = [IgnoredConfig(substvar=name, reason=_ENGINE_REASON)
+    reason = _engine_reason(ctx.naming)
+    ignored = [IgnoredConfig(substvar=name, reason=reason)
                for name in sorted(chosen) if _ENGINE_VAR.match(name)]
-    rows = [ConfigMap(substvar=name, key=ctx.naming.config_key(ctx.module, _ident(name, "Var")),
+    rows = [ConfigMap(substvar=name, key=ctx.naming.config_key(ctx.module_words, name),
                       secret=looks_secret(name, value))
             for name, (_, value) in sorted(chosen.items()) if not _ENGINE_VAR.match(name)]
     for res in resources:
-        rname = _ident(res.name, "Resource")
         for fld in res.masked_fields:
-            key = ctx.naming.config_key(ctx.module, f"{rname}:{_ident(fld, 'Setting')}")
+            key = ctx.naming.config_key(ctx.module_words, res.name, fld)
             rows.append(ConfigMap(substvar=f"resource:{res.name}.{fld}", key=key, secret=True))
         if res.kind == "jdbc":
-            rows.append(ConfigMap(substvar=f"resource:{res.name}.jdbc_url", key=f"ConnectionStrings:{rname}",
+            rows.append(ConfigMap(substvar=f"resource:{res.name}.jdbc_url", key=ctx.naming.connection_key(res.name),
                                   secret=True))
     return rows, ignored
 
@@ -467,7 +466,7 @@ def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
             "rest": ("Client", f"{str(c.get('verb') or '').upper()} {c.get('path') or ''}".strip()),
             "http": ("Client", f"HTTP {c.get('resource_path') or ''}".strip()),
             "soap": ("Client", f"SOAP {c.get('operation') or p.name}"),
-            "jms": ("ServiceBus", str(c.get("destination") or "")),
+            "jms": (ctx.naming.messaging_actor, str(c.get("destination") or "")),
             "timer": ("Scheduler", str(c.get("interval") or c.get("start") or "schedule")),
         }[kind]
         steps.append(SequenceStep(from_=actor, to=starter_row.class_name, label=f"{label} ({st.activity_id})"))
@@ -493,33 +492,18 @@ def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
 
 
 # ----------------------------------------------------------------- layout
-def _dotnet_scaffold(ctx: _Ctx, files: dict[str, set[str]], patterns_used: set[str]) -> None:
-    """The files the .NET generator writes next to the mapped ones (project files, host, tests)."""
-    pn = ctx.proc_name
-    for kind in _PROJECT_KINDS:
-        files[kind].add(f"{ctx.project(kind)}.csproj")
-    files["api"] |= {"Program.cs", "appsettings.json"}
-    files["core"] |= {"Contracts/TibcoPathAttribute.cs", f"Services/{pn}Service.cs"}
-    files["tests"] |= {f"{pn}RulesTests.cs", f"{pn}BranchTests.cs", f"{pn}ScenarioTests.cs"}
-    if patterns_used & set(_JMS_TYPES):
-        files["core"].add("Messaging/IMessageBus.cs")
-        files["infrastructure"] |= {"Messaging/ServiceBusMessageBus.cs", "Messaging/InMemoryMessageBus.cs"}
-    if "throw" in patterns_used:
-        files["api"].add("Errors/FaultExceptionHandler.cs")
-    if patterns_used & {"jdbc.query", "jdbc.update", "jdbc.call"}:
-        files["tests"].add("TestDatabase.cs")
-
-
-def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap], stack: str) -> SolutionLayout:
-    """Projects and files: the mapped rows and contracts for every stack, plus the .NET scaffold for
-    .NET (another stack's generator owns its own scaffold)."""
+def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap]) -> SolutionLayout:
+    """Projects and files: the mapped rows and contracts, plus the files the stack's generator
+    writes next to them (``StackNaming.layout_scaffold``)."""
     files: dict[str, set[str]] = {k: set() for k in _PROJECT_KINDS}
     files["core"] |= {cm.file for cm in contract_maps}
     by_project = {ctx.project(k): k for k in _PROJECT_KINDS}
     for r in rows:
         files[by_project[r.project]].add(r.file)
-    if stack == DEFAULT_STACK:
-        _dotnet_scaffold(ctx, files, {r.pattern for r in rows})
+    scaffold = ctx.naming.layout_scaffold({k: ctx.project(k) for k in _PROJECT_KINDS}, ctx.proc_name,
+                                          {r.pattern for r in rows})
+    for kind, extra in scaffold.items():
+        files[kind] |= extra
     return SolutionLayout(name=ctx.app_name, projects=[
         ProjectLayout(name=ctx.project(k), kind=k, files=sorted(files[k])) for k in _PROJECT_KINDS])
 
@@ -574,7 +558,7 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
             act = next((a for a in process.activities if a.id == r.activity_id), None)
             native = act.native_type if act else r.canonical_type
             open_questions.append(OpenQuestion(
-                question=f"No .NET pattern for native type {native} (step {r.activity_id}).",
+                question=f"No {naming.platform} pattern for native type {native} (step {r.activity_id}).",
                 recommendation="Add a catalog mapping before generation; until then the builder drafts "
                                f"the method and a reviewer checks it. {_NOT_A_DECISION}"))
         if r.pattern == "call.process" and r.activity_id not in ctx.calls:
@@ -611,7 +595,7 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
         process_id=process.id,
         spec_hash=spec_hash or _spec_hash(process, rules, findings),
         stack=stack,
-        solution=_layout(ctx, rows, contract_maps, stack),
+        solution=_layout(ctx, rows, contract_maps),
         mapping=rows,
         contracts=contract_maps,
         config=config,

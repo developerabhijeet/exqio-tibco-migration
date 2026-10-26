@@ -96,6 +96,9 @@ class ContractProp:
     child: str | None = None  # the nested record lineage walks into, when the type is a record
     enum_values: list[str] = field(default_factory=list)  # the values when ``type_ref`` is an enum
     tibco_path: str = ""  # lineage: the record's path plus ``path_part``
+    # The element, attribute or JSON property name as the contract spells it, before any casing:
+    # what a stack's naming cases its own way (``name`` is the PascalCase .NET-era identifier).
+    raw_name: str = ""
 
 
 @dataclass
@@ -353,10 +356,10 @@ class _XsdBuilder:
                             props += self._ct_props(self.cts[local], owner, seen_bases | {local})
                         elif kind == "simpleContent":
                             t, _ = self._type_ref(d, base, owner)
-                            props.append(ContractProp("Value", "value", t, True, False, ""))
+                            props.append(ContractProp("Value", "value", t, True, False, "", raw_name="value"))
                     elif kind == "simpleContent" and base:
                         t, _ = self._type_ref(d, base, owner)
-                        props.append(ContractProp("Value", "value", t, True, False, ""))
+                        props.append(ContractProp("Value", "value", t, True, False, "", raw_name="value"))
                     props += self._ct_props(d, owner, seen_bases)
         return props
 
@@ -386,7 +389,7 @@ class _XsdBuilder:
             name = local
             target = self.elements.get(local, el)
         t, child = self._element_type(target, name, owner)
-        return ContractProp(ident(name), _camel(name), t, required, repeated, name, child)
+        return ContractProp(ident(name), _camel(name), t, required, repeated, name, child, raw_name=name)
 
     def _element_type(self, el, name: str, owner: str) -> tuple[str, str | None]:
         parent = el.getparent()
@@ -418,7 +421,8 @@ class _XsdBuilder:
         else:
             sts = _xs_children(at, "simpleType")
             t = self._inline_st(sts[0], name, owner) if sts else "string"
-        return [ContractProp(ident(name), _camel(name), t, at.get("use") == "required", False, f"@{name}")]
+        return [ContractProp(ident(name), _camel(name), t, at.get("use") == "required", False, f"@{name}",
+                             raw_name=name)]
 
     def build(self) -> _Draft:
         for el in self.global_order:
@@ -522,7 +526,7 @@ class _JsonBuilder:
         required = set(schema.get("required") or [])
         for name, ps in (schema.get("properties") or {}).items():
             t, child, repeated = self._type(ps if isinstance(ps, dict) else {}, name, owner)
-            props.append(ContractProp(ident(name), name, t, name in required, repeated, name, child))
+            props.append(ContractProp(ident(name), name, t, name in required, repeated, name, child, raw_name=name))
         return props
 
     def _type(self, ps: dict[str, Any], name: str, owner: str) -> tuple[str, str | None, bool]:
@@ -637,11 +641,12 @@ def plan_contracts(app_name: str, contracts: list[Contract], naming: StackNaming
     ``naming.contract_target(app_name, module, stem)`` gives each contract's namespace and file.
     Within a namespace contracts are taken XSD first, then WSDL, then JSON, each by id; a record
     name an earlier contract already emits is renamed with a suffix (``Json``, ``Wsdl``, or the XSD
-    stem). Two contracts never share a file path.
+    stem). Two contracts never share a file path, compared case-insensitively: a checkout on a
+    case-insensitive file system (macOS, Windows) would otherwise hold one file for both.
     """
     plans: dict[str, ContractPlan] = {}
     owners: dict[str, dict[str, str]] = {}  # namespace -> record name -> contract id
-    files: set[str] = set()
+    files: set[str] = set()  # lower-cased
     for c in sorted(contracts, key=lambda c: (contract_module(c), _KIND_RANK.get(c.kind, 9), c.id)):
         ns, file = naming.contract_target(app_name, contract_module(c), stem(c))
         owned = owners.setdefault(ns, {})
@@ -649,12 +654,12 @@ def plan_contracts(app_name: str, contracts: list[Contract], naming: StackNaming
         natural = record_names(c)
         names = record_names(c, reserved)
         collisions = {n: e for n, e in zip(natural, names, strict=False) if n in reserved and n != e}
-        if file in files:
+        if file.lower() in files:
             natural_file, n = file, 2
             file = _with_suffix(natural_file, suffix(c))
-            while file in files:
+            while file.lower() in files:
                 file, n = _with_suffix(natural_file, f"{suffix(c)}{n}"), n + 1
-        files.add(file)
+        files.add(file.lower())
         plans[c.id] = ContractPlan(
             contract_id=c.id, module=contract_module(c), namespace=ns, file=file, record_names=names,
             reserved=reserved, collisions=collisions,

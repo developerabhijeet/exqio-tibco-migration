@@ -1,6 +1,7 @@
 """Target stack: project field, Settings default, ``GET /stacks``, the migration."""
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import sys
@@ -165,10 +166,12 @@ async def test_design_job_builds_for_the_project_stack(client, app, monkeypatch)
     seen: list[str] = []
     real = design_svc.build_design_skeleton
 
-    def spy(*args):
-        *rest, stack = args
-        seen.append(stack)
-        return real(*rest, "dotnet")
+    def spy(*args, **kwargs):  # however the job passes it, positionally or by name
+        bound = inspect.signature(real).bind(*args, **kwargs)
+        bound.apply_defaults()
+        seen.append(bound.arguments["stack"])
+        bound.arguments["stack"] = "dotnet"
+        return real(*bound.args, **bound.kwargs)
 
     monkeypatch.setattr(design_svc, "build_design_skeleton", spy)
     r = await client.post(f"/processes/{proc_id}/design")

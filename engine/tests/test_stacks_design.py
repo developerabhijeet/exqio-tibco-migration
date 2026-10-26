@@ -21,7 +21,7 @@ from engine.dotnet_gen import csharp_contracts
 from engine.dotnet_gen.design import build_design_skeleton
 from engine.dotnet_gen.models import DesignRecord, compute_design_hash
 from engine.dotnet_gen.patterns import PATTERNS
-from engine.stacks import get_stack
+from engine.stacks import all_stacks, get_stack
 from engine.stacks.base import StackNaming
 from engine.tests.conftest import DFR, PROCESS_IDS
 
@@ -30,9 +30,13 @@ UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
 
 
 def _golden(name: str, actual: str, frozen: bool = False) -> str:
+    """The golden file's text; written only with ``UPDATE_GOLDEN=1`` (never for a frozen one), so a
+    missing golden fails instead of passing against itself."""
     path = GOLDEN / name
-    if (UPDATE and not frozen) or not path.exists():
+    if UPDATE and not frozen:
         path.write_text(actual, encoding="utf-8")
+    if not path.exists():
+        pytest.fail(f"golden file {name} is missing; write it with UPDATE_GOLDEN=1 and review it")
     return path.read_text(encoding="utf-8")
 
 
@@ -114,6 +118,143 @@ def test_dotnet_naming_members():
         "GmfCredit.Core.Contracts.DealerFunding", "Contracts/DealerFunding/FundingRequest.cs")
     assert naming.contract_target("GmfCredit", "", "Funding") == ("GmfCredit.Core.Contracts", "Contracts/Funding.cs")
     assert naming.config_key("DealerFunding", "DbUrl") == "Gmf:DealerFunding:DbUrl"
+    # raw words in, cased here
+    assert naming.config_key("dealerfunding", "GMF.DB.URL") == "Gmf:Dealerfunding:GmfDbUrl"
+    assert naming.config_key("dealerfunding", "GMF FundingDB", "password") == "Gmf:Dealerfunding:GmfFundingDB:Password"
+    assert naming.connection_key("GMF FundingDB") == "ConnectionStrings:GmfFundingDB"
+    assert naming.exception_name("DealerInactiveFault") == "DealerInactiveFaultException"
+    assert naming.exception_name("Timeout Exception") == "TimeoutException"
+    assert naming.file_name("lookup dealer") == "LookupDealer.cs"
+    assert naming.escape("class") == "@class" and naming.escape("Class") == "Class"
+    assert (naming.platform, naming.config_file, naming.messaging_actor) == (".NET", "appsettings.json", "ServiceBus")
+    scaffold = naming.layout_scaffold({"api": "A.Api", "core": "A.Core", "infrastructure": "A.Infrastructure",
+                                       "tests": "A.Tests"}, "Proc", {"jms.receive", "throw"})
+    assert "A.Api.csproj" in scaffold["api"] and "Errors/FaultExceptionHandler.cs" in scaffold["api"]
+    assert "Messaging/IMessageBus.cs" in scaffold["core"] and "TestDatabase.cs" not in scaffold["tests"]
+
+
+class SnakeNaming:
+    """A stand-in stack with Python-like conventions: the contract without any .NET in it."""
+
+    platform = "Snake"
+    config_file = "settings.toml"
+    messaging_actor = "Broker"
+    reserved = frozenset({"class", "def"})
+
+    @staticmethod
+    def _words(text: str) -> list[str]:
+        import re
+        return [w.lower() for w in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", text)]
+
+    def escape(self, name: str) -> str:
+        return f"{name}_" if name in self.reserved else name
+
+    def type_name(self, words: str, fallback: str = "Value") -> str:
+        out = "".join(w.capitalize() for w in self._words(words))
+        if not out:
+            return fallback
+        return f"{fallback}{out}" if out[0].isdigit() else out
+
+    def method_name(self, prefix: str, words: str) -> str:
+        name = "_".join(self._words(prefix) + self._words(words)) or "execute"
+        return self.escape(f"step_{name}" if name[0].isdigit() else name)
+
+    def file_name(self, words: str) -> str:
+        return "_".join(self._words(words)) + ".snk"
+
+    def exception_name(self, words: str) -> str:
+        return self.type_name(words, "Step") + "Error"
+
+    def config_key(self, module: str, *names: str) -> str:
+        return "_".join(["GMF", *("_".join(self._words(n)).upper() for n in (module, *names))])
+
+    def connection_key(self, resource: str) -> str:
+        return "DB_" + "_".join(self._words(resource)).upper()
+
+    def pattern_paths(self, pattern: str) -> tuple[str, str, str]:
+        PATTERNS[pattern]  # KeyError for an unknown pattern, as the contract says
+        return f"{pattern.replace('.', '_')}/{{process}}.snk", "{process}" + pattern.title().replace(".", ""), \
+            "run_{activity}"
+
+    def layer_folder(self, kind: str, app: str) -> str:
+        return f"{app.lower()}/{kind}"
+
+    def contract_target(self, app: str, module: str, stem: str) -> tuple[str, str]:
+        return f"{app.lower()}.contracts", f"contracts/{self.file_name(stem)}"
+
+    def layout_scaffold(self, projects: dict[str, str], process: str,
+                        patterns: set[str]) -> dict[str, set[str]]:
+        return {"core": {f"{process}.main.snk"}}
+
+
+def _naming_contract(naming) -> None:
+    """What every stack's naming must do, whatever its casing (``StackNaming``)."""
+    assert isinstance(naming, StackNaming)
+    for words in ("Lookup Dealer", "LookupDealer", "lookup-dealer", "GMF.DB.URL", "9lives", "class"):
+        t = naming.type_name(words)
+        assert t and t.isidentifier() and not t[0].isdigit() and t not in naming.reserved
+        m = naming.method_name("", words)
+        assert m and m.lstrip("@").isidentifier() and m not in naming.reserved
+        assert naming.file_name(words) and "/" not in naming.file_name(words)
+        assert naming.exception_name(words).isidentifier()
+    assert naming.type_name("", "Fallback") == "Fallback"
+    assert naming.method_name("", "") and naming.method_name("Execute", "") == naming.method_name("", "Execute")
+    assert naming.method_name("Handle", "funding event") != naming.method_name("", "funding event")
+    assert naming.type_name("Lookup Dealer") == naming.type_name("lookup dealer") == naming.type_name("LookupDealer")
+    for word in naming.reserved:
+        assert naming.escape(word) != word and naming.escape(naming.escape(word)) not in naming.reserved
+    assert naming.config_key("dealerfunding", "DB_URL") != naming.config_key("dealerfunding", "DB_USER")
+    assert naming.connection_key("FundingDB")
+    assert all(isinstance(getattr(naming, a), str) and getattr(naming, a)
+               for a in ("platform", "config_file", "messaging_actor"))
+    for name in PATTERNS:
+        assert all(isinstance(x, str) for x in naming.pattern_paths(name))
+    with pytest.raises(KeyError):
+        naming.pattern_paths("no.such.pattern")
+    kinds = ("api", "core", "infrastructure", "tests")
+    folders = [naming.layer_folder(k, naming.type_name("gmf.credit", "App")) for k in kinds]
+    assert len(set(folders)) == 4
+    scaffold = naming.layout_scaffold(dict(zip(kinds, folders, strict=True)), "Proc", set(PATTERNS))
+    assert set(scaffold) <= set(kinds)
+
+
+@pytest.mark.parametrize("key", [s.key for s in all_stacks()])
+def test_naming_contract_holds_for_every_registered_stack(key):
+    _naming_contract(get_stack(key).naming)
+
+
+def test_naming_contract_holds_for_a_stand_in_stack():
+    _naming_contract(SnakeNaming())
+
+
+def test_design_takes_every_name_from_the_stack(monkeypatch, gmf_app, gmf_processes, rules, findings, cards):
+    """No .NET string or casing leaks into another stack's skeleton: placeholders, keys, the broker,
+    the ignored-config reason and the scaffold all come from its naming."""
+    import engine.stacks as registry
+
+    class SnakeStack:
+        key = "python"
+        naming = SnakeNaming()
+
+    monkeypatch.setitem(registry._FACTORIES, "python", SnakeStack)
+    monkeypatch.delitem(registry._INSTANCES, "python", raising=False)
+    rec = build_design_skeleton(gmf_processes[DFR], gmf_app, rules[DFR], findings[DFR], cards[DFR], stack="python")
+    blob = json.dumps(rec.model_dump(mode="json"))
+    for dotnet in (".NET", "appsettings.json", "ServiceBus", "ConnectionStrings:", "Gmf:", ".cs\"", "Async\"",
+                   ".csproj"):
+        assert dotnet not in blob, dotnet
+    row = next(r for r in rec.mapping if r.activity_id == "LookupDealer" and r.pattern == "jdbc.query")
+    assert (row.file, row.class_name, row.method) == ("jdbc_query/DealerFundingRequest.snk",
+                                                      "DealerFundingRequestJdbcQuery", "run_LookupDealer")
+    assert row.project == "gmfcredit/infrastructure"
+    throw = next(r for r in rec.mapping if r.pattern == "throw")
+    assert "{exception}" not in throw.file
+    assert rec.sequence[0].from_ == "Broker"
+    assert {c.key for c in rec.config} and all(c.key.startswith(("GMF_", "DB_")) for c in rec.config)
+    assert all("Snake" in i.reason and "settings.toml" in i.reason for i in rec.config_ignored)
+    core = next(p for p in rec.solution.projects if p.kind == "core")
+    assert "DealerFundingRequest.main.snk" in core.files
+    assert all(cm.file.startswith("contracts/") and cm.file.endswith(".snk") for cm in rec.contracts)
 
 
 # ---------------------------------------------------------------------- skeleton

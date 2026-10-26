@@ -103,11 +103,63 @@ class SourceLanguage(Protocol):
 
 @runtime_checkable
 class StackNaming(Protocol):
-    """Identifiers and paths of the stack (spec section 2): what the design record's names are."""
+    """Identifiers, paths and stack words of a design (spec section 2): what the record's names are.
 
-    def type_name(self, text: str) -> str: ...
+    The design passes RAW words, never pre-cased identifiers: an activity name as TIBCO spells it
+    (``"Lookup Dealer"``, ``"LookupDealer"``, ``"lookup-dealer"``), a process name, a resource name.
+    Each stack splits and cases them its own way, so one design code path serves every stack.
 
-    def method_name(self, prefix: str, text: str) -> str: ...
+    Contract (``tests/test_stacks_design.py::test_naming_contract`` runs it over every stack):
+
+    * ``type_name(words, fallback="Value")``: the stack's type identifier. Empty words give
+      ``fallback``; words that would start with a digit are prefixed with it.
+    * ``method_name(prefix, words)``: a method, the verb ``prefix`` joined before ``words``; empty
+      ``words`` give the prefix alone, both empty give the stack's ``execute``.
+    * ``file_name(words)``: the source file that holds type ``type_name(words)``, with extension.
+    * ``exception_name(words)``: the exception type a TIBCO fault named ``words`` is thrown as.
+    * ``config_key(module, *names)``: the configuration key of a setting, from raw words.
+    * ``connection_key(resource)``: the configuration key of a JDBC resource's connection string.
+    * ``reserved`` / ``escape(name)``: the stack's keywords, and an identifier made safe from them;
+      ``type_name`` and ``method_name`` already return escaped names.
+    * ``platform``, ``config_file``, ``messaging_actor``: words the design writes into its text
+      (open questions, ignored-config reasons, the sequence's message broker).
+    * ``pattern_paths``, ``layer_folder``, ``contract_target``, ``layout_scaffold``: where things go.
+
+    Per stack, for the activity ``Lookup Dealer`` (``method_name("", "Lookup Dealer")``); .NET is
+    implemented, the other rows are the targets Tasks 7, 12 and 14 implement:
+
+    ======  ======================  =====================  =========================  ==========================
+    stack   type_name               method_name            file_name                  config_key("dealerfunding", "DB_URL")
+    ======  ======================  =====================  =========================  ==========================
+    .NET    ``LookupDealer``        ``LookupDealerAsync``  ``LookupDealer.cs``        ``Gmf:Dealerfunding:DbUrl``
+    Java    ``LookupDealer``        ``lookupDealer``       ``LookupDealer.java``      ``gmf.dealerfunding.db-url``
+    Go      ``LookupDealer``        ``LookupDealer``       ``lookup_dealer.go``       ``GMF_DEALERFUNDING_DB_URL``
+    Python  ``LookupDealer``        ``lookup_dealer``      ``lookup_dealer.py``       ``GMF_DEALERFUNDING_DB_URL``
+    ======  ======================  =====================  =========================  ==========================
+
+    ``method_name("Execute", "")`` is ``ExecuteAsync`` / ``execute`` / ``Execute`` / ``execute``;
+    escaping: Java ``new`` -> ``new_``, Python ``class`` -> ``class_``, Go ``type`` -> ``type_``;
+    .NET PascalCase names never meet a C# keyword, and a lower-case one is written ``@name``.
+    """
+
+    platform: str  # ".NET", "Java", "Go", "Python"
+    config_file: str  # where configuration is written: "appsettings.json", "application.yml", ...
+    messaging_actor: str  # the broker in the sequence diagram: "ServiceBus"
+    reserved: frozenset[str]
+
+    def escape(self, name: str) -> str: ...
+
+    def type_name(self, words: str, fallback: str = "Value") -> str: ...
+
+    def method_name(self, prefix: str, words: str) -> str: ...
+
+    def file_name(self, words: str) -> str: ...
+
+    def exception_name(self, words: str) -> str: ...
+
+    def config_key(self, module: str, *names: str) -> str: ...
+
+    def connection_key(self, resource: str) -> str: ...
 
     def pattern_paths(self, pattern: str) -> tuple[str, str, str]: ...
 
@@ -115,7 +167,8 @@ class StackNaming(Protocol):
 
     def contract_target(self, app: str, module: str, stem: str) -> tuple[str, str]: ...
 
-    def config_key(self, module: str, name: str) -> str: ...
+    def layout_scaffold(self, projects: dict[str, str], process: str,
+                        patterns: set[str]) -> dict[str, set[str]]: ...
 
 
 @runtime_checkable
