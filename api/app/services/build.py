@@ -83,10 +83,12 @@ from engine.agents.reviewers import (
     HAND_REVIEW_MAX_BYTES,
     REVIEWERS,
     TEST_REVIEWER,
+    hand_review_suffixes,
     review_panel,
     reviewed_files,
     reviewed_test_files,
     skipped_hand_files,
+    unreviewed_hand_files,
 )
 from engine.agents.test_engineer import fill_test_bodies, placeholder_methods
 from engine.dotnet_gen import runner as dotnet_runner
@@ -688,6 +690,10 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     else:
         # without code the builder filled (or a person edited) there is nothing for the production reviewers
         reviewed_code = bool(filled_paths) or bool(hand & set(reviewed_files(solution, stack.key)))
+        not_source = unreviewed_hand_files(solution, stack.key)
+        if not_source:
+            await ctx.log("not sent to the review panel (hand edits that are not source files of the stack, "
+                          f"{', '.join(hand_review_suffixes(stack.key))}): " + ", ".join(not_source), tag="ai")
         too_large = skipped_hand_files(solution, stack.key)
         if too_large:
             await ctx.log(f"not sent to the review panel (hand edits over {HAND_REVIEW_MAX_BYTES // 1024} KB): "
@@ -896,8 +902,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                   f"({runtime}), Dockerfile, pipelines")
     infra_hand: set[str] = set()
     if edit is not None:
-        infra_files, infra_results = await asyncio.to_thread(apply_infra_edits, edit, solution.root,
-                                                             solution.name, infra_files, git)
+        infra_files, infra_results = await asyncio.to_thread(
+            apply_infra_edits, edit, solution.root, solution.name, infra_files, git,
+            edit.scaffold_changed(design_row.design_hash, row.spec_hash))
         infra_hand = hand_paths(infra_results)
         hand_results += infra_results
         await _log_hand_edits(ctx, infra_results, "infrastructure hand edits")
@@ -1049,15 +1056,17 @@ async def _log_hand_edits(ctx: JobContext, results: list[MergeResult], note: str
 
 
 def apply_infra_edits(edit: edits_svc.EditBuild, root: Path, name: str, infra_files: list[GenFile],
-                      git: str) -> tuple[list[GenFile], list[MergeResult]]:
+                      git: str, scaffold_changed: bool = False) -> tuple[list[GenFile], list[MergeResult]]:
     """The edit set's infrastructure changes merged into the fresh infrastructure generation (after
-    it, so the generator does not write over them)."""
+    it, so the generator does not write over them). ``scaffold_changed`` (the design or spec moved
+    since the baseline): a file already hand-edited in the baseline is kept and listed as a conflict
+    (X23), as the code files are."""
     changes = [c for c in edit.changes if edit.is_infra(c)]
     if not changes:
         return infra_files, []
     infra = GeneratedSolution(root=root, name=name, files=list(infra_files), build_hash="")
     results = apply_edits(infra, edit.baseline_root, edit.edited_root, changes, set(), git,
-                          model_written=edit.model_written)
+                          scaffold_changed=scaffold_changed, model_written=edit.model_written)
     return infra.files, results
 
 
@@ -1152,7 +1161,8 @@ async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, ed
     await ctx.log(f"{len(infra_files)} infrastructure file(s) generated")
     await ctx.stage(HAND_EDITS)
     git = await asyncio.to_thread(git_path)
-    infra_files, results = await asyncio.to_thread(apply_infra_edits, edit, out_dir, name, infra_files, git)
+    infra_files, results = await asyncio.to_thread(apply_infra_edits, edit, out_dir, name, infra_files, git,
+                                                   edit.scaffold_changed(design_hash, spec_hash))
     infra_hand = hand_paths(results)
     await _log_hand_edits(ctx, results, f"edit set {edit.edit_set_id[:12]}")
     await ctx.stage(STAGES[12])

@@ -260,3 +260,39 @@ def test_infra_change_follows_the_path_whatever_the_origin():                   
     assert infra_change(FileChange(path="RUN_LOCALLY.md", change="modified", origin="hand", sha256="0"),
                         frozenset({"RUN_LOCALLY.md"}))
     assert not infra_change(FileChange(path=AGENT_FILE, change="modified", origin="hand", sha256="0"))
+
+
+@pytest.mark.parametrize("redesigned", [False, True])
+def test_a_hand_edited_infra_file_after_a_redesign_is_a_conflict(tmp_path, redesigned):     # X23, infra
+    """An infra file a person already edited in the baseline (origin ``hand``) sits on the fresh
+    infrastructure generation: after a redesign it is kept and flagged, as the code files are."""
+    from api.app.services.edits import EditBuild, FileChange
+    from engine.dotnet_gen.generator import GenFile
+
+    baseline, edited, out = tmp_path / "base", tmp_path / "edited", tmp_path / "out"
+    for root, text in ((baseline, "FROM a\n# old hand\n"), (edited, "FROM a\n# old hand\n# again\n"),
+                       (out, "FROM b\n")):
+        root.mkdir()
+        (root / "Dockerfile").write_text(text)
+    edit = EditBuild(edit_set_id="e" * 12, baseline_build_id="b", baseline_root=baseline, edited_root=edited,
+                     infra_only=False, baseline_design_hash="d1", baseline_spec_hash="s",
+                     changes=[FileChange(path="Dockerfile", change="modified", origin="hand", sha256="0")])
+    _, results = build_svc.apply_infra_edits(edit, out, "Gmf", [GenFile(path="Dockerfile", content="FROM b\n",
+                                                                            origin="code")], "git",
+                                                 scaffold_changed=edit.scaffold_changed("d2" if redesigned else "d1", "s"))
+    assert [r.outcome for r in results] == (["conflict"] if redesigned else ["kept"])
+    assert (out / "Dockerfile").read_text() == "FROM a\n# old hand\n# again\n"
+
+
+def test_hand_files_the_panel_cannot_read_are_named():
+    from engine.agents.reviewers import hand_review_suffixes, unreviewed_hand_files
+    from engine.dotnet_gen.generator import GeneratedSolution, GenFile
+
+    sol = GeneratedSolution(root=Path("/nonexistent"), name="Gmf", build_hash="", files=[
+        GenFile(path="src/A.cs", content="class A {}", origin="hand"),
+        GenFile(path="src/A.csproj", content="<Project/>", origin="hand"),
+        GenFile(path="src/logo.png", content="\x00png", origin="hand"),
+        GenFile(path="tests/T.cs", content="class T {}", origin="hand")])
+    assert hand_review_suffixes() == (".cs",)
+    assert hand_review_suffixes("java") == (".java",)
+    assert unreviewed_hand_files(sol) == ["src/A.csproj", "src/logo.png"]

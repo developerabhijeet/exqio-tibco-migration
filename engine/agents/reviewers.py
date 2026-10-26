@@ -93,6 +93,13 @@ def reviewed_files(solution: GeneratedSolution, stack: str = "dotnet") -> dict[s
     }
 
 
+def unreviewed_hand_files(solution: GeneratedSolution, stack: str = "dotnet") -> list[str]:
+    """Hand-edited production files the panel does not read because they are not text source files
+    of the stack (project files, assets, binaries), sorted; the build log names them."""
+    return sorted(f.path for f in solution.files
+                  if f.origin == "hand" and not language(stack).is_test_path(f.path) and not _hand_source(f, stack))
+
+
 def skipped_hand_files(solution: GeneratedSolution, stack: str = "dotnet") -> list[str]:
     """Hand-edited source files too large for the panel, sorted."""
     return sorted(f.path for f in solution.files
