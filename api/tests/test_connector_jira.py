@@ -675,3 +675,16 @@ async def test_route_refusals_are_audited(client_atlassian, jira_app, atlassian_
     assert [r.detail["outcome"] for r in rows] == ["refused"] * 3
     assert [r.detail["items"] for r in rows] == [["finding:F1"]] * 3
     assert fake.jira.requests == []
+
+
+@pytest.mark.parametrize("key", ["GMF-1/../../admin", "GMF-1?x=1#f", "GMF 1", "GMF-1\r\nX: y", "../../etc"])
+async def test_browse_url_cannot_be_steered_by_a_crafted_key(client_atlassian, jira_app, key):
+    from urllib.parse import urlsplit
+    _, fake = client_atlassian("cloud")
+    async with jira_app.state.sessionmaker() as s:
+        atl = await connector_for(s, jira_app.state.settings, "atlassian")
+    url = atl.jira.browse_url(key)
+    parts = urlsplit(url)
+    assert url.startswith(f"{fake.jira.url}/browse/") and parts.query == "" and parts.fragment == ""
+    assert parts.path.count("/") == 2 and ".." not in parts.path.split("/")
+    assert "\r" not in url and "\n" not in url and " " not in url

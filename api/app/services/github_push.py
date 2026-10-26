@@ -150,11 +150,12 @@ async def _push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         await ctx.stage("pull-request")
         pull = await gh.open_pull_request(repo, branch, base, f"{proc.name}: build {build.id[:8]}",
                                           _pr_body(build, proc, commit, w.settings.brand_name))
-        await ctx.log(f"pull request #{pull['number']}: {pull['url']}")
+        shown = pull["url"] or f"{repo}#{pull['number']}"  # no link when GitHub's was not on our host
+        await ctx.log(f"pull request #{pull['number']}: {shown}")
         async with w.sessionmaker() as s:
             await upsert_link(s, **where, kind="github", object_type="pull_request", local_ref=build.id,
                               remote_id=str(pull["number"]), remote_url=pull["url"], created_by=actor)
-            await audit("ok", pull["url"], {"repo": repo, "number": pull["number"], "head": branch,
+            await audit("ok", shown, {"repo": repo, "number": pull["number"], "head": branch,
                                             "base": base}, s)
             await s.commit()
         out["pull_request"] = pull

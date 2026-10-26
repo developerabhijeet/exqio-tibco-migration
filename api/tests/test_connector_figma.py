@@ -437,3 +437,49 @@ async def test_route_refusals_are_audited(client_figma_restricted, architect):
         r = await client_figma_restricted.post(f"/processes/{proc_id}/figma/frames", headers=architect, json=body)
         assert r.status_code == 422
     assert len(await _audits(client_figma_restricted, "refused")) == 3
+
+
+def _stored_images(client) -> list[Path]:
+    root = client.app.state.settings.data_dir.resolve() / "figma"
+    return sorted(root.glob("*.png")) if root.is_dir() else []
+
+
+async def test_a_replaced_thumbnail_that_is_no_longer_made_is_deleted(client_figma, rest_process, wait_terminal,
+                                                                      fake_figma, fake_figma_images):
+    await _attach(client_figma, rest_process, wait_terminal)
+    assert len(_stored_images(client_figma)) == 1
+    bad = FakeServer(responder(lambda m, p, h: (200, {"content-type": "text/html"}, b"<html>")))
+    with bad:
+        fake_figma.images = bad  # the next render yields no usable image
+        await _attach(client_figma, rest_process, wait_terminal)
+    (frame,) = (await client_figma.get(f"/processes/{rest_process}/figma/frames")).json()
+    assert frame["has_image"] is False and _stored_images(client_figma) == []
+
+
+async def test_detaching_a_frame_deletes_its_thumbnail(client_figma, rest_process, architect, wait_terminal,
+                                                       fake_figma_images):
+    await _attach(client_figma, rest_process, wait_terminal, ["1:2", "2:1"])
+    first, second = (await client_figma.get(f"/processes/{rest_process}/figma/frames")).json()
+    assert len(_stored_images(client_figma)) == 2
+    assert (await client_figma.delete(f"/figma/frames/{first['id']}")).status_code in (401, 403)
+    assert (await client_figma.delete(f"/figma/frames/{first['id']}", headers=architect)).status_code == 204
+    assert len(_stored_images(client_figma)) == 1
+    left = (await client_figma.get(f"/processes/{rest_process}/figma/frames")).json()
+    assert [f["id"] for f in left] == [second["id"]]
+    assert (await client_figma.delete(f"/figma/frames/{first['id']}", headers=architect)).status_code == 404
+
+
+async def test_purge_removes_a_projects_thumbnails_and_nothing_outside_the_store(client_figma, rest_process,
+                                                                                 wait_terminal, fake_figma_images,
+                                                                                 tmp_path):
+    from api.app.services.figma_sync import purge_thumbnails, remove_thumbnail
+    await _attach(client_figma, rest_process, wait_terminal, ["1:2", "2:1"])
+    data_dir = client_figma.app.state.settings.data_dir
+    outsider = tmp_path / "keep.png"
+    outsider.write_bytes(PNG)
+    assert remove_thumbnail(data_dir, str(outsider)) is False and outsider.exists()
+    async with client_figma.app.state.sessionmaker() as s:
+        link = (await s.execute(select(ConnectorLink))).scalars().first()
+        project_id = link.project_id
+        assert await purge_thumbnails(s, data_dir, project_id=project_id) == 2
+    assert _stored_images(client_figma) == []

@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -249,6 +249,17 @@ class GitHubConnector(BaseConnector):
             url, params = (match.group(1) if match else None), None  # the next link carries its query
         return names[:MAX_BRANCHES]
 
+    def trusted_link(self, url: object) -> str:
+        """``url`` when it is an https link (http only for the test loopback) on exactly the
+        configured GitHub host, without credentials; else ``""``: a link the API returned is never
+        stored or shown on trust."""
+        base, got = urlsplit(self.base_url), urlsplit(str(url or ""))
+        secure = got.scheme == "https" or (got.scheme == "http" and self.settings.connectors_allow_insecure_loopback)
+        if (not secure or got.scheme != base.scheme or got.username or got.password or not got.hostname
+                or got.netloc.lower() != base.netloc.lower()):
+            return ""
+        return str(url)
+
     async def _open_pull_for(self, repo: str, head: str) -> dict[str, Any] | None:
         owner = repo.split("/")[0]
         rows = (await self._call("GET", f"/repos/{repo}/pulls",
@@ -266,7 +277,7 @@ class GitHubConnector(BaseConnector):
             try:
                 pull = (await self._call("POST", f"/repos/{repo}/pulls",
                                          json={"title": title, "head": head, "base": base, "body": body})).json()
-                return {"number": pull["number"], "url": pull["html_url"]}
+                return {"number": pull["number"], "url": self.trusted_link(pull.get("html_url"))}
             except ConnectorError as exc:  # opened in between: GitHub answers 422 "already exists"
                 if exc.status != 422 or "already exists" not in exc.message:
                     raise
@@ -277,7 +288,7 @@ class GitHubConnector(BaseConnector):
         if (pull.get("base") or {}).get("ref") != base:  # opened against another base: retarget it
             patch["base"] = base
         pull = (await self._call("PATCH", f"/repos/{repo}/pulls/{pull['number']}", json=patch)).json()
-        return {"number": pull["number"], "url": pull["html_url"]}
+        return {"number": pull["number"], "url": self.trusted_link(pull.get("html_url"))}
 
     # ---------------------------------------------------------------- git
     async def clone(self, repo: str, branch: str, dest: Path, *, depth: int = 1, timeout_s: int = GIT_TIMEOUT_S) -> str:

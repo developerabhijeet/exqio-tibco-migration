@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from api.app.auth.roles import Principal, dev_principal
@@ -74,7 +74,7 @@ from api.app.services.confluence_publish import dedupe_key as confluence_dedupe_
 from api.app.services.evidence import latest_design
 from api.app.services.figma_sync import SYNC_KIND as FIGMA_SYNC_KIND
 from api.app.services.figma_sync import dedupe_key as figma_dedupe_key
-from api.app.services.figma_sync import frame_links
+from api.app.services.figma_sync import frame_links, remove_frame_link
 from api.app.services.github_push import PUSH_KIND
 from api.app.services.github_push import dedupe_key as push_dedupe_key
 from api.app.services.jira_issues import (
@@ -457,6 +457,21 @@ async def process_figma_frames(process_id: str, session: SessionDep) -> list[Fra
     if await session.get(Process, process_id) is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
     return [_frame_link_out(link) for link in await frame_links(session, process_id)]
+
+
+@router.delete("/figma/frames/{link_id}", status_code=204)
+async def remove_figma_frame(link_id: str, session: SessionDep, settings: SettingsDep,
+                             principal: FigmaRoles) -> Response:
+    """Detach a frame from its process: the link and its stored thumbnail go (audited)."""
+    link = await session.get(ConnectorLink, link_id)
+    if link is None or link.object_type != "figma_frame":
+        raise HTTPException(status_code=404, detail="frame not found")
+    await audit_connector(session, principal.actor, "figma", "detach", project_id=link.project_id,
+                          process_id=link.process_id, target=link.remote_url or link.local_ref, outcome="ok",
+                          detail={"local_ref": link.local_ref})
+    await remove_frame_link(session, settings.data_dir, link)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/figma/frames/{link_id}/image")

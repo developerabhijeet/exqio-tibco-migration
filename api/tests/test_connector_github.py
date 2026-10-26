@@ -552,3 +552,20 @@ async def test_double_submit_is_one_push(client, app, fake_github, finished_buil
     assert other.status_code == 202
     await wait_terminal(client, other.json()["job_id"])
     assert _pushes(fake_github) == 2
+
+
+@pytest.mark.parametrize("forged", [
+    "https://evil.example/gmf/pr/pull/1",           # another host
+    "javascript:alert(1)",                          # not a web link
+    "http://github.test/gmf/pr/pull/1",             # not https
+    "https://user:pw@github.test/gmf/pr/pull/1",    # credentials
+    "",
+])
+async def test_pull_request_link_off_the_configured_host_is_not_kept(gh, fake_github, forged):
+    fake_github.add_repo("gmf/pr")
+    fake_github.commit("exiqo/r", {"a": "1"}, repo="gmf/pr")
+    first = await gh.open_pull_request("gmf/pr", "exiqo/r", "main", "t", "one")
+    assert first["url"] == f"{fake_github.url}/gmf/pr/pull/1"  # the honest link is kept
+    fake_github.pulls["gmf/pr"][0]["html_url"] = forged
+    again = await gh.open_pull_request("gmf/pr", "exiqo/r", "main", "t", "two")
+    assert again["number"] == 1 and again["url"] == ""

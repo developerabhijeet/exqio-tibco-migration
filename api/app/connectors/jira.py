@@ -281,7 +281,7 @@ class JiraConnector:
         self.flavor = connector.flavor
 
     def browse_url(self, key: str) -> str:
-        return f"{self.base_url}/browse/{key}"
+        return f"{self.base_url}/browse/{quote(key, safe='')}"
 
     async def test(self) -> ConnectionTest:
         self.connector.ready()

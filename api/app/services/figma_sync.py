@@ -17,7 +17,9 @@ and link of each live attached frame.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select
@@ -33,7 +35,7 @@ from api.app.connectors.figma import (
     valid_node_id,
 )
 from api.app.connectors.http import header_secrets, redact
-from api.app.connectors.links import upsert_link
+from api.app.connectors.links import find_link, upsert_link
 from api.app.connectors.registry import connector_for
 from api.app.jobs.locks import advisory_lock
 from api.app.models import Process
@@ -72,6 +74,41 @@ async def frame_links(session: AsyncSession, process_id: str, *, live_only: bool
     if live_only:
         query = query.where(ConnectorLink.stale.is_(False))
     return list((await session.execute(query.order_by(ConnectorLink.created_at, ConnectorLink.id))).scalars())
+
+
+def remove_thumbnail(data_dir: Path, stored: object) -> bool:
+    """Delete the stored thumbnail at ``stored`` when it lies under ``<data_dir>/figma``; ``True``
+    when a file was removed. Anything else (no path, elsewhere, a symlink) is left alone."""
+    if not stored:
+        return False
+    root = Path(data_dir).resolve() / "figma"
+    path = Path(str(stored))
+    if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
+        return False
+    with contextlib.suppress(OSError):
+        path.unlink()
+        return True
+    return False
+
+
+async def remove_frame_link(session: AsyncSession, data_dir: Path, link: ConnectorLink) -> None:
+    """Delete one attached frame and its thumbnail (flushed, not committed)."""
+    remove_thumbnail(data_dir, (link.detail or {}).get("image_path"))
+    await session.delete(link)
+    await session.flush()
+
+
+async def purge_thumbnails(session: AsyncSession, data_dir: Path, *, process_ids: list[str] | None = None,
+                           project_id: str | None = None) -> int:
+    """Delete the thumbnails of every frame link of the given processes or project (the caller is
+    deleting them, and the links go with it). Returns how many files were removed."""
+    query = select(ConnectorLink).where(ConnectorLink.object_type == LINK_TYPE)
+    if project_id is not None:
+        query = query.where(ConnectorLink.project_id == project_id)
+    if process_ids is not None:
+        query = query.where(ConnectorLink.process_id.in_(process_ids))
+    return sum(remove_thumbnail(data_dir, (link.detail or {}).get("image_path"))
+               for link in (await session.execute(query)).scalars())
 
 
 def reference_of(link: ConnectorLink) -> dict[str, Any]:
@@ -149,12 +186,17 @@ async def sync_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                       "image_note": None if image else notes.get(node_id)}
             state["detail"], state["target"] = {"file_key": file_key, "local_ref": ref}, url or ref
             async with advisory_lock(w.sessionmaker, f"{LOCK_PREFIX}{proc.id}:{ref}"), w.sessionmaker() as s:
+                before = await find_link(s, kind=LINK_KIND, object_type=LINK_TYPE, process_id=proc.id,
+                                         local_ref=ref)
+                old_image = (before.detail or {}).get("image_path") if before else None
                 await upsert_link(s, **where, kind=LINK_KIND, object_type=LINK_TYPE, local_ref=ref,
                                   remote_id=node_id, remote_url=url, detail=detail, created_by=actor)
                 await audit_connector(s, actor, "figma", "sync", target=url or ref, outcome="ok",
                                       detail={"file_key": file_key, "local_ref": ref, "name": frame.name,
                                               "thumbnail": image is not None}, **where)
                 await s.commit()
+            if old_image and old_image != detail["image_path"]:  # replaced or dropped: not kept
+                remove_thumbnail(w.settings.data_dir, old_image)
             note = "" if image else f" (no thumbnail: {notes.get(node_id)})"
             await ctx.log(f"{ref}: attached {frame.name!r}{note}")
         shown = [n for n in node_ids if images.get(n)]
