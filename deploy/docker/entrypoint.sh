@@ -19,9 +19,19 @@ cd /app
 # GMF's package mirror may sit behind a private CA. MIRROR_CA_BUNDLE (a PEM file, mounted from the
 # chart's mirrors.caBundle) is imported with keytool into a copy of the JDK's trust store under /tmp
 # (the root filesystem is read-only), and Maven is pointed at it through MAVEN_OPTS. Unset: nothing
-# changes and the JDK's own trust store is used. A bundle that cannot be imported fails the pod.
-if [ -n "${MIRROR_CA_BUNDLE:-}" ] && [ -f "$MIRROR_CA_BUNDLE" ] && [ -x "${JAVA_HOME:-/opt/java}/bin/keytool" ]; then
+# changes and the JDK's own trust store is used. Set but unusable (the file or keytool is missing,
+# or it holds no certificate) fails the pod: a mirror behind a private CA must never fall back to
+# the public trust store silently.
+if [ -n "${MIRROR_CA_BUNDLE:-}" ]; then
   jhome="${JAVA_HOME:-/opt/java}"
+  if [ ! -f "$MIRROR_CA_BUNDLE" ]; then
+    echo "entrypoint: MIRROR_CA_BUNDLE ($MIRROR_CA_BUNDLE) is not a file" >&2
+    exit 66
+  fi
+  if [ ! -x "$jhome/bin/keytool" ]; then
+    echo "entrypoint: MIRROR_CA_BUNDLE is set but keytool is missing ($jhome/bin/keytool)" >&2
+    exit 66
+  fi
   store=/tmp/exiqo-cacerts
   cp "$jhome/lib/security/cacerts" "$store"
   chmod u+w "$store"
