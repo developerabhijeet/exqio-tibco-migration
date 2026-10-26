@@ -116,3 +116,45 @@ async def test_a_push_onto_a_non_empty_base_ships_exactly_the_build(client, fake
     job = (await client.post(f"/repos/{r.json()['id']}/pull", json={"branch": out["branch"]}, headers=engineer)).json()
     es = (await client.get(f"/edit-sets/{(await wait_terminal(client, job['job_id']))['id']}")).json()
     assert [f["path"] for f in es["files"]] == [AGENT_FILE]  # README, LICENSE and the workflow are no edits
+
+
+# ------------------------------------------------------------------ final review N1, N2
+async def test_a_failed_pull_request_still_records_the_pushed_commit(client, app, fake_github, connected_build_repo,
+                                                                     finished_build, engineer, monkeypatch):  # N1
+    from api.app.connectors.base import ConnectorError
+    from api.app.connectors.github import GitHubConnector
+    real = GitHubConnector.open_pull_request
+
+    async def failing(self, *a, **kw):
+        raise ConnectorError("GitHub refused the pull request")
+
+    monkeypatch.setattr(GitHubConnector, "open_pull_request", failing)
+    r = await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build}, headers=engineer)
+    assert r.status_code == 502
+    branch = "exiqo/dealer-funding-request/iteration-1"
+    async with app.state.sessionmaker() as s:
+        line = (await s.execute(select(AuditLog).where(AuditLog.action == "repo pushed"))).scalars().one()
+    assert len(line.detail["commit"]) == 40
+    assert line.detail["branch"] == branch and "pull request" in line.detail["follow_up_failed"]
+    monkeypatch.setattr(GitHubConnector, "open_pull_request", real)
+    again = await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build}, headers=engineer)
+    assert again.status_code == 200, again.text  # not a false 409
+
+
+async def test_the_losing_concurrent_push_is_409(client, fake_github, connected_build_repo, finished_build, engineer,
+                                                 monkeypatch):  # N2
+    from api.app.connectors import github as gh_mod
+    real = gh_mod.run_git
+    branch = "exiqo/dealer-funding-request/iteration-1"
+    first = (await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build},
+                               headers=engineer)).json()
+
+    def racing(args, cwd, env, timeout_s):
+        if args and args[0] == "push":  # the other push lands between the lease check and ours
+            fake_github.commit(branch, {AGENT_FILE: replace_body}, repo="gmf/svc")
+        return real(args, cwd, env, timeout_s)
+
+    monkeypatch.setattr(gh_mod, "run_git", racing)
+    r = await client.post(f"/repos/{connected_build_repo}/push", json={"build_id": finished_build}, headers=engineer)
+    assert first["branch"] == branch
+    assert r.status_code == 409 and "pull the reviewer's edits first" in r.json()["detail"]

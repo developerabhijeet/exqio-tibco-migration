@@ -57,6 +57,7 @@ from api.app.routers import (
 )
 from api.app.routers import memory as memory_router
 from api.app.routers import settings as settings_router
+from api.app.services import artefacts as artefacts_svc
 from api.app.services.citations import configure_masking
 from api.app.services.hosting import Hosting, http_client
 from api.app.services.infra import make_fernet
@@ -179,9 +180,13 @@ def _create_api(settings: Settings) -> FastAPI:
         except Exception as exc:  # noqa: BLE001  start without a database; requests will report it
             log.error("job runner not started (database unavailable or schema missing; run `make db`): %s",
                       exc)
+        sweeper = asyncio.create_task(artefacts_svc.sweep_forever(sessionmaker, settings, first_after_s=30), name="artefact-sweep") \
+            if worker is not None else None
         try:
             yield
         finally:
+            if sweeper is not None:
+                sweeper.cancel()
             if app.state.background:
                 await asyncio.gather(*app.state.background, return_exceptions=True)
             try:

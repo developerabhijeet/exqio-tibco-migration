@@ -415,21 +415,28 @@ async def push_build(session: AsyncSession, sessionmaker, settings: Settings, ro
                                                       extra_files=extras, excluded=DOWNLOAD_EXCLUDED,
                                                       lease=lease, mirror=True),
                                 repo=repo, branch=branch, build_id=build.id, iteration=build.iteration)
-    await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
-                      object_type="branch", local_ref=build.id, remote_id=branch,
-                      remote_url=f"{gh.base_url}/{repo}/tree/{branch}", created_by=actor)
     out: dict[str, Any] = {"branch": branch, "commit": commit, "pull_request": None}
-    if open_pr and base_exists:
-        body = github_push_svc._pr_body(build, proc, commit, settings.brand_name)
-        pull = await _audited(session, actor, "pull-request", target, row.project_id, row.process_id,
-                              lambda: gh.open_pull_request(repo, branch, base_name,
-                                                           f"{proc.name}: iteration {build.iteration}", body),
-                              repo=repo, head=branch, base=base_name)
+    pushed = {"repo_id": row.id, "repo": repo, "branch": branch, "commit": commit, "build_id": build.id,
+              "iteration": build.iteration}
+    try:
         await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
-                          object_type="pull_request", local_ref=build.id, remote_id=str(pull["number"]),
-                          remote_url=pull["url"], created_by=actor)
-        out["pull_request"] = {"number": pull["number"], "url": pull["url"]}
-    gate_svc.audit(session, None, actor, "repo pushed", project_id=row.project_id,
-                   detail={"repo_id": row.id, "repo": repo, "branch": branch, "commit": commit, "build_id": build.id,
-                           "iteration": build.iteration})
+                          object_type="branch", local_ref=build.id, remote_id=branch,
+                          remote_url=f"{gh.base_url}/{repo}/tree/{branch}", created_by=actor)
+        if open_pr and base_exists:
+            body = github_push_svc._pr_body(build, proc, commit, settings.brand_name)
+            pull = await _audited(session, actor, "pull-request", target, row.project_id, row.process_id,
+                                  lambda: gh.open_pull_request(repo, branch, base_name,
+                                                               f"{proc.name}: iteration {build.iteration}", body),
+                                  repo=repo, head=branch, base=base_name)
+            await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
+                              object_type="pull_request", local_ref=build.id, remote_id=str(pull["number"]),
+                              remote_url=pull["url"], created_by=actor)
+            out["pull_request"] = {"number": pull["number"], "url": pull["url"]}
+    except ConnectorError as exc:
+        # the commit is on the branch: record it, or the next push leases on an older head and is
+        # refused as a moved branch (final review N1). The caller commits this line with the error.
+        gate_svc.audit(session, None, actor, "repo pushed", project_id=row.project_id,
+                       detail={**pushed, "follow_up_failed": exc.message[:500]})
+        raise
+    gate_svc.audit(session, None, actor, "repo pushed", project_id=row.project_id, detail=pushed)
     return out

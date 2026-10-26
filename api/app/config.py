@@ -73,6 +73,7 @@ class Settings(BaseSettings):
 
     # Storage and secrets
     data_dir: Path = Path("./data")
+    iteration_artefact_ttl_hours: int = 24  # grace before an unreferenced clone or edit tree is swept
     app_secret: str = ""  # Fernet key for stored Azure credentials
     # Parity scenario database. Unset: one database per project, ``exiqo_scn_<project>_test`` on the
     # DATABASE_URL server (created when missing). Set: every project uses this one (its name must

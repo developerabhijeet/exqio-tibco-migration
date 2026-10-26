@@ -393,8 +393,13 @@ class GitHubConnector(BaseConnector):
                     _write_into(work, rel, data)
                 git("add", "--all", "--force")
                 git("commit", "--quiet", "--no-verify", "--allow-empty", "-m", message)
-                git("push", "--quiet", "--no-verify", f"--force-with-lease=refs/heads/{branch}:{expected}",
-                    "origin", f"HEAD:refs/heads/{branch}")
+                try:
+                    git("push", "--quiet", "--no-verify", f"--force-with-lease=refs/heads/{branch}:{expected}",
+                        "origin", f"HEAD:refs/heads/{branch}")
+                except ConnectorError as exc:
+                    if "stale info" in exc.message:  # git's lease check lost a race with another push (N2)
+                        raise BranchMoved(branch) from exc
+                    raise
                 return git("rev-parse", "HEAD").strip()
             finally:
                 shutil.rmtree(work, ignore_errors=True)

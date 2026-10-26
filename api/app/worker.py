@@ -34,6 +34,7 @@ from api.app.db import make_engine, make_sessionmaker
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
 from api.app.jobs.registry import WorkerServices
 from api.app.jobs.runner import JobWorker, worker_name
+from api.app.services import artefacts as artefacts_svc
 from api.app.services import hosting as hosting_svc
 from api.app.services.hosting import Hosting
 from api.app.services.infra import make_fernet
@@ -133,6 +134,7 @@ async def run(settings: Settings) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
+    sweeper = asyncio.create_task(artefacts_svc.sweep_forever(sessionmaker, settings), name="artefact-sweep")
     try:
         await worker.start()
         log.info("worker %s: %d slot(s), internal listener on port %d", worker.name, worker.slots,
@@ -147,6 +149,7 @@ async def run(settings: Settings) -> None:
         await serving
         stopped.cancel()
     finally:
+        sweeper.cancel()
         await http.aclose()
         await engine.dispose()
         if memory is not None:
