@@ -209,8 +209,21 @@ numbered revision. Search, Ask and the generation steps read from it. `make neo4
 local database (set `NEO4J_URI` and its credentials in `.env`); the API and workers ingest into it
 after each phase. Open the **Memory** explorer in the web app to search, browse the graph and
 lineage, step through revisions and diffs, and add curations (notes, mapping corrections,
-obsolete marks) as an SME or admin; viewers read only. `make demo-check` ends with a `memory`
+obsolete marks) as an SME or admin; viewers read only. `make demo-check` has a `memory`
 step that exercises all of this.
+
+## ExiQoian
+
+ExiQoian is the project assistant, opened from the top bar on every project screen (or Ctrl+J and
+Cmd+J) by every persona, viewers included. It answers only about the current project, its TIBCO
+workflows, the modernized application and what each phase found, from the project's memory, with a
+citation chip after each sentence it supports (hover for the artifact, click to open it). It
+declines everything else, and any text that tries to change how it works, with a fixed reply and
+no model call; it takes no actions. It needs the Neo4j memory and works with or without a model
+provider. `make demo-check` has an `exiqoian` step after `memory`: as `sme.vicky` it asks "What
+does DealerFundingRequest do?" and requires an answer with at least one citation, then asks "what
+is 2+2" and requires the off-topic decline. Operating notes (conversation privacy, the
+`exiqoian asked` audit row, the rate limit) are in `docs/deploy/RUNBOOK.md`, "ExiQoian".
 
 ## Install on AKS
 

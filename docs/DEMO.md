@@ -76,9 +76,11 @@ is not part of this build.
   expected value, actual value and classification, with the noise rules applied (timestamps,
   generated IDs, ordering) listed. The overall figure is matching fields over compared fields.
 - **Knowledge graph.** Discover, domain graph: processes, tables, queues and endpoints with their
-  calls, reads, writes, publishes and consumes edges. Ask AI on the Validate tab answers from the
-  knowledge base with citations that jump to the canvas ("Which workflows read the funding
-  table?").
+  calls, reads, writes, publishes and consumes edges. ExiQoian (the top bar button, or Ctrl+J and
+  Cmd+J, on any project screen) answers from the project's memory with inline citations that jump
+  to the canvas ("Which workflows read the funding table?"). Ask it "what is 2+2" to show the fixed
+  decline: it answers only about the project, and it refuses text that tries to change how it
+  works. Every persona may use it, `viewer.val` included.
 - **Test data with masking.** Open `CreditApplicationIntake` (Credit Origination domain) on
   Verify, test data panel: inputs generated from the schemas, enumerations and branch predicates,
   with SSNs masked to the last four digits (`***-**-1184`) and a note that production test data

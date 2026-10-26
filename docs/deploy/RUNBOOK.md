@@ -238,6 +238,95 @@ then `helm rollback`. Writes made in Neo4j after the migration are not copied ba
 upgrading again, either delete the `neo4j_migrated_at` row from `knowledge.meta` so the API queues
 the migration, or run `memory_admin migrate`.
 
+## ExiQoian
+
+ExiQoian is the project assistant in the slide-over opened from the top bar ("ExiQoian", or Ctrl+J
+and Cmd+J). It answers only about the current project (its TIBCO workflows, the modernized
+application, and what each phase found and decided) from the project's Neo4j memory, and cites the
+phase artifacts inline. It has no tools and takes no actions, so it cannot approve a gate or start
+a step. It needs no setting of its own: it runs wherever memory (`NEO4J_URI`) is configured, with
+the model provider if there is one and without it (a no-model answer built from the top memory
+hits, labelled "From memory, no model" in the panel).
+
+**Who can use it.** Every persona, viewers included. In `AUTH_MODE=oidc` any signed-in user who
+holds at least one role may chat; the panel header shows a persona select with the roles the user
+holds (the first held is the default), and a request for a role the user does not hold is 403. The
+persona changes only the order of the sources and the tone of the answer, never what may be
+retrieved. Every other viewer write stays refused. The routes are under
+`/api/exiqoian/<project id>/` (`profile`, `conversations`, `conversations/<id>/messages`, the last
+a server-sent event stream).
+
+**What it declines.** The decline text is fixed and written by the platform, never by a model, and
+no model is called for a decline made by the rules.
+
+| Verdict | When | What the user sees |
+|---|---|---|
+| `off_topic` | arithmetic, recipes, general knowledge, chit-chat, a question with too little to go on | "I'm ExiQoian, and I only answer questions about this project ..." |
+| `injection` | text that tries to change the assistant's behaviour: override or role-change phrases, requests for its instructions, forged `<source>` or `system:` markers, encoded payloads, in several languages and obfuscations; also a model reply that leaks the per-request canary | "I can't follow instructions that try to change how I work ..." |
+| `not_covered` | nothing in the project's memory clears the retrieval floors, or the model's answer cited nothing | "I couldn't find anything in this project's memory that answers that, so I won't guess ..." |
+| `intro` | a greeting or "what can you do" | the introduction and three suggested questions |
+| `unavailable` | memory is down or not configured | "Project memory is unavailable right now ..." or "Project memory is not configured for this install ..." |
+
+An injection mixed into an on-topic question refuses the whole message; the user resends the
+question alone. A project process that happens to be called like an off-topic word (a process named
+`CookDealerRates`) lets that word through the off-topic filter: the project's own names count as
+on-topic. Retrieved memory text that carries an injection is dropped before the model sees it.
+Questions over 2000 characters are refused with 422.
+
+**Conversation privacy.** A conversation belongs to the user who started it and is shown only to
+them; another user's conversation id answers 404, administrators included. The tables are
+`chat_conversations` and `chat_messages`; the text is stored masked. A user deletes their own
+conversation from the panel's conversation menu, and deleting the project removes all of its
+conversations. There is no automatic retention purge: the install's Postgres backup policy governs
+how long chat text is kept. If your policy needs one, schedule a delete such as:
+
+```sql
+delete from chat_conversations where updated_at < now() - interval '180 days';
+```
+
+(messages go with their conversation).
+
+**The audit row.** Every question writes one `audit_log` row with `action` `exiqoian asked`,
+whatever the verdict. `detail` carries `conversation_id`, `message_id`, `verdict`, `rule` (the guard
+rule that decided, if any), `persona`, `used_model`, `provider`, `sources`, `cited`,
+`dropped_sources` and `question` (masked, cut to 500 characters). An `injection` verdict also logs
+a warning on `api.exiqoian` with the rule name, never the text.
+
+```sql
+select ts, actor, project_id, detail->>'verdict' as verdict, detail->>'rule' as rule,
+       detail->>'persona' as persona, detail->>'question' as question
+from audit_log where action = 'exiqoian asked' order by ts desc limit 50;
+
+-- who is being refused as an injection, and by which rule
+select actor, detail->>'rule' as rule, count(*)
+from audit_log where action = 'exiqoian asked' and detail->>'verdict' = 'injection'
+  and ts > now() - interval '7 days' group by 1, 2 order by 3 desc;
+
+-- answers the model wrote but that cited nothing
+select ts, actor, detail->>'question' from audit_log
+where action = 'exiqoian asked' and detail->>'verdict' = 'not_covered' and detail->>'used_model' = 'true';
+```
+
+A burst of `injection` rows from one actor is the thing to look at; a `rule` of `output_leak`
+means the model's reply, not the question, was refused.
+
+**Rate limit.** 12 questions per user per rolling 60 seconds, counted from the stored messages, so
+it holds across api replicas. The 13th answers 429 "slow down: ExiQoian takes 12 questions a
+minute"; the panel shows that text. There is no setting for it.
+
+**When memory is down.** ExiQoian reads memory only through the same retriever as the explorer, so
+it is down when Neo4j is. The question is still stored and audited (verdict `unavailable`, rule
+`memory_unavailable`, or `not_configured` when `NEO4J_URI` is empty), the stream sends an `error`
+event and the panel shows the fixed "unavailable" or "not configured" reply. Nothing is queued:
+the user asks again when `/readyz` shows `neo4j: ok` again (see "Reading /readyz and
+/system/status", and "Memory (Neo4j)" for a restore). The panel's profile
+(`GET /api/exiqoian/<project id>/profile`) reports `memory: {configured, available}` and the model
+provider name (`fake`, `none` or the real one), which is the quickest check from a browser session.
+If the model provider fails, ExiQoian falls back to the no-model answer instead of failing.
+
+**Egress.** The panel uses only the platform's own API. It adds no outbound host, so
+`make egress-audit` and the install's allowlist are unchanged.
+
 ## Connectors
 
 Optional GitHub, Confluence, Jira and Figma integrations (`GMF-INSTALL.md`, section 6, "Connectors").
