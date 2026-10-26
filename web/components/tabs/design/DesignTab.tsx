@@ -259,7 +259,7 @@ export function DesignTab() {
                   {rec.messaging.length === 0 ? (
                     <p className="text-md text-slate">No queues or topics.</p>
                   ) : (
-                    <div className="table-scroll">
+                    <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
                       <table className="table">
                         <thead>
                           <tr className="table-head">

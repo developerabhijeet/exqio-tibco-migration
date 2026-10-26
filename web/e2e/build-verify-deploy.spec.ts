@@ -175,7 +175,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
     await expect(g4.getByRole("button", { name: "Approve G4" })).toBeDisabled();
     await expect(g4).toContainText("restore failed");
     // The stepper reads the failed build, not "not started".
-    await expect(page.getByTestId("step-build")).toContainText("failed");
+    await expect(page.getByTestId("step-build")).toHaveAttribute("data-status", "failed");
   }
 
   // -------------------------------------------------------------- Verify
@@ -258,7 +258,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await expect(plan).toHaveAttribute("data-status", "acknowledged");
   await expect(plan).toContainText("ops.sam");
   // An acknowledged connect-later with G6 pending needs review.
-  await expect(page.getByTestId("step-deploy")).toContainText("needs review");
+  await expect(page.getByTestId("step-deploy")).toHaveAttribute("data-status", "needs_review");
   const apply = plan.getByRole("button", { name: "Apply" });
   await expect(apply).toBeDisabled();
   await expect(plan).toContainText("Apply is not part of this build");

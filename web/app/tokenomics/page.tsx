@@ -74,7 +74,7 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
   return (
-    <div className="table-scroll">
+    <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
       <table className="table" data-testid="agent-costs">
         <thead className="border-b border-line text-left text-slate">
           <tr>

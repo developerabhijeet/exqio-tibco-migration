@@ -99,7 +99,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
     >
       {error ? <ErrorNote error={error} /> : null}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-        <div className="table-scroll">
+        <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
           <table className="table">
             <thead>
               <tr className="table-head">
@@ -135,7 +135,7 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
           </table>
         </div>
         <div>
-          <div className="table-scroll">
+          <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
             <table className="table text-sm">
               <thead>
                 <tr className="table-head">
@@ -333,7 +333,7 @@ function Evaluation() {
             Evaluation {v.id.slice(0, 8)}: {v.status}
           </p>
           {v.rows.length > 0 ? (
-            <div className="table-scroll rounded-btn border border-line">
+            <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll rounded-btn border border-line">
               <table className="table min-w-[860px] text-sm">
                 <thead>
                   <tr className="table-head">
@@ -379,7 +379,7 @@ function Toolchains({ s }: { s: SettingsView }) {
   const names = [...order.filter((n) => s.toolchains[n]), ...Object.keys(s.toolchains).filter((n) => !order.includes(n))];
   return (
     <Panel title="Toolchains" eyebrow="Detected on the API host" testId="toolchains">
-      <div className="table-scroll">
+      <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
         <table className="table">
           <thead>
             <tr className="table-head">

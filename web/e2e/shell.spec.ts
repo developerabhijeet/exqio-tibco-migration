@@ -63,4 +63,17 @@ test.describe("app shell", () => {
       expect(overflow.main).toBeLessThanOrEqual(0);
     });
   }
+
+  test("the top bar stays on one row at every width from 1024 px", async ({ page }) => {
+    await page.goto("/");
+    for (const width of [1024, 1280, 1536, 1600, 1700, 1760, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      const brand = (await page.locator("header a[href='/']").first().boundingBox())!;
+      const right = (await page.getByTestId("user-menu").boundingBox())!;
+      const header = (await page.locator("header").first().boundingBox())!;
+      expect(Math.abs(right.y + right.height / 2 - (brand.y + brand.height / 2)), `${width}px: user menu on the brand row`).toBeLessThanOrEqual(2);
+      expect(header.height, `${width}px: bar is one row`).toBeLessThanOrEqual(70);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${width}px: no horizontal scroll`).toBe(true);
+    }
+  });
 });

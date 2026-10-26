@@ -19,12 +19,12 @@ test("upload, scan, discover a domain and trace a step to its XML", async ({ pag
   await expect(page.getByTestId("counter-processes")).toHaveText("11");
   await expect(page.getByTestId("counter-unknown-types")).toHaveText("0");
   // Machine-derived steps read "complete"; green "approved" is kept for gate records.
-  await expect(page.getByTestId("step-upload")).not.toContainText("approved");
-  await expect(page.getByTestId("step-discover")).toContainText("complete");
+  await expect(page.getByTestId("step-upload")).not.toHaveAttribute("data-status", "approved");
+  await expect(page.getByTestId("step-discover")).toHaveAttribute("data-status", "complete");
   await expect(page.getByTestId("parse-report").getByRole("row")).toHaveCount(12); // header + 11
 
   // Discover tab: domain, process, step.
-  await page.getByRole("button", { name: /^Discover/ }).click();
+  await page.getByRole("tab", { name: /^Discover/ }).click();
   await page.getByTestId("domain-select").click();
   await page.getByRole("option", { name: /Dealer Funding/ }).click();
   await expect(page.getByTestId("domain-select")).toContainText("Dealer Funding");
@@ -70,7 +70,7 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.getByRole("button", { name: "Scan" }).click();
   await expect(page.getByTestId("counter-processes")).toHaveText("11");
 
-  await page.getByRole("button", { name: /^Discover/ }).click();
+  await page.getByRole("tab", { name: /^Discover/ }).click();
   await page.getByTestId("domain-select").click();
   await page.getByRole("option", { name: /Dealer Funding/ }).click();
   await page.getByTestId("process-list").getByRole("button", { name: /DealerFundingRequest/ }).click();
@@ -97,7 +97,7 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.locator('.react-flow__node[data-id="LookupDealer"]').click();
   await page.getByRole("tab", { name: "XML" }).click();
   const editor = page.getByTestId("xml-viewer").locator(".monaco-editor").first();
-  await expect(editor).toHaveClass(/\bvs\b/);
+  await expect(editor).toHaveClass(/(^|\s)vs(\s|$)/);
 
   await page.getByTestId("user-menu").click();
   await page.getByTestId("theme-dark").click();

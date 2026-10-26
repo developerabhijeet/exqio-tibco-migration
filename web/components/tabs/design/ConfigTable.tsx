@@ -9,7 +9,7 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
       {config.length === 0 ? (
         <p className="text-md text-slate">This process reads no substitution variables.</p>
       ) : (
-        <div className="table-scroll">
+        <div tabIndex={0} role="region" aria-label="Scrollable table" className="table-scroll">
         <table className="table min-w-[640px]" data-testid="config-table">
           <thead>
             <tr className="table-head">

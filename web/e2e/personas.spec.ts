@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { actAs } from "./helpers";
+import { actAs, newProjectAndScan } from "./helpers";
 
 // The persona model on the stepper. No project is needed: the bar renders for every persona, and
 // what changes with the persona is which steps are theirs to act in. Each persona joins the
@@ -87,4 +87,46 @@ test("theme follows the system and the choice persists", async ({ page }) => {
   await page.getByTestId("user-menu").click();
   await expect(page.getByTestId("theme-light")).toHaveAttribute("aria-checked", "true");
   await expect(page.getByTestId("theme-system")).toHaveAttribute("aria-checked", "false");
+});
+
+test("the stepper shows one status pill and works from the keyboard", async ({ page }) => {
+  await page.goto("/");
+  await newProjectAndScan(page);
+  await expect(page.getByRole("tablist", { name: "Migration steps" }).getByTestId("step-status-pill")).toHaveCount(1);
+  await page.getByTestId("step-discover").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByTestId("step-validate")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByTestId("step-deploy")).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(page.getByTestId("step-upload")).toBeFocused();
+  await page.setViewportSize({ width: 900, height: 900 });
+  await page.getByTestId("stepper-compact").click();
+  await page.getByRole("option", { name: /Design/ }).click();
+  await expect(page.getByTestId("step-design")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("stepper-compact")).toContainText("Step 4 of 7 · Design");
+});
+
+test("the stepper never overflows at 1024 px or 1280 px, and the header compacts on scroll", async ({ page }) => {
+  await page.goto("/");
+  await newProjectAndScan(page);
+  for (const width of [1024, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    const tablist = page.getByRole("tablist", { name: "Migration steps" });
+    await expect(tablist).toBeVisible();
+    expect(await tablist.evaluate((n) => n.scrollWidth <= n.clientWidth + 1)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  const header = page.getByTestId("pinned-header");
+  await expect(header).not.toHaveAttribute("data-compact", "true");
+  await page.evaluate(() => {
+    const filler = document.createElement("div");
+    filler.style.height = "3000px";
+    document.querySelector("main")?.appendChild(filler);
+  });
+  await page.mouse.move(600, 500);
+  await page.mouse.wheel(0, 400);
+  await expect(header).toHaveAttribute("data-compact", "true");
+  await page.mouse.wheel(0, -2000);
+  await expect(header).not.toHaveAttribute("data-compact", "true");
 });

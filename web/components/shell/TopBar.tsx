@@ -65,14 +65,21 @@ function MoreMenu({ path }: { path: string }) {
     links[next]?.focus();
   };
   return (
-    <div className="relative shrink-0 xl:hidden" ref={ref}>
+    <div
+      className="relative shrink-0 xl:hidden"
+      ref={ref}
+      onBlur={(e) => {
+        // Focus leaving the whole menu (button and list) closes it.
+        if (open && !e.currentTarget.contains(e.relatedTarget as Node | null) && e.relatedTarget) setOpen(false);
+      }}
+    >
       <button
         ref={button}
         type="button"
         aria-label="More"
         data-testid="topbar-more"
         aria-expanded={open}
-        aria-controls="topbar-more-menu"
+        aria-controls={open ? "topbar-more-menu" : undefined}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") {
@@ -134,7 +141,7 @@ function PhasePill() {
 
 /**
  * The brand bar, full window width on the content's gutter. From 1280 px every secondary link sits
- * in the bar (labels from 1600 px; below that the icon, with the label as its accessible name and
+ * in the bar (labels from 1760 px, as is the brand subtitle; below that the icon, with the label as its accessible name and
  * tooltip); below 1280 they fold into "More". Below 768 px the project selector and the phase pill
  * wrap onto a second row, so the first keeps the brand, "More" and the user menu.
  */
@@ -143,19 +150,19 @@ export function TopBar() {
   const { brand_name } = useBrand();
   return (
     <header className="z-30 border-b border-black/20 bg-plum shadow-e2">
-      <div className="flex w-full flex-wrap items-center gap-x-5 px-[var(--gutter)]">
+      <div className="flex w-full flex-wrap items-center gap-x-5 md:flex-nowrap px-[var(--gutter)]">
         <Link href="/" className="flex h-16 shrink-0 items-center gap-3 rounded-btn">
           <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
           <span className="leading-tight max-2xl:hidden">
             <span className="block font-display text-lg font-semibold tracking-[-0.01em] text-white">{brand_name} Migrate</span>
-            <span className="block text-xs text-lilac">TIBCO BusinessWorks to .NET</span>
+            <span className="block text-xs text-lilac max-[1759px]:hidden">TIBCO BusinessWorks to .NET</span>
           </span>
           <span className="sr-only 2xl:hidden">{brand_name} Migrate</span>
         </Link>
         <div className="h-8 w-px bg-white/15 max-md:hidden" />
         {/* The second row under 768 px: last in order and the full width. */}
         <div
-          className="flex min-w-0 items-center gap-4 max-md:order-last max-md:basis-full max-md:border-t max-md:border-white/10 max-md:py-3"
+          className="flex min-w-0 flex-1 items-center gap-4 max-md:order-last max-md:basis-full max-md:border-t max-md:border-white/10 max-md:py-3"
           data-testid="topbar-context"
         >
           <ProjectSelector />
@@ -179,7 +186,7 @@ export function TopBar() {
                   }`}
                 >
                   <Icon size={16} aria-hidden />
-                  <span className="max-[1599px]:sr-only">{label}</span>
+                  <span className="max-[1759px]:sr-only">{label}</span>
                 </Link>
               );
             })}

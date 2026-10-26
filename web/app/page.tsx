@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Stepper } from "@/components/stepper/Stepper";
 import { NextStep } from "@/components/stepper/NextStep";
 import { UploadTab } from "@/components/tabs/upload/UploadTab";
@@ -52,31 +52,65 @@ export default function Home() {
   // It is measured rather than assumed because the stepper wraps on a narrow window and the title
   // can run to two lines, and a wrong number would leave a gap or hide the heading behind it.
   const pinned = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  const sentinel = useRef<HTMLDivElement | null>(null);
+  const [compact, setCompact] = useState(false);
+  const [reserve, setReserve] = useState(0);
+  const expanded = useRef(0);
+  useLayoutEffect(() => {
     const node = pinned.current;
     if (!node) return;
-    const apply = () => document.documentElement.style.setProperty("--pinned-h", `${node.offsetHeight}px`);
+    const apply = () => {
+      const h = node.offsetHeight;
+      document.documentElement.style.setProperty("--pinned-h", `${h}px`);
+      // The header is taller expanded than compact. The difference is kept as bottom margin while
+      // compact, so the content below never moves when the header shrinks (no layout shift, no
+      // scroll feedback loop).
+      if (node.dataset.compact !== "true") {
+        expanded.current = h;
+        setReserve(0);
+      } else {
+        setReserve(Math.max(0, expanded.current - h));
+      }
+    };
     apply();
     const observer = new ResizeObserver(apply);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [compact]);
+
+  // Compact once the top 48 px of the page have scrolled away. An IntersectionObserver on a
+  // sentinel avoids a scroll listener.
+  useEffect(() => {
+    const node = sentinel.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setCompact(!entry.isIntersecting), { threshold: 0 });
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="relative space-y-8">
+      <div ref={sentinel} aria-hidden className="pointer-events-none absolute left-0 top-0 h-12 w-px" />
       {/* Pinned to the top of the scrolling content area: which project this is and where the
           migration stands. The negative margins let the background cover the page gutter, so the
           cards passing underneath are not visible beside it. */}
       <div
         ref={pinned}
-        className="sticky top-0 z-20 -mx-[var(--gutter)] -mt-8 space-y-4 border-b border-line/60 bg-page px-[var(--gutter)] py-5 print:static print:m-0 print:border-0 print:p-0"
+        data-testid="pinned-header"
+        data-compact={compact ? "true" : undefined}
+        style={compact && reserve ? { marginBottom: reserve } : undefined}
+        className={`sticky top-0 z-20 -mx-[var(--gutter)] -mt-8 border-b border-line/60 bg-page px-[var(--gutter)] print:static print:m-0 print:border-0 print:p-0 ${
+          compact ? "space-y-2 py-2" : "space-y-4 py-5"
+        }`}
       >
         <div className="flex items-end justify-between gap-4 print:hidden">
           <div>
-            <p className="eyebrow">Project</p>
-            <h1 className="screen-title">{project?.name ?? "No project selected"}</h1>
+            {compact ? null : <p className="eyebrow">Project</p>}
+            <h1 className={compact ? "truncate text-lg font-semibold text-heading" : "screen-title"}>
+              {project?.name ?? "No project selected"}
+            </h1>
           </div>
-          {report.data ? (
+          {report.data && !compact ? (
             <p className="text-md text-slate">
               Last scan {new Date(report.data.created_at).toLocaleString()} · {report.data.files_parsed} of{" "}
               {report.data.files_found} files parsed
@@ -84,7 +118,7 @@ export default function Home() {
           ) : null}
         </div>
         <div className="print:hidden">
-          <Stepper steps={steps} active={active} onSelect={(i) => setStep(STEP_KEYS[i])} />
+          <Stepper steps={steps} active={active} onSelect={(i) => setStep(STEP_KEYS[i])} compact={compact} />
         </div>
       </div>
       {/* A step that is not this persona's is open to read; the banner says so, above the controls
