@@ -417,9 +417,22 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
         await s.flush()
 
         old_rules = {r.rule_key: r for r in await gate_svc.load_rules(s, process_id)}
-        old_rule_keys = set(old_rules)
+        # Rules an iteration proposed (``source`` set) are not the analyst's to drop: they survive
+        # every re-analysis, decided or not, and never count as a change of the rule set.
+        proposed = {k: r for k, r in old_rules.items() if r.source}
+        old_rule_keys = set(old_rules) - set(proposed)
+        next_free = max([0, *(gate_svc.key_number(k) for k in old_rules),
+                         *(gate_svc.key_number(r.id) for r in rules)]) + 1
         rows: dict[str, Rule] = {}
         for r in rules:
+            kept = proposed.get(r.id)
+            if kept is not None and norm(kept.text) != norm(r.text) and norm(kept.original_text) != norm(r.text):
+                # a key taken by a proposed rule meanwhile (an analysis racing an iteration's design)
+                originals[f"R{next_free}"] = originals.pop(r.id, r.text)
+                r.id = f"R{next_free}"
+                next_free += 1
+            elif kept is not None:
+                proposed.pop(r.id)  # the analyst found the same rule: one row, updated by the analyst
             row = old_rules.pop(r.id, None)
             if row is None:
                 row = Rule(process_id=process_id, rule_key=r.id)
@@ -437,6 +450,9 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
             row.challenge = r.challenge.model_dump(mode="json") if r.challenge else None
             rows[r.id] = row
         for gone in old_rules.values():
+            if gone.rule_key in proposed:
+                rows[gone.rule_key] = gone
+                continue
             if gone.status in gate_svc.RULE_DECIDED:
                 if keep_decided:
                     rows[gone.rule_key] = gone
@@ -497,7 +513,7 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
 
         if process.migration_status == "not_started":
             process.migration_status = "analysed"
-        changed = old_rule_keys != set(rows) or old_finding_keys != kept_findings
+        changed = old_rule_keys != set(rows) - set(proposed) or old_finding_keys != kept_findings
         gate_svc.audit(s, process, gate_svc.SYSTEM, "analysis completed", actor_kind=gate_svc.SYSTEM,
                        detail={"job_id": ctx.job_id, "provider": provider_name, "rules": len(rows),
                                "findings": len(kept_findings), "verified": verification.verified,

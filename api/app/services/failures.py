@@ -39,6 +39,10 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 
 
+class LogTooLarge(UploadError):
+    """An uploaded log over ``MAX_UPLOAD_BYTES`` (HTTP 413; other refusals are 422)."""
+
+
 class FailureItem(BaseModel):
     kind: Literal["build_failure", "test_failure", "parity_defect", "plan_error", "uploaded_log"]
     ref: str
@@ -118,7 +122,7 @@ def read_log_upload(name: str, data: bytes) -> FailureItem:
     binary, empty or raw TIBCO process XML."""
     shown = _title(Path(str(name).replace("\\", "/")).name)
     if len(data) > MAX_UPLOAD_BYTES:
-        raise UploadError(f"{shown} is larger than 5 MB")
+        raise LogTooLarge(f"{shown} is larger than 5 MB")
     if b"\x00" in data[:8192]:
         raise UploadError(f"{shown} looks binary: only text logs are accepted")
     try:

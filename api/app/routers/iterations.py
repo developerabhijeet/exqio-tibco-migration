@@ -37,6 +37,7 @@ from api.app.services.context import active_job
 from api.app.services.failures import (
     MAX_UPLOAD_BYTES,
     FailureItem,
+    LogTooLarge,
     clean,
     collect_failures,
     read_log_upload,
@@ -53,6 +54,7 @@ JSON_BODY_LIMIT = 256 * 1024
 #: ten logs of 5 MB, the ``body`` field and the multipart framing
 MULTIPART_BODY_LIMIT = MAX_LOGS * MAX_UPLOAD_BYTES + 1024 * 1024
 SME_ONLY = "an SME may open an iteration with requirements only"
+QUEUE_FAILED = "the design job could not be queued: the iteration was abandoned, open it again"
 TOO_LARGE = "the request is larger than {mb} MB"
 OPENERS = ("architect", "admin", "sme")
 FULL_OPENERS = frozenset({"architect", "admin"})
@@ -89,7 +91,9 @@ def _capped(request: Request, limit: int) -> Request:
 
 
 def _invalid(exc: ValidationError) -> HTTPException:
-    return HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False))
+    # never the input itself: requirements may hold secrets the masker has not seen yet
+    return HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False,
+                                                            include_input=False))
 
 
 def _read_upload(file: UploadFile) -> FailureItem:
@@ -129,8 +133,8 @@ async def _parse(request: Request) -> tuple[IterationOpen, list[FailureItem]]:
             try:
                 logs.append(await run_in_threadpool(_read_upload, f))
             except UploadError as exc:
-                status = 413 if str(exc).endswith("is larger than 5 MB") else 422
-                raise HTTPException(status_code=status, detail=str(exc)) from exc
+                raise HTTPException(status_code=413 if isinstance(exc, LogTooLarge) else 422,
+                                    detail=str(exc)) from exc
         return body, logs
     finally:
         await form.close()
@@ -222,9 +226,16 @@ async def open_iteration(process_id: str, request: Request, principal: OpenerDep
     await gate_svc.reset_gates(session, process, rows, "G3", f"iteration {row.n} re-entered design",
                                principal.actor, "user", {"iteration": row.n, "iteration_id": row.id})
     await session.commit()
-    job_id = await runner.submit("design", {"process_id": process_id, "provider": settings.resolved_provider(),
-                                            "iteration": row.n},
-                                 project_id=process.project_id, process_id=process_id)
+    try:
+        job_id = await runner.submit("design", {"process_id": process_id, "provider": settings.resolved_provider(),
+                                                "iteration": row.n},
+                                     project_id=process.project_id, process_id=process_id)
+    except Exception as exc:
+        # No open iteration without its design job: it is abandoned (the gate reset stands, audited).
+        await session.rollback()
+        await iteration_svc.abandon(session, row.id, iteration_svc.INITIAL_ACTOR, QUEUE_FAILED)
+        await session.commit()
+        raise HTTPException(status_code=503, detail=QUEUE_FAILED) from exc
     return IterationOut.model_validate(row).model_copy(update={"job_id": job_id})
 
 

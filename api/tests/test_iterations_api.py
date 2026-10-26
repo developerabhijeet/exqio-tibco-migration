@@ -314,3 +314,65 @@ async def test_approved_iteration_rule_passes_g1_reapproval(client, built_and_fa
     for gate in ("G1", "G2"):
         r = await client.post(f"/gates/{proc}/{gate}", json={"state": "approved", "note": ""}, headers=sme)
         assert r.status_code == 200, (gate, r.text)
+
+
+async def _reanalyse(client, proc: str) -> None:
+    r = await client.post(f"/processes/{proc}/analyse")
+    assert r.status_code == 202, r.text
+    assert (await _wait_job(client, r.json()["job_id"]))["status"] == "done"
+
+
+async def _iteration_rule(client, proc: str) -> dict:
+    view = (await client.get(f"/processes/{proc}/analysis")).json()
+    return next(r for r in view["rules"] if r["source"] == "iteration 2")
+
+
+async def test_reanalysis_keeps_a_draft_iteration_rule(client, built_and_failed, architect,
+                                                       provider_proposing_one_rule):  # review I1
+    _, proc = built_and_failed
+    await client.post(f"/processes/{proc}/iterations", json={"requirements": "Reject dealers on watch list."},
+                      headers=architect)
+    await wait_design(client, proc)
+    before = await _iteration_rule(client, proc)
+    await _reanalyse(client, proc)
+    after = await _iteration_rule(client, proc)
+    assert (after["id"], after["rule_key"], after["status"], after["text"]) == \
+        (before["id"], before["rule_key"], "draft", before["text"])
+    assert not [a for a in await audit_rows(client, "rule removed by re-analysis")
+                if a.detail.get("rule_key") == before["rule_key"]]
+
+
+async def test_full_reanalysis_keeps_an_approved_iteration_rule_and_the_spec_hash(
+        client, built_and_failed, architect, sme, provider_proposing_one_rule):  # review I1
+    _, proc = built_and_failed
+    await client.post(f"/processes/{proc}/iterations", json={"requirements": "Reject dealers on watch list."},
+                      headers=architect)
+    await wait_design(client, proc)
+    rule = await _iteration_rule(client, proc)
+    assert (await client.patch(f"/rules/{rule['id']}", json={"status": "approved"}, headers=sme)).status_code == 200
+    spec = (await client.get(f"/processes/{proc}/analysis")).json()["spec_hash"]
+    await _reanalyse(client, proc)
+    view = (await client.get(f"/processes/{proc}/analysis")).json()
+    kept = next(r for r in view["rules"] if r["id"] == rule["id"])
+    assert kept["status"] == "approved" and kept["rule_key"] == rule["rule_key"]
+    assert view["spec_hash"] == spec and view["provider"] == "fake"
+
+
+async def test_validation_errors_do_not_echo_the_input(client, built_and_failed, architect):  # review M3
+    _, proc = built_and_failed
+    secret = "password=hunter2 " + "x" * 20_000
+    r = await client.post(f"/processes/{proc}/iterations", json={"requirements": secret}, headers=architect)
+    assert r.status_code == 422 and "hunter2" not in r.text
+
+
+async def test_a_failed_queue_leaves_no_open_iteration(client, app, built_and_failed, architect, monkeypatch):  # M5
+    pid, proc = built_and_failed
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr(app.state.runner, "submit", broken)
+    r = await client.post(f"/processes/{proc}/iterations", json={"requirements": "r"}, headers=architect)
+    assert r.status_code == 503
+    listed = (await client.get(f"/projects/{pid}/iterations")).json()
+    assert listed[-1]["n"] == 2 and listed[-1]["status"] == "abandoned"
