@@ -41,16 +41,18 @@ function KeyValues({ title, rows, empty }: { title: string; rows: [string, unkno
       {rows.length === 0 ? (
         <p className="mt-1 text-md text-slate">{empty}</p>
       ) : (
-        <table className="mt-1 w-full text-sm">
-          <tbody className="divide-y divide-line">
-            {rows.map(([k, v]) => (
-              <tr key={k}>
-                <td className="w-[38%] py-1.5 pr-3 align-top font-medium text-heading">{k}</td>
-                <td className="whitespace-pre-wrap break-all py-1.5 font-mono text-xs text-ink">{scalar(v)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-scroll mt-1">
+          <table className="table table-dense text-sm">
+            <tbody className="divide-y divide-line">
+              {rows.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="w-[38%] py-1.5 pr-3 align-top font-medium text-heading">{k}</td>
+                  <td className="whitespace-pre-wrap break-all py-1.5 font-mono text-xs text-ink">{scalar(v)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -97,7 +99,7 @@ export function Inspector({
   );
 
   return (
-    <section className="card flex h-[620px] flex-col overflow-hidden" data-testid="inspector">
+    <section className="card flex p-0 h-[620px] flex-col overflow-hidden" data-testid="inspector">
       <div className="border-b border-line px-4 pt-3">
         <p className="label">Inspector</p>
         <p className="truncate font-semibold text-heading">{node ? node.data.name : "Select a step on the canvas"}</p>

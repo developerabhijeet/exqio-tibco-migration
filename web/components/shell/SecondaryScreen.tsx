@@ -1,20 +1,24 @@
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { PageHeader } from "@/components/ui/PageHeader";
 
-/** Layout for the secondary screens reached from the top bar. */
-export function SecondaryScreen({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) {
+/** Layout for the secondary screens reached from the top bar: the page header, then its sections. */
+export function SecondaryScreen({
+  title,
+  description,
+  eyebrow = "Project",
+  actions,
+  children,
+}: {
+  title: string;
+  description: string;
+  eyebrow?: string;
+  actions?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
   return (
-    <div className="space-y-6">
-      <Link href="/" className="inline-flex items-center gap-1.5 text-md font-medium text-accent-ink hover:underline">
-        <ArrowLeft size={16} aria-hidden /> Back to the migration
-      </Link>
-      <div>
-        <p className="eyebrow">Project</p>
-        <h1 className="screen-title">{title}</h1>
-        <p className="mt-1 text-slate">{description}</p>
-      </div>
+    <div className="page">
+      <PageHeader back={{ href: "/", label: "Back to the migration" }} eyebrow={eyebrow} title={title} description={description} actions={actions} />
       {children ?? (
-        <section className="card p-8">
+        <section className="card">
           <p className="text-slate">This screen is not available in this build yet.</p>
         </section>
       )}

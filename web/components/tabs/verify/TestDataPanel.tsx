@@ -52,36 +52,38 @@ export function TestDataPanel({ processId }: { processId: string }) {
                   <span className="text-slate">{t.operations.join(", ")}</span>
                   <span className="ml-auto text-slate">{t.rows.length} rows</span>
                 </p>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-2xs uppercase tracking-wide text-slate">
-                      {cols.map((c) => (
-                        <th key={c} className="px-3 py-1.5">
-                          {c}
-                          {masked.has(c.toLowerCase()) ? <Lock size={10} className="ml-1 inline text-decision" aria-label="masked" /> : null}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {t.rows.map((r, i) => (
-                      <tr key={i}>
+                <div className="table-scroll">
+                  <table className="table text-sm">
+                    <thead>
+                      <tr className="text-left text-2xs uppercase tracking-wide text-slate">
                         {cols.map((c) => (
-                          <td key={c} className={`px-3 py-1.5 font-mono ${masked.has(c.toLowerCase()) ? "text-decision" : "text-ink"}`}>
-                            {cell(r[c])}
-                          </td>
+                          <th key={c} className="px-3 py-1.5">
+                            {c}
+                            {masked.has(c.toLowerCase()) ? <Lock size={10} className="ml-1 inline text-decision" aria-label="masked" /> : null}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {t.rows.map((r, i) => (
+                        <tr key={i}>
+                          {cols.map((c) => (
+                            <td key={c} className={`px-3 py-1.5 font-mono ${masked.has(c.toLowerCase()) ? "text-decision" : "text-ink"}`}>
+                              {cell(r[c])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             );
           })}
           {d.inputs.length > 0 ? (
-            <div className="overflow-x-auto rounded-btn border border-line">
+            <div className="table-scroll rounded-btn border border-line">
               <p className="border-b border-line bg-page px-3 py-1.5 text-sm font-semibold text-heading">Scenario inputs</p>
-              <table className="w-full text-sm">
+              <table className="table table-dense text-sm">
                 <tbody className="divide-y divide-line">
                   {d.inputs.map((x) => (
                     <tr key={x.scenario}>

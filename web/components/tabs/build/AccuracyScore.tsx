@@ -131,43 +131,45 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
       </div>
 
       {!failedCompile ? (
-        <table className="mt-5 w-full text-sm">
-          <thead>
-            <tr className="table-head">
-              <th scope="col" className="rounded-l-btn px-3 py-1.5">
-                Metric
-              </th>
-              <th scope="col" className="px-3 py-1.5 text-right">
-                Value
-              </th>
-              <th scope="col" className="px-3 py-1.5 text-right">
-                Weight
-              </th>
-              <th scope="col" className="rounded-r-btn px-3 py-1.5 text-right">
-                Contribution
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {AXES.map((a) => {
-              const value = metrics[a.key];
-              const has = typeof value === "number";
-              const weight = has ? WEIGHTS[a.key] / weightTotal : 0;
-              return (
-                <tr key={a.key} data-testid={`accuracy-row-${a.key}`} className="row-hover">
-                  <td className="px-3 py-1.5 text-ink">{a.label}</td>
-                  <td className={`px-3 py-1.5 text-right font-medium ${has ? "text-heading" : "text-slate"}`}>
-                    {has ? pct(value as number) : "not measured"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-slate">{has ? pct(weight) : "left out"}</td>
-                  <td className="px-3 py-1.5 text-right font-medium text-heading">
-                    {has ? pct((value as number) * weight) : "0%"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="table-scroll mt-5">
+          <table className="table text-sm">
+            <thead>
+              <tr className="table-head">
+                <th scope="col" className="rounded-l-btn px-3 py-1.5">
+                  Metric
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right">
+                  Value
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right">
+                  Weight
+                </th>
+                <th scope="col" className="rounded-r-btn px-3 py-1.5 text-right">
+                  Contribution
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {AXES.map((a) => {
+                const value = metrics[a.key];
+                const has = typeof value === "number";
+                const weight = has ? WEIGHTS[a.key] / weightTotal : 0;
+                return (
+                  <tr key={a.key} data-testid={`accuracy-row-${a.key}`} className="row-hover">
+                    <td className="px-3 py-1.5 text-ink">{a.label}</td>
+                    <td className={`px-3 py-1.5 text-right font-medium ${has ? "text-heading" : "text-slate"}`}>
+                      {has ? pct(value as number) : "not measured"}
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-slate">{has ? pct(weight) : "left out"}</td>
+                    <td className="px-3 py-1.5 text-right font-medium text-heading">
+                      {has ? pct((value as number) * weight) : "0%"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : null}
 
       <p className="mt-4 flex items-start gap-2 text-sm text-slate">

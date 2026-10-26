@@ -90,7 +90,7 @@ export function DiscoverTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 2</p>
           <h2 className="panel-title">Discover</h2>
@@ -126,7 +126,7 @@ export function DiscoverTab() {
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-        <section className="card flex h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[440px] flex-col overflow-hidden">
           <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
             <h3 className="text-lg font-semibold text-heading">Domain graph</h3>
             <label className="ml-auto flex items-center gap-1.5 text-sm text-slate">
@@ -176,7 +176,7 @@ export function DiscoverTab() {
             </div>
           </div>
         </section>
-        <section className="card flex h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[440px] flex-col overflow-hidden">
           <div className="border-b border-line px-4 py-2.5">
             <h3 className="text-lg font-semibold text-heading">Processes</h3>
           </div>

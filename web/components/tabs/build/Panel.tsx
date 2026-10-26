@@ -23,18 +23,18 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section id={id} className={`card scroll-mt-4 p-5 ${className}`} data-testid={testId}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <section id={id} className={`card scroll-mt-4 ${className}`} data-testid={testId}>
+      <div className="card-header">
+        <div className="min-w-0">
           {eyebrow ? <p className="label">{eyebrow}</p> : null}
-          <h3 className="flex items-center gap-2 text-xl font-semibold text-heading">
+          <h3 className="card-title mt-0.5 flex items-center gap-2">
             {icon}
             {title}
           </h3>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
-      <div className="mt-3">{children}</div>
+      <div>{children}</div>
     </section>
   );
 }

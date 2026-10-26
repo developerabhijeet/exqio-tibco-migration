@@ -77,19 +77,21 @@ function TableDiagram({ tables }: { tables: Views["tables"] }) {
               ))}
             </span>
           </figcaption>
-          <table className="w-full text-sm">
-            <tbody>
-              {t.columns.map((c) => (
-                <tr key={c.name} className="border-b border-line/50 last:border-0">
-                  <td className="px-3 py-1.5 font-mono text-ink">{c.name}</td>
-                  <td className="px-2 py-1.5 text-slate">{c.type || "n/a"}</td>
-                  <td className="px-3 py-1.5 text-right">
-                    <Pill tone={ROLE_TONE[c.role] ?? "det"}>{c.role}</Pill>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="table table-dense text-sm">
+              <tbody>
+                {t.columns.map((c) => (
+                  <tr key={c.name} className="border-b border-line/50 last:border-0">
+                    <td className="px-3 py-1.5 font-mono text-ink">{c.name}</td>
+                    <td className="px-2 py-1.5 text-slate">{c.type || "n/a"}</td>
+                    <td className="px-3 py-1.5 text-right">
+                      <Pill tone={ROLE_TONE[c.role] ?? "det"}>{c.role}</Pill>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {t.columns.length === 0 ? (
             <p className="px-3 py-2 text-sm text-slate">no columns named in the SQL</p>
           ) : null}

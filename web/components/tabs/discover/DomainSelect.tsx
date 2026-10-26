@@ -130,7 +130,7 @@ export function DomainSelect({
               <ChevronDown size={18} className="text-slate" aria-hidden />
             </button>
             {open ? (
-              <ul role="listbox" aria-label="Domains" className="card absolute left-0 top-[60px] z-40 w-[380px] py-1 shadow-lg">
+              <ul role="listbox" aria-label="Domains" className="card absolute left-0 top-[60px] z-40 w-[380px] px-0 py-1 shadow-lg">
                 {[{ id: ALL, name: "All domains", count: total, suggested: "" }, ...domains.map((d) => ({
                   id: d.id,
                   name: d.name,

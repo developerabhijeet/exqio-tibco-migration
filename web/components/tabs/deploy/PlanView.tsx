@@ -138,8 +138,8 @@ export function PlanView({
           ) : null}
 
           {p.summary ? (
-            <div className="overflow-x-auto rounded-btn border border-line">
-              <table className="w-full text-sm">
+            <div className="table-scroll rounded-btn border border-line">
+              <table className="table text-sm">
                 <thead>
                   <tr className="table-head">
                     <th className="px-3 py-2">Unit</th>

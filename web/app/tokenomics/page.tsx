@@ -43,7 +43,7 @@ function Tile({ label: name, value, sub, icon: Icon }: {
   icon: typeof Coins;
 }) {
   return (
-    <div className="card px-5 py-4">
+    <div className="card">
       <p className="label flex items-center gap-1.5">
         <Icon size={14} aria-hidden /> {name}
       </p>
@@ -74,8 +74,8 @@ function AgentTable({ rows, totalCost }: { rows: AgentTotals[]; totalCost: numbe
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-md" data-testid="agent-costs">
+    <div className="table-scroll">
+      <table className="table" data-testid="agent-costs">
         <thead className="border-b border-line text-left text-slate">
           <tr>
             <th className="px-3 py-2">Agent</th>
@@ -224,8 +224,8 @@ export default function TokenomicsPage() {
       ) : totals.model_calls === 0 ? (
         <Empty title="No model calls yet">Run a step that uses a model and its cost shows up here.</Empty>
       ) : (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
+        <div className="space-y-8">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <p className="text-md text-slate">
               Counting since the project was created. Resetting clears the model calls only; the runs,
               gates and builds stay, and the reset goes on the audit trail.
@@ -233,7 +233,7 @@ export default function TokenomicsPage() {
             <ResetMeter projectId={projectId} calls={totals.model_calls} />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
             <Tile
               icon={Coins}
               label="Total cost"

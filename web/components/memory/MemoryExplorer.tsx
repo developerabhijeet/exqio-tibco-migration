@@ -8,9 +8,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
-import { ArrowLeft, DatabaseBackup, GitBranch, Loader2, Share2, Waypoints } from "lucide-react";
+import { DatabaseBackup, GitBranch, Loader2, Share2, Waypoints } from "lucide-react";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { useAppState } from "@/lib/state";
 import { ApiError } from "@/lib/api";
 import {
@@ -482,26 +482,25 @@ export function MemoryExplorer() {
   const focusNode = shown?.nodes.find((n) => n.uid === (mode === "lineage" ? view.uid : focus));
 
   return (
-    <div className="flex h-[calc(100vh-13.5rem)] min-h-[780px] flex-col gap-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <Link href="/" className="inline-flex items-center gap-1.5 text-md font-medium text-accent-ink hover:underline">
-            <ArrowLeft size={15} aria-hidden /> Back to the migration
-          </Link>
-          <h1 className="screen-title mt-2">Memory</h1>
-          <p className="mt-0.5 text-base text-slate">The old code, the new code and what the team learnt, linked and versioned by revision.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <MemoryStatusPill status={status.data} />
-          {projectReady ? <ReingestButton projectId={projectReady} /> : null}
-          {ready ? (
-            <button type="button" className="btn-secondary py-1.5 text-md" onClick={share} title="Copy a link to this view">
-              <Share2 size={15} aria-hidden />
-              {copied ? "Link copied" : "Share view"}
-            </button>
-          ) : null}
-        </div>
-      </header>
+    <div className="flex h-[calc(100vh-15rem)] min-h-[780px] flex-col gap-6">
+      <PageHeader
+        back={{ href: "/", label: "Back to the migration" }}
+        eyebrow="Project"
+        title="Memory"
+        description="The old code, the new code and what the team learnt, linked and versioned by revision."
+        actions={
+          <>
+            <MemoryStatusPill status={status.data} />
+            {projectReady ? <ReingestButton projectId={projectReady} /> : null}
+            {ready ? (
+              <button type="button" className="btn-secondary py-1.5 text-md" onClick={share} title="Copy a link to this view">
+                <Share2 size={15} aria-hidden />
+                {copied ? "Link copied" : "Share view"}
+              </button>
+            ) : null}
+          </>
+        }
+      />
 
       {!projectId ? (
         <Empty title="No project selected">Pick a project in the top bar.</Empty>
@@ -534,7 +533,7 @@ export function MemoryExplorer() {
               onPick={pick}
             />
 
-            <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Memory graph">
+            <section className="card flex p-0 min-w-0 flex-1 flex-col overflow-hidden" aria-label="Memory graph">
               <div className="flex flex-wrap items-center gap-3 border-b border-line/80 px-5 py-3">
                 <div className="min-w-[120px] flex-1">
                   <p className="label">{mode === "lineage" ? "Lineage of" : focus ? "Around" : "Project overview"}</p>

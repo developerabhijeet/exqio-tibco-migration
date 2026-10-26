@@ -51,7 +51,7 @@ export function UploadTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0">
         <p className="eyebrow">Step 1</p>
         <h2 className="panel-title">Upload the estate</h2>
       </div>

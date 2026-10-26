@@ -99,60 +99,64 @@ function Models({ s, onSaved }: { s: SettingsView; onSaved: (v: SettingsView) =>
     >
       {error ? <ErrorNote error={error} /> : null}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-        <table className="w-full text-md">
-          <thead>
-            <tr className="table-head">
-              <th className="px-3 py-2">Tier</th>
-              <th className="px-3 py-2">Claude model</th>
-              <th className="px-3 py-2">Azure OpenAI deployment</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {TIERS.map((t) => (
-              <tr key={t}>
-                <td className="px-3 py-2 font-medium text-heading">{t}</td>
-                <td className="px-3 py-2">
-                  <select
-                    aria-label={`Claude model for the ${t} tier`}
-                    className="select py-1 font-mono text-sm"
-                    value={models[t]}
-                    onChange={(e) => setModels((m) => ({ ...m, [t]: e.target.value }))}
-                  >
-                    {[...new Set([models[t], ...CLAUDE_MODELS])].filter(Boolean).map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-3 py-2">
-                  <Presence ok={!!s.models.tiers[t]?.azure_deployment_set} yes="set" no="not set" />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div>
-          <table className="w-full text-sm">
+        <div className="table-scroll">
+          <table className="table">
             <thead>
               <tr className="table-head">
-                <th className="px-3 py-2">Stage</th>
-                <th className="px-3 py-2">Task</th>
-                <th className="px-3 py-2 text-right">Weight</th>
                 <th className="px-3 py-2">Tier</th>
+                <th className="px-3 py-2">Claude model</th>
+                <th className="px-3 py-2">Azure OpenAI deployment</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {s.models.stages.map((st) => (
-                <tr key={st.stage}>
-                  <td className="px-3 py-1.5 font-medium text-heading">{st.stage}</td>
-                  <td className="px-3 py-1.5 text-slate">{st.task_kind}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{st.weight}</td>
-                  <td className="px-3 py-1.5 text-slate">{st.tier}</td>
+              {TIERS.map((t) => (
+                <tr key={t}>
+                  <td className="px-3 py-2 font-medium text-heading">{t}</td>
+                  <td className="px-3 py-2">
+                    <select
+                      aria-label={`Claude model for the ${t} tier`}
+                      className="select py-1 font-mono text-sm"
+                      value={models[t]}
+                      onChange={(e) => setModels((m) => ({ ...m, [t]: e.target.value }))}
+                    >
+                      {[...new Set([models[t], ...CLAUDE_MODELS])].filter(Boolean).map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Presence ok={!!s.models.tiers[t]?.azure_deployment_set} yes="set" no="not set" />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+        <div>
+          <div className="table-scroll">
+            <table className="table text-sm">
+              <thead>
+                <tr className="table-head">
+                  <th className="px-3 py-2">Stage</th>
+                  <th className="px-3 py-2">Task</th>
+                  <th className="px-3 py-2 text-right">Weight</th>
+                  <th className="px-3 py-2">Tier</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {s.models.stages.map((st) => (
+                  <tr key={st.stage}>
+                    <td className="px-3 py-1.5 font-medium text-heading">{st.stage}</td>
+                    <td className="px-3 py-1.5 text-slate">{st.task_kind}</td>
+                    <td className="px-3 py-1.5 text-right font-mono">{st.weight}</td>
+                    <td className="px-3 py-1.5 text-slate">{st.tier}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="mt-1.5 text-xs text-slate">
             A stage takes the tier its task complexity falls in; the model is the tier&apos;s model for the active provider. The
             API has no per-stage override.
@@ -329,8 +333,8 @@ function Evaluation() {
             Evaluation {v.id.slice(0, 8)}: {v.status}
           </p>
           {v.rows.length > 0 ? (
-            <div className="overflow-x-auto rounded-btn border border-line">
-              <table className="w-full min-w-[860px] text-sm">
+            <div className="table-scroll rounded-btn border border-line">
+              <table className="table min-w-[860px] text-sm">
                 <thead>
                   <tr className="table-head">
                     {["Provider", "Model", "Process", "Citations verified", "Coverage", "Challenger agree", "Rules", "Latency", "Cost"].map((h) => (
@@ -375,31 +379,33 @@ function Toolchains({ s }: { s: SettingsView }) {
   const names = [...order.filter((n) => s.toolchains[n]), ...Object.keys(s.toolchains).filter((n) => !order.includes(n))];
   return (
     <Panel title="Toolchains" eyebrow="Detected on the API host" testId="toolchains">
-      <table className="w-full text-md">
-        <thead>
-          <tr className="table-head">
-            <th className="px-3 py-2">Tool</th>
-            <th className="px-3 py-2">Present</th>
-            <th className="px-3 py-2">Version</th>
-            <th className="px-3 py-2">Path</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">
-          {names.map((n) => {
-            const t = s.toolchains[n];
-            return (
-              <tr key={n} data-tool={n}>
-                <td className="px-3 py-2 font-medium text-heading">{n}</td>
-                <td className="px-3 py-2">
-                  <Presence ok={t.present} yes="present" no="missing" />
-                </td>
-                <td className="px-3 py-2 font-mono text-xs">{t.version ?? ""}</td>
-                <td className="px-3 py-2 font-mono text-xs text-slate">{t.path ?? ""}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr className="table-head">
+              <th className="px-3 py-2">Tool</th>
+              <th className="px-3 py-2">Present</th>
+              <th className="px-3 py-2">Version</th>
+              <th className="px-3 py-2">Path</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {names.map((n) => {
+              const t = s.toolchains[n];
+              return (
+                <tr key={n} data-tool={n}>
+                  <td className="px-3 py-2 font-medium text-heading">{n}</td>
+                  <td className="px-3 py-2">
+                    <Presence ok={t.present} yes="present" no="missing" />
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">{t.version ?? ""}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate">{t.path ?? ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       <p className="mt-2 text-sm text-slate">
         APP_SECRET <Presence ok={s.app_secret_configured} yes="set" no="not set" /> · Scenario database: {s.scenario_database}
       </p>
@@ -544,7 +550,7 @@ function GeneralSettings() {
       {!s ? (
         settings.isLoading ? null : <Empty title="Settings unavailable">The API did not answer GET /settings.</Empty>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-8">
           <Providers s={s} />
           <Models key={JSON.stringify(s.models.tiers)} s={s} onSaved={onSaved} />
           <AzureKeys key={s.azure_openai.source + s.azure_openai.endpoint} s={s} onSaved={onSaved} />

@@ -30,7 +30,7 @@ export function Pill({
     <span
       title={title}
       data-testid={testId}
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold leading-5 tracking-[0.01em] ${TONES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold leading-5 tracking-[0.01em] ${TONES[tone]} ${className}`}
     >
       {children}
     </span>

@@ -88,8 +88,8 @@ function ScenarioCard({ r }: { r: ScenarioReport }) {
       {r.status === "error" ? (
         <p className="px-3 py-2 text-sm text-error">{r.error ?? "the scenario did not run"}</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[680px] table-fixed text-sm">
+        <div className="table-scroll">
+          <table className="table min-w-[680px] table-fixed text-sm">
             <thead>
               <tr className="text-left text-2xs uppercase tracking-wide text-slate">
                 <th className="w-[34%] px-3 py-1.5">Field</th>

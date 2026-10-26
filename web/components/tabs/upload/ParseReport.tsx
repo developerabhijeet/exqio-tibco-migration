@@ -58,13 +58,13 @@ export function ParseReportTable({
   const processFiles = new Set(processes.map((p) => p.source_path));
   const otherFailures = report.failures.filter((f) => !processFiles.has(reportFile(f.path)));
   return (
-    <section className="card overflow-hidden">
+    <section className="card overflow-hidden p-0">
       <div className="flex items-center justify-between px-5 py-4">
         <h3 className="panel-title">Parse report</h3>
         <span className="text-md text-slate">Select a row to open the process on the canvas</span>
       </div>
-      <div className="overflow-x-auto">
-        <table data-testid="parse-report" className="w-full text-md">
+      <div className="table-scroll">
+        <table data-testid="parse-report" className="table">
           <thead>
             <tr className="table-head">
               <th className="px-5 py-2.5 font-semibold">File</th>

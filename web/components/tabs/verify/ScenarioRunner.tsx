@@ -187,8 +187,8 @@ export function ScenarioRunner({
           {list.isLoading ? "Loading scenarios." : "No scenarios yet. Generate scenarios builds one per branch, the happy path and the faults from the model."}
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-btn border border-line">
-          <table className="w-full min-w-[640px] text-sm">
+        <div className="table-scroll rounded-btn border border-line">
+          <table className="table min-w-[640px] text-sm">
             <thead>
               <tr className="table-head">
                 <th className="px-3 py-2">Kind</th>

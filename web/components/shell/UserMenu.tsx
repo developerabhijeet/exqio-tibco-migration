@@ -61,7 +61,7 @@ export function UserMenu() {
         <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-strong text-sm font-semibold uppercase shadow-inset">
           {shown.slice(0, 1)}
         </span>
-        <span className="text-left leading-tight">
+        <span className="text-left leading-tight max-lg:sr-only">
           <span className="block text-md font-semibold">{shown}</span>
           <span className="block text-xs text-lilac">{me.role}</span>
         </span>

@@ -241,8 +241,28 @@ kbd,
 }
 
 @layer components {
+  /* A card: surface, hairline border, radius `card`, resting elevation and the card padding (24 px,
+     20 px under 640). A card that lays out its own regions edge to edge (a header bar over a canvas,
+     a table) sets `p-0`; any padding utility overrides this one. */
   .card {
     @apply rounded-card border border-line bg-surface shadow-e1;
+    padding: var(--card-pad);
+  }
+  /* A card's header: title (and an eyebrow or one-line description) on the left, actions on the
+     right, wrapping on a narrow card; 16 px above the body. */
+  .card-header {
+    @apply mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2;
+  }
+  .card-desc {
+    @apply mt-0.5 text-md text-slate;
+  }
+  /* A page: its header, then sections 32 px apart. */
+  .page {
+    @apply flex flex-col;
+    gap: var(--section-gap);
+  }
+  .section {
+    @apply flex flex-col gap-4;
   }
   .eyebrow {
     @apply text-eyebrow uppercase text-coral-dk;
@@ -274,8 +294,46 @@ kbd,
   .input {
     @apply w-full rounded-btn border border-line-strong bg-surface px-3 py-2 text-base text-ink outline-none transition-colors placeholder:text-slate/60 focus:border-accent focus:ring-2 focus:ring-accent-soft;
   }
+  /* The header row of a table, also outside `.table`: sunken, small uppercase slate labels. */
   .table-head {
-    @apply bg-plum text-left text-eyebrow uppercase text-white;
+    @apply bg-sunken text-left text-xs font-semibold uppercase tracking-[0.04em] text-slate;
+  }
+  /* Tables (spec section 4): a sunken header row with small uppercase labels that sticks while
+     its scroll container scrolls, rows at least 44 px high on hairline separators, no zebra, a soft
+     accent hover, numbers right-aligned in tabular figures (`.num`). Every cell rule is wrapped in
+     :where() so it has the specificity of one class and any utility on a cell overrides it. */
+  .table {
+    @apply w-full border-collapse text-left text-md;
+  }
+  .table :where(thead th) {
+    @apply sticky top-0 z-[1] bg-sunken px-4 py-2.5 align-bottom text-xs font-semibold uppercase tracking-[0.04em] text-slate;
+    box-shadow: inset 0 -1px 0 rgb(var(--c-line));
+  }
+  .table :where(tbody td, tbody th) {
+    @apply h-11 border-b border-line px-4 py-2.5 align-middle;
+  }
+  .table :where(tbody tr:last-child > td, tbody tr:last-child > th) {
+    @apply border-b-0;
+  }
+  .table :where(tbody tr) {
+    @apply transition-colors duration-fast;
+  }
+  .table :where(tbody tr:hover) {
+    @apply bg-accent-soft/40;
+  }
+  .table :where(.num) {
+    @apply text-right tabular-nums;
+  }
+  /* Key and value lists in drawers and inspectors: no row height floor and no hover. */
+  .table-dense :where(tbody td, tbody th) {
+    @apply h-auto;
+  }
+  .table-dense :where(tbody tr:hover) {
+    @apply bg-transparent;
+  }
+  /* A wide table scrolls inside its card, never the page. */
+  .table-scroll {
+    @apply min-w-0 max-w-full overflow-x-auto;
   }
   /* A select keeps its native behavior and loses the native chrome, which the platform draws in
      its own colors and which looks pasted on beside the buttons next to it. The caret is drawn as

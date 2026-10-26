@@ -63,13 +63,13 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Pinned to the top of the scrolling content area: which project this is and where the
           migration stands. The negative margins let the background cover the page gutter, so the
           cards passing underneath are not visible beside it. */}
       <div
         ref={pinned}
-        className="sticky top-0 z-20 -mx-6 -mt-6 space-y-4 border-b border-line/60 bg-page px-6 pb-4 pt-6 print:static print:m-0 print:border-0 print:p-0"
+        className="sticky top-0 z-20 -mx-[var(--gutter)] -mt-8 space-y-4 border-b border-line/60 bg-page px-[var(--gutter)] py-5 print:static print:m-0 print:border-0 print:p-0"
       >
         <div className="flex items-end justify-between gap-4 print:hidden">
           <div>

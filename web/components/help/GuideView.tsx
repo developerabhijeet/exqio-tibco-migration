@@ -79,7 +79,7 @@ const COMPONENTS: Components = {
     className ? (
       <code className={`${className} font-mono`}>{children}</code>
     ) : (
-      <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[0.88em] text-heading">{children}</code>
+      <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[0.88em] text-heading break-words">{children}</code>
     ),
   pre: ({ children }) => (
     <div className="relative my-4">
@@ -88,8 +88,8 @@ const COMPONENTS: Components = {
     </div>
   ),
   table: ({ children }) => (
-    <div className="my-5 overflow-x-auto rounded-card border border-line">
-      <table className="w-full text-left text-md">{children}</table>
+    <div className="table-scroll my-5 rounded-card border border-line">
+      <table className="table">{children}</table>
     </div>
   ),
   thead: ({ children }) => <thead className="table-head">{children}</thead>,

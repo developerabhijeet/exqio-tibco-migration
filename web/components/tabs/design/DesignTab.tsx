@@ -100,7 +100,7 @@ export function DesignTab() {
 
   return (
     <div className="space-y-5" data-testid="design-tab">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 4</p>
           <h2 className="panel-title">Design</h2>
@@ -259,24 +259,26 @@ export function DesignTab() {
                   {rec.messaging.length === 0 ? (
                     <p className="text-md text-slate">No queues or topics.</p>
                   ) : (
-                    <table className="w-full text-md">
-                      <thead>
-                        <tr className="table-head">
-                          <th className="px-3 py-2">Kind</th>
-                          <th className="px-3 py-2">Name</th>
-                          <th className="px-3 py-2">Direction</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-line">
-                        {rec.messaging.map((m) => (
-                          <tr key={`${m.kind}:${m.name}:${m.direction}`}>
-                            <td className="px-3 py-2">{m.kind}</td>
-                            <td className="px-3 py-2 font-mono text-sm">{m.name}</td>
-                            <td className="px-3 py-2">{m.direction === "in" ? "consumed" : "published"}</td>
+                    <div className="table-scroll">
+                      <table className="table">
+                        <thead>
+                          <tr className="table-head">
+                            <th className="px-3 py-2">Kind</th>
+                            <th className="px-3 py-2">Name</th>
+                            <th className="px-3 py-2">Direction</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-line">
+                          {rec.messaging.map((m) => (
+                            <tr key={`${m.kind}:${m.name}:${m.direction}`}>
+                              <td className="px-3 py-2">{m.kind}</td>
+                              <td className="px-3 py-2 font-mono text-sm">{m.name}</td>
+                              <td className="px-3 py-2">{m.direction === "in" ? "consumed" : "published"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </Panel>
                 <Panel title="Resilience" eyebrow="Timeouts, retries and breakers">

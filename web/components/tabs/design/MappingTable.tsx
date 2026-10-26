@@ -22,8 +22,8 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[960px] text-md" data-testid="mapping-table">
+    <div className="table-scroll">
+      <table className="table min-w-[960px]" data-testid="mapping-table">
         <thead>
           <tr className="table-head">
             <th className="px-3 py-2">TIBCO step</th>

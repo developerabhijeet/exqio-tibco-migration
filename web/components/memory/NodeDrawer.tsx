@@ -95,18 +95,20 @@ function Overview({ d }: { d: NodeDetail }) {
         {props.length === 0 ? (
           <p className="text-md text-slate">No properties.</p>
         ) : (
-          <table className="w-full text-md">
-            <tbody className="divide-y divide-line/70">
-              {props.map(([k, v]) => (
-                <tr key={k} className="align-top">
-                  <th scope="row" className="w-[38%] py-2 pr-3 text-left font-medium text-slate">
-                    {k}
-                  </th>
-                  <td className="break-words py-2 font-mono text-sm text-ink">{show(v)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="table table-dense">
+              <tbody className="divide-y divide-line/70">
+                {props.map(([k, v]) => (
+                  <tr key={k} className="align-top">
+                    <th scope="row" className="w-[38%] py-2 pr-3 text-left font-medium text-slate">
+                      {k}
+                    </th>
+                    <td className="break-words py-2 font-mono text-sm text-ink">{show(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -306,7 +308,7 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, o
       ref={panel}
       tabIndex={-1}
       data-testid="node-drawer"
-      className="card flex min-h-0 w-[440px] shrink-0 flex-col overflow-hidden outline-none"
+      className="card flex p-0 min-h-0 w-[440px] shrink-0 flex-col overflow-hidden outline-none"
       aria-label="Node detail"
     >
       <div className="border-b border-line/80 px-6 pb-0 pt-5">

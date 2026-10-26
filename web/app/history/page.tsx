@@ -25,7 +25,7 @@ type Measure = keyof typeof MEASURES;
 
 function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="card px-5 py-4">
+    <div className="card">
       <p className="label">{label}</p>
       <p className="mt-1 text-3xl font-semibold text-heading">{value}</p>
       {sub ? <p className="text-sm text-slate">{sub}</p> : null}
@@ -112,15 +112,15 @@ export default function Page() {
       ) : history.error ? (
         <ErrorNote error={history.error} />
       ) : !h ? null : (
-        <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-4">
+        <div className="space-y-8">
+          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
             <Tile label="Tokens in" value={fmt.format(h.totals.all.tokens_in)} sub={`${fmt.format(h.totals.all.tokens_cached)} cached`} />
             <Tile label="Tokens out" value={fmt.format(h.totals.all.tokens_out)} sub={`cache hit rate ${Math.round(h.totals.cache_hit_rate * 100)}%`} />
             <Tile label="Cost" value={usd(h.totals.all.cost_usd)} sub={`${h.totals.all.model_calls} model calls, ${h.totals.all.failed_calls} failed`} />
             <Tile label="Jobs and decisions" value={`${h.totals.all.jobs} / ${h.totals.all.decisions}`} sub="jobs / human decisions" />
           </div>
 
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+          <div className="grid items-start gap-6 xl:grid-cols-2">
             <Panel
               title="By phase"
               eyebrow="Totals"
@@ -157,31 +157,33 @@ export default function Page() {
                   </ResponsiveContainer>
                 ) : null}
               </div>
-              <table className="mt-2 w-full text-sm">
-                <thead>
-                  <tr className="text-left text-2xs uppercase tracking-wide text-slate">
-                    <th className="py-1">Phase</th>
-                    <th className="py-1 text-right">Jobs</th>
-                    <th className="py-1 text-right">Calls</th>
-                    <th className="py-1 text-right">Tokens</th>
-                    <th className="py-1 text-right">Cost</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {h.phases.map((p) => {
-                    const t = h.totals.by_phase[p];
-                    return t ? (
-                      <tr key={p}>
-                        <td className="py-1 font-medium text-heading">{p}</td>
-                        <td className="py-1 text-right">{t.jobs}</td>
-                        <td className="py-1 text-right">{t.model_calls}</td>
-                        <td className="py-1 text-right">{fmt.format(t.tokens_in + t.tokens_out)}</td>
-                        <td className="py-1 text-right">{usd(t.cost_usd)}</td>
-                      </tr>
-                    ) : null;
-                  })}
-                </tbody>
-              </table>
+              <div className="table-scroll mt-4">
+                <table className="table text-sm">
+                  <thead>
+                    <tr className="text-left text-2xs uppercase tracking-wide text-slate">
+                      <th className="py-1">Phase</th>
+                      <th className="py-1 text-right">Jobs</th>
+                      <th className="py-1 text-right">Calls</th>
+                      <th className="py-1 text-right">Tokens</th>
+                      <th className="py-1 text-right">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {h.phases.map((p) => {
+                      const t = h.totals.by_phase[p];
+                      return t ? (
+                        <tr key={p}>
+                          <td className="py-1 font-medium text-heading">{p}</td>
+                          <td className="py-1 text-right">{t.jobs}</td>
+                          <td className="py-1 text-right">{t.model_calls}</td>
+                          <td className="py-1 text-right">{fmt.format(t.tokens_in + t.tokens_out)}</td>
+                          <td className="py-1 text-right">{usd(t.cost_usd)}</td>
+                        </tr>
+                      ) : null;
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </Panel>
 
             <Panel title="By workflow" eyebrow="Complexity band" testId="history-workflows">
@@ -192,8 +194,8 @@ export default function Page() {
                   </span>
                 ))}
               </div>
-              <div className="max-h-[360px] overflow-auto rounded-btn border border-line">
-                <table className="w-full min-w-[560px] text-sm">
+              <div className="table-scroll max-h-[360px] overflow-auto rounded-btn border border-line">
+                <table className="table min-w-[560px] text-sm">
                   <thead className="sticky top-0">
                     <tr className="table-head">
                       <th className="px-3 py-2">Workflow</th>

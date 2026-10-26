@@ -151,7 +151,7 @@ export function SearchRail(props: SearchRailProps) {
   const active = labels.length + (side ? 1 : 0) + (phase ? 1 : 0);
 
   return (
-    <aside className="card flex min-h-0 w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Search memory">
+    <aside className="card flex p-0 min-h-0 w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Search memory">
       <div className="space-y-3 border-b border-line/80 p-5">
         <label className="relative block">
           <span className="sr-only">Search memory</span>

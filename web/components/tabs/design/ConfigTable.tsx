@@ -9,8 +9,8 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
       {config.length === 0 ? (
         <p className="text-md text-slate">This process reads no substitution variables.</p>
       ) : (
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-md" data-testid="config-table">
+        <div className="table-scroll">
+        <table className="table min-w-[640px]" data-testid="config-table">
           <thead>
             <tr className="table-head">
               <th className="px-3 py-2">TIBCO substitution variable</th>

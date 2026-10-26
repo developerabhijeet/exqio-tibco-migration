@@ -24,7 +24,9 @@ export function Chrome({ children }: { children: React.ReactNode }) {
     <>
       <TopBar />
       <main className="flex-1 overflow-y-auto print:overflow-visible">
-        <div className="w-full px-6 py-6">{children}</div>
+        {/* One centred column up to 1600 px with the gutter tokens (16 / 24 / 40 px); the bar above
+            spans the window. Sticky bars inside pull out by the same gutter (-mx-[var(--gutter)]). */}
+        <div className="mx-auto w-full max-w-content px-[var(--gutter)] py-8">{children}</div>
       </main>
       <Footer />
     </>

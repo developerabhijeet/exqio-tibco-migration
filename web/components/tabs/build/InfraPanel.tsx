@@ -32,8 +32,8 @@ export function ValidationRows({ validation, testId }: { validation: InfraValida
   const modules = validation.modules ?? [];
   return (
     <div data-testid={testId} className="space-y-2">
-      <div className="overflow-x-auto rounded-btn border border-line">
-        <table className="w-full min-w-[620px] text-sm">
+      <div className="table-scroll rounded-btn border border-line">
+        <table className="table min-w-[620px] text-sm">
           <thead>
             <tr className="table-head">
               <th className="px-3 py-2">Check</th>

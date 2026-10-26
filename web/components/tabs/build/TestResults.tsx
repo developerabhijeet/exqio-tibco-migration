@@ -67,8 +67,8 @@ export function TestResults({
         </ul>
       ) : null}
       {tests.data && tests.data.cases.length > 0 ? (
-        <div className="max-h-[420px] overflow-auto rounded-btn border border-line">
-          <table className="w-full min-w-[640px] text-sm">
+        <div className="table-scroll max-h-[420px] overflow-auto rounded-btn border border-line">
+          <table className="table min-w-[640px] text-sm">
             <thead className="sticky top-0">
               <tr className="table-head">
                 <th className="px-3 py-2">Test</th>

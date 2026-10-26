@@ -112,8 +112,8 @@ export default function Page() {
             <Pill tone="error">{r.summary.missing} missing</Pill>
             <span className="text-sm text-slate">Status is computed from stored evidence; select a link to open it.</span>
           </div>
-          <section className="card overflow-x-auto">
-            <table className="w-full min-w-[900px] text-md">
+          <section className="card table-scroll p-0">
+            <table className="table min-w-[900px]">
               <thead>
                 <tr className="table-head">
                   <th className="w-[220px] px-4 py-2.5">Expectation</th>
