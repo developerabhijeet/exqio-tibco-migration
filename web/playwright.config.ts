@@ -125,7 +125,9 @@ export default defineConfig({
         CLAUDE_CODE_OAUTH_TOKEN: "",
         AZURE_OPENAI_ENDPOINT: "",
         AZURE_OPENAI_API_KEY: "",
-        // The browser calls the API directly: allow this run's web origin.
+        // The browser calls the API directly: allow this run's web origin. The API passes
+        // CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>), so the Verify
+        // tab's dev-token call from this run's web origin is allowed there too.
         CORS_ORIGINS: process.env.CORS_ORIGINS ?? `http://localhost:${webPort}`,
         // Settings → Connectors against the fakes above: http on 127.0.0.1 needs the loopback flag
         // (tests and local fakes only), and the credentials are the fakes' token files.
@@ -134,8 +136,12 @@ export default defineConfig({
         GITHUB_TOKEN_FILE: join(fakeTokens, "github"),
         ATLASSIAN_TOKEN_FILE: join(fakeTokens, "atlassian"),
         FIGMA_TOKEN_FILE: join(fakeTokens, "figma"),
-        // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),
-        // so the Verify tab's dev-token call from this run's web origin is allowed there too.
+        // A developer's own connector tokens must not leak in from the shell (the plain variables
+        // are read with the loopback flag on).
+        GITHUB_TOKEN: "",
+        ATLASSIAN_TOKEN: "",
+        ATLASSIAN_USER: "",
+        FIGMA_TOKEN: "",
       },
     },
     {

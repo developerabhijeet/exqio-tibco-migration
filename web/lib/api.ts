@@ -329,7 +329,8 @@ export const api = {
   links: (processId: string) => json<ConnectorLinkView[]>(`/processes/${processId}/links`),
   pushToGithub: (buildId: string, body: { repo: string; branch?: string; open_pr: boolean; base?: string }) =>
     json<{ job_id: string }>(`/builds/${buildId}/github/push`, post(body)),
-  publishConfluence: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/confluence/publish`, post()),
+  publishConfluence: (processId: string, createAgain = false) =>
+    json<{ job_id: string }>(`/processes/${processId}/confluence/publish`, post({ create_again: createAgain })),
   jiraIssues: (processId: string, items: JiraItem[], createAgain = false) =>
     json<{ job_id: string }>(`/processes/${processId}/jira/issues`, post({ items, create_again: createAgain })),
   figmaFileFrames: (fileKey: string) => json<FigmaFrame[]>(`/figma/files/${encodeURIComponent(fileKey)}/frames`),

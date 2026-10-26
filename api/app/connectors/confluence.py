@@ -13,8 +13,11 @@ Confluence's XSRF check requires on a multipart POST). Every request goes throug
 
 Publishing updates the linked page (its stored version + 1). A 409 means someone else saved a
 version in between: the current version is fetched once and the update retried; a second 409 is
-an error. Without a link (or when the linked page is gone) a page of the same title in the space
-is updated, else a page is created under the parent page.
+an error. Deleted remote objects follow one policy for every connector (ruling X20): a linked page
+that answers 404 raises ``PageGone`` (the job marks the link stale) and a page is made again only
+on an explicit ``create_again``. Without a link a page is created under the parent page, but never
+over a page of the same title that is already in the space (a person's page is never adopted or
+overwritten: ``TitleTaken``).
 """
 from __future__ import annotations
 
@@ -48,6 +51,14 @@ class ConfluenceHTTPError(ConnectorError):
     def __init__(self, message: str, status: int, remote: str) -> None:
         super().__init__(message, status)
         self.remote = remote
+
+
+class PageGone(ConnectorError):
+    """The linked page answered 404 (deleted since it was published): nothing was written."""
+
+
+class TitleTaken(ConnectorError):
+    """A page of the same title, not linked to this process, is in the space: nothing was written."""
 
 
 @dataclass
@@ -240,13 +251,6 @@ class ConfluencePublisher:
                 raise
             raise ConnectorError(f"Confluence rejected the update twice: {exc.remote}", 409) from None
 
-    async def publish(self, ctx: PageContext, *, space_key: str, parent_page_id: str,
-                      existing: ConnectorLink | None) -> tuple[str, str, int]:
-        """Create or update the page, then attach the design record. ``(page id, url, version)``."""
-        page = await self.write_page(ctx, space_key=space_key, parent_page_id=parent_page_id, existing=existing)
-        await self.attach_design(page[0], ctx)
-        return page
-
     async def attach_design(self, page_id: str, ctx: PageContext) -> None:
         """The design record as ``design-<hash 12>.json`` (a new version when already attached)."""
         self.connector.ready()
@@ -254,26 +258,32 @@ class ConfluencePublisher:
         await self.adapter.attach(page_id, attachment_name(design_hash), design_attachment(ctx.design))
 
     async def write_page(self, ctx: PageContext, *, space_key: str, parent_page_id: str,
-                         existing: ConnectorLink | None) -> tuple[str, str, int]:
-        """Create or update the page only. ``(page id, url, version)``."""
+                         existing: ConnectorLink | None, create_again: bool = False) -> tuple[str, str, int]:
+        """Create or update the page only. ``(page id, url, version)``. ``PageGone`` when the linked
+        page is deleted (or its link is stale) and ``create_again`` is not set; ``TitleTaken``
+        rather than creating over an unlinked page of the same title."""
         self.connector.ready()
         if not space_key:
             raise ConnectorError("set the Confluence space key in Settings → Connectors")
         title = page_title(ctx.app_name, ctx.process_name)
         body = render_architecture_page(ctx)
         message = f"republished from design v{ctx.design_version}"
-        page: Page | None = None
         if existing is not None and existing.remote_id:
-            try:
+            if existing.stale and not create_again:
+                raise PageGone(f"the linked page {existing.remote_id} was deleted in Confluence: "
+                               "publish with create again to make a new page", 404)
+            try:  # live, or stale with create again: the old page may exist again (restored)
                 page = await self._update(existing.remote_id, title, body, existing.remote_version, message)
+                return page.id, page.url, page.version
             except ConfluenceHTTPError as exc:
                 if exc.status != 404:
                     raise
-                page = None  # the linked page was deleted: find it by title, or create it again
-        if page is None:
-            found = await self.adapter.find(space_key, title)
-            if found is not None:
-                page = await self._update(found.id, title, body, found.version, message)
-            else:
-                page = await self.adapter.create(space_key, parent_page_id, title, body)
+                if not create_again:
+                    raise PageGone(f"the linked page {existing.remote_id} is gone (404): the link is marked "
+                                   "stale; publish with create again to make a new page", 404) from None
+        found = await self.adapter.find(space_key, title)
+        if found is not None:
+            raise TitleTaken(f"a page titled {title!r} is already in the space {space_key} and is not this "
+                             "process's page: it is not overwritten (rename or move it, then publish again)", 409)
+        page = await self.adapter.create(space_key, parent_page_id, title, body)
         return page.id, page.url, page.version

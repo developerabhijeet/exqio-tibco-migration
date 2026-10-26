@@ -2,8 +2,13 @@
 (latest design record, gates, latest finished build, Figma links) and create or update it in
 Confluence; the page is recorded as the process's ``confluence_page`` link and audited.
 
-Payload ``{process_id, actor}`` (no credential: it is read from its mounted file when the job runs);
-result ``{page_id, url, version, title}``.
+Payload ``{process_id, actor, create_again}`` (no credential: it is read from its mounted file when
+the job runs); result ``{page_id, url, version, title}``.
+
+A deleted page follows the one policy of ruling X20: a linked page that answers 404 marks the link
+stale and the job is refused; a stale link is refused before any request; only ``create_again``
+makes a new page. A page of the same title that this process did not publish is never adopted or
+overwritten (refused).
 """
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.connectors.audit import audit_connector
 from api.app.connectors.base import ConnectorDisabled, ConnectorNotConfigured
+from api.app.connectors.confluence import PageGone, TitleTaken
 from api.app.connectors.confluence_page import PageContext, page_title
 from api.app.connectors.http import header_secrets, redact
 from api.app.connectors.links import find_link, upsert_link
@@ -39,6 +45,11 @@ LOCK_PREFIX = "confluence:"  # the advisory lock and the queue's dedupe key, per
 LOCK_BUSY_DELAY_S = 2.0
 DEFAULT_STACK = "dotnet"  # until builds carry their stack (sub-project 5)
 DEFAULT_ITERATION = 1  # until iterations exist (sub-project 6)
+
+
+def dedupe_key(process_id: str, create_again: bool) -> str:
+    """The queue's dedupe key: one queued publish per process (and per ``create_again``)."""
+    return f"{LOCK_PREFIX}{process_id}" + (":again" if create_again else "")
 
 
 def _iso(value: Any) -> str:
@@ -155,8 +166,22 @@ async def _publish(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         await ctx.stage("publish")
         await ctx.log(f"publishing design v{page.design_version} to Confluence space {space_key}"
                       + (f" (updating page {existing.remote_id})" if existing else ""))
-        page_id, url, version = await publisher.write_page(page, space_key=space_key, parent_page_id=parent,
-                                                           existing=existing)
+        try:
+            page_id, url, version = await publisher.write_page(page, space_key=space_key, parent_page_id=parent,
+                                                               existing=existing,
+                                                               create_again=bool(p.get("create_again")))
+        except PageGone as exc:
+            if existing is not None and not existing.stale:
+                async with w.sessionmaker() as s:  # the page is gone: never silently made again
+                    gone = await page_link(s, existing.process_id)
+                    if gone is not None:
+                        gone.stale = True
+                    await s.commit()
+                await ctx.log(f"page {existing.remote_id} is gone; the link is marked stale")
+            state["target"] = existing.remote_url if existing is not None else state["target"]
+            raise Refused(exc.message) from None
+        except TitleTaken as exc:
+            raise Refused(exc.message) from None
         state["target"] = url
         state["detail"] = {**state["detail"], "page_id": page_id, "version": version}
         async with w.sessionmaker() as s:  # linked now: a failed attachment must not lose the page

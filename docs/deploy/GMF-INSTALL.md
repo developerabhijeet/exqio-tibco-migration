@@ -361,7 +361,15 @@ with everything the worker pod holds:
 - the projected Workload Identity token (`AZURE_FEDERATED_TOKEN_FILE`), which it can exchange
   with Entra for the platform identity (`exiqo-platform`: Key Vault Secrets User on the vault, and
   whatever else GMF grants it) and for **every** deploy identity, because each one trusts the
-  `exiqo-worker` service account.
+  `exiqo-worker` service account;
+- the connector tokens, when a connector is enabled: `GITHUB_TOKEN`, `ATLASSIAN_TOKEN` (and
+  `ATLASSIAN_USER` on cloud) and `FIGMA_TOKEN` are mounted in the worker too, because the publish
+  jobs run there, and the worker's egress reaches the connectors' `cidrs`. Generated code could
+  therefore push to any branch of the target repositories that branch protection leaves open (not
+  only `exiqo/...`, and without the platform's audit line), or write to the Confluence space and
+  the Jira project. Keep the GitHub token fine-grained (the target repositories only,
+  `contents:write`, `pull_requests:write`, `metadata:read`) with branch protection on the default
+  branch, and give the Atlassian account rights on the one space and project only (the connector table in section 6).
 
 So size the deploy identities for planning only: Reader, or the narrow custom role of
 DEPLOY-STEP-SECRETS.md (read actions, provider registration, and the data-plane reads a refresh
@@ -370,12 +378,14 @@ its own identity. Give `exiqo-platform` nothing beyond what section 4 lists. As 
 code is generated from GMF's own estate and reviewed at the gates, and the same rule applies:
 restrict the `engineer` role and do not build an estate GMF does not trust. Running the
 untrusted execution (tests, the service, Terraform) in a separate pod with no mounted secret and no
-platform identity is the planned hardening.
+platform identity is the planned hardening, together with a dedicated connector worker that runs
+the connector jobs and no generated code, so the connector tokens leave the pod that runs it.
 
 ## 4. Key Vault secrets
 
 Secrets live in GMF's Key Vault and reach the pods as files under `/mnt/secrets` through the CSI
-driver. The app reads each from `<NAME>_FILE` when set, else `<NAME>`; the chart sets only the
+driver. The app reads each from `<NAME>_FILE` when set, else `<NAME>` (connector tokens only from
+`<NAME>_FILE`: their plain variable is a local development fallback); the chart sets only the
 `_FILE` form, so no secret value is ever in a pod spec, Helm values, image, log or job payload. The
 pods authenticate to the vault with Workload Identity as `exiqo-platform`, which holds Key Vault
 Secrets User on the vault. The object names below are the defaults of `keyVault.secrets.*`.

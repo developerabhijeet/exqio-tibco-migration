@@ -2,7 +2,8 @@
 
 // Design tab: publish (or republish) the process's architecture page to Confluence
 // (POST /processes/{id}/confluence/publish, a `connector.confluence.publish` job). Hidden when
-// Confluence is off; disabled with the reason for anyone but an architect or admin.
+// Confluence is off; disabled with the reason for anyone but an architect or admin. A page deleted in
+// Confluence leaves its link stale: a new page is made only with the "Create again" opt-in (X20).
 import { useState } from "react";
 import { BookOpen, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -22,11 +23,13 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
   const access = useActionAccess("confluence");
   const links = useLinks(processId);
   const { stream, watch } = useJob("confluence", processId);
+  const [createAgain, setCreateAgain] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!flags.data?.atlassian.confluence) return null;
   const page = (links.data ?? []).filter((l) => l.object_type === "confluence_page");
+  const stale = page.some((l) => l.stale);
   const running = busy || stream?.status === "running";
   const reason = access.reason ?? (!hasDesign ? "Generate the design record first" : undefined);
 
@@ -34,8 +37,9 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
     setBusy(true);
     setError(null);
     try {
-      const { job_id } = await api.publishConfluence(processId);
+      const { job_id } = await api.publishConfluence(processId, createAgain && stale);
       watch(job_id);
+      setCreateAgain(false);
     } catch (e) {
       setError(actionError(e));
     } finally {
@@ -62,6 +66,18 @@ export function PublishConfluence({ processId, hasDesign }: { processId: string;
         {access.reason ??
           "The architecture page is built from this design record by code: the mapping, views, decisions and open questions."}
       </p>
+      {stale ? (
+        <label className="flex items-center gap-2 text-[13px]">
+          <input
+            type="checkbox"
+            checked={createAgain}
+            disabled={!access.allowed || running}
+            onChange={(e) => setCreateAgain(e.target.checked)}
+            data-testid="confluence-create-again"
+          />
+          Create again the page that was deleted in Confluence
+        </label>
+      ) : null}
       <ActionStatus stream={stream} error={error} testId="publish-confluence" summary={summary} />
     </section>
   );

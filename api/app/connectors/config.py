@@ -2,7 +2,9 @@
 
 Install layer (``InstallConnector``): the chart's ``connectors.<kind>`` values, passed as the
 ``CONNECTORS`` JSON (camelCase keys, as in the values file). It is the ceiling: a connector the
-install leaves off cannot be turned on, and every URL must have a host in its ``allowedHosts``.
+install leaves off cannot be turned on, and every URL must have a host in its ``allowedHosts``
+(an admin's URL is checked when it is saved; an install URL off its own allowlist is logged at
+start-up by ``install_problems`` and the connector is not ready).
 
 Application layer (``AppConnector``): what an admin sets in Settings → Connectors, stored in the
 ``settings`` table under ``connectors``: the toggle, URL overrides within the allowlist, and
@@ -132,6 +134,11 @@ class ConnectorConfig(BaseModel):
     def urls(self) -> dict[str, str]:
         return {f: self.url(f) for f in (*REQUEST_URLS[self.kind], *LINK_URLS[self.kind])}
 
+    def install_problem(self) -> str | None:
+        """Why the install layer cannot be used (an install URL off its ``allowedHosts``), or ``None``."""
+        return install_problems({self.kind: self.install},
+                                allow_insecure_loopback=self.allow_insecure_loopback).get(self.kind)
+
     def secret_roles(self) -> dict[str, str]:
         """The secrets this connector needs: role -> ``Settings`` field."""
         roles = dict(SECRET_FIELDS[self.kind])
@@ -161,6 +168,27 @@ def load_install(settings: Settings) -> dict[str, InstallConnector]:
             out[kind] = INSTALL_MODELS[kind].model_validate(raw.get(kind) or {})
         except ValidationError as exc:
             raise ValueError(f"CONNECTORS.{kind}: {exc.errors()[0]['msg']}") from exc
+    return out
+
+
+def install_problems(install: dict[str, InstallConnector], *,
+                     allow_insecure_loopback: bool = False) -> dict[str, str]:
+    """``{kind: why}`` for each enabled install connector with a request URL that is not https
+    (``http://127.0.0.1`` with the loopback flag) or whose host is not in its own ``allowedHosts``."""
+    out: dict[str, str] = {}
+    for kind, cfg in install.items():
+        if not cfg.enabled:
+            continue
+        for field in REQUEST_URLS[kind]:
+            url = str(getattr(cfg, field, "") or "").strip()
+            if not url:
+                continue
+            try:
+                check_url(f"connectors.{kind}.{to_camel(field)}", url, cfg.allowed_hosts,
+                          allow_insecure_loopback=allow_insecure_loopback)
+            except ValueError as exc:
+                out[kind] = str(exc)
+                break
     return out
 
 
@@ -249,9 +277,11 @@ def validate_app(kind: str, install: InstallConnector, patch: dict[str, Any],
 
 def secret(settings_field: str, settings: Settings | None = None) -> str:
     """A connector secret, read now: the file named by ``<FIELD>_FILE`` (so a token the Key Vault
-    CSI driver rotates is used on the next call, without a restart), else the plain field
-    (``settings`` when given, else the ``<FIELD>`` variable). A configured file that is missing
-    reads as no credential."""
+    CSI driver rotates is used on the next call, without a restart). The plain field (``settings``
+    when given, else the ``<FIELD>`` variable) is a fallback for local development only: it is
+    read only with ``CONNECTORS_ALLOW_INSECURE_LOOPBACK`` on, so a developer's exported
+    ``GITHUB_TOKEN`` never reaches an install. A configured file that is missing reads as no
+    credential."""
     path = os.environ.get(f"{settings_field.upper()}_FILE", "")
     if path:
         try:
@@ -259,7 +289,11 @@ def secret(settings_field: str, settings: Settings | None = None) -> str:
         except OSError:
             return ""
     if settings is not None:
+        if not settings.connectors_allow_insecure_loopback:
+            return ""
         return str(getattr(settings, settings_field, "") or "").strip()
+    if os.environ.get("CONNECTORS_ALLOW_INSECURE_LOOPBACK", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return ""
     return os.environ.get(settings_field.upper(), "").strip()
 
 

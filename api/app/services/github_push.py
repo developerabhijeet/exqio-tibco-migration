@@ -4,6 +4,10 @@ pull request; the branch and the pull request are recorded as links of the proce
 Payload ``{build_id, repo, branch, open_pr, base, actor}`` (no credential: the token is read from
 its mounted file when the job runs); result ``{branch, commit, pull_request}`` (plus ``message`` when no pull request
 could be opened: the repository was empty).
+
+One push of a build to a branch at a time: the route queues it once (``dedupe_key``) and refuses
+it while it runs, and the job holds the advisory lock ``github:<build>:<repo>:<branch>`` around the
+push and its link upserts (a second job waits, then runs after the first).
 """
 from __future__ import annotations
 
@@ -19,6 +23,8 @@ from api.app.connectors.github import GitHubConnector
 from api.app.connectors.http import header_secrets, redact
 from api.app.connectors.links import upsert_link
 from api.app.connectors.registry import connector_for
+from api.app.jobs.locks import try_advisory_lock
+from api.app.jobs.registry import RetryLater
 from api.app.models import Build, Process
 from api.app.services.build_tree import DOWNLOAD_EXCLUDED, export_note
 
@@ -28,6 +34,13 @@ if TYPE_CHECKING:
 
 PUSH_KIND = "connector.github.push"
 EXPORT_NOTE = "EXPORTED_FROM.md"
+LOCK_PREFIX = "github:"
+LOCK_BUSY_DELAY_S = 2.0
+
+
+def dedupe_key(build_id: str, repo: str, branch: str) -> str:
+    """The queue's dedupe key and the job's advisory lock name: one push per build and branch."""
+    return f"{LOCK_PREFIX}{build_id}:{repo}:{branch}"
 
 
 def _pr_body(build: Build, proc: Process, commit: str, brand: str) -> str:
@@ -55,6 +68,16 @@ def _secrets(gh: GitHubConnector | None) -> list[str]:
 
 
 async def push_job(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """One push of a build to a branch at a time (advisory lock): a second job waits for the first."""
+    p = ctx.payload
+    async with try_advisory_lock(w.sessionmaker, dedupe_key(p["build_id"], p["repo"], p["branch"])) as locked:
+        if not locked:
+            raise RetryLater(LOCK_BUSY_DELAY_S, "another push of this build to this branch is running",
+                             count_attempt=False)
+        return await _push(ctx, w)
+
+
+async def _push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Every outcome is audited: ``refused`` (off, no credential, nothing to push), ``failed``
     (any error, its redacted text) or ``ok`` per step; an error is then raised to fail the job."""
     p = ctx.payload

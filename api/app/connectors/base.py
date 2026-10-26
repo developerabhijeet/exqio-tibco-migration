@@ -35,6 +35,14 @@ class ConnectorNotConfigured(Exception):
         super().__init__(f"the {NAMES.get(kind, kind)} connector has no credential: mount {secret_name}")
 
 
+class ConnectorMisconfigured(ConnectorNotConfigured):
+    """The install layer cannot be used (an install URL off its own ``allowedHosts``; API: 409)."""
+
+    def __init__(self, kind: str, problem: str) -> None:
+        self.kind, self.secret_name = kind, ""
+        Exception.__init__(self, f"the {NAMES.get(kind, kind)} connector is not ready: {problem}")
+
+
 class ConnectorError(Exception):
     """The remote service failed or refused; ``status`` is its HTTP status when there was one.
     The message is already redacted."""

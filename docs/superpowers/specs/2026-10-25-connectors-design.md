@@ -229,6 +229,16 @@ Publish (`architect`, `admin`): creates the page under `parent_page_id` in `spac
 the linked page (version + 1, a "republished from design vN" version message). A 409 version
 conflict refetches the version once and retries.
 
+Ruling (X20, one deleted-object policy for every connector): a linked page that answers 404 marks
+the link stale and the publish is refused (audited `refused`); a stale link is refused before any
+request. Only an explicit "Create again" (`{create_again: true}`, the Design tab's opt-in) makes a
+new page; it first tries the old page id (it may have been restored). Without a link the page is
+created, but never over a page of the same title already in the space: that is refused, so a page
+a person wrote is never adopted or overwritten. Publishes of a process are queued once
+(`dedupe_key`) and run one at a time (advisory lock `confluence:<process id>`) — cost if wrong: a
+lost create answer leaves a page the platform does not link; the publish then says so and a person
+renames or links it.
+
 Ruling: tables instead of rendered diagrams — Confluence storage format renders tables natively,
 a server-side diagram renderer would be a new dependency and a picture of data an editor cannot
 search — cost if wrong: add an SVG attachment later from the web's existing diagram components.
@@ -294,9 +304,11 @@ cost if wrong: names, text and links still work; only the picture is missing.
 - Egress: `egress.fqdns` (shown in About as `EGRESS_ALLOWLIST`) gains each enabled connector's
   `allowedHosts` (and Figma `imageHosts`); NetworkPolicy `exiqo-connectors-egress` allows api and
   worker pods to the union of enabled connectors' `cidrs` on 443 (no rule rendered when none is
-  enabled; the schema requires `cidrs` or a non-empty `egress.allowCidrs` when a connector is
-  enabled).
-- Schema: each `*Url` must be `https://`, its host in that connector's `allowedHosts`; enabled
+  enabled; the schema requires each enabled connector's own `cidrs`: `egress.allowCidrs` does not
+  substitute for them).
+- Schema: each `*Url` must be `https://`, its host in that connector's `allowedHosts` (the app
+  also checks the install URLs at start-up: one off its allowlist is logged as an error and that
+  connector is not ready, a 409 on every action); enabled
   connectors require their Key Vault secret names (Atlassian cloud also `atlassianUser`);
   `CONNECTORS_ALLOW_INSECURE_LOOPBACK` cannot be set.
 - `deploy/egress-allowlist.txt` gains nothing (no host in code); the reserved commit email is
@@ -305,8 +317,11 @@ cost if wrong: names, text and links still work; only the picture is missing.
   one command; it is never written to `.git/config` or a file.
 - Audit actions: `connector <kind> test`, `connector github push`, `connector github pull-request`,
   `connector confluence publish`, `connector jira create`, `connector jira update`,
-  `connector figma attach`, `connector settings changed` (fields changed, not values of secrets,
-  which do not exist here).
+  `connector figma sync`, `connector settings changed` (fields changed, not values of secrets,
+  which do not exist here). Every refusal is audited `refused`, including those a route answers
+  (422 or 409) before anything is queued (ruling X20).
+- Secrets are read from `<NAME>_FILE` on every call. The plain `<NAME>` variable is a local
+  development fallback, read only with `CONNECTORS_ALLOW_INSECURE_LOOPBACK` on.
 
 ## 8. API
 
@@ -317,8 +332,11 @@ cost if wrong: names, text and links still work; only the picture is missing.
   allowedHosts`, `https required`, `enable it in the install first (connectors.<kind>.enabled)`).
 - `POST /connectors/{kind}/test` (admin) — `ConnectionTest`, audited.
 - `GET /connectors` — `{github: {enabled}, atlassian: {enabled, confluence: bool, jira: bool}, figma: {enabled}}`.
-- `POST /builds/{id}/github/push` (engineer, admin) `{repo, branch?, open_pr=true, base?}` → 202 job.
-- `POST /processes/{id}/confluence/publish` (architect, admin) → 202 job; `GET` → link.
+- `POST /builds/{id}/github/push` (engineer, admin) `{repo, branch?, open_pr=true, base?}` → 202 job;
+  409 while the same build is queued or running for the same repository and branch
+  (`dedupe_key` `github:<build>:<repo>:<branch>`, also the job's advisory lock).
+- `POST /processes/{id}/confluence/publish` (architect, admin) `{create_again=false}` (optional
+  body) → 202 job; `GET` → link.
 - `POST /processes/{id}/jira/issues` (architect, sme, qa, admin) `{items: [{type, ref}]}` → 202 job.
 - `GET /figma/files/{key}/frames` (architect, admin), `POST /processes/{id}/figma/frames`
   `{file_key, node_ids}` → 202 job; `GET /processes/{id}/figma/frames`;

@@ -114,8 +114,8 @@ neo4jBackup:
 
 # Connectors are off. To enable one (hosts and addresses are GMF's own; example.com names below are
 # placeholders), uncomment its block, name its Key Vault secret under keyVault.secrets
-# (githubToken, atlassianToken, atlassianUser for cloud, figmaToken) and give cidrs (or a
-# non-empty egress.allowCidrs covering it). GMF's private CA goes in connectors.caBundle (PEM text)
+# (githubToken, atlassianToken, atlassianUser for cloud, figmaToken) and give its own cidrs
+# (required: egress.allowCidrs does not substitute for them). GMF's private CA goes in connectors.caBundle (PEM text)
 # or keyVault.secrets.connectorsCaBundle (a Key Vault object); not both.
 #connectors:
 #  caBundle: |

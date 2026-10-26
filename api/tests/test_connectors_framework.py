@@ -206,9 +206,35 @@ def test_secret_is_read_per_call(tmp_path, monkeypatch):  # Review Focus 2
     assert secret("github_token") == "two"
 
 
-def test_secret_falls_back_to_the_plain_field(monkeypatch, settings):
-    monkeypatch.delenv("FIGMA_TOKEN_FILE", raising=False)
-    assert secret("figma_token", settings.model_copy(update={"figma_token": "plain"})) == "plain"
+def test_plain_field_is_a_fallback_only_with_the_loopback_flag(monkeypatch, settings):
+    """A developer's exported ``FIGMA_TOKEN`` is read only for local development (the loopback flag)."""
+    plain = settings.model_copy(update={"figma_token": "plain"})
+    assert secret("figma_token", plain) == ""
+    assert secret("figma_token", plain.model_copy(update={"connectors_allow_insecure_loopback": True})) == "plain"
+    monkeypatch.setenv("FIGMA_TOKEN", "from-the-shell")
+    assert secret("figma_token") == ""
+    monkeypatch.setenv("CONNECTORS_ALLOW_INSECURE_LOOPBACK", "true")
+    assert secret("figma_token") == "from-the-shell"
+
+
+def test_install_url_off_its_allowlist_is_logged_at_start_and_not_ready(settings, caplog):
+    from api.app.connectors.base import ConnectorMisconfigured
+    from api.app.main import check_connector_settings
+
+    install = {"github": {"enabled": True, "baseUrl": "https://github.gmf.example",
+                          "allowedHosts": ["git.other.example"]},
+               "figma": {"enabled": True, "apiUrl": "https://api.figma.example", "allowedHosts": ["api.figma.example"]},
+               "atlassian": {"enabled": False, "confluenceUrl": "https://wiki.off.example"}}
+    s = settings.model_copy(update={"connectors": json.dumps(install)})
+    with caplog.at_level("ERROR", logger="api.app.main"):
+        check_connector_settings(s)  # logged, not raised: the other connectors still start
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    expected = "connector github is not ready: connectors.github.baseUrl: host github.gmf.example not in allowedHosts"
+    assert errors == [expected]
+    stored = {"connectors": {"github": {"enabled": True}, "figma": {"enabled": True}}}
+    with pytest.raises(ConnectorMisconfigured, match="GitHub connector is not ready: .*not in allowedHosts"):
+        get_connector("github", settings=s, stored=stored).ready()
+    assert get_connector("figma", settings=s, stored=stored).config.install_problem() is None
 
 
 def test_errors_are_redacted():

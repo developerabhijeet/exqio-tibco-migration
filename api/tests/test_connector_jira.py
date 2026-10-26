@@ -213,6 +213,9 @@ async def test_kept_finding_is_refused(client_atlassian, process_with_kept_findi
     c, _ = client_atlassian("datacenter")
     r = await c.post(f"/processes/{process_with_kept_finding}/jira/issues", json={"items": [{"type": "finding", "ref": "F2"}]}, headers=sme)
     assert r.status_code == 422 and "is decided keep" in r.json()["detail"]
+    row = (await _audits(c.app, "connector jira create"))[-1]  # refused before the queue: audited (X20)
+    assert row.detail["outcome"] == "refused" and "is decided keep" in row.detail["message"]
+    assert row.detail["items"] == ["finding:F2"] and row.process_id == process_with_kept_finding
 
 
 # ------------------------------------------------------------------ issue text
@@ -499,6 +502,8 @@ async def test_items_are_checked_before_queueing(client_atlassian, process_with_
     r = await c.post(f"/processes/{process_with_findings}/jira/issues", json={"items": items}, headers=SME)
     assert r.status_code == 422 and r.json()["detail"] == detail, r.text
     assert fake.jira.requests == []
+    row = (await _audits(c.app, "connector jira create"))[-1]
+    assert row.detail["outcome"] == "refused" and row.detail["message"] == detail
 
 
 async def test_body_limits(client_atlassian, process_with_findings):

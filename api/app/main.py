@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.app.auth import router as auth_router
 from api.app.auth.oidc import Oidc
 from api.app.config import Settings
-from api.app.connectors.config import load_install, secret_names
+from api.app.connectors.config import install_problems, load_install, secret_names
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
 from api.app.deps import require_admin_writes, require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
@@ -102,12 +102,18 @@ def check_auth_settings(settings: Settings) -> None:
 
 
 def check_connector_settings(settings: Settings) -> None:
-    """A malformed ``CONNECTORS`` or ``CONNECTOR_SECRET_NAMES`` stops the start, not a request."""
+    """A malformed ``CONNECTORS`` or ``CONNECTOR_SECRET_NAMES`` stops the start, not a request. An
+    enabled connector whose install URL is off its own ``allowedHosts`` is logged as an error at
+    start-up (and is not ready: ``BaseConnector.ready`` refuses it), so it does not first show up
+    as a refused request."""
     try:
-        load_install(settings)
+        install = load_install(settings)
         secret_names(settings)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
+    for kind, problem in install_problems(
+            install, allow_insecure_loopback=settings.connectors_allow_insecure_loopback).items():
+        log.error("connector %s is not ready: %s", kind, problem)
 
 
 def _create_api(settings: Settings) -> FastAPI:

@@ -30,6 +30,17 @@ from api.tests.fakes.jira import FakeJira
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localhost:5432/exiqo_test")
 
 
+CONNECTOR_SECRET_VARS = ("GITHUB_TOKEN", "ATLASSIAN_TOKEN", "ATLASSIAN_USER", "FIGMA_TOKEN")
+
+
+@pytest.fixture(autouse=True)
+def _no_shell_connector_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's exported connector tokens (plain or ``_FILE``) never reach a test."""
+    for name in CONNECTOR_SECRET_VARS:
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(f"{name}_FILE", raising=False)
+
+
 @pytest.fixture
 def settings(tmp_path: Path, request: pytest.FixtureRequest) -> Settings:
     """Role ``api`` (no in-process worker) when the test asks for ``app_no_worker``."""

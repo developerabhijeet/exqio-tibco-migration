@@ -88,6 +88,15 @@ class JiraIssuesIn(BaseModel):
     create_again: bool = False
 
 
+class ConfluencePublishIn(BaseModel):
+    """``POST /processes/{id}/confluence/publish`` (the body is optional): ``create_again`` makes a
+    new page when the linked one was deleted in Confluence (its link is stale) instead of refusing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    create_again: bool = False
+
+
 class JobAccepted(BaseModel):
     job_id: str
 

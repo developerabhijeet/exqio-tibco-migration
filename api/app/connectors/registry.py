@@ -19,6 +19,7 @@ from api.app.connectors.base import (
     ConnectorDisabled,
     ConnectorError,
     ConnectorKind,
+    ConnectorMisconfigured,
     ConnectorNotConfigured,
 )
 from api.app.connectors.config import (
@@ -63,9 +64,13 @@ class BaseConnector:
         return value
 
     def ready(self) -> None:
-        """``ConnectorDisabled`` or ``ConnectorNotConfigured`` before any request is made."""
+        """``ConnectorDisabled`` or ``ConnectorNotConfigured`` (``ConnectorMisconfigured`` for an
+        install URL off its own allowlist) before any request is made."""
         if not self.enabled:
             raise ConnectorDisabled(self.kind)
+        problem = self.config.install_problem()
+        if problem:
+            raise ConnectorMisconfigured(self.kind, problem)
         for role in self.config.secret_roles():
             self.credential(role)
 

@@ -12,6 +12,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 
 from api.app.auth.roles import Principal, dev_principal
 from api.app.connectors.audit import audit_connector
@@ -50,9 +51,10 @@ from api.app.deps import (
     current_principal,
     require_roles,
 )
-from api.app.models import AuditLog, Build, Process, Setting
+from api.app.models import AuditLog, Build, Job, Process, Setting
 from api.app.models.connector import ConnectorLink
 from api.app.schemas.connector import (
+    ConfluencePublishIn,
     ConnectorsPatch,
     FigmaFramesIn,
     FrameLinkOut,
@@ -62,18 +64,19 @@ from api.app.schemas.connector import (
     LinkOut,
 )
 from api.app.services.confluence_publish import (
-    LOCK_PREFIX,
     NO_DESIGN,
     NO_SPACE,
     NO_URL,
     PUBLISH_KIND,
     page_link,
 )
+from api.app.services.confluence_publish import dedupe_key as confluence_dedupe_key
 from api.app.services.evidence import latest_design
 from api.app.services.figma_sync import SYNC_KIND as FIGMA_SYNC_KIND
 from api.app.services.figma_sync import dedupe_key as figma_dedupe_key
 from api.app.services.figma_sync import frame_links
 from api.app.services.github_push import PUSH_KIND
+from api.app.services.github_push import dedupe_key as push_dedupe_key
 from api.app.services.jira_issues import (
     ISSUES_KIND,
     NO_PROJECT,
@@ -106,6 +109,16 @@ async def _put_setting(session: SessionDep, key: str, value: Any, user: str) -> 
         session.add(Setting(key=key, value=value, updated_by=user))
     else:
         row.value, row.updated_by = value, user
+
+
+async def _refused(session: SessionDep, principal: Principal, kind: str, op: str, proc: Process, *,
+                   status: int, message: str, target: str, detail: dict[str, Any] | None = None) -> HTTPException:
+    """Audit a refusal before anything is queued (``refused``, ruling X20) and return the error to
+    raise: every connector route answers its 409 and 422 refusals (after the role check) this way."""
+    await audit_connector(session, principal.actor, kind, op, project_id=proc.project_id, process_id=proc.id,
+                          target=target, outcome="refused", detail={**(detail or {}), "message": message})
+    await session.commit()
+    return HTTPException(status_code=status, detail=message)
 
 
 @router.get("/settings/connectors")
@@ -208,40 +221,50 @@ UNFINISHED = frozenset({"queued", "running"})
 @router.post("/builds/{build_id}/github/push", status_code=202)
 async def push_build_to_github(build_id: str, body: GithubPushIn, session: SessionDep, settings: SettingsDep,
                                runner: RunnerDep, principal: PushRoles) -> JobAccepted:
-    """Queue ``connector.github.push``: 409 when GitHub is off or has no credential (no request is
-    made), 422 for a repository or branch name refused before anything is queued."""
+    """Queue ``connector.github.push``: 422 for a repository or branch name refused, 409 when GitHub
+    is off or has no credential, the build has not finished or has no solution on disk (each
+    audited ``refused``; no request is made), or the same push is already queued or running."""
     build = await session.get(Build, build_id)
     if build is None:
         raise HTTPException(status_code=404, detail="build not found")
     proc = await session.get(Process, build.process_id)
     if proc is None:
         raise HTTPException(status_code=404, detail="the build's process is gone")
+    target = f"{body.repo}@{body.branch or ''}"
+
+    async def refuse(status: int, message: str) -> HTTPException:
+        return await _refused(session, principal, "github", "push", proc, status=status, message=message,
+                              target=target, detail={"build_id": build.id})
+
     if not valid_repo(body.repo):
-        raise HTTPException(status_code=422, detail=f"repo: not owner/name: {body.repo!r}")
+        raise await refuse(422, f"repo: not owner/name: {body.repo!r}")
     branch = (body.branch or "").strip() or default_push_branch(proc.name, build.id)
+    target = f"{body.repo}@{branch}"
     if not valid_push_branch(branch):
-        raise HTTPException(status_code=422, detail=PUSH_REFUSED)
+        raise await refuse(422, PUSH_REFUSED)
     base = (body.base or "").strip() or None
     if base is not None and not valid_branch(base):
-        raise HTTPException(status_code=422, detail=f"base: not a branch name: {base!r}")
+        raise await refuse(422, f"base: not a branch name: {base!r}")
     connector = await connector_for(session, settings, "github")
     try:
         connector.ready()
     except (ConnectorDisabled, ConnectorNotConfigured) as exc:
-        await audit_connector(session, principal.actor, "github", "push", project_id=proc.project_id,
-                              process_id=proc.id, target=f"{body.repo}@{branch}", outcome="refused",
-                              detail={"build_id": build.id, "message": str(exc)})
-        await session.commit()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise await refuse(409, str(exc)) from exc
     if build.status in UNFINISHED:
-        raise HTTPException(status_code=409, detail="the build has not finished")
+        raise await refuse(409, "the build has not finished")
     if not build.output_dir or not Path(build.output_dir).is_dir():
-        raise HTTPException(status_code=409, detail="the build has no solution on disk")
+        raise await refuse(409, "the build has no solution on disk")
+    key = push_dedupe_key(build.id, body.repo, branch)
+    running = await session.scalar(select(Job.id).where(Job.kind == PUSH_KIND, Job.status == "running",
+                                                        Job.payload["dedupe_key"].astext == key).limit(1))
+    if running is not None:
+        raise HTTPException(status_code=409, detail=f"this build is already being pushed to {branch}")
     job_id = await runner.submit(PUSH_KIND, {"build_id": build.id, "repo": body.repo, "branch": branch,
-                                             "open_pr": body.open_pr, "base": base, "actor": principal.actor},
+                                             "open_pr": body.open_pr, "base": base, "actor": principal.actor,
+                                             "dedupe_key": key},
                                  project_id=proc.project_id, process_id=proc.id)
-    if job_id is None:  # submit answers None only for a payload with a dedupe_key, which this has not
-        raise RuntimeError("the push job was not queued")
+    if job_id is None:  # a queued push of this build to this branch will push the same tree
+        raise HTTPException(status_code=409, detail=f"a push of this build to {branch} is already queued")
     return JobAccepted(job_id=job_id)
 
 
@@ -250,29 +273,33 @@ PublishRoles = Annotated[Principal, Depends(require_roles("architect", "admin"))
 
 @router.post("/processes/{process_id}/confluence/publish", status_code=202)
 async def publish_to_confluence(process_id: str, session: SessionDep, settings: SettingsDep, runner: RunnerDep,
-                                principal: PublishRoles) -> JobAccepted:
+                                principal: PublishRoles, body: ConfluencePublishIn | None = None) -> JobAccepted:
     """Queue ``connector.confluence.publish``: 409 when Atlassian is off, has no credential, no
-    Confluence URL or space key (no request is made), or the process has no design record."""
+    Confluence URL or space key, or the process has no design record (each audited ``refused``;
+    no request is made). ``create_again`` makes a new page when the linked one was deleted."""
+    create_again = bool(body and body.create_again)
     proc = await session.get(Process, process_id)
     if proc is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
     connector = await connector_for(session, settings, "atlassian")
+
+    async def refuse(message: str) -> HTTPException:
+        return await _refused(session, principal, "confluence", "publish", proc, status=409, message=message,
+                              target=proc.ir_id)
+
     try:
         connector.ready()
     except (ConnectorDisabled, ConnectorNotConfigured) as exc:
-        await audit_connector(session, principal.actor, "confluence", "publish", project_id=proc.project_id,
-                              process_id=proc.id, target=proc.ir_id, outcome="refused",
-                              detail={"message": str(exc)})
-        await session.commit()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise await refuse(str(exc)) from exc
     if not connector.config.url("confluence_url"):
-        raise HTTPException(status_code=409, detail=NO_URL)
+        raise await refuse(NO_URL)
     if not getattr(connector.config.app, "space_key", ""):
-        raise HTTPException(status_code=409, detail=NO_SPACE)
+        raise await refuse(NO_SPACE)
     if await latest_design(session, proc.id) is None:
-        raise HTTPException(status_code=409, detail=NO_DESIGN)
+        raise await refuse(NO_DESIGN)
     job_id = await runner.submit(PUBLISH_KIND, {"process_id": proc.id, "actor": principal.actor,
-                                                "dedupe_key": f"{LOCK_PREFIX}{proc.id}"},
+                                                "create_again": create_again,
+                                                "dedupe_key": confluence_dedupe_key(proc.id, create_again)},
                                  project_id=proc.project_id, process_id=proc.id)
     if job_id is None:  # a queued publish of this process will render the same, latest data
         raise HTTPException(status_code=409, detail="a Confluence publish of this process is already queued")
@@ -305,18 +332,17 @@ async def jira_issues(process_id: str, body: JiraIssuesIn, session: SessionDep, 
     if proc is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
     src = await issue_source(session, proc)
+    items = list(body.items)
+
+    async def refuse(status: int, message: str) -> HTTPException:
+        return await _refused(session, principal, "jira", "create", proc, status=status, message=message,
+                              target=proc.ir_id, detail={"items": [i.local_ref for i in items]})
+
     try:
         items = check_items(src, body.items)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise await refuse(422, str(exc)) from exc
     connector = await connector_for(session, settings, "atlassian")
-
-    async def refuse(status: int, message: str) -> HTTPException:
-        await audit_connector(session, principal.actor, "jira", "create", project_id=proc.project_id,
-                              process_id=proc.id, target=proc.ir_id, outcome="refused",
-                              detail={"items": [i.local_ref for i in items], "message": message})
-        await session.commit()
-        return HTTPException(status_code=status, detail=message)
 
     try:
         connector.ready()
@@ -398,11 +424,8 @@ async def attach_figma_frames(process_id: str, body: FigmaFramesIn, session: Ses
     node_ids = list(dict.fromkeys(body.node_ids))
 
     async def refuse(status: int, message: str) -> HTTPException:
-        await audit_connector(session, principal.actor, "figma", "sync", project_id=proc.project_id,
-                              process_id=proc.id, target=body.file_key, outcome="refused",
-                              detail={"node_ids": node_ids, "message": message})
-        await session.commit()
-        return HTTPException(status_code=status, detail=message)
+        return await _refused(session, principal, "figma", "sync", proc, status=status, message=message,
+                              target=body.file_key, detail={"node_ids": node_ids})
 
     if not valid_file_key(body.file_key):
         raise await refuse(422, f"file_key: not a Figma file key: {body.file_key!r}")

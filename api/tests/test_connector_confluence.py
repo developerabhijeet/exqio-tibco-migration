@@ -10,6 +10,7 @@ api/tests/test_connector_confluence.py -k golden`` and review the diff before co
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -36,6 +37,7 @@ from api.app.models import (
     Gate,
     Process,
     Project,
+    Setting,
     Upload,
 )
 from api.app.services.confluence_publish import PUBLISH_KIND, page_context
@@ -326,23 +328,88 @@ async def test_republish_versions_the_attachment_and_says_why(client_atlassian, 
     assert rows[-1].actor == "architect.lee"
 
 
-async def test_deleted_page_is_created_again(client_atlassian, published_once, architect, wait_terminal):
+async def test_deleted_page_marks_the_link_stale(client_atlassian, published_once, architect, wait_terminal):
+    """Ruling X20: a deleted page is never silently made again; the link goes stale and the
+    publish is refused (audited), and a stale link is refused again before any request."""
+    c, fake = client_atlassian("datacenter")
+    del fake.pages[fake.only_page().id]
+    url = f"/processes/{published_once}/confluence/publish"
+    job = await wait_terminal(c, (await c.post(url, headers=architect)).json()["job_id"], expect="failed")
+    assert "is gone (404)" in job["error"] and "create again" in job["error"]
+    assert fake.page_count() == 0
+    link = (await c.get(f"/processes/{published_once}/confluence")).json()
+    assert link["stale"] is True
+    row = (await _audits(c.app, "connector confluence publish"))[-1]
+    assert row.detail["outcome"] == "refused" and "is gone (404)" in row.detail["message"]
+    sent = len(fake.requests)
+    job = await wait_terminal(c, (await c.post(url, headers=architect)).json()["job_id"], expect="failed")
+    assert "was deleted in Confluence" in job["error"] and len(fake.requests) == sent  # no request
+    assert fake.page_count() == 0
+
+
+async def test_create_again_makes_a_new_page(client_atlassian, published_once, architect, wait_terminal):
     c, fake = client_atlassian("datacenter")
     old = fake.only_page().id
     del fake.pages[old]
-    out = await wait_terminal(c, (await c.post(f"/processes/{published_once}/confluence/publish", headers=architect)).json()["job_id"])
+    url = f"/processes/{published_once}/confluence/publish"
+    await wait_terminal(c, (await c.post(url, headers=architect)).json()["job_id"], expect="failed")
+    out = await wait_terminal(c, (await c.post(url, json={"create_again": True}, headers=architect)).json()["job_id"])
     assert fake.page_count() == 1 and fake.only_page().id != old and out["version"] == 1
-    assert (await c.get(f"/processes/{published_once}/confluence")).json()["remote_id"] == out["page_id"]
+    link = (await c.get(f"/processes/{published_once}/confluence")).json()
+    assert link["remote_id"] == out["page_id"] and link["stale"] is False
 
 
-async def test_unlinked_page_of_the_same_title_is_updated(client_atlassian, designed_process, architect,
-                                                          wait_terminal):
+async def test_create_again_updates_the_old_page_when_it_is_back(client_atlassian, atlassian_app, published_once,
+                                                                 architect, wait_terminal):
+    """A stale link whose page was restored: create again updates that page, it makes no other."""
+    c, fake = client_atlassian("datacenter")
+    pid = fake.only_page().id
+    async with atlassian_app.state.sessionmaker() as s:
+        from api.app.services.confluence_publish import page_link
+        (await page_link(s, published_once)).stale = True
+        await s.commit()
+    out = await wait_terminal(c, (await c.post(f"/processes/{published_once}/confluence/publish",
+                                               json={"create_again": True}, headers=architect)).json()["job_id"])
+    assert out["page_id"] == pid and out["version"] == 2 and fake.page_count() == 1
+
+
+async def test_a_persons_page_of_the_same_title_is_never_overwritten(client_atlassian, designed_process,
+                                                                     architect, wait_terminal):
     c, fake = client_atlassian("cloud")
     pid = fake.create_page("GMF", "gmf.credit · DealerFundingRequest · Architecture", "<p>by hand</p>", "1001")
-    fake.seeded.discard(pid)
-    out = await wait_terminal(c, (await c.post(f"/processes/{designed_process}/confluence/publish",
-                                               headers=architect)).json()["job_id"])
-    assert out["page_id"] == pid and out["version"] == 2 and fake.page_count() == 1
+    url = f"/processes/{designed_process}/confluence/publish"
+    for body in (None, {"create_again": True}):
+        job = await wait_terminal(c, (await c.post(url, json=body, headers=architect)).json()["job_id"],
+                                  expect="failed")
+        assert "already in the space GMF" in job["error"] and "not overwritten" in job["error"]
+    assert fake.pages[pid]["body"] == "<p>by hand</p>" and fake.pages[pid]["version"] == 1
+    assert fake.page_count() == 0 and not [r for r in fake.requests if r.method in ("PUT", "POST")]
+    assert (await c.get(f"/processes/{designed_process}/confluence")).status_code == 404
+    assert (await _audits(c.app, "connector confluence publish"))[-1].detail["outcome"] == "refused"
+
+
+async def test_route_refusals_before_the_queue_are_audited(client_atlassian, atlassian_app, architect, dfr):
+    """No design, no space key, no Confluence URL: each 409 is audited ``refused`` (ruling X20)."""
+    c, fake = client_atlassian("datacenter")
+    bare = await _seed(atlassian_app, dfr, with_design=False)
+    assert (await c.post(f"/processes/{bare}/confluence/publish", headers=architect)).status_code == 409
+    designed = await _seed(atlassian_app, dfr)
+    async with atlassian_app.state.sessionmaker() as s:
+        row = await s.get(Setting, "connectors")
+        row.value = {"atlassian": {**row.value["atlassian"], "space_key": ""}}
+        await s.commit()
+    r = await c.post(f"/processes/{designed}/confluence/publish", headers=architect)
+    assert r.status_code == 409 and r.json()["detail"] == "set the Confluence space key in Settings → Connectors"
+    install = json.loads(atlassian_app.state.settings.connectors)
+    install["atlassian"]["confluenceUrl"] = ""
+    atlassian_app.state.settings.connectors = json.dumps(install)
+    r = await c.post(f"/processes/{designed}/confluence/publish", headers=architect)
+    assert r.status_code == 409 and "no Confluence URL" in r.json()["detail"]
+    rows = await _audits(c.app, "connector confluence publish")
+    assert [(r.process_id, r.detail["outcome"]) for r in rows] == [(bare, "refused"), (designed, "refused"),
+                                                                   (designed, "refused")]
+    assert rows[0].detail["message"] == "design the process before publishing it"
+    assert fake.requests == []
 
 
 async def test_failed_publish_is_audited(client_atlassian, published_once, architect, wait_terminal):

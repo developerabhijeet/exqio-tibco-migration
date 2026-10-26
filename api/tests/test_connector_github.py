@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from api.app.connectors.base import ConnectorError, HostNotAllowed
+from api.app.connectors.base import ConnectorError, ConnectorMisconfigured, HostNotAllowed
 from api.app.connectors.config import STORED_KEY
 from api.app.connectors.gitcli import auth_header_value, git_env, run_git
 from api.app.connectors.github import GitHubConnector, default_push_branch, valid_push_branch
@@ -341,8 +341,13 @@ async def test_remote_off_the_allowlist_is_refused(gh_settings, fake_github, tmp
     other = gh_settings.model_copy(update={"connectors": json.dumps({"github": {
         "enabled": True, "baseUrl": fake_github.url, "allowedHosts": ["github.gmf.example.com"]}})})
     connector = get_connector("github", settings=other, stored=ON)
+    with pytest.raises(ConnectorMisconfigured, match="baseUrl: host .* not in allowedHosts"):
+        await connector.clone("gmf/estate", "main", tmp_path / "c")  # the install itself is refused
+    # an admin URL that bypassed the save-time check (written to the table) is refused per request
+    stored = {STORED_KEY: {"github": {"enabled": True, "base_url": "https://github.elsewhere.example"}}}
+    connector = get_connector("github", settings=gh_settings, stored=stored)
     with pytest.raises(HostNotAllowed):
-        await connector.clone("gmf/estate", "main", tmp_path / "c")
+        await connector.clone("gmf/estate", "main", tmp_path / "d")
     assert fake_github.requests == []
 
 
@@ -472,3 +477,78 @@ async def test_reused_pr_is_retargeted_to_the_asked_base(gh, fake_github):
     assert patch.json == {"body": "two", "base": "release"}
     await gh.open_pull_request("gmf/rt", "exiqo/r", "main", "t", "three")  # the fake keeps base main
     assert [r for r in fake_github.requests if r.method == "PATCH"][-1].json == {"body": "three"}
+
+
+# ------------------------------------------------------------------ final review (X20, dedupe and lock)
+
+
+def _pushes(fake_github) -> int:
+    return sum(1 for r in fake_github.requests if r.method == "POST" and r.path.endswith("/git-receive-pack"))
+
+
+async def test_route_refusals_before_the_queue_are_audited(client, app, fake_github, finished_build, proc_id):
+    """Every 422 and 409 the route answers is audited ``refused`` (ruling X20), and nothing is sent."""
+    url = f"/builds/{finished_build}/github/push"
+    asked = [({"repo": "../etc"}, 422, "repo: not owner/name"),
+             ({"repo": "gmf/credit", "branch": "main"}, 422, "pushes go to exiqo/ branches only"),
+             ({"repo": "gmf/credit", "base": "bad..base"}, 422, "base: not a branch name")]
+    for body, status, message in asked:
+        r = await client.post(url, json=body, headers=ENGINEER)
+        assert r.status_code == status and message in r.json()["detail"], r.text
+    async with app.state.sessionmaker() as s:
+        build = await s.get(Build, finished_build)
+        build.status = "running"
+        await s.commit()
+    r = await client.post(url, json={"repo": "gmf/credit"}, headers=ENGINEER)
+    assert r.status_code == 409 and r.json()["detail"] == "the build has not finished"
+    async with app.state.sessionmaker() as s:
+        build = await s.get(Build, finished_build)
+        build.status, build.output_dir = "passed", None
+        await s.commit()
+    r = await client.post(url, json={"repo": "gmf/credit"}, headers=ENGINEER)
+    assert r.status_code == 409 and r.json()["detail"] == "the build has no solution on disk"
+    rows = [a for a in await _audit_rows(app) if a.action == "connector github push"]
+    assert [a.detail["outcome"] for a in rows] == ["refused"] * 5
+    assert [a.detail["message"].split(":")[0] for a in rows][-2:] == ["the build has not finished",
+                                                                       "the build has no solution on disk"]
+    assert all(a.process_id == proc_id and a.detail["build_id"] == finished_build and a.actor == "engineer.ravi"
+               for a in rows)
+    assert rows[1].detail["target"] == "gmf/credit@main"
+    assert fake_github.requests == []
+
+
+async def test_double_submit_is_one_push(client, app, fake_github, finished_build, engineer, wait_terminal):
+    """The same build to the same branch is queued once, refused while it runs, and the job holds
+    the push lock: a double submit pushes once and the second answer is a readable 409."""
+    from api.app.jobs.locks import try_advisory_lock
+    from api.app.models import Job
+    from api.app.services.github_push import PUSH_KIND, dedupe_key
+
+    fake_github.add_repo("gmf/credit", tree={"README.md": "x"})
+    branch = default_push_branch("Account Lookup", finished_build)
+    url, body = f"/builds/{finished_build}/github/push", {"repo": "gmf/credit"}
+    async with try_advisory_lock(app.state.sessionmaker, dedupe_key(finished_build, "gmf/credit", branch)) as got:
+        assert got
+        first = await client.post(url, json=body, headers=engineer)
+        assert first.status_code == 202, first.text
+        await asyncio.sleep(0.6)
+        assert (await client.get(f"/jobs/{first.json()['job_id']}")).json()["status"] == "queued"  # waiting
+        again = await client.post(url, json=body, headers=engineer)
+        assert again.status_code == 409 and again.json()["detail"] == (
+            f"a push of this build to {branch} is already queued")
+        assert _pushes(fake_github) == 0
+    out = await wait_terminal(client, first.json()["job_id"])
+    assert out["branch"] == branch and _pushes(fake_github) == 1
+    # while one runs, the same push is refused too
+    async with app.state.sessionmaker() as s:
+        s.add(Job(kind=PUSH_KIND, status="running",
+                  payload={"dedupe_key": dedupe_key(finished_build, "gmf/credit", branch)}))
+        await s.commit()
+    running = await client.post(url, json=body, headers=engineer)
+    assert running.status_code == 409 and running.json()["detail"] == (
+        f"this build is already being pushed to {branch}")
+    # another branch of the same build is another push
+    other = await client.post(url, json={**body, "branch": "exiqo/other"}, headers=engineer)
+    assert other.status_code == 202
+    await wait_terminal(client, other.json()["job_id"])
+    assert _pushes(fake_github) == 2
