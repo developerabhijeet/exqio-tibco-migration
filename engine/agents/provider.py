@@ -189,10 +189,31 @@ def _field_pattern(fields: Iterable[str]) -> re.Pattern[str]:
 
 _DEFAULT_PATTERN = _field_pattern(SENSITIVE_FIELDS)
 
+# Credentials (X24): masked wherever the text goes, with no configuration. Same key/value and
+# element handling as the sensitive fields; "password" in prose has no separator, so it stays.
+CREDENTIAL_FIELDS = ("password", "passwd", "pwd", "secret", "client_secret", "api_key",
+                     "apikey", "token", "access_token", "accountkey", "sharedaccesskey",
+                     "sharedaccesssignature")
+_CRED_PATTERN = _field_pattern(CREDENTIAL_FIELDS)
+_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+                  re.DOTALL)
+_GITHUB_TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})")
+_SAS_SIG = re.compile(r"(?P<head>[?&;]sig=)[^&\s;\"']+", re.IGNORECASE)
+_URL_USERINFO = re.compile(r"(?P<head>\b[A-Za-z][A-Za-z0-9+.\-]*://[^\s/:@]+:)[^\s/@]+(?=@)")
+_AUTH_HEADER = re.compile(
+    r"(?P<head>\bauthorization\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)\s+)?)"
+    r"(?P<val>[^\s\"',;]+)", re.IGNORECASE)
+_BEARER = re.compile(r"(?P<head>\b(?:bearer|basic)\s+)(?P<val>[A-Za-z0-9._~+/\-]{12,}=*)",
+                     re.IGNORECASE)
+# "token <credential>": a long value containing a digit, so "token expires" stays prose.
+_TOKEN_WORD = re.compile(r"(?P<head>\btoken\s+)(?=[A-Za-z0-9._~+/\-]*\d)"
+                         r"(?P<val>[A-Za-z0-9._~+/\-]{12,}=*)", re.IGNORECASE)
+
 
 def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:
     """Mask SSNs and the values of sensitive fields before text reaches a log, a trace, a tag
-    or an embedding. Never apply it to a prompt: citations must quote the source verbatim.
+    or an embedding, plus credentials (passwords, secrets, API keys, tokens, bearer/basic
+    headers, URL userinfo, connection-string passwords). Never apply it to a prompt: citations must quote the source verbatim.
 
     Handles ``key: value``, ``key=value``, JSON ``"key": "value"`` and ``<key>value</key>``
     (with namespace prefix and attributes). ``extra_fields`` adds field names tagged sensitive
@@ -209,4 +230,12 @@ def mask_sensitive(text: str, extra_fields: Iterable[str] = ()) -> str:
         masked = f"{val[0]}{MASK}{val[0]}" if val[:1] in "\"'" and len(val) >= 2 else MASK
         return f"{m.group('q')}{m.group('key')}{m.group('q')}{m.group('sep')}{masked}"
 
+    text = _PEM.sub(MASK, text)
+    text = _GITHUB_TOKEN.sub(MASK, text)
+    text = _SAS_SIG.sub(lambda m: m.group("head") + MASK, text)
+    text = _URL_USERINFO.sub(lambda m: m.group("head") + MASK, text)
+    text = _AUTH_HEADER.sub(lambda m: m.group("head") + MASK, text)
+    text = _BEARER.sub(lambda m: m.group("head") + MASK, text)
+    text = _TOKEN_WORD.sub(lambda m: m.group("head") + MASK, text)
+    text = _CRED_PATTERN.sub(repl, text)
     return _SSN.sub("***-**-****", pattern.sub(repl, text))
