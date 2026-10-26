@@ -1,0 +1,111 @@
+"""Deterministic layers 1-4 of the ExiQoian pipeline: normalise, injection check, greeting and
+off-topic pre-filter. No model, no I/O."""
+import re
+import unicodedata
+
+from pydantic import BaseModel
+
+from engine.exiqoian.lexicon import OFF_DOMAIN_PHRASES, OFF_DOMAIN_SINGLE, split_identifier, tokens
+from engine.exiqoian.patterns import INJECTION_RULES, LEET
+from engine.exiqoian.replies import Verdict
+from engine.memory.search import query_terms
+
+_INVISIBLE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+# Cyrillic and Greek look-alikes of Latin letters (lowercase; applied after casefold).
+_HOMOGLYPHS = str.maketrans({
+    "а": "a", "в": "b", "с": "c", "е": "e", "н": "h", "і": "i", "ї": "i", "ј": "j", "к": "k",
+    "м": "m", "о": "o", "р": "p", "ѕ": "s", "т": "t", "у": "y", "х": "x", "ԁ": "d", "һ": "h",
+    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p", "τ": "t",
+    "υ": "u", "χ": "x", "γ": "y",
+})
+_SPACES = re.compile(r"[^\S\n]+")
+_BLANKS = re.compile(r"\s*\n\s*")
+# Runs of single letters split by separators ("i g n o r e", "i.g.n.o.r.e").
+_SPLIT_LETTERS = re.compile(r"(?<![a-z])(?:[a-z][ \t._\-*]+){2,}[a-z](?![a-z])")
+_SPLIT_SEP = re.compile(r"[ \t._\-*]+")
+
+
+def normalise(text: str) -> str:
+    """Matching form only: NFKC, invisible and bidi control characters removed, casefold,
+    look-alike letters mapped to Latin, runs of blanks collapsed (line breaks are kept as one
+    ``\\n`` so line-start rules still work)."""
+    t = unicodedata.normalize("NFKC", text)
+    t = _INVISIBLE.sub("", t).casefold().translate(_HOMOGLYPHS)
+    return _BLANKS.sub("\n", _SPACES.sub(" ", t)).strip()
+
+
+def _deobfuscate(n: str) -> str:
+    """Leet-mapped text with single-letter runs joined (the obfuscated_override view)."""
+    return _SPLIT_LETTERS.sub(lambda m: _SPLIT_SEP.sub("", m.group()), n.translate(LEET))
+
+
+def detect_injection(text: str) -> str | None:
+    """Name of the first matching injection rule for ``text`` (normalised here), else None."""
+    n = normalise(text)
+    for name, pattern in INJECTION_RULES:
+        if name == "obfuscated_override":
+            d = _deobfuscate(n)
+            if d != n and pattern.search(d):
+                return name
+        elif pattern.search(n):
+            return name
+    return None
+
+
+_GREETING = re.compile(
+    r"^(?:hi|hello|hey|hiya|howdy|yo|namaste|thanks|thank you|thx|ok|okay|help|"
+    r"good (?:morning|afternoon|evening)|who are you|what are you|what do you do|what can you do|"
+    r"what can you do for me|how can you help|how can you help me)(?: (?:there|exiqoian|everyone|you))?$")
+
+
+def is_greeting(normalised: str) -> bool:
+    """A message that is only a greeting, thanks or a capability question."""
+    return bool(_GREETING.match(re.sub(r"[^\w\s]", "", normalised).strip()))
+
+
+_ARITH_LEAD = re.compile(r"^(?:please\s+)?(?:what(?:'s|s| is)|calculate|solve|compute)\b\s*")
+_ARITH = re.compile(r"^[\d\s+\-*/^().=x×÷%]+$")
+
+
+def _is_arithmetic(n: str) -> bool:
+    t = n.replace("?", " ").replace("% of", "%*").strip()
+    while (stripped := _ARITH_LEAD.sub("", t, count=1)) != t:
+        t = stripped.strip()
+    return bool(_ARITH.match(t)) and any(c.isdigit() for c in t) and any(c in "+-*/^×÷%x" for c in t)
+
+
+def _project_word(tok: str, lexicon: frozenset[str]) -> bool:
+    return tok in lexicon or any(p in lexicon for p in split_identifier(tok))
+
+
+def prefilter(normalised: str, lexicon: frozenset[str], *, has_context: bool = False) -> str | None:
+    """``"arithmetic"``, ``"off_domain"``, ``"too_vague"`` or None. A project word (or an
+    identifier part of one) overrides off_domain and too_vague; too_vague is skipped with context."""
+    if _is_arithmetic(normalised):
+        return "arithmetic"
+    toks = tokens(normalised)
+    has_project_word = any(_project_word(t, lexicon) for t in toks)
+    if not has_project_word:
+        joined = " " + " ".join(toks) + " "
+        if any(t in OFF_DOMAIN_SINGLE for t in toks) or any(f" {p} " in joined for p in OFF_DOMAIN_PHRASES):
+            return "off_domain"
+        if not has_context and len(query_terms(normalised)) < 2:
+            return "too_vague"
+    return None
+
+
+class GuardResult(BaseModel):
+    verdict: Verdict | None = None  # None: continue to retrieval
+    rule: str | None = None
+
+
+def check(text: str, lexicon: frozenset[str], *, has_context: bool = False) -> GuardResult:
+    """Layers 2, 3 and 4 in order; the first that decides ends it."""
+    if rule := detect_injection(text):
+        return GuardResult(verdict="injection", rule=rule)
+    n = normalise(text)
+    if is_greeting(n):
+        return GuardResult(verdict="intro", rule="greeting")
+    if rule := prefilter(n, lexicon, has_context=has_context):
+        return GuardResult(verdict="off_topic", rule=rule)
+    return GuardResult()
