@@ -112,10 +112,28 @@ shows each provider as configured or missing and never shows a value.
 | `make samples`     | regenerate the synthetic estate                                                                                                                                                        |
 | `make samples-zip` | zip it to `samples/synthetic-gmf.zip`                                                                                                                                                  |
 | `make toolchain`   | report `dotnet`, `terraform`, `terragrunt`, `docker`, `az`, `node`                                                                                                                     |
+| `make stack-locks` | refresh the Go and Python dependency locks of the target stacks (needs `GOPROXY` and `UV_INDEX_URL`) |
 | `make nuget-cache` | build an offline NuGet feed in `.tools/nuget-cache` (run where NuGet is reachable, then copy it)                                                                                       |
 
 
 
+
+## Target stacks
+
+A project picks the language the migrated service is generated in; the platform's design, tests,
+parity and memory are the same for all of them.
+
+| Stack | Generated service | Build tools | Package source |
+|---|---|---|---|
+| `dotnet` (default) | C# · .NET 10 · ASP.NET Core | `dotnet` | NuGet |
+| `java` | Java 21 · Spring Boot 3.5 | JDK 21, Maven | Maven mirror |
+| `go` | Go · net/http · pgx | Go | Go module proxy |
+| `python` | Python 3.12 · FastAPI | `uv`, Python 3.12 | PyPI mirror |
+
+`ENABLED_STACKS` (the chart's `stacks.enabled`) says which are offered; `make toolchain` shows the
+tools present. The generated dependency versions are pinned in `engine/stacks/<stack>/`; refresh
+the Go and Python locks with `make stack-locks` where the mirrors are reachable (`GOPROXY`,
+`UV_INDEX_URL`). The install guide has the mirrors, firewall hosts and worker sizing.
 
 ## What runs with no keys
 
@@ -195,6 +213,11 @@ with the NuGet reason and the `make nuget-cache` remedy, build and test skipped,
 enabled, the service not running and verify refused, the registry reported unreachable.
 
 Force a mode with `make demo-check DEMO_ARGS="--mode full"` (or `--mode offline`).
+
+`--stack dotnet|java|go|python` (default `dotnet`) runs the same seven steps on a project with that
+target stack: it asserts the build's stack, the metrics keys, parity with no unexplained
+difference and, with memory configured, a `MIGRATED_TO` edge to a `method:<stack>:` node.
+`make demo-check DEMO_ARGS="--stack java"`.
 
 Against an installed platform (the smoke test in the install guide) run the script directly:
 `scripts/demo_check.py --base-url https://<host>` talks to the API under `<host>/api`, and `--token`

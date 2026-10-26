@@ -535,3 +535,14 @@ def test_pipelines_and_dockerfile_refuse_an_empty_or_direct_proxy(go_infra):
         text = go_infra[name]
         assert 'test -n "$GOPROXY"' in text and "*direct*" in text, name
     assert "*direct*" in go_infra["Dockerfile"]
+
+
+def test_runner_trusts_the_mirror_ca_bundle(tmp_path, monkeypatch):
+    """A module mirror behind GMF's private CA: Go reads SSL_CERT_FILE (as the Python runner does)."""
+    pem = tmp_path / "ca.pem"
+    pem.write_text("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("MIRROR_CA_BUNDLE", str(pem))
+    assert GoRunner(tmp_path, go="go").env()["SSL_CERT_FILE"] == str(pem)
+    monkeypatch.setenv("MIRROR_CA_BUNDLE", str(tmp_path / "absent.pem"))
+    assert "SSL_CERT_FILE" not in GoRunner(tmp_path, go="go").env()

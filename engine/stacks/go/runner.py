@@ -134,6 +134,9 @@ class GoRunner:
         env.update({k: os.environ[k] for k in _PLATFORM_KEPT if os.environ.get(k)})
         env["GOPROXY"] = os.environ.get("GOPROXY", "").strip() or "off"
         env.update(GO_SETTINGS)
+        ca = os.environ.get("MIRROR_CA_BUNDLE", "")  # the module mirror's private CA
+        if ca and Path(ca).is_file() and "SSL_CERT_FILE" not in env:
+            env["SSL_CERT_FILE"] = ca
         if Path(self.go).is_absolute():
             env["PATH"] = os.pathsep.join([str(Path(self.go).parent), env.get("PATH", "")])
         env.update(self.extra_env)

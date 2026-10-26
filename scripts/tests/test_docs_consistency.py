@@ -42,7 +42,7 @@ DEPLOY_TOPICS = ["az identity create", "federated credential", "Contributor", "c
 # Files named in the guides that live in GMF's own repository, not in this one.
 GMF_REPO_PATHS = ("deploy/gmf/",)
 # `<NAME>_FILE` variables that are not app secrets (pipeline and Terraform settings).
-OTHER_FILE_VARS = {"COSIGN_PUBLIC_KEY_FILE", "TF_CLI_CONFIG_FILE", "AZURE_FEDERATED_TOKEN_FILE"}
+OTHER_FILE_VARS = {"COSIGN_PUBLIC_KEY_FILE", "TF_CLI_CONFIG_FILE", "AZURE_FEDERATED_TOKEN_FILE", "SSL_CERT_FILE"}
 
 FENCE = re.compile(r"^```(?P<info>[^\n]*)\n(?P<body>.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 INLINE = re.compile(r"`([^`\n]+)`")

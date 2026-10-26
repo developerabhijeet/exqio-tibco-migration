@@ -545,6 +545,31 @@ Other upgrades:
 - **StorageClass.** Its parameters are immutable. To change them, create a new class under a new
   name and migrate the share deliberately.
 
+## A stack's build fails to restore
+
+A Java, Go or Python build that stops at the restore step (the build view shows `restore` failed
+and build and test skipped; the job itself is done) cannot fetch its packages. Work down this list:
+
+1. Read the restore log in the build view. It names the mirror host and the error.
+2. Check the mirror: from a worker pod, `curl -sI` the configured URL (`mirrors.maven`,
+   `mirrors.goproxy` or `mirrors.pypi`). A TLS error means the CA: see "A mirror behind a private
+   CA" in the install guide, and check `MIRROR_CA_BUNDLE` is set on the worker.
+3. Go says `GOPROXY is off` or `module lookup disabled by GOPROXY=off`: `mirrors.goproxy` is empty
+   on this install. Go never falls back to a public proxy, so set the value and upgrade the chart.
+   A `missing go.sum entry` or `checksum mismatch` is not a network problem: the platform's
+   `go.sum.lock` lacks a module the generated code needs. Refresh it with `make stack-locks` on a
+   machine that reaches the mirror and ship the new image.
+4. Python says a hash is missing or does not match: the mirror serves a different file than the one
+   locked (a re-published wheel). Refresh the lock with `make stack-locks`; never disable
+   `--require-hashes`.
+5. Maven resolves from `.exiqo/maven-settings.xml` only; a `401` or `403` means the mirror's
+   repository does not proxy the artifact or needs credentials the settings do not carry.
+6. The cache can be the culprit after a partial download: restart the worker pod (the
+   `/cache/stacks` volume is per pod and refills).
+7. The job error "needs <tool>" before any model call means the worker image lacks the stack's
+   toolchain: the image is not the platform image, or `stacks.enabled` names a stack the image was
+   built without.
+
 ## Local development notes
 
 These apply on a developer machine, where the same job runner is used: `make api` (the default

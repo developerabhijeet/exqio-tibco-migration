@@ -208,33 +208,65 @@ refilled from the mirror after a restart.
 #### Target stacks
 
 `stacks.enabled` (default `[dotnet]`; any of `dotnet`, `java`, `go`, `python`) becomes
-`ENABLED_STACKS`. An enabled stack other than .NET needs its mirror: the schema and the template
-refuse the install without `mirrors.maven` (java), `mirrors.goproxy` (go) or `mirrors.pypi`
-(python), and refuse a mirror that is not `https://`. The pods have no route to the public
-repositories. The worker gets a per-pod `/cache/stacks` volume (`worker.stackCacheSize`, default
-10Gi: the Maven repository, the Go and uv caches), refilled from the mirrors after a restart. A
-Maven build needs about 2 GiB of memory per concurrent job (`worker.slots`): raise
-`worker.resources` when you enable `java`. The platform image carries Temurin JDK 21 and Maven 3.9
-(pinned and checksum-verified at build; override `TEMURIN_BASE_URL` and `MAVEN_BASE_URL` build
-arguments to fetch them from your mirror).
+`ENABLED_STACKS`. Each project picks one stack (the Settings page sets the default for new
+projects; only an admin changes it) and every build of it targets that stack.
+
+| Stack | Generated service | Needs on the worker | Mirror (values) |
+|---|---|---|---|
+| `dotnet` | C# · .NET 10 · ASP.NET Core | `dotnet` | `mirrors.nuget` |
+| `java` | Java 21 · Spring Boot 3.5 · Maven | JDK 21 and Maven 3.9 (in the image) | `mirrors.maven` |
+| `go` | Go · net/http · pgx (go modules) | Go toolchain (in the image) | `mirrors.goproxy` |
+| `python` | Python 3.12 · FastAPI · pytest | `uv` (in the image) and a Python 3.12 interpreter | `mirrors.pypi` |
+
+An enabled stack other than .NET needs its mirror: the schema and the template refuse the install
+without it and refuse a mirror that is not `https://`. The pods have no route to the public
+repositories, so a stack without a mirror cannot restore a single package; a Go build with no
+`GOPROXY` fails closed (`GOPROXY=off`), it never falls back to Go's public proxy.
+
+Worker sizing, only when a stack other than .NET is enabled:
+
+- The worker gets a per-pod `/cache/stacks` volume (`worker.stackCacheSize`, default 10Gi: the
+  Maven repository, the Go module and build caches, uv's cache), refilled from the mirrors after a
+  restart. A .NET-only install gets no such volume. The pod's `ephemeral-storage` request already
+  includes it; raise both together.
+- A Maven build needs about 2 GiB of memory per concurrent job (`worker.slots`). Go links and Python
+  installs need less, but raise `worker.resources` for the busiest stack you enable. Keep
+  `worker.slots` low (2) until you have watched a week of builds.
+- The platform image carries Temurin JDK 21, Maven 3.9, the Go toolchain and `uv`, each pinned and
+  checksum-verified at build (override the `*_BASE_URL` build arguments to fetch them from your
+  mirror). Python 3.12 is the image's own interpreter; `uv` never downloads one.
 
 For the firewall team: the host of each configured mirror joins `EGRESS_ALLOWLIST` (shown in the
 About panel) automatically, only for an enabled stack. Allow exactly these on 443:
-the `mirrors.maven` host, the `mirrors.goproxy` host, the `mirrors.pypi` host (and the existing
-NuGet / npm / Terraform mirror hosts). Nothing public is named by the chart or the code.
+the `mirrors.maven` host (java), the `mirrors.goproxy` host (go), the `mirrors.pypi` host (python)
+and the existing NuGet, npm and Terraform mirror hosts. Nothing public is named by the chart or the
+code. A Go build does not contact `sum.golang.org` or any VCS host: checksums come from the
+`go.sum` the platform commits, and `GOFLAGS=-mod=readonly` forbids anything else.
+
+Dependency versions are pinned by the platform, not chosen by the model: Maven versions in
+`engine/stacks/java/versions.py`, Go modules and checksums in `engine/stacks/go/versions.py` and
+`go.sum.lock`, Python requirements in hash-locked files. Refresh the Go and Python locks on a
+machine that reaches your mirrors with `make stack-locks` (set `GOPROXY` and `UV_INDEX_URL`), review
+the diff and commit it.
+
+An upgrade that moves the uploads volume to another mount path changes the source paths stored in
+every analysis (the scanner records the path it read) and with them every spec hash, which resets
+the gates G1 and G2 of existing projects. Keep `DATA_DIR` where it was across upgrades, or plan to
+re-approve.
 
 #### A mirror behind a private CA
 
 When the mirrors' certificates come from GMF's own CA, put the CA certificate(s) (PEM, a chain is
 fine) in `mirrors.caBundle`. The chart stores it in a ConfigMap, mounts it read-only on the worker
-at `/etc/exiqo-ca/ca.pem` and sets `MIRROR_CA_BUNDLE`; at start the entrypoint copies the JDK trust
-store to `/tmp/exiqo-cacerts`, adds each certificate with `keytool`, and adds
+at `/etc/exiqo-ca/ca.pem` and sets `MIRROR_CA_BUNDLE`. Java: at start the entrypoint copies the JDK
+trust store to `/tmp/exiqo-cacerts`, adds each certificate with `keytool`, and adds
 `-Djavax.net.ssl.trustStore` to `MAVEN_OPTS` (the Java runner passes that through to Maven and
-nothing else of `MAVEN_OPTS` but the repository path). A bundle with no certificate, or one
-`keytool` rejects, stops the pod. Go and Python builds do not use the bundle yet; give their mirror
-a publicly trusted certificate or bake the CA into the base image until they do. The same CA must
-also be in the trust store of the image build that runs `mvn` for the generated Dockerfile (GMF's
-base image, `BASE_IMAGE_BUILD`).
+nothing else of `MAVEN_OPTS` but the repository path). Go and Python: their runners hand the same
+file to the build as `SSL_CERT_FILE`. The entrypoint fails closed: a `MIRROR_CA_BUNDLE` that is set
+but names no file, a missing `keytool`, a bundle with no certificate, or one `keytool` rejects,
+stops the pod (exit 65 or 66) instead of starting with the public trust store. The same CA must
+also be in the trust store of the image build that runs the generated Dockerfile (GMF's base image,
+`BASE_IMAGE_BUILD`, and the pipelines' `UV_INDEX_URL` / `GOPROXY` / `MAVEN_MIRROR_URL` variables).
 
 GMF adds its own mirror hosts in two places: `egress.fqdns` (the firewall list, shown in the
 About panel) and, for the build-time audit, `deploy/egress-allowlist.txt` if GMF runs `make
