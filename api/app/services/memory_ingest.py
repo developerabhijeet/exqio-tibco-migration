@@ -16,9 +16,10 @@ connection (busy: back to the queue in 2 s, the attempt not counted), loads the 
 the ``load_*`` functions, calls the phase's projector and applies the delta as one revision.
 Neo4j being unreachable raises ``RetryLater`` with backoff ``min(600, 15 * 2 ** (attempt - 1))``;
 after the last attempt the job fails with ``memory unavailable after <n> attempts: <class>``.
-While the one-time ``memory.migrate`` job (``services.memory_migrate``) is queued or running,
-an ingest goes back to the queue (5 s, the attempt not counted), so the migration is each
-legacy project's revision 1.
+While the one-time ``memory.migrate`` job (``services.memory_migrate``) or a ``memory.reembed``
+job is queued or running, an ingest goes back to the queue (5 s, the attempt not counted): the
+migration is then each legacy project's revision 1, and no ingest meets a re-embed half done (the
+recorded backend changes only after its last project).
 """
 from __future__ import annotations
 
@@ -85,6 +86,7 @@ log = logging.getLogger(__name__)
 
 INGEST_KIND = "memory.ingest"
 MIGRATE_KIND = "memory.migrate"
+REEMBED_KIND = "memory.reembed"
 MIGRATION_WAIT_S = 5
 SYSTEM_ACTOR = "system"
 LOCK_BUSY_DELAY_S = 2
@@ -482,10 +484,16 @@ def unavailable_retry(attempt: int, exc: BaseException) -> RetryLater:
                       give_up=f"memory unavailable after {{attempts}} attempts: {cls}")
 
 
-async def migration_pending(s: AsyncSession) -> bool:
-    """A ``memory.migrate`` job is queued or running."""
-    return await s.scalar(select(Job.id).where(Job.kind == MIGRATE_KIND,
-                                               Job.status.in_(("queued", "running"))).limit(1)) is not None
+# Install-wide memory jobs an ingest waits for, and the wait's reason.
+BLOCKING_KINDS = {MIGRATE_KIND: "waiting for the memory migration",
+                  REEMBED_KIND: "waiting for the memory re-embed"}
+
+
+async def blocking_job(s: AsyncSession) -> str | None:
+    """The kind of a queued or running ``memory.migrate`` or ``memory.reembed`` job, if any."""
+    return await s.scalar(select(Job.kind).where(Job.kind.in_(list(BLOCKING_KINDS)),
+                                                 Job.status.in_(("queued", "running")))
+                          .order_by(Job.kind).limit(1))
 
 
 async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
@@ -498,8 +506,9 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
         raise ValueError(f"memory phase {phase!r} has no projector")
     source = p.get("source") or {}
     async with w.sessionmaker() as s:
-        if await migration_pending(s):
-            raise RetryLater(MIGRATION_WAIT_S, "waiting for the memory migration", count_attempt=False)
+        blocking = await blocking_job(s)
+        if blocking is not None:
+            raise RetryLater(MIGRATION_WAIT_S, BLOCKING_KINDS[blocking], count_attempt=False)
         project_id = await _project_id(s, p)
     async with try_advisory_lock(w.sessionmaker, f"memory:{project_id}") as locked:
         if not locked:

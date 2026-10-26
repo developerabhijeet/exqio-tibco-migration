@@ -54,7 +54,7 @@ from engine.memory.model import KnowledgeError, MemNode, MemRel, RevisionMeta, S
 log = logging.getLogger(__name__)
 
 MIGRATE_KIND = mi.MIGRATE_KIND
-REEMBED_KIND = "memory.reembed"
+REEMBED_KIND = mi.REEMBED_KIND
 INGEST_KEY = "migration:pg-knowledge"
 ACTOR = "migration"
 ORPHAN_SCOPE = "migration:orphan"

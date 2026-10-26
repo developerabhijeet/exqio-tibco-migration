@@ -251,6 +251,21 @@ async def test_ingest_waits_for_a_pending_migration(memory_app, legacy_project):
     assert m.result["projects"][0]["project_id"] == legacy_project and i.attempts <= 1
 
 
+async def test_ingest_waits_for_a_pending_reembed(memory_app, legacy_project):
+    """An ingest queued alongside an all-project re-embed (the recorded backend still the old
+    one) waits for it instead of failing on the backend mismatch."""
+    from engine.tests.memory_helpers import set_embedding_backend
+
+    await run_migration(memory_app)
+    await set_embedding_backend(memory_app.state.memory, "another-backend")
+    reembed = await enqueue(memory_app.state.sessionmaker, REEMBED_KIND, {})
+    ing = await enqueue_ingest_for(memory_app, legacy_project, scope="seed")
+    r, i = await wait_terminal(memory_app, reembed), await wait_terminal(memory_app, ing)
+    assert r.status == i.status == "done", (r.error, i.error)
+    assert i.finished_at >= r.finished_at and i.attempts <= 1
+    assert await memory_app.state.memory.recorded_backend() == embeddings.backend_name()
+
+
 async def test_embeddings_are_reused_when_backend_matches(memory_app, legacy_project, embed_spy):
     await run_migration(memory_app)
     assert embed_spy.memory_texts == []
