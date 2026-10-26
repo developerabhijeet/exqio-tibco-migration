@@ -18,8 +18,9 @@ class Build(IdMixin, CreatedMixin, Base):
     design_id: Mapped[str | None] = mapped_column(fk("design_records.id", ondelete="SET NULL"))
     job_id: Mapped[str | None]
     iteration: Mapped[int] = mapped_column(default=1, server_default="1")  # Iteration.n of the job
-    # the edit set this build applied (no foreign key: edit_sets refers to builds)
-    edit_set_id: Mapped[str | None]
+    # the edit set this build applied (use_alter: edit_sets refers to builds too)
+    edit_set_id: Mapped[str | None] = mapped_column(fk("edit_sets.id", ondelete="SET NULL", use_alter=True),
+                                                    index=True)
     # must be one of engine.infra_gen.generator's runtimes; "container_apps" (plural) is rejected
     runtime: Mapped[str] = mapped_column(default="container_app")
     stack: Mapped[str] = mapped_column(server_default="dotnet")  # the target stack this build generated

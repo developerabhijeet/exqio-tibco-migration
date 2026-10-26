@@ -97,9 +97,11 @@ async def open_iteration(session: AsyncSession, project_id: str, process_ids: li
                          actor: str, requirements: str | None = None, resume_phase: str = "design",
                          baseline_build_id: str | None = None, source: dict | None = None,
                          note: str | None = None) -> Iteration:
-    """Open iteration ``max + 1`` naming ``process_ids``. An active iteration naming one of them is
-    abandoned ("superseded by iteration <n>"), unless a design or build of that process is queued
-    or running: then :class:`IterationBusy`, and nothing changes."""
+    """Open iteration ``max + 1`` naming ``process_ids``. Each of them that sits in an earlier
+    active iteration moves to the new one: it is removed from that iteration's ``process_ids``, and
+    an iteration left with no process is abandoned ("superseded by iteration <n>"); the processes it
+    keeps stay in it. A moved process with a design or build queued or running raises
+    :class:`IterationBusy`, and nothing changes."""
     if kind not in KINDS or kind == "initial":
         raise ValueError(f"kind must be one of: {', '.join(k for k in KINDS if k != 'initial')}")
     if resume_phase not in RESUME_PHASES:
@@ -110,7 +112,7 @@ async def open_iteration(session: AsyncSession, project_id: str, process_ids: li
     await _lock(session, project_id)
     await ensure_initial(session, project_id)
 
-    superseded: list[Iteration] = []
+    earlier: dict[str, Iteration] = {}  # id -> an active iteration that loses processes
     for pid in process_ids:
         rows = (await session.execute(
             select(Iteration).where(Iteration.project_id == project_id, Iteration.status.in_(ACTIVE_STATUSES),
@@ -122,7 +124,7 @@ async def open_iteration(session: AsyncSession, project_id: str, process_ids: li
         if busy is not None:
             process = await session.get(Process, pid)
             raise IterationBusy(f"a design or build of {process.name if process else pid} is queued or running")
-        superseded.extend(r for r in rows if r not in superseded)
+        earlier.update((r.id, r) for r in rows)
 
     n = (await session.scalar(select(func.max(Iteration.n)).where(Iteration.project_id == project_id)) or 0) + 1
     row = Iteration(project_id=project_id, n=n, process_ids=process_ids, kind=kind, status="open",
@@ -131,9 +133,15 @@ async def open_iteration(session: AsyncSession, project_id: str, process_ids: li
                     baseline_build_id=baseline_build_id, source=source, opened_by=actor, note=note)
     session.add(row)
     await session.flush()
-    for old in superseded:
-        _end(old, "abandoned", f"superseded by iteration {n}")
-        _audit(session, old, actor, "iteration abandoned", {"superseded_by": row.id})
+    for old in earlier.values():
+        moved = [p for p in old.process_ids if p in process_ids]
+        kept = [p for p in old.process_ids if p not in process_ids]
+        if kept:
+            old.process_ids = kept  # a new list, so SQLAlchemy sees the JSONB change
+            _audit(session, old, actor, "iteration processes moved", {"moved": moved, "to": row.id, "to_n": n})
+        else:
+            _end(old, "abandoned", f"superseded by iteration {n}")
+            _audit(session, old, actor, "iteration abandoned", {"superseded_by": row.id})
     _audit(session, row, actor, "iteration opened",
            {"kind": kind, "resume_phase": resume_phase, "baseline_build_id": baseline_build_id})
     await session.flush()
@@ -160,13 +168,18 @@ async def _get(session: AsyncSession, iteration_id: str) -> Iteration:
     return row
 
 
-async def set_status(session: AsyncSession, iteration_id: str, status: str) -> Iteration:
-    """Move an iteration to ``status`` (``closed``/``abandoned`` also stamp ``closed_at``)."""
+async def set_status(session: AsyncSession, iteration_id: str, status: str,
+                     actor: str = INITIAL_ACTOR) -> Iteration:
+    """Move an active iteration to ``status``; ``closed``/``abandoned`` also stamp ``closed_at`` and
+    write the audit line. An iteration that has ended is never reopened (ValueError)."""
     if status not in ITERATION_STATUSES:
         raise ValueError(f"status must be one of: {', '.join(ITERATION_STATUSES)}")
     row = await _get(session, iteration_id)
+    if row.status in ENDED_STATUSES:
+        raise ValueError(f"iteration {row.n} is already {row.status}")
     if status in ENDED_STATUSES:
         _end(row, status, None)
+        _audit(session, row, actor, f"iteration {status}")
     else:
         row.status = status
     await session.flush()

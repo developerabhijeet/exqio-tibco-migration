@@ -1,7 +1,8 @@
 """iteration loop: ``iterations``, ``iteration_inputs``, ``edit_sets``, ``project_repos``
 
 Design records and builds gain ``iteration`` (default 1: every existing row belongs to the implicit
-iteration 1, created on first read), builds gain ``edit_set_id`` and rules ``source``.
+iteration 1, created on first read), builds gain ``edit_set_id`` (a foreign key added after
+``edit_sets``, which refers to builds) and rules ``source``.
 
 Revision ID: 0011
 Revises: 0010
@@ -111,11 +112,16 @@ def upgrade() -> None:
                   schema='api')
     op.add_column('builds', sa.Column('iteration', sa.Integer(), server_default='1', nullable=False), schema='api')
     op.add_column('builds', sa.Column('edit_set_id', sa.String(), nullable=True), schema='api')
+    op.create_index(op.f('ix_builds_edit_set_id'), 'builds', ['edit_set_id'], unique=False, schema='api')
+    op.create_foreign_key(op.f('fk_builds_edit_set_id_edit_sets'), 'builds', 'edit_sets', ['edit_set_id'], ['id'],
+                          source_schema='api', referent_schema='api', ondelete='SET NULL')
     op.add_column('rules', sa.Column('source', sa.String(), nullable=True), schema='api')
 
 
 def downgrade() -> None:
     op.drop_column('rules', 'source', schema='api')
+    op.drop_constraint(op.f('fk_builds_edit_set_id_edit_sets'), 'builds', type_='foreignkey', schema='api')
+    op.drop_index(op.f('ix_builds_edit_set_id'), table_name='builds', schema='api')
     op.drop_column('builds', 'edit_set_id', schema='api')
     op.drop_column('builds', 'iteration', schema='api')
     op.drop_column('design_records', 'iteration', schema='api')

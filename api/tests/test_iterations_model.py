@@ -2,6 +2,7 @@
 an open iteration, stamping on design records and builds, and the role dependency's messages."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import httpx
@@ -18,6 +19,7 @@ from api.app.services.iterations import (
     close,
     current_iteration,
     ensure_initial,
+    job_iteration,
     open_iteration,
     set_status,
 )
@@ -73,6 +75,16 @@ async def proc(session, project) -> Process:
     row = Process(project_id=project.id, application_id=application.id, upload_id=upload.id,
                   ir_id="dealerfunding.DealerFundingRequest", name="DealerFundingRequest", dialect="bw5",
                   source_path="p.process", ir={}, spec_hash="h")
+    session.add(row)
+    await session.commit()
+    return row
+
+
+@pytest.fixture
+async def proc_b(session, proc) -> Process:
+    row = Process(project_id=proc.project_id, application_id=proc.application_id, upload_id=proc.upload_id,
+                  ir_id="dealerfunding.FundingStatusLookup", name="FundingStatusLookup", dialect="bw5",
+                  source_path="b.process", ir={}, spec_hash="h")
     session.add(row)
     await session.commit()
     return row
@@ -183,6 +195,61 @@ async def test_current_iteration_follows_open_then_closed(session, project, proc
     assert (await current_iteration(session, proc.id)).id == it.id  # abandoned ones never count
     with pytest.raises(ValueError):
         await set_status(session, it.id, "bogus")
+    with pytest.raises(ValueError, match="already closed"):
+        await set_status(session, it.id, "open")  # an ended iteration is never reopened
+    assert (await session.get(Iteration, it.id)).status == "closed"
+
+
+async def test_set_status_to_ended_writes_the_audit_line(session, project, proc):
+    it = await open_iteration(session, project.id, [proc.id], "reentry", actor="architect.lee")
+    await set_status(session, it.id, "closed")
+    assert it.closed_at is not None
+    rows = (await session.execute(select(AuditLog).where(AuditLog.action == "iteration closed"))).scalars().all()
+    assert [(r.actor, r.detail["iteration_id"]) for r in rows] == [("system", it.id)]
+
+
+async def test_reentering_one_process_moves_only_that_one(session, project, proc, proc_b):
+    second = await open_iteration(session, project.id, [proc.id, proc_b.id], "reentry", actor="architect.lee")
+    third = await open_iteration(session, project.id, [proc.id], "reentry", actor="architect.lee")
+    await session.commit()
+    await session.refresh(second)
+    assert (second.status, second.process_ids) == ("open", [proc_b.id])
+    assert (await current_iteration(session, proc_b.id)).n == second.n == 2
+    assert (await current_iteration(session, proc.id)).n == third.n == 3
+    assert await job_iteration(session, {}, proc_b.id) == 2  # B keeps being stamped 2
+    moved = (await session.execute(select(AuditLog).where(AuditLog.action == "iteration processes moved")))
+    assert [r.detail["moved"] for r in moved.scalars()] == [[proc.id]]
+    # the last process leaving iteration 2 abandons it
+    fourth = await open_iteration(session, project.id, [proc_b.id], "reentry", actor="architect.lee")
+    await session.refresh(second)
+    assert (second.status, second.note) == ("abandoned", f"superseded by iteration {fourth.n}")
+
+
+async def test_busy_check_covers_every_moved_process(session, project, proc, proc_b):
+    await open_iteration(session, project.id, [proc.id, proc_b.id], "reentry", actor="architect.lee")
+    session.add(Job(kind="design", status="running", project_id=project.id, process_id=proc.id, payload={}))
+    await session.flush()
+    with pytest.raises(IterationBusy, match="DealerFundingRequest"):
+        await open_iteration(session, project.id, [proc_b.id, proc.id], "reentry", actor="architect.lee")
+
+
+async def test_concurrent_opens_take_distinct_numbers(app_no_worker, project, proc):
+    async def open_one() -> int:
+        async with app_no_worker.state.sessionmaker() as s:
+            it = await open_iteration(s, project.id, [], "reentry", actor="architect.lee")
+            await s.commit()
+            return it.n
+
+    assert sorted(await asyncio.gather(open_one(), open_one(), open_one())) == [2, 3, 4]
+
+
+async def test_a_retried_job_keeps_its_stamped_iteration(session, project, proc):
+    it = await open_iteration(session, project.id, [proc.id], "reentry", actor="architect.lee")
+    payload = {"process_id": proc.id, "iteration": it.n}  # stamped on submit; a retry reuses the row
+    await close(session, it.id, "architect.lee")
+    newer = await open_iteration(session, project.id, [proc.id], "reentry", actor="architect.lee")
+    assert newer.n == 3 and await job_iteration(session, payload, proc.id) == 2
+    assert await job_iteration(session, {"process_id": proc.id}, proc.id) == 3
 
 
 # ------------------------------------------------------------------ stamping
@@ -216,3 +283,12 @@ async def test_require_roles_messages(client_oidc, viewer_token, sme_token):
         assert (await c.post("/_probe/architect-only", headers=sme_token)).json()["detail"] == \
             "this needs one of: architect, admin"
         assert (await c.post("/_probe/architect-only", headers=as_roles("architect"))).status_code == 200
+
+    @probe.post("/_probe/engineer-only", dependencies=[Depends(require_roles("engineer"))])
+    async def engineer_only() -> dict:
+        return {}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=probe), base_url="http://test") as c:
+        assert (await c.post("/_probe/engineer-only", headers=as_roles("admin"))).status_code == 200  # always
+        assert (await c.post("/_probe/engineer-only", headers=as_roles("architect"))).json()["detail"] == \
+            "this needs one of: engineer"
