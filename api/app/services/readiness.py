@@ -25,6 +25,7 @@ from api.app.models import (
     Scenario,
     TestResult,
 )
+from api.app.services.citations import cite_readiness_row
 from api.app.services.evidence import latest_verify_runs, unconfirmed_count, unconfirmed_text
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 
@@ -264,5 +265,10 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     else:
         rows.append(_row("tokenomics", "missing", [], "nothing has run yet"))
 
+    # ``cited``: the status sentence (with the gap) and one ref per evidence item. ``cited.text``
+    # is MASKED and the spans index into it (code points): clients render it when present.
+    build_process = {b.id: b.process_id for b in builds}
+    for r in rows:
+        r["cited"] = cite_readiness_row(r, build_process).model_dump(mode="json")
     summary = {s: sum(1 for r in rows if r["status"] == s) for s in ("met", "partial", "missing")}
     return {"project_id": project_id, "rows": rows, "summary": summary}

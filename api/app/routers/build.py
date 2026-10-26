@@ -22,6 +22,7 @@ from api.app.services import build as svc
 from api.app.services import hosting
 from api.app.services import verify as verify_svc
 from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files, export_note
+from api.app.services.citations import cite_review
 from api.app.services.context import active_job
 
 router = APIRouter(tags=["build"])
@@ -194,9 +195,24 @@ async def get_tests(build_id: str, session: SessionDep) -> dict[str, Any]:
     return {"build_id": build_id, "cases": cases, "summary": summary}
 
 
+async def _cited_reviews(session, build: Build, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each finding plus ``cited``: a ``file`` ref to its file and line (``line`` ``None`` when the
+    reviewer gave none) and refs to the activities of that file it names. ``cited.text`` is the
+    MASKED finding text and the spans index into it (code points), so it can differ from ``text``:
+    clients render ``cited.text`` when present."""
+    proc = await session.get(Process, build.process_id)
+    paths = {f.get("file") for f in findings if f.get("file")}
+    refs = {r.path: r.tibco_ref for r in (await session.execute(
+        select(BuildFile).where(BuildFile.build_id == build.id, BuildFile.path.in_(paths)))).scalars()} \
+        if paths else {}
+    return [{**f, "cited": cite_review(f, build.id, proc, refs.get(f.get("file"))).model_dump(mode="json")}
+            for f in findings]
+
+
 @router.get("/builds/{build_id}/reviews")
 async def get_reviews(build_id: str, session: SessionDep) -> list[dict[str, Any]]:
-    return list((await _build(session, build_id)).reviews or [])
+    build = await _build(session, build_id)
+    return await _cited_reviews(session, build, list(build.reviews or []))
 
 
 class ReviewDecision(BaseModel):
@@ -220,7 +236,8 @@ async def decide_all_reviews(build_id: str, body: ReviewDecisionAll, session: Se
     """Keep or reject every review finding at once; a finding a later build already applied is
     left as it is."""
     build = await _build(session, build_id)
-    return await svc.decide_all_review_findings(session, build, body.decision, body.only_undecided, user)
+    findings = await svc.decide_all_review_findings(session, build, body.decision, body.only_undecided, user)
+    return await _cited_reviews(session, build, findings)
 
 
 @router.patch("/builds/{build_id}/reviews/{index}")
@@ -233,7 +250,7 @@ async def decide_review(build_id: str, index: int, body: ReviewDecision, session
         findings = await svc.decide_review_finding(session, build, index, body.decision, body.note, user)
     except IndexError as exc:
         raise HTTPException(status_code=404, detail="no review finding at that index") from exc
-    return findings
+    return await _cited_reviews(session, build, findings)
 
 
 # ------------------------------------------------------------------ the running service

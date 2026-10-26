@@ -1,15 +1,24 @@
-"""Inline citation spans (``cited``) for the Discover domains and the Validate rules and findings.
+"""Inline citation spans (``cited``) for the Discover domains, the Validate rules and findings,
+the Design narrative and decisions, the Build review findings, the Verify parity differences and
+the Readiness rows.
 
 Each claim keeps every citation it carries: a ref anchors on the first sentence naming its
 activity (or an identifier its quote holds), else on the last sentence (``engine.citations.claims``).
-Text is masked before anchoring, so offsets stay true to the text shown."""
+Text is masked before anchoring, so offsets stay true to the text shown: ``cited.text`` is the
+MASKED text and may differ from the raw field it restates; the spans index into ``cited.text``
+(code points), so clients render ``cited.text`` whenever ``cited`` is present.
+
+Entity names (activities, rules, findings, tables, queues) only ever come from the payload's own
+process; a single common word (``Map``, ``dealer``) is never a hint."""
 from __future__ import annotations
 
+import json
 import re
+from pathlib import PurePosixPath
 from typing import Any
 
 from engine.agents.provider import mask_sensitive
-from engine.citations.claims import HintedRef, anchor, tail
+from engine.citations.claims import HintedRef, anchor, link_entities, tail
 from engine.citations.model import (
     LABEL_MAX,
     PREVIEW_MAX,
@@ -19,7 +28,9 @@ from engine.citations.model import (
     UiPhase,
     cut,
 )
-from engine.citations.uids import activity_uid
+from engine.citations.uids import activity_uid, finding_chunk_uid, rule_chunk_uid
+from engine.domains.discover import activity_messages, activity_sql, sql_tables
+from engine.ir.models import Activity
 
 _WORD = re.compile(r"[A-Za-z_][\w]*")
 # An identifier, not a common word: snake case, a digit, or a capital after the first letter.
@@ -118,3 +129,254 @@ def cite_domain(domain: Any) -> CitedText:
                     target=CiteTarget(kind="step", step="discover")),
         hints=[text]) for i, (kind, text) in enumerate(items)]
     return anchor(rationale, hinted) if hinted else CitedText.plain(rationale)
+
+
+# ------------------------------------------------------------------ design
+def _entity_name(name: str) -> bool:
+    """A name worth linking: an identifier (see ``_identifier_like``) or a dotted or slashed
+    destination (``gmf.funding.request``)."""
+    return _identifier_like(name) or bool(re.search(r"\w[./]\w", name or ""))
+
+
+def _unique(hinted: list[HintedRef]) -> list[HintedRef]:
+    """One ref per entity: an activity named by both its id and its name gets one chip, on the
+    first mention."""
+    seen: set[str] = set()
+    out = []
+    for h in hinted:
+        key = h.ref.model_dump_json(exclude={"id"})
+        if key not in seen:
+            seen.add(key)
+            out.append(h)
+    return out
+
+
+def _ir_resources(process: Any) -> tuple[list[str], list[str]]:
+    """The table and queue (or topic) names the process's activities touch, in IR order."""
+    tables: dict[str, None] = {}
+    queues: dict[str, None] = {}
+    for raw in (process.ir or {}).get("activities") or []:
+        try:
+            act = Activity.model_validate(raw)
+        except ValueError:
+            continue
+        for ref in sql_tables(activity_sql(act) or ""):
+            tables.setdefault(ref.name)
+        for m in activity_messages(act):
+            queues.setdefault(m.destination)
+    starter = (process.ir or {}).get("starter") or {}
+    dest = (starter.get("config") or {}).get("destination") if starter.get("kind") == "jms" else None
+    if isinstance(dest, str) and dest:
+        queues.setdefault(dest)
+    return list(tables), list(queues)
+
+
+def design_entities(process: Any, design: dict[str, Any], rules: list[Any],
+                    findings: list[Any]) -> dict[str, CiteRef]:
+    """The names the design prose may mention, each with its ref: this process's activities (by id
+    and by name), its rule and finding keys, and the tables and queues its IR touches. ``design``
+    is accepted for the mapping's activity names when the IR has none."""
+    out: dict[str, CiteRef] = {}
+
+    def add(name: str | None, ref: CiteRef) -> None:
+        name = (name or "").strip()
+        if _entity_name(name) and name not in out:
+            out[name] = ref
+
+    names = activity_names(process)
+    for row in design.get("mapping") or []:
+        names.setdefault(row.get("activity_id"), row.get("activity_name") or "")
+    types = {a.get("id"): a.get("type") or "" for a in (process.ir or {}).get("activities") or []}
+    for aid, name in names.items():
+        if not aid:
+            continue
+        ref = activity_ref("c1", process.id, process.ir_id, aid, name, types.get(aid, ""),
+                           verified=None, reason=None, phase="design")
+        add(aid, ref)
+        add(name, ref)
+    for kind, items, key_of, uid_of in (("rule", rules, "rule_key", rule_chunk_uid),
+                                        ("finding", findings, "finding_key", finding_chunk_uid)):
+        for item in items:
+            key = getattr(item, key_of, None) if not isinstance(item, dict) else item.get(key_of)
+            text = getattr(item, "text", None) if not isinstance(item, dict) else item.get("text")
+            if not key:
+                continue
+            add(key, CiteRef(
+                id="c1", phase="validate", kind=kind, label=cut(mask_sensitive(key), LABEL_MAX),
+                preview=cut(mask_sensitive(text or ""), PREVIEW_MAX),
+                memory_uid=uid_of(process.ir_id, key),
+                target=CiteTarget(kind="step", step="validate", process_id=process.id)))
+    tables, queues = _ir_resources(process)
+    for kind, label in (("table", "Table"), ("queue", "Queue")):
+        for name in tables if kind == "table" else queues:
+            add(name, CiteRef(id="c1", phase="discover", kind=kind, label=cut(name, LABEL_MAX),
+                              preview=cut(f"{label} {name}, used by this process", PREVIEW_MAX),
+                              target=CiteTarget(kind="step", step="discover", process_id=process.id)))
+    return out
+
+
+def _cite_prose(text: str, entities: dict[str, CiteRef]) -> CitedText:
+    text = mask_sensitive(text or "")
+    hinted = _unique(link_entities(text, entities)) if text.strip() else []
+    return anchor(text, hinted) if hinted else CitedText.plain(text)
+
+
+def cite_design(design: dict[str, Any], entities: dict[str, CiteRef]) -> dict[str, Any]:
+    """``design`` plus ``narrative_cited`` (``None`` without a narrative) and a ``cited`` on each
+    decision: ``"{choice}. {reason}"`` with a span on each sentence naming an entity. A decision
+    naming nothing has no spans and no refs (plain text)."""
+    narrative = design.get("narrative")
+    decisions = [
+        {**d, "cited": _cite_prose(f"{d.get('choice') or ''}. {d.get('reason') or ''}", entities)
+         .model_dump(mode="json")}
+        for d in design.get("decisions") or []]
+    return {**design, "decisions": decisions,
+            "narrative_cited": _cite_prose(narrative, entities).model_dump(mode="json")
+            if narrative else None}
+
+
+# ------------------------------------------------------------------ build reviews
+def cite_review(finding: dict[str, Any], build_id: str, process: Any,
+                tibco_ref: dict[str, Any] | None = None) -> CitedText:
+    """A review finding's text with a ``file`` ref to where it points (``line`` is ``None`` when the
+    reviewer gave none, which it records as 0) and a ref for each activity of that file the text
+    names. The file ref is hinted by the file's basename, stem and the class and method names its
+    design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise."""
+    text = mask_sensitive(str(finding.get("text") or ""))
+    path = str(finding.get("file") or "")
+    hinted: list[HintedRef] = []
+    rows = (tibco_ref or {}).get("rows") or []
+    if path:
+        base = PurePosixPath(path).name
+        line = int(finding.get("line") or 0) or None
+        hints = [base, PurePosixPath(path).stem,
+                 *(r.get("class_name") or "" for r in rows), *(r.get("method") or "" for r in rows)]
+        hinted.append(HintedRef(
+            ref=CiteRef(id="c1", phase="build", kind="code",
+                        label=cut(f"{base}:{line}" if line else base, LABEL_MAX),
+                        preview=cut(f"{finding.get('reviewer') or 'review'} finding in {path}"
+                                    + (f" at line {line}" if line else ""), PREVIEW_MAX),
+                        target=CiteTarget(kind="file", step="build", process_id=process.id,
+                                          path=path, line=line)),
+            hints=list(dict.fromkeys(h for h in hints if _identifier_like(h)))))
+    names = activity_names(process)
+    linked = {r.get("activity_id"): r.get("activity_name") or names.get(r.get("activity_id"), "")
+              for r in rows if r.get("activity_id")}
+    for aid in (tibco_ref or {}).get("activity_ids") or []:
+        linked.setdefault(aid, names.get(aid, ""))
+    entities: dict[str, CiteRef] = {}
+    for aid, name in linked.items():
+        ref = activity_ref("c1", process.id, process.ir_id, aid, name, "", verified=None,
+                           reason=None, phase="build")
+        for n in (aid, name):
+            if _identifier_like(n or ""):
+                entities.setdefault(n, ref)
+    hinted += _unique(link_entities(text, entities)) if text.strip() else []
+    if not hinted:
+        return CitedText.plain(text)
+    if not text.strip():
+        return tail(cut(PurePosixPath(path).name or "review finding", LABEL_MAX),
+                    [h.ref for h in hinted])
+    return anchor(text, hinted)
+
+
+# ------------------------------------------------------------------ verify parity
+def _show(path: str, value: Any) -> str:
+    """``value`` as JSON, masked: wholly when the field is a sensitive one (``ssn``), else any SSN
+    in it. The sentence is not masked as a whole, where ``ssn: expected ...`` would read as a
+    ``key: value`` pair and mask the prose."""
+    shown = json.dumps(value, ensure_ascii=False, default=str)
+    if value is None:
+        return shown
+    leaf = re.split(r"[./\[\]@]+", path.strip("./[]@"))[-1] if path.strip("./[]@") else ""
+    if leaf:
+        probe = mask_sensitive(f"{leaf}: {shown}")
+        if probe != f"{leaf}: {shown}" and probe.startswith(f"{leaf}: "):
+            return probe[len(leaf) + 2:]
+    return mask_sensitive(shown)
+
+
+def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = None) -> CitedText:
+    """``"{path}: expected {e}, got {a}."`` (plus the diff's ``note``) with a ``verify`` ref for
+    the scenario run and, when the diff carries a ``finding_id`` (a finding key), a ``validate``
+    ref for that finding. Values are JSON, each masked (an SSN, or any value of a sensitive field,
+    never shows), so ``cited.text`` can differ from the raw ``expected``/``actual``."""
+    path = str(diff.get("path") or "")
+    text = f"{path}: expected {_show(path, diff.get('expected'))}, got {_show(path, diff.get('actual'))}."
+    if diff.get("note"):
+        text += f" {mask_sensitive(str(diff['note']))}"
+    pid = getattr(process, "id", None)
+    scenario = run.get("scenario_name") or run.get("scenario_key") or run.get("scenario_id") or "scenario"
+    parity = run.get("parity")
+    hinted = [HintedRef(ref=CiteRef(
+        id="c1", phase="verify", kind="test", label=cut(mask_sensitive(str(scenario)), LABEL_MAX),
+        preview=cut(mask_sensitive(f"Scenario run {scenario}: {run.get('status') or 'run'}"
+                                   + (f", parity {parity:.0%}" if isinstance(parity, int | float)
+                                      else "")), PREVIEW_MAX),
+        target=CiteTarget(kind="step", step="verify", process_id=pid)), hints=[path])]
+    key = diff.get("finding_id")
+    if key:
+        hinted.append(HintedRef(ref=CiteRef(
+            id="c2", phase="validate", kind="finding", label=cut(str(key), LABEL_MAX),
+            preview=cut(f"Finding {key}" + (", touched through a branch decision"
+                                            if diff.get("via") == "control" else ", decided Fix at G2"),
+                        PREVIEW_MAX),
+            memory_uid=finding_chunk_uid(process.ir_id, key) if process is not None else None,
+            target=CiteTarget(kind="step", step="validate", process_id=pid)), hints=[path, key]))
+    return anchor(text, hinted)
+
+
+def cite_parity(view: dict[str, Any], process: Any) -> dict[str, Any]:
+    """``view`` with a ``cited`` on every field and side-effect difference of every run."""
+    reports = []
+    for rep in view.get("reports") or []:
+        rep = dict(rep)
+        for key in ("fields", "side_effects"):
+            if isinstance(rep.get(key), list):
+                rep[key] = [{**d, "cited": cite_diff(d, rep, process).model_dump(mode="json")}
+                            for d in rep[key]]
+        reports.append(rep)
+    return {**view, "reports": reports}
+
+
+# ------------------------------------------------------------------ readiness
+_STEP_OF_PROCESS_PAGE = {"canvas": "discover", "scenarios": "verify", "test-data": "verify",
+                         "analysis": "validate", "design": "design"}
+
+
+def _readiness_target(kind: str, ref: str,
+                      build_process: dict[str, str]) -> tuple[UiPhase, CiteTarget]:
+    """Where an evidence link goes, as ``web/app/readiness/page.tsx``'s ``target()`` resolves it.
+    Settings and history are no phase: a ``step`` target without a step, ``path`` the page."""
+    path = ref.split("?")[0]
+    if path.startswith("/ask"):
+        return "memory", CiteTarget(kind="step", step="memory")
+    if path.startswith(("/settings", "/history")):
+        return "deploy", CiteTarget(kind="step", path=path)
+    if m := re.match(r"^/projects/[^/]+/(report|domains|graph|files)", path):
+        step: UiPhase = "upload" if m[1] in ("report", "files") else "discover"
+        return step, CiteTarget(kind="step", step=step)
+    if m := re.match(r"^/processes/([^/]+)/(canvas|scenarios|test-data|analysis|design)", path):
+        step = _STEP_OF_PROCESS_PAGE[m[2]]  # type: ignore[assignment]
+        return step, CiteTarget(kind="step", step=step, process_id=m[1])
+    if m := re.match(r"^/builds/([^/]+)(?:/(\w[\w-]*))?", path):
+        sub = m[2] or kind
+        step = "verify" if sub == "parity" else "deploy" if sub == "plan" else "build"
+        return step, CiteTarget(kind="step", step=step, process_id=build_process.get(m[1]))
+    return "upload", CiteTarget(kind="step")
+
+
+def cite_readiness_row(row: dict[str, Any], build_process: dict[str, str] | None = None) -> CitedText:
+    """``"{expectation}: {status}."`` (with the gap) and one ref per evidence item on its last
+    sentence. ``build_process`` maps a build id to its API process id for build links."""
+    gap = row.get("gap")
+    text = mask_sensitive(f"{row.get('expectation')}: {row.get('status')}" + (f"; {gap}" if gap else "")
+                          + ".")
+    refs = []
+    for i, ev in enumerate(row.get("evidence") or []):
+        phase, target = _readiness_target(str(ev.get("kind") or ""), str(ev.get("ref") or ""),
+                                          build_process or {})
+        label = mask_sensitive(str(ev.get("label") or ev.get("kind") or "evidence"))
+        refs.append(CiteRef(id=f"c{i + 1}", phase=phase, kind="evidence", label=cut(label, LABEL_MAX),
+                            preview=cut(label, PREVIEW_MAX), target=target))
+    return tail(text, refs)

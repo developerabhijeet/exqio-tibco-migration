@@ -12,6 +12,7 @@ from api.app.models import Build, Process
 from api.app.schemas.job import JobCreated
 from api.app.services import hosting
 from api.app.services import verify as svc
+from api.app.services.citations import cite_parity
 from api.app.services.context import active_job
 from engine.parity.evaluator import EvaluationError
 
@@ -115,11 +116,14 @@ async def verify(build_id: str, request: Request, session: SessionDep, runner: R
 
 @router.get("/builds/{build_id}/parity")
 async def parity(build_id: str, session: SessionDep) -> dict[str, Any]:
-    """The parity report of the latest verify run; 404 before the first one."""
+    """The parity report of the latest verify run; 404 before the first one. Every field and
+    side-effect difference carries ``cited``: ``"{path}: expected {e}, got {a}."`` with a ``verify``
+    ref for its scenario run and, when it has a ``finding_id``, a ``validate`` ref for that finding.
+    ``cited.text`` is MASKED and the spans index into it (code points): clients render it."""
     build = await session.get(Build, build_id)
     if build is None:
         raise HTTPException(status_code=404, detail="build not found")
     view = await svc.parity_view(session, build)
     if view is None:
         raise HTTPException(status_code=404, detail="no verify run for this build yet")
-    return view
+    return cite_parity(view, await session.get(Process, build.process_id))
