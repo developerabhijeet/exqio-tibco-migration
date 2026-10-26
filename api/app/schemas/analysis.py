@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from engine.citations.model import CitedText
+
 GateName = Literal["G1", "G2", "G3", "G4", "G5", "G6"]
 
 
@@ -19,6 +21,7 @@ class DomainOut(BaseModel):
     ir_process_ids: list[str]
     evidence: list[dict[str, Any]]  # {kind: module|table|queue|call|name, text}
     renamed_by: str | None
+    cited: CitedText | None = None  # the rationale, one ref per evidence item
 
 
 class DomainRename(BaseModel):
@@ -73,6 +76,7 @@ class RuleOut(BaseModel):
     challenge: ChallengeOut | None
     updated_by: str | None
     updated_at: str | None
+    cited: CitedText | None = None  # ``text`` with a span per cited activity
 
 
 class FindingCitationOut(BaseModel):
@@ -93,6 +97,7 @@ class FindingOut(BaseModel):
     note: str | None
     decided_by: str | None
     decided_at: str | None
+    cited: CitedText | None = None  # ``text`` with a span per cited activity
 
 
 class VerificationOut(BaseModel):

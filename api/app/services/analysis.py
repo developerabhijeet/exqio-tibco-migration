@@ -41,6 +41,7 @@ from api.app.models import (
     Rule,
 )
 from api.app.services import gates as gate_svc
+from api.app.services.citations import cite_finding, cite_rule
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import (
     CODE_ONLY_NOTICE,
@@ -639,7 +640,7 @@ async def _remember(knowledge: Knowledge, project_id: str, memory: tuple[str, di
 
 
 # ------------------------------------------------------------------ view
-def _rule_out(r: Rule, failures: list[dict[str, Any]]) -> dict[str, Any]:
+def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process) -> dict[str, Any]:
     cits = []
     for c in r.citations or []:
         c = _cit(c)
@@ -652,14 +653,16 @@ def _rule_out(r: Rule, failures: list[dict[str, Any]]) -> dict[str, Any]:
     return {"id": r.id, "rule_key": r.rule_key, "text": r.text, "original_text": r.original_text,
             "citations": cits, "confidence": r.confidence, "status": r.status, "owner": r.owner,
             "memory_refs": r.memory_refs or [], "challenge": r.challenge, "updated_by": r.updated_by,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "cited": cite_rule(r, process, citations=cits)}
 
 
-def _finding_out(f: Finding) -> dict[str, Any]:
+def _finding_out(f: Finding, process: Process) -> dict[str, Any]:
     return {"id": f.id, "finding_key": f.finding_key, "severity": f.severity, "text": f.text,
             "citations": [_cit(c) for c in f.citations or []], "source": f.source,
             "business_impact": f.business_impact, "decision": f.decision, "note": f.note,
-            "decided_by": f.decided_by, "decided_at": f.decided_at.isoformat() if f.decided_at else None}
+            "decided_by": f.decided_by, "decided_at": f.decided_at.isoformat() if f.decided_at else None,
+            "cited": cite_finding(f, process)}
 
 
 async def analysis_view(session: AsyncSession, process: Process) -> dict[str, Any]:
@@ -688,8 +691,8 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
         "notice": summary.get("notice"),
         "static_only": analysis.static_only if analysis else None,
         "summary": summary.get("text"),
-        "rules": [_rule_out(r, failures) for r in rules],
-        "findings": [_finding_out(f) for f in findings],
+        "rules": [_rule_out(r, failures, process) for r in rules],
+        "findings": [_finding_out(f, process) for f in findings],
         "verification": {"verified": ver.get("verified", 0), "total": ver.get("total", 0),
                          "failures": failures, "passed": not live},
         "coverage": {"covered": covered, "total": len(items), "complete": covered == len(items),
