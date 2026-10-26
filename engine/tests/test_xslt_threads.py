@@ -47,12 +47,19 @@ def test_transform_on_a_worker_thread_exits_cleanly_after_warm_up():
 
 
 def test_warm_up_off_the_main_thread_does_not_create_the_isolate():
-    from engine.parity import xslt
-
-    created = {}
-    import threading
-
-    t = threading.Thread(target=lambda: created.setdefault("r", xslt.warm_up()))
-    t.start()
-    t.join()
-    assert created["r"] is False
+    # A fresh interpreter: earlier tests in this process (any parity evaluation, or warm_up itself)
+    # have already created the shared processor, after which warm_up rightly returns True anywhere.
+    script = textwrap.dedent(
+        """
+        import threading
+        from engine.parity import xslt
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", xslt.warm_up()))
+        t.start(); t.join()
+        print(out["r"], xslt._saxon_processor is None)
+        """
+    )
+    proc = subprocess.run([sys.executable, "-c", script], cwd=REPO, capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert proc.returncode == 0, proc.stderr[:600]
+    assert proc.stdout.split() == ["False", "True"], proc.stdout
