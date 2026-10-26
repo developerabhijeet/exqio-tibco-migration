@@ -189,6 +189,29 @@ test("at 390 px the panel is a full-width sheet with no horizontal scroll", asyn
   await expect(panel(page)).toBeHidden();
 });
 
+test("on a desktop the panel opens under the top bar and follows the dark theme", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await uploadSample(page);
+  await page.getByTestId("exiqoian-launcher").click();
+  await expect(panel(page)).toBeVisible();
+  // The slide-over starts where SP4's top bar ends: the bar and its launcher stay in view.
+  const bar = await page.locator("header").first().boundingBox();
+  const box = await panel(page).boundingBox();
+  expect(Math.abs(box!.y - (bar!.y + bar!.height))).toBeLessThanOrEqual(1);
+  await expect(page.getByTestId("exiqoian-launcher")).toBeVisible();
+  // Its colours are theme tokens: the surface follows the system theme.
+  const surface = () => panel(page).evaluate((el) => {
+    const want = getComputedStyle(document.documentElement).getPropertyValue("--c-surface").trim().split(/\s+/).join(", ");
+    return { bg: getComputedStyle(el).backgroundColor, want: `rgb(${want})` };
+  });
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    const { bg, want } = await surface();
+    expect(bg).toBe(want);
+  }
+  expect((await surface()).bg).toBe("rgb(23, 18, 31)");
+});
+
 test("no request leaves the web or API origin while chatting", async ({ page }) => {
   const outside: string[] = [];
   page.on("request", (r) => {

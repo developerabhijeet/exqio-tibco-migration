@@ -8,8 +8,8 @@ import { actAs, gotoStep, SAMPLE_PROCESS_NAME } from "./helpers";
 // baselines). Screenshots are machine-sensitive (fonts, GPU), so the baselines are per platform.
 //
 // One walk through the flow per width; at each screen both themes are shot (the theme is the
-// system one, `exiqo.theme` = system, so emulateMedia switches it). The ExiQoian panel shot waits
-// for SP3 Task 9 (cross-ruling X5): there is no panel in this build to open.
+// system one, `exiqo.theme` = system, so emulateMedia switches it). The ExiQoian panel is shot open
+// over Design (its subtitle carries the project name, so it is masked).
 //
 // What varies between runs is masked: times, the job logs, anything marked data-mask, and the
 // project name (each run creates its own project), the design hash and the domain graph (a force
@@ -30,6 +30,8 @@ function masks(page: Page): Locator[] {
     page.getByTestId("design-hash"),
     // Cytoscape's force layout places the domain graph's nodes differently on each run.
     page.getByTestId("domain-graph"),
+    // The ExiQoian panel's subtitle names the project.
+    page.getByTestId("exiqoian-panel").locator("h2 + p"),
   ];
 }
 
@@ -103,6 +105,13 @@ test.describe("@visual", () => {
       await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/, { timeout: 60_000 });
       await page.getByTestId("design-decision").first().scrollIntoViewIfNeeded();
       await shoot(page, "design", width);
+
+      // The ExiQoian panel, open over Design with its first-visit intro and suggestions.
+      await page.getByTestId("exiqoian-launcher").click();
+      await expect(page.getByTestId("exiqoian-panel")).toBeVisible();
+      await shoot(page, "exiqoian", width);
+      await page.getByRole("button", { name: "Close ExiQoian" }).click();
+      await expect(page.getByTestId("exiqoian-panel")).toBeHidden();
 
       // Help.
       await page.goto("/help");
