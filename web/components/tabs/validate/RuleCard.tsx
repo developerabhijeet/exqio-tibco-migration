@@ -53,6 +53,15 @@ export function RuleCard({
       <header className="flex flex-wrap items-center gap-2">
         <span className="rounded-btn bg-heading px-2 py-0.5 font-mono text-xs font-semibold text-page">{key}</span>
         <Pill tone={s.tone}>{s.label}</Pill>
+        {rule.source?.startsWith("iteration ") ? (
+          <Pill
+            tone="purple"
+            testId="rule-source"
+            title="Proposed by an iteration from its requirements, not quoted from the TIBCO source: your approval is its evidence"
+          >
+            from {rule.source}
+          </Pill>
+        ) : null}
         {typeof rule.confidence === "number" ? (
           <span className="text-sm text-slate" title="Analyst confidence">
             confidence {Math.round(rule.confidence * 100)}%

@@ -22,6 +22,16 @@ import type {
   ScenarioSet,
   StackStatus,
   UploadResult,
+  EditDiff,
+  EditResumed,
+  EditSetView,
+  FailureItem,
+  IterationDetail,
+  IterationOpenBody,
+  IterationView,
+  RepoPull,
+  RepoPush,
+  RepoView,
 } from "./types";
 import type { Brand } from "./brand";
 import type {
@@ -344,6 +354,41 @@ export const api = {
   figmaFrames: (processId: string) => json<FigmaFrameLink[]>(`/processes/${processId}/figma/frames`),
   /** A stored frame thumbnail, as a blob (the request carries the caller like every other). */
   figmaFrameImage: async (linkId: string) => (await request(`/figma/frames/${linkId}/image`)).blob(),
+
+  // Sub-project 6: iterations (re-enter Design), hand edits, repositories as a source.
+  iterations: (projectId: string) => json<IterationView[]>(`/projects/${projectId}/iterations`),
+  iteration: (iterationId: string) => json<IterationDetail>(`/iterations/${iterationId}`),
+  iterationInput: (iterationId: string, inputId: string) =>
+    json<{ text: string }>(`/iterations/${iterationId}/inputs/${inputId}`),
+  iterationPreview: (processId: string) => json<{ items: FailureItem[] }>(`/processes/${processId}/iterations/preview`),
+  /**
+   * Re-enter Design. JSON without logs (the only form an SME may send: the API refuses an SME's
+   * multipart request), multipart `body` + `logs` with them.
+   */
+  openIteration: (processId: string, body: IterationOpenBody, logs: File[] = []) => {
+    if (logs.length === 0) return json<IterationView>(`/processes/${processId}/iterations`, post(body));
+    const form = new FormData();
+    form.append("body", JSON.stringify(body));
+    for (const f of logs) form.append("logs", f, f.name);
+    return json<IterationView>(`/processes/${processId}/iterations`, { method: "POST", body: form });
+  },
+  uploadEdits: (buildId: string, file: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("file", file, filename);
+    return json<EditSetView>(`/builds/${buildId}/edits`, { method: "POST", body: form });
+  },
+  editSet: (editSetId: string) => json<EditSetView>(`/edit-sets/${editSetId}`),
+  editDiff: (editSetId: string, path: string) =>
+    json<EditDiff>(`/edit-sets/${editSetId}/diff/${path.split("/").map(encodeURIComponent).join("/")}`),
+  resumeEditSet: (editSetId: string) => json<EditResumed>(`/edit-sets/${editSetId}/resume`, post()),
+  /** null when this API has no repository routes (before sub-project 6 Task 9). */
+  repos: (projectId: string) => optional<RepoView[]>(`/projects/${projectId}/repos`),
+  connectRepo: (projectId: string, body: { repo: string; branch: string; purpose: "estate" | "build"; process_id?: string }) =>
+    json<RepoView>(`/projects/${projectId}/repos`, post(body)),
+  repoBranches: (repoId: string) => json<{ branches: string[] }>(`/repos/${repoId}/branches`),
+  pullRepo: (repoId: string, branch?: string) => json<RepoPull>(`/repos/${repoId}/pull`, post(branch ? { branch } : {})),
+  pushRepo: (repoId: string, buildId: string, openPr = true) =>
+    json<RepoPush>(`/repos/${repoId}/push`, post({ build_id: buildId, open_pr: openPr })),
 };
 
 export interface DesignView {

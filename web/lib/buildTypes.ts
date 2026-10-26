@@ -7,6 +7,7 @@ export interface BuildSummary {
   status: "queued" | "running" | "passed" | "failed" | string;
   runtime: string;
   stack?: string;
+  iteration?: number | null;
   build_hash: string | null;
   job_id: string | null;
   created_at: string | null;
@@ -69,11 +70,23 @@ export interface BuildRejection {
   body?: string;
 }
 
+/** One file of an edit set as the build applied it (engine/sourcing/merge.py MergeResult). */
+export interface HandEditResult {
+  path: string;
+  outcome: "kept" | "merged" | "conflict" | "added" | "deleted" | "restored" | string;
+  detail: string;
+}
+
 export interface BuilderResult {
   filled: string[];
   rejections: BuildRejection[];
   provider?: string | null;
   ai_available?: boolean;
+  /** A build from an edit set: what happened to each hand-edited file. */
+  hand_edits?: HandEditResult[];
+  /** An infrastructure-only resume; `carried_from` names the build whose test evidence it carries. */
+  infra_only?: boolean;
+  carried_from?: string | null;
   test_engineer?: {
     filled?: string[];
     rejections?: BuildRejection[];
@@ -96,6 +109,7 @@ export interface BuildView {
   status: string;
   runtime: string;
   stack?: string;
+  iteration?: number | null;
   build_hash: string | null;
   spec_hash: string | null;
   design_hash: string | null;

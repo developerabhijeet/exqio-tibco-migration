@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { StatusPill } from "@/components/ui/Pill";
+import { IterationStrip } from "@/components/iterations/IterationStrip";
 import { blockedReason, canActOn, useActingPersona } from "@/lib/personas";
 import { useAppState, type StepKey } from "@/lib/state";
 import type { StepState } from "@/lib/types";
@@ -101,6 +102,7 @@ export function Stepper({
   };
 
   return (
+    <div className="min-w-0">
     <div className="flex items-stretch gap-3">
       <nav aria-label="Migration steps" className="hidden min-w-0 flex-1 lg:block">
       <ol className={`card flex min-w-0 items-stretch shadow-card ${compact ? "p-1" : "p-2"}`}>
@@ -163,6 +165,9 @@ export function Stepper({
       </nav>
       <CompactStepper steps={steps} active={active} onSelect={onSelect} compact={compact} />
       {trailing ? <div className="flex shrink-0 items-center" data-testid="stepper-trailing">{trailing}</div> : null}
+    </div>
+    {/* Each pass through the pipeline: iteration 1, then every re-entry, edit set or fetch. */}
+    <IterationStrip />
     </div>
   );
 }

@@ -17,18 +17,70 @@ import { GateButton, gateDisplayState } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
 import { PushToGitHub } from "@/components/connectors/PushToGitHub";
+import { EditPreview } from "@/components/iterations/EditPreview";
+import { EditUpload } from "@/components/iterations/EditUpload";
+import { HandBadge } from "@/components/iterations/HandBadge";
+import { ReenterDesign } from "@/components/iterations/ReenterDialog";
+import { RepoPanel } from "@/components/iterations/RepoPanel";
+import type { EditResumed } from "@/lib/types";
+import type { HandEditResult } from "@/lib/buildTypes";
 import { BuildJobLog, BuildSteps, failedBuildOutcome } from "./BuildLog";
 import { AccuracyScore } from "./AccuracyScore";
 import { ExportPanel } from "./ExportPanel";
 import { Remedy, restoreFailure } from "./BuildStatusStrip";
 import { InfraPanel } from "./InfraPanel";
 import { MetricsRadar } from "./MetricsRadar";
-import { errorText, OutcomePill, shortHash, useScrollToHash } from "./Panel";
+import { errorText, OutcomePill, Panel, shortHash, useScrollToHash } from "./Panel";
 import { ReviewPanel } from "./ReviewPanel";
 import { SourceTargetExplorer } from "./SourceTargetExplorer";
 import { TestResults } from "./TestResults";
 import { StackBadge, StackNote } from "@/components/ui/StackBadge";
 import { useProjectStack } from "@/lib/stacks";
+
+/** The "hand edits" stage of a build from an edit set: what happened to each edited file. */
+function HandEdits({ rows, carriedFrom }: { rows: HandEditResult[]; carriedFrom?: string | null }) {
+  const conflicts = rows.filter((r) => r.outcome === "conflict");
+  return (
+    <Panel
+      title="Hand edits"
+      eyebrow={`${rows.length} file(s) from the edit set${conflicts.length ? `, ${conflicts.length} to review` : ""}`}
+      testId="hand-edits"
+    >
+      {carriedFrom ? (
+        <p className="mb-2 text-[13px] text-slate">
+          Infrastructure only: the code and its test evidence are carried from build{" "}
+          <span className="font-mono">{carriedFrom.slice(0, 8)}</span>.
+        </p>
+      ) : null}
+      {conflicts.length ? (
+        <div role="status" data-testid="hand-conflicts" className="mb-3 rounded-card border border-error/30 bg-error-bg px-4 py-3 text-[13.5px] text-error">
+          <p className="font-semibold">
+            {conflicts.length} conflict(s): the hand edit was kept as uploaded and the regenerated version is beside it for
+            review.
+          </p>
+          <ul className="mt-1 space-y-0.5 font-mono text-[12.5px]">
+            {conflicts.map((c) => (
+              <li key={c.path}>
+                {c.path}
+                {c.detail ? <span className="text-ink"> ({c.detail})</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <ul className="space-y-1 text-[13px]">
+        {rows.map((r) => (
+          <li key={r.path} className="flex flex-wrap items-center gap-2" data-outcome={r.outcome}>
+            <HandBadge detail={r.detail} />
+            <OutcomePill outcome={r.outcome} text={r.outcome} />
+            <span className="font-mono text-plum">{r.path}</span>
+            {r.detail && r.outcome !== "conflict" ? <span className="text-slate">{r.detail}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
 
 /** Queries that change when a build finishes. */
 export const BUILD_QUERIES = ["build", "build-files", "build-tests", "build-reviews", "infra", "run", "plan", "parity"];
@@ -44,6 +96,9 @@ export function BuildTab() {
   const design = useDesign(processId);
   const builds = useBuilds(processId);
   const { stream, watch } = useJob("build", processId);
+  const designJob = useJob("design", processId);
+  const { setStep } = useAppState();
+  const [editSet, setEditSet] = useState<{ processId: string; id: string } | null>(null);
   const [started, setStarted] = useState<{ processId: string; buildId: string } | null>(null);
   const [runtime, setRuntime] = useState<"container_app" | "aks">("container_app");
   const [runError, setRunError] = useState<string | null>(null);
@@ -101,6 +156,21 @@ export function BuildTab() {
       setRunError(errorText(e));
     }
   };
+
+  // A resumed edit set: a build that applies the edits (watch it here), or the design first.
+  const resumed = (r: EditResumed) => {
+    setEditSet(null);
+    if (r.kind === "build" && r.build_id && processId) {
+      setStarted({ processId, buildId: r.build_id });
+      watch(r.job_id);
+    } else {
+      designJob.watch(r.job_id);
+      qc.invalidateQueries({ queryKey: ["design", processId] });
+      setStep("design");
+    }
+  };
+  const editSetId = editSet && editSet.processId === processId ? editSet.id : null;
+  const showEditSet = (id: string) => processId && setEditSet({ processId, id });
 
   const g3State = gateDisplayState(g3, !!design.data);
   const buildStatus = running ? "running" : (build.data?.status ?? null);
@@ -225,6 +295,15 @@ export function BuildTab() {
                   ) : null}
                 </p>
               ) : null}
+              {finished && build.data?.status === "failed" && processId ? (
+                <div className="rounded-card border border-line bg-white px-4 py-3" data-testid="build-reenter">
+                  <p className="mb-2 text-[13.5px] text-ink">
+                    Take what failed back to the design: the next iteration&apos;s designer reads these failures, any logs you add
+                    and the requirements.
+                  </p>
+                  <ReenterDesign processId={processId} processName={proc?.name} />
+                </div>
+              ) : null}
               {buildId ? <BuildSteps rows={rows} /> : null}
             </div>
             <BuildJobLog
@@ -248,7 +327,19 @@ export function BuildTab() {
                   warnings={build.data.builder?.test_engineer?.warnings ?? []}
                 />
                 <InfraPanel buildId={buildId} />
+                {build.data.builder?.hand_edits?.length ? (
+                  <HandEdits rows={build.data.builder.hand_edits} carriedFrom={build.data.builder.carried_from} />
+                ) : null}
                 <ExportPanel buildId={buildId} compiled={build.data.metrics?.compile_ok ?? null} />
+                <Panel
+                  title="Bring edits back"
+                  eyebrow="An edited copy of this build's download, or a branch a reviewer committed to"
+                  testId="edits-panel"
+                >
+                  <EditUpload buildId={buildId} finished={finished} onUploaded={(es) => showEditSet(es.id)} />
+                </Panel>
+                {editSetId ? <EditPreview editSetId={editSetId} onResumed={resumed} /> : null}
+                <RepoPanel purpose="build" processId={processId} buildId={buildId} onEditSet={showEditSet} />
                 <PushToGitHub processId={processId} processName={proc?.name ?? ""} buildId={buildId} finished={finished} />
               </>
             ) : (

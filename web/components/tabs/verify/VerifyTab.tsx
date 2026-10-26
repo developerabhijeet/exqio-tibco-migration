@@ -18,6 +18,7 @@ import { DevTokenHelper, ServiceControl, SwaggerFrame, useService } from "./Swag
 import { TestDataPanel } from "./TestDataPanel";
 import { StackBadge, StackNote } from "@/components/ui/StackBadge";
 import { useProjectStack } from "@/lib/stacks";
+import { ReenterOnFailure } from "@/components/iterations/ReenterDialog";
 
 export function VerifyTab() {
   const qc = useQueryClient();
@@ -108,6 +109,7 @@ export function VerifyTab() {
             </div>
           ) : null}
           {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} stack={recordStack} /> : null}
+          <ReenterOnFailure processId={processId} processName={proc?.name} kinds={["parity_defect"]} what="parity defect(s)" />
           <ScenarioRunner processId={processId} buildId={buildId} running={svc.state === "running"} stream={stream} onRun={runVerify} />
           <ParityTable buildId={buildId} />
           <TestDataPanel processId={processId} />

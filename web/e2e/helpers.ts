@@ -1,4 +1,5 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, request, type Locator, type Page } from "@playwright/test";
+import { unzipSync, zipSync } from "fflate";
 import { SAMPLE_ZIP } from "./global-setup";
 import { apiUrl, webPort } from "../scripts/root-env";
 
@@ -168,4 +169,113 @@ export async function gotoStep(page: Page, step: string): Promise<void> {
   }
   if (await full.isVisible()) await expect(full).toHaveAttribute("aria-current", "step");
   else await expect(page.getByTestId("stepper-compact")).toContainText(new RegExp(step, "i"));
+}
+
+// ------------------------------------------------------------------ iterations (sub-project 6)
+
+/** The build the last openFailedBuild / openFinishedBuild finished (editedZipFixture edits it). */
+let lastBuildId: string | null = null;
+
+/** Who the top bar menu acts as now. */
+async function currentUser(page: Page): Promise<string> {
+  const text = (await page.getByTestId("user-menu").textContent()) ?? "";
+  const users = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam", "viewer.val"];
+  return users.find((u) => text.includes(u)) ?? "sme.vicky";
+}
+
+/** Analysis with every rule approved, G1, every finding "ask", G2 (SME); design and G3 (architect). */
+async function approveThroughG3(page: Page): Promise<void> {
+  await actAs(page, "sme.vicky");
+  await page.getByTestId("step-validate").click();
+  await page.getByRole("button", { name: "Run analysis" }).click();
+  await expect(page.getByTestId("analysis-log")).toContainText("citations verified", { timeout: 90_000 });
+  const rules = page.getByTestId("rule-card");
+  await expect(rules.first()).toBeVisible();
+  for (let i = 0, n = await rules.count(); i < n; i++) {
+    const card = rules.nth(i);
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(card).toHaveAttribute("data-status", "approved");
+  }
+  const g1 = page.getByTestId("gate-G1");
+  await g1.getByRole("button", { name: "Approve G1" }).click();
+  await expect(g1).toHaveAttribute("data-state", "approved");
+  const findings = page.getByTestId("finding-card");
+  for (let i = 0, n = await findings.count(); i < n; i++) {
+    const card = findings.nth(i);
+    await card.getByRole("button", { name: "Ask business" }).click();
+    await expect(card).toHaveAttribute("data-decision", "ask");
+  }
+  const g2 = page.getByTestId("gate-G2");
+  await g2.getByRole("button", { name: "Approve G2" }).click();
+  await expect(g2).toHaveAttribute("data-state", "approved");
+
+  await actAs(page, "architect.lee");
+  await page.getByTestId("step-design").click();
+  await page.getByRole("button", { name: "Generate design" }).click();
+  await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/, { timeout: 60_000 });
+  const g3 = page.getByTestId("gate-G3");
+  await g3.getByRole("button", { name: "Approve G3" }).click();
+  await expect(g3).toHaveAttribute("data-state", "approved");
+}
+
+/**
+ * A fresh project scanned, FundingStatusLookup approved through G3 and built once; the Build tab
+ * is left open as the user who was acting when it was called. The e2e API runs with the build
+ * toolchain off (BUILD_TOOLCHAIN=false): restore is recorded as skipped and the build as failed.
+ */
+async function buildOnce(page: Page): Promise<string> {
+  const user = await currentUser(page);
+  await actAs(page, "sme.vicky");
+  await newProjectAndScan(page);
+  await openDealerProcess(page, "FundingStatusLookup");
+  await approveThroughG3(page);
+  await actAs(page, "engineer.ravi");
+  await page.getByTestId("step-build").click();
+  const posted = page.waitForResponse(
+    (r) => r.request().method() === "POST" && /\/processes\/[^/]+\/build$/.test(new URL(r.url()).pathname),
+  );
+  await page.getByRole("button", { name: "Generate and build" }).click();
+  const { build_id: buildId } = (await (await posted).json()) as { build_id: string };
+  await expect(page.getByTestId("build-status")).toContainText(/passed|failed/, { timeout: 240_000 });
+  await expect(page.getByRole("button", { name: "Generate and build" })).toBeEnabled({ timeout: 30_000 });
+  lastBuildId = buildId;
+  await actAs(page, user);
+  return buildId;
+}
+
+/** buildOnce, asserting the build failed (the toolchain is off in the e2e API). */
+export async function openFailedBuild(page: Page): Promise<string> {
+  const id = await buildOnce(page);
+  await expect(page.getByTestId("build-status")).toContainText("failed");
+  return id;
+}
+
+/** buildOnce: a build that has finished, whatever its outcome. */
+export async function openFinishedBuild(page: Page): Promise<string> {
+  return buildOnce(page);
+}
+
+/**
+ * The download of the last build with two of its C# files edited by hand (a comment appended to
+ * each), zipped again: exactly two modified files against that build.
+ */
+export async function editedZipFixture(): Promise<{ name: string; mimeType: string; buffer: Buffer }> {
+  if (!lastBuildId) throw new Error("editedZipFixture needs openFinishedBuild first");
+  const ctx = await request.newContext();
+  try {
+    const res = await ctx.get(`${apiUrl}/builds/${lastBuildId}/download`, { headers: { "X-User": "engineer.ravi" } });
+    expect(res.ok()).toBe(true);
+    const entries = unzipSync(new Uint8Array(await res.body()));
+    const targets = Object.keys(entries)
+      .filter((p) => /(^|\/)src\/.+\.cs$/.test(p))
+      .sort()
+      .slice(0, 2);
+    expect(targets).toHaveLength(2);
+    for (const path of targets) {
+      entries[path] = new Uint8Array(Buffer.concat([Buffer.from(entries[path]), Buffer.from("\n// edited by hand in review\n")]));
+    }
+    return { name: "edited-build.zip", mimeType: "application/zip", buffer: Buffer.from(zipSync(entries)) };
+  } finally {
+    await ctx.dispose();
+  }
 }

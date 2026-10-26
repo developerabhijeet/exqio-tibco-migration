@@ -177,7 +177,9 @@ export function GateButton({
         </div>
       ) : null}
       {state !== "approved" && state !== "rejected" && gate?.reset_reason ? (
-        <p className="mt-2 text-sm text-decision">Reopened: {gate.reset_reason}</p>
+        <p className="mt-2 text-sm text-decision" data-testid={`gate-${name}-reset`}>
+          Reopened, pending again: {gate.reset_reason}
+        </p>
       ) : null}
       {notMine && state !== "approved" && state !== "rejected" ? (
         <p className="mt-1 text-sm text-slate" data-testid={`gate-${name}-not-mine`}>

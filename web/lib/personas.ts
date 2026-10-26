@@ -158,7 +158,33 @@ export function stepsOf(persona: Persona): StepKey[] {
   return STEP_KEYS.slice(stepIndex(persona.entry)) as StepKey[];
 }
 
-export function canActOn(persona: Persona, step: StepKey): boolean {
+/**
+ * The iteration loop's actions (sub-project 6) and the role keys their routes accept
+ * (`require_roles` in api/app/routers/iterations.py, edits.py, repos.py): `iterate` re-enters Design
+ * (an SME with requirements only), `edits` uploads and resumes an edited build, `repo` connects and
+ * pulls a repository (an SME an estate repository only) and pushes a build to one (engineer, admin).
+ */
+export const ITERATION_ACTION_ROLES = {
+  iterate: ["architect", "admin", "sme"],
+  edits: ["engineer", "admin"],
+  repo: ["engineer", "admin", "sme"],
+} as const;
+export type IterationAction = keyof typeof ITERATION_ACTION_ROLES;
+
+function isAction(key: string): key is IterationAction {
+  return Object.prototype.hasOwnProperty.call(ITERATION_ACTION_ROLES, key);
+}
+
+/**
+ * Whether this persona may act on a step (from its entry step on), or take an iteration action:
+ * for an action, `roles` are the role keys held (the persona's own when omitted). The API decides
+ * either way; this only keeps a control it would refuse from being offered as if it worked.
+ */
+export function canActOn(persona: Persona, step: StepKey | IterationAction, roles?: readonly string[]): boolean {
+  if (isAction(step)) {
+    const held = roles ?? persona.roleKey.split(",");
+    return held.some((r) => (ITERATION_ACTION_ROLES[step] as readonly string[]).includes(r));
+  }
   return STEP_KEYS.indexOf(step) >= stepIndex(persona.entry);
 }
 

@@ -2,7 +2,7 @@
 
 // Read-only Monaco, loaded from this app's public/monaco (copied at install), never a CDN.
 import { useEffect, useRef, useState } from "react";
-import Editor, { loader, type OnMount } from "@monaco-editor/react";
+import Editor, { DiffEditor, loader, type OnMount } from "@monaco-editor/react";
 import { cssColor, isDarkNow, useThemed } from "@/lib/theme";
 import type { XmlHighlight } from "@/lib/xmlspan";
 
@@ -149,6 +149,45 @@ export default function CodeView({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Read-only side-by-side diff (the baseline on the left, the edited file on the right). */
+export function DiffView({
+  original,
+  modified,
+  language,
+  height,
+  testId,
+}: {
+  original: string;
+  modified: string;
+  language: string;
+  height: number | string;
+  testId?: string;
+}) {
+  return (
+    <div data-testid={testId} className="overflow-hidden rounded-btn border border-line">
+      <DiffEditor
+        height={height}
+        language={language}
+        original={original}
+        modified={modified}
+        theme="vs"
+        loading={<div className="p-4 text-[13px] text-slate">Loading editor</div>}
+        options={{
+          readOnly: true,
+          originalEditable: false,
+          domReadOnly: true,
+          minimap: { enabled: false },
+          fontSize: 12.5,
+          lineHeight: 19,
+          scrollBeyondLastLine: false,
+          renderSideBySide: true,
+          automaticLayout: true,
+        }}
+      />
     </div>
   );
 }

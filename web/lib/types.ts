@@ -275,6 +275,8 @@ export interface RuleView {
   updated_at?: string | null;
   /** The rule text with its citations inline. `cited.text` is the MASKED text: render it, not `text`. */
   cited?: CitedText | null;
+  /** "iteration <n>" for a rule an iteration proposed (requirement-backed, not TIBCO evidence). */
+  source?: string | null;
 }
 
 export type FindingDecision = "keep" | "fix" | "ask";
@@ -529,4 +531,125 @@ export interface FigmaFrameLink {
   image_note?: string | null;
   stale: boolean;
   updated_at: string;
+}
+
+// ------------------------------------------------------------------ iterations (sub-project 6)
+
+export type IterationKind = "initial" | "reentry" | "edits" | "repo" | string;
+export type IterationStatus =
+  | "open" | "designing" | "building" | "verifying" | "deploying" | "closed" | "abandoned" | "superseded" | string;
+
+/** GET /projects/{id}/iterations, GET /iterations/{id} (api/app/schemas/iteration.py). */
+export interface IterationView {
+  id: string;
+  project_id: string;
+  n: number;
+  process_ids: string[];
+  kind: IterationKind;
+  status: IterationStatus;
+  resume_phase: string;
+  requirements: string | null;
+  baseline_build_id: string | null;
+  source: Record<string, unknown> | null;
+  opened_by: string;
+  opened_at: string;
+  closed_at: string | null;
+  note: string | null;
+  /** The design job an opened iteration queued. */
+  job_id?: string | null;
+}
+
+export interface IterationInputView {
+  id: string;
+  kind: string;
+  process_id: string | null;
+  ref: string | null;
+  title: string;
+  sha256: string | null;
+  created_at: string;
+}
+
+export interface IterationTimelineEntry {
+  kind: "design" | "build" | "gate" | string;
+  at: string | null;
+  process_id: string | null;
+  id: string;
+  iteration?: number | null;
+  summary: string;
+}
+
+export interface IterationDetail extends IterationView {
+  inputs: IterationInputView[];
+  timeline: IterationTimelineEntry[];
+}
+
+/** What failed in the process's latest build, verify or plan (GET /processes/{id}/iterations/preview). */
+export interface FailureItem {
+  kind: "build_failure" | "test_failure" | "parity_defect" | "plan_error" | "uploaded_log" | string;
+  ref: string;
+  title: string;
+  text: string;
+  process_id: string;
+  sha256: string | null;
+  key: string;
+}
+
+/** POST /processes/{id}/iterations; `include` null keeps every collected failure, [] none. */
+export interface IterationOpenBody {
+  requirements?: string;
+  include?: string[];
+  note?: string;
+}
+
+export interface FileChange {
+  path: string;
+  change: "modified" | "added" | "deleted";
+  origin: string;
+  sha256: string | null;
+}
+
+export interface EditSetView {
+  id: string;
+  iteration: number;
+  iteration_id: string;
+  baseline_build_id: string | null;
+  resume_phase: "build" | "design" | "infra" | string;
+  status: "previewed" | "designing" | "resumed" | string;
+  files: FileChange[];
+  counts: Record<string, number>;
+}
+
+export interface EditDiff {
+  baseline: string;
+  edited: string;
+}
+
+export interface EditResumed {
+  job_id: string;
+  kind: "build" | "design" | string;
+  edit_set_id: string;
+  build_id: string | null;
+}
+
+/** A connected GitHub repository (Task 9 RepoOut). */
+export interface RepoView {
+  id: string;
+  project_id: string;
+  repo: string;
+  branch: string;
+  purpose: "estate" | "build" | string;
+  process_id: string | null;
+  last_commit: string | null;
+  connected_by: string;
+  connected_at: string;
+  job_id?: string | null;
+}
+
+export type RepoPull = { changed: false } | { changed: true; job_id: string; commit: string };
+
+/** Task 10: POST /repos/{id}/push. */
+export interface RepoPush {
+  branch: string;
+  commit: string;
+  pull_request: { number: number; url: string } | null;
 }

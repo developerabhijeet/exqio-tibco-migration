@@ -16,6 +16,7 @@ import { AzureIcon } from "@/components/ui/BrandIcons";
 import { AzureConnectForm } from "./AzureConnectForm";
 import { SecurityPanel } from "./SecurityPanel";
 import { PlanView } from "./PlanView";
+import { ReenterOnFailure } from "@/components/iterations/ReenterDialog";
 
 export function DeployTab() {
   const qc = useQueryClient();
@@ -83,6 +84,7 @@ export function DeployTab() {
             started={!!buildId}
             hint="Operations approves the plan, or the acknowledged connect-later state."
           />
+          <ReenterOnFailure processId={processId} processName={proc?.name} kinds={["plan_error"]} what="failed plan(s)" />
           {buildId ? <PlanView buildId={buildId} stream={stream} onPlanJob={watch} /> : null}
           <SecurityPanel buildId={buildId} processId={processId} />
           <AzureConnectForm

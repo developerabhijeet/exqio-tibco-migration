@@ -115,6 +115,9 @@ export default defineConfig({
         PROVIDER: process.env.PROVIDER ?? "fake",
         // Offline and deterministic: fastembed would try to download its model on first use.
         EMBEDDINGS_BACKEND: process.env.EMBEDDINGS_BACKEND ?? "hash",
+        // BUILD_TOOLCHAIN=false skips restore, build, format and test: every build is generated,
+        // stored and recorded as failed, which e2e/iterations.spec.ts needs for its failed builds.
+        BUILD_TOOLCHAIN: process.env.BUILD_TOOLCHAIN ?? "true",
         DATABASE_URL: process.env.DATABASE_URL ?? "postgresql+asyncpg://exiqo:exiqo@localhost:5432/exiqo",
         // The memory graph (`make neo4j`): the scan and every phase are ingested into it, and the
         // /memory explorer reads it.

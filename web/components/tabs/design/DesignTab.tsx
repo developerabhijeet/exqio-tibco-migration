@@ -29,6 +29,8 @@ import { SequenceDiagram } from "./SequenceDiagram";
 import { SolutionTree } from "./SolutionTree";
 import { StackBadge, StackNote } from "@/components/ui/StackBadge";
 import { useProjectStack } from "@/lib/stacks";
+import { IterationInputs } from "@/components/iterations/IterationStrip";
+import { ReenterDesign } from "@/components/iterations/ReenterDialog";
 
 const STAGES = ["skeleton", "memory", "designer", "persist"];
 
@@ -167,6 +169,11 @@ export function DesignTab() {
               </div>
             ) : null}
           </div>
+
+          {/* Re-entering is always open to an architect or admin here (an SME: requirements only),
+              not only after a failure: a requirement can change a design that passed. */}
+          {rec ? <ReenterDesign processId={processId} processName={proc?.name} /> : null}
+          <IterationInputs processId={processId} />
 
           <DesignConnectorPanels processId={processId} hasDesign={!!rec} />
 
