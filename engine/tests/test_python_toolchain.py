@@ -555,3 +555,17 @@ def test_python_bundle_fails_closed_without_the_pypi_mirror(python_infra):
     for text in (gh, ado):
         assert 'test -n "${UV_INDEX_URL:-}"' in text and "never the public index" in text
         assert "unset UV_INDEX_URL" not in text
+
+
+def test_runner_adds_the_mirror_ca_to_the_system_roots(tmp_path, monkeypatch):
+    from engine.stacks import cabundle
+
+    system, pem = tmp_path / "system.pem", tmp_path / "ca.pem"
+    system.write_text("-----BEGIN CERTIFICATE-----\nSYSTEM\n-----END CERTIFICATE-----\n")
+    pem.write_text("-----BEGIN CERTIFICATE-----\nMIRROR\n-----END CERTIFICATE-----\n")
+    monkeypatch.setattr(cabundle, "system_bundle", lambda: system)
+    monkeypatch.setattr(cabundle, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("MIRROR_CA_BUNDLE", str(pem))
+    text = Path(UvRunner(tmp_path, python="python3", uv="uv").env()["SSL_CERT_FILE"]).read_text()
+    assert "SYSTEM" in text and "MIRROR" in text

@@ -227,7 +227,7 @@ def test_java_stack_is_registered_with_its_contract():
     assert (stack.key, stack.label, stack.required_tools, stack.source_suffixes, stack.prompt_pack,
             stack.download_excluded, stack.service_process_marker) == (
         "java", "Java 21 · Spring Boot 3.5 · Maven", ("java", "mvn"), (".java",), "java",
-        frozenset({"target", ".exiqo/logs"}), "java")
+        frozenset({"target/", ".exiqo/logs"}), "java")
     tools = {"java": {"present": True}, "mvn": {"present": True}}
     assert stack_status("java", tools, ["java"]).available is True
     assert stack_status("java", {"java": {"present": True}}, ["java"]).reason == "toolchain missing: mvn"

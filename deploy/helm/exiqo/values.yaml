@@ -247,7 +247,8 @@ mirrors:
   pypi: ""             # UV_INDEX_URL and PIP_INDEX_URL (https): required with python
   # PEM text of the CA that signed the mirrors' certificates, when it is a private one. Mounted on
   # the worker at /etc/exiqo-ca/ca.pem; the entrypoint imports it (keytool) into a copy of the JDK
-  # trust store that Maven uses. Public CAs need nothing. Go and Python builds do not use it yet.
+  # trust store that Maven uses; Go and uv get it added to the system roots (SSL_CERT_FILE). Public CAs
+  # need nothing.
   caBundle: ""
 
 # Connectors (GitHub Enterprise, Confluence/Jira, Figma): all off. The install layer is the ceiling

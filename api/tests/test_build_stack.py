@@ -199,7 +199,7 @@ def test_export_note_names_the_target_stack():
 def test_download_exclusions_follow_the_stack():
     assert download_excluded("dotnet") == DOWNLOAD_EXCLUDED == stacks.get_stack("dotnet").download_excluded
     assert download_excluded(None) == DOWNLOAD_EXCLUDED
-    assert download_excluded("java") == frozenset({"target", ".exiqo/logs"})
+    assert download_excluded("java") == frozenset({"target/", ".exiqo/logs"})
     assert download_excluded("go") == frozenset({".exiqo-bin", ".exiqo"})
     assert download_excluded("python") == stacks.get_stack("python").download_excluded
 
@@ -216,6 +216,18 @@ def test_java_download_keeps_the_maven_settings_but_not_the_logs(tmp_path):
     with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path, None, download_excluded("java")))) as zf:
         names = set(zf.namelist())
     assert names == {"pom.xml", ".exiqo/maven-settings.xml", "src/main/java/A.java"}
+
+
+def test_java_download_drops_only_the_root_target_folder(tmp_path):
+    """A package or contract folder called ``target`` (a TIBCO module named Target) is source."""
+    import io
+    import zipfile
+    for rel in ("target/app.jar", "src/main/java/com/x/target/Contract.java", "core/target/B.java"):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path, None, download_excluded("java")))) as zf:
+        assert set(zf.namelist()) == {"src/main/java/com/x/target/Contract.java", "core/target/B.java"}
 
 
 def test_alembic_has_one_head_and_it_is_the_stacks_revision():

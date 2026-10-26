@@ -732,7 +732,7 @@ def test_java_dockerfile_builds_the_jar_the_layout_names(java_infra, java_soluti
     # offline after the dependency layer, with the project's Maven settings (the mirror)
     assert "-s .exiqo/maven-settings.xml" in df and " -o " in df
     ignore = java_infra[".dockerignore"]
-    assert "**/target" in ignore and "**/bin" not in ignore and ".exiqo" not in ignore.split()
+    assert "target" in ignore.split() and "**/target" not in ignore and "**/bin" not in ignore and ".exiqo" not in ignore.split()
 
 
 def test_java_bundle_explains_the_local_run(java_infra):

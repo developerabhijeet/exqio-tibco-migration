@@ -39,6 +39,7 @@ from engine.dotnet_gen.runner import (
     _tail,
     _toolchain_detect,
 )
+from engine.stacks.cabundle import with_system_roots
 from engine.stacks.coverage import parse_go_cover
 from engine.stacks.results import parse_test2json
 from engine.stacks.testindex import join, read_index
@@ -136,7 +137,7 @@ class GoRunner:
         env.update(GO_SETTINGS)
         ca = os.environ.get("MIRROR_CA_BUNDLE", "")  # the module mirror's private CA
         if ca and Path(ca).is_file() and "SSL_CERT_FILE" not in env:
-            env["SSL_CERT_FILE"] = ca
+            env["SSL_CERT_FILE"] = with_system_roots(ca)  # added to, not replacing, the system roots
         if Path(self.go).is_absolute():
             env["PATH"] = os.pathsep.join([str(Path(self.go).parent), env.get("PATH", "")])
         env.update(self.extra_env)

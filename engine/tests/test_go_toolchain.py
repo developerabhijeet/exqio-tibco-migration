@@ -538,11 +538,18 @@ def test_pipelines_and_dockerfile_refuse_an_empty_or_direct_proxy(go_infra):
 
 
 def test_runner_trusts_the_mirror_ca_bundle(tmp_path, monkeypatch):
-    """A module mirror behind GMF's private CA: Go reads SSL_CERT_FILE (as the Python runner does)."""
-    pem = tmp_path / "ca.pem"
-    pem.write_text("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+    """A module mirror behind GMF's private CA: Go reads SSL_CERT_FILE (as the Python runner does), and
+    the file is the system roots plus the mirror CA, so a public mirror still verifies."""
+    from engine.stacks import cabundle
+
+    system, pem = tmp_path / "system.pem", tmp_path / "ca.pem"
+    system.write_text("-----BEGIN CERTIFICATE-----\nSYSTEM\n-----END CERTIFICATE-----\n")
+    pem.write_text("-----BEGIN CERTIFICATE-----\nMIRROR\n-----END CERTIFICATE-----\n")
+    monkeypatch.setattr(cabundle, "system_bundle", lambda: system)
+    monkeypatch.setattr(cabundle, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.setenv("MIRROR_CA_BUNDLE", str(pem))
-    assert GoRunner(tmp_path, go="go").env()["SSL_CERT_FILE"] == str(pem)
+    text = Path(GoRunner(tmp_path, go="go").env()["SSL_CERT_FILE"]).read_text()
+    assert "SYSTEM" in text and "MIRROR" in text
     monkeypatch.setenv("MIRROR_CA_BUNDLE", str(tmp_path / "absent.pem"))
     assert "SSL_CERT_FILE" not in GoRunner(tmp_path, go="go").env()

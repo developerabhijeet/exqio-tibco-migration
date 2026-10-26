@@ -219,7 +219,10 @@ projects; only an admin changes it) and every build of it targets that stack.
 | `python` | Python 3.12 · FastAPI · pytest | `uv` (in the image) and a Python 3.12 interpreter | `mirrors.pypi` |
 
 An enabled stack other than .NET needs its mirror: the schema and the template refuse the install
-without it and refuse a mirror that is not `https://`. The pods have no route to the public
+without it and refuse a mirror that is not `https://`. Java and Python fail closed too: without `mirrors.maven`
+or `mirrors.pypi` the restore refuses with a clear error and the generated Dockerfiles and
+pipelines stop, they never reach Maven Central or the public Python index. The pilot compose file
+enables only `dotnet` until you set `ENABLED_STACKS` and the mirrors. The pods have no route to the public
 repositories, so a stack without a mirror cannot restore a single package; a Go build with no
 `GOPROXY` fails closed (`GOPROXY=off`), it never falls back to Go's public proxy.
 
@@ -240,19 +243,18 @@ For the firewall team: the host of each configured mirror joins `EGRESS_ALLOWLIS
 About panel) automatically, only for an enabled stack. Allow exactly these on 443:
 the `mirrors.maven` host (java), the `mirrors.goproxy` host (go), the `mirrors.pypi` host (python)
 and the existing NuGet, npm and Terraform mirror hosts. Nothing public is named by the chart or the
-code. A Go build does not contact `sum.golang.org` or any VCS host: checksums come from the
+code. A Go build does not contact Go's checksum database or any VCS host: checksums come from the
 `go.sum` the platform commits, and `GOFLAGS=-mod=readonly` forbids anything else.
+
+Generated Java and Python services verify the TLS certificate of Azure Database for PostgreSQL
+against the JDK trust store and the system roots (Azure's roots are public). A private database CA
+belongs in the runtime base image's store (or `PGSSLROOTCERT` for Python).
 
 Dependency versions are pinned by the platform, not chosen by the model: Maven versions in
 `engine/stacks/java/versions.py`, Go modules and checksums in `engine/stacks/go/versions.py` and
 `go.sum.lock`, Python requirements in hash-locked files. Refresh the Go and Python locks on a
 machine that reaches your mirrors with `make stack-locks` (set `GOPROXY` and `UV_INDEX_URL`), review
 the diff and commit it.
-
-An upgrade that moves the uploads volume to another mount path changes the source paths stored in
-every analysis (the scanner records the path it read) and with them every spec hash, which resets
-the gates G1 and G2 of existing projects. Keep `DATA_DIR` where it was across upgrades, or plan to
-re-approve.
 
 #### A mirror behind a private CA
 
@@ -261,8 +263,9 @@ fine) in `mirrors.caBundle`. The chart stores it in a ConfigMap, mounts it read-
 at `/etc/exiqo-ca/ca.pem` and sets `MIRROR_CA_BUNDLE`. Java: at start the entrypoint copies the JDK
 trust store to `/tmp/exiqo-cacerts`, adds each certificate with `keytool`, and adds
 `-Djavax.net.ssl.trustStore` to `MAVEN_OPTS` (the Java runner passes that through to Maven and
-nothing else of `MAVEN_OPTS` but the repository path). Go and Python: their runners hand the same
-file to the build as `SSL_CERT_FILE`. The entrypoint fails closed: a `MIRROR_CA_BUNDLE` that is set
+nothing else of `MAVEN_OPTS` but the repository path). Go and Python: their runners hand the build
+`SSL_CERT_FILE`, the system roots with the bundle added after them (a second mirror with a public
+certificate still verifies). The entrypoint fails closed: a `MIRROR_CA_BUNDLE` that is set
 but names no file, a missing `keytool`, a bundle with no certificate, or one `keytool` rejects,
 stops the pod (exit 65 or 66) instead of starting with the public trust store. The same CA must
 also be in the trust store of the image build that runs the generated Dockerfile (GMF's base image,

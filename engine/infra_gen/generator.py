@@ -584,7 +584,8 @@ def _stack_dockerfile(stack: str, context: dict[str, Any]) -> str:
 def _stack_dockerignore(stack: str) -> str:
     """The .NET ignore list with the stack's build output in place of its ``bin``/``obj`` lines.
     ``.exiqo`` (the Maven settings the image build reads) is not ignored."""
-    output = [f"**/{d}" for d in sorted(get_stack(stack).download_excluded - {".exiqo"})]
+    # a plain name is ignored anywhere; an entry with a slash (``target/``) only at the root
+    output = [d.rstrip("/") if "/" in d else f"**/{d}" for d in sorted(get_stack(stack).download_excluded - {".exiqo"})]
     lines: list[str] = []
     for line in (TEMPLATES / "dockerignore").read_text(encoding="utf-8").splitlines():
         if line == "**/bin":
