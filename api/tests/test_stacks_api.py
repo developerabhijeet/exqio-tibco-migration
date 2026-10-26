@@ -214,5 +214,7 @@ async def test_default_stack_that_is_no_longer_enabled_falls_back(client, app, c
     r = await client.post("/projects", json={"name": "a"})
     assert r.status_code == 201 and r.json()["target_stack"] == "dotnet"
     assert "java" in caplog.text and "not enabled" in caplog.text
+    body = (await client.get("/stacks")).json()  # the picker shows what a create would use
+    assert body["default"] == "dotnet" and [s["key"] for s in body["stacks"] if s["default"]] == ["dotnet"]
     # an explicit choice of a disabled stack is still refused
     assert (await client.post("/projects", json={"name": "b", "target_stack": "java"})).status_code == 422

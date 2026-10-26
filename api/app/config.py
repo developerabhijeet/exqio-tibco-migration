@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     deploy_credential_mode: Literal["workload_identity", "local"] = "local"
     api_base_path: str = ""
     nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
-    # GMF package mirrors of the other stacks (MAVEN_MIRROR_URL, GOPROXY, UV_INDEX_URL); empty = the tool's default
+    # GMF package mirrors of the other stacks (MAVEN_MIRROR_URL, GOPROXY, UV_INDEX_URL); empty = that stack's restore refuses (X26)
     maven_mirror_url: str = ""
     goproxy: str = ""
     uv_index_url: str = ""

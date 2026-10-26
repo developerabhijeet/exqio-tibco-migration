@@ -41,6 +41,16 @@ def test_without_system_roots_the_mirror_ca_alone_is_returned(tmp_path, monkeypa
     assert cabundle.with_system_roots(ca) == str(ca)
 
 
+def test_unreadable_ca_fails_closed(tmp_path, monkeypatch):
+    import pytest
+
+    system = tmp_path / "system.pem"
+    system.write_text(_pem("SYSTEM"))
+    monkeypatch.setattr(cabundle, "system_bundle", lambda: system)
+    with pytest.raises(cabundle.MirrorCAError, match="cannot be read"):
+        cabundle.with_system_roots(tmp_path / "absent.pem")
+
+
 def test_system_bundle_finds_a_file_on_this_machine():
     found = cabundle.system_bundle()
     assert found is None or os.path.isfile(found)

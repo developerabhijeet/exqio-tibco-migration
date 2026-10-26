@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -10,6 +11,8 @@ from api.app.config import Settings
 from api.app.deps import SettingsDep, require_user
 from api.app.services import settings as settings_svc
 from engine.stacks import STACK_KEYS, stack_status
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["stacks"])
 
@@ -32,9 +35,21 @@ def stack_views(settings: Settings, toolchains: dict[str, Any]) -> list[dict[str
         status = stack_status(k, toolchains, enabled)
         registry = stack_status(k, _AnyToolPresent(), enabled)
         missing = [t for t in status.required_tools if not (toolchains.get(t) or {}).get("present")]
-        views.append(status.model_dump() | {"default": k == settings.default_stack, "selectable": registry.available,
+        views.append(status.model_dump() | {"default": k == effective_default(settings), "selectable": registry.available,
                                             "toolchain_missing": missing})
     return views
+
+
+def effective_default(settings: Settings) -> str:
+    """The stored default stack, or (when the install no longer enables it) the first enabled one,
+    dotnet by preference: a stale default must not make every create without a stack a 422."""
+    enabled = settings.enabled_stack_list
+    if settings.default_stack in enabled or not enabled:
+        return settings.default_stack
+    fallback = "dotnet" if "dotnet" in enabled else enabled[0]
+    log.warning("the default stack %r is not enabled on this install (%s); using %s",
+                settings.default_stack, ", ".join(enabled), fallback)
+    return fallback
 
 
 def require_available(key: str, settings: Settings) -> None:
@@ -54,5 +69,5 @@ async def list_stacks(request: Request, settings: SettingsDep) -> dict[str, Any]
         roles = (await require_user(request, request.headers.get("x-user"), request.headers.get("x-agent"))).roles
     except HTTPException:
         roles = frozenset()
-    return {"default": settings.default_stack, "stacks": stack_views(settings, toolchains),
+    return {"default": effective_default(settings), "stacks": stack_views(settings, toolchains),
             "can_change_stack": bool(roles & {"architect", "admin"}), "can_set_default": "admin" in roles}

@@ -18,7 +18,7 @@ from api.app.db import new_id
 from api.app.deps import PrincipalDep, RunnerDep, SessionDep, SettingsDep
 from api.app.jobs.locks import advisory_lock
 from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
-from api.app.routers.stacks import require_available
+from api.app.routers.stacks import effective_default, require_available
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
 from api.app.schemas.project import (
@@ -45,25 +45,13 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
     return project
 
 
-def _usable_default(settings: SettingsDep) -> str:
-    """The stored default stack, or (when the install no longer enables it) the first enabled one,
-    dotnet by preference: a stale default must not make every create without a stack a 422."""
-    enabled = settings.enabled_stack_list
-    if settings.default_stack in enabled or not enabled:
-        return settings.default_stack
-    fallback = "dotnet" if "dotnet" in enabled else enabled[0]
-    log.warning("the default stack %r is not enabled on this install (%s); using %s",
-                settings.default_stack, ", ".join(enabled), fallback)
-    return fallback
-
-
 @router.post("/projects", status_code=201, response_model=ProjectOut)
 async def create_project(body: ProjectCreate, request: Request, session: SessionDep,
                          settings: SettingsDep) -> Project:
     """Create a project and seed its migration memory with the TIBCO-to-.NET seed patterns
     (``source: seed``): a ``memory.ingest`` of phase ``seed`` is queued (nothing without
     ``NEO4J_URI``)."""
-    stack = body.target_stack or _usable_default(settings)
+    stack = body.target_stack or effective_default(settings)
     require_available(stack, settings)
     project = Project(name=body.name.strip(), target_stack=stack)
     session.add(project)

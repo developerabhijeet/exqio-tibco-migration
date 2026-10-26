@@ -16,6 +16,10 @@ CACHE_DIR = Path(tempfile.gettempdir()) / "exiqo-ca"
 _COMMON = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem")
 
 
+class MirrorCAError(RuntimeError):
+    """The configured mirror CA cannot be used; a build must stop, not trust something else."""
+
+
 def system_bundle() -> Path | None:
     """The system CA file (OpenSSL's default location, else the usual distribution paths)."""
     paths = ssl.get_default_verify_paths()
@@ -32,7 +36,10 @@ def with_system_roots(mirror_ca: Path | str) -> str:
     system = system_bundle()
     if system is None:
         return str(ca)
-    data = system.read_bytes().rstrip(b"\n") + b"\n" + ca.read_bytes().rstrip(b"\n") + b"\n"
+    try:
+        data = system.read_bytes().rstrip(b"\n") + b"\n" + ca.read_bytes().rstrip(b"\n") + b"\n"
+    except OSError as exc:
+        raise MirrorCAError(f"MIRROR_CA_BUNDLE ({ca}) cannot be read: {exc.strerror or exc}") from exc
     target = CACHE_DIR / f"roots-{hashlib.sha256(data).hexdigest()[:16]}.pem"
     if not target.is_file():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)

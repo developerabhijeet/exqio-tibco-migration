@@ -393,7 +393,8 @@ def _conninfo(python_solution):
     src = _file(python_solution, "database.py").content
     body = src[src.index("def _sslmode"):src.index("CONNECT_TIMEOUT_S")]
     import os
-    scope = {"psycopg": psycopg, "urllib": urllib, "os": os}
+    import ssl
+    scope = {"psycopg": psycopg, "urllib": urllib, "os": os, "ssl": ssl}
     exec(body, scope)  # noqa: S102 - generated code under test
     return scope["conninfo"]
 
@@ -427,12 +428,18 @@ def test_verify_modes_read_the_system_roots_unless_a_root_is_given(python_soluti
 
     base = "Host=db.example;Database=x;Username=u;Password=p;"
     assert parse(base + "SSL Mode=Require")["sslrootcert"] == "system"
-    assert parse(base + "SSL Mode=VerifyCA")["sslrootcert"] == "system"
+    ca = parse(base + "SSL Mode=VerifyCA")["sslrootcert"]
+    assert ca != "system" and os.path.isfile(ca) or ca.endswith("ca-certificates.crt")  # a file, never "system"
+    monkeypatch.setenv("MIRROR_CA_BUNDLE", __file__)
+    assert parse(base + "SSL Mode=VerifyCA")["sslrootcert"] == __file__
+    monkeypatch.delenv("MIRROR_CA_BUNDLE")
     assert "sslrootcert" not in parse(base + "SSL Mode=Require;Trust Server Certificate=true")
     assert "sslrootcert" not in parse(base + "SSL Mode=Prefer")
     assert parse("Host=x.postgres.database.azure.com;Database=x;Username=u;Password=p")["sslrootcert"] == "system"
     assert parse("jdbc:postgresql://h/d?sslmode=verify-full")["sslrootcert"] == "system"
     assert "sslrootcert=system" in conninfo("postgresql://u:p@h/d?sslmode=verify-full")
+    assert "sslrootcert=system" not in conninfo("postgresql://u:p@h/d?sslmode=verify-ca")
+    assert "sslrootcert=" in conninfo("postgresql://u:p@h/d?sslmode=verify-ca")
     assert conninfo("postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=/ca.pem").count("sslrootcert") == 1
     monkeypatch.setenv("PGSSLROOTCERT", "/etc/db-ca.pem")  # libpq reads it itself
     assert "sslrootcert" not in parse(base + "SSL Mode=Require")
@@ -441,3 +448,16 @@ def test_verify_modes_read_the_system_roots_unless_a_root_is_given(python_soluti
 def test_401_never_echoes_the_jwt_library_error(python_solution):
     src = _file(python_solution, "auth.py").content
     assert 'detail="the bearer token is not valid"' in src and "invalid token: {ex}" not in src
+
+
+@pytest.mark.parametrize("mode", ["VerifyCA", "VerifyFull"])
+def test_libpq_accepts_the_verify_conninfo(python_solution, monkeypatch, mode):
+    """libpq's own parser: a closed port must fail as a connection error, not as a bad sslmode/sslrootcert."""
+    import psycopg
+    monkeypatch.delenv("PGSSLROOTCERT", raising=False)
+    info = _conninfo(python_solution)(f"Host=127.0.0.1;Port=1;Database=x;Username=u;Password=p;SSL Mode={mode}")
+    with pytest.raises(psycopg.OperationalError) as err:
+        psycopg.connect(info, connect_timeout=2)
+    msg = str(err.value).lower()
+    assert "weak sslmode" not in msg and "invalid" not in msg, msg
+    assert "refused" in msg or "connection" in msg
