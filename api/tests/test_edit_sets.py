@@ -412,3 +412,18 @@ def test_os_clutter_is_never_an_edit(tmp_path):
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text("x", encoding="utf-8")
     assert diff_tree(tmp_path, {}, {}, frozenset()) == []
+
+
+async def test_an_edit_set_iteration_queues_its_memory_revision(client, finished_build, monkeypatch):  # T5 M4
+    from api.app.services import memory_ingest
+
+    calls = []
+
+    async def record(*args, **kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(memory_ingest, "enqueue_ingest", record)
+    r = await post_edits(client, finished_build, edit(await download(client, finished_build), {AGENT_FILE: replace_body}))
+    assert r.status_code == 201, r.text
+    assert [(c["phase"], c["scope"], c["iteration"], c["source"]["iteration_id"]) for c in calls] == \
+        [("iteration", f"iteration:{r.json()['iteration']}", r.json()["iteration"], r.json()["iteration_id"])]

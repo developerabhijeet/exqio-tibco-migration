@@ -132,9 +132,12 @@ class Knowledge:
         return await self._read(work)
 
     # ------------------------------------------------------------ reads
-    async def retrieve_memory(self, project_id: str, query: str, k: int = 6) -> list[MemoryItem]:
-        """The ``k`` best current ``Memory`` nodes for ``query`` (obsolete ones left out)."""
-        hits = await self._read(lambda m: m.retrieve(project_id, query, labels=("Memory",), k=k))
+    async def retrieve_memory(self, project_id: str, query: str, k: int = 6,
+                              prefer_iteration: int | None = None) -> list[MemoryItem]:
+        """The ``k`` best current ``Memory`` nodes for ``query`` (obsolete ones left out); with
+        ``prefer_iteration``, that iteration's hits first (no score is boosted)."""
+        hits = await self._read(lambda m: m.retrieve(project_id, query, labels=("Memory",), k=k,
+                                                     prefer_iteration=prefer_iteration))
         return [item for h in hits if (item := memory_item(project_id, h)) is not None]
 
     async def ask(self, project_id: str, question: str, provider: Any = None) -> Answer:

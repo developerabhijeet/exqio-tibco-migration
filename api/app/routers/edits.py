@@ -26,6 +26,7 @@ from api.app.services import build as build_svc
 from api.app.services import edits as svc
 from api.app.services import gates as gate_svc
 from api.app.services import iterations as iteration_svc
+from api.app.services import memory_ingest
 from api.app.services.context import active_job
 from api.app.services.uploads import UploadError, UploadTooLarge
 
@@ -93,6 +94,10 @@ async def _upload(request: Request, session, settings, principal: Principal, bui
             raise
     finally:
         part.unlink(missing_ok=True)
+    iteration = await session.get(Iteration, row.iteration_id)
+    await memory_ingest.enqueue_iteration_ingest(  # the edit set's iteration revision (spec section 5)
+        request.app.state.sessionmaker, settings, project_id=project_id, iteration_id=iteration.id, n=iteration.n,
+        process_id=(iteration.process_ids or [None])[0], actor=principal.actor)
     return await _out(session, row)
 
 

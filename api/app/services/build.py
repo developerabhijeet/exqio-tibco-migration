@@ -602,7 +602,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log("nothing to write: every rule and branch test already has a body", tag="ai")
     else:
         try:
-            te_memory = await knowledge.retrieve_memory(project_id, f"{proc.name} tests")
+            te_memory = await knowledge.retrieve_memory(project_id, f"{proc.name} tests",
+                                                        prefer_iteration=iteration_ctx.n if iteration_ctx else None)
         except KnowledgeUnavailable as exc:
             te_memory = []
             await ctx.log(f"migration memory unavailable: {exc}")
@@ -647,7 +648,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     else:
         memory_items: list[Any] = []
         try:
-            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} mapping patterns")
+            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} mapping patterns",
+                                                           prefer_iteration=iteration_ctx.n if iteration_ctx else None)
         except KnowledgeUnavailable as exc:
             await ctx.log(f"migration memory unavailable: {exc}")
         # Every process in the solution, not only the one under review: a called sub-process is

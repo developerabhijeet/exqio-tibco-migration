@@ -246,13 +246,9 @@ async def open_iteration(process_id: str, request: Request, principal: OpenerDep
         raise HTTPException(status_code=503, detail=QUEUE_FAILED) from exc
     wake_local_workers(request.app.state.sessionmaker)
     # what the iteration brought in, as one memory revision of that iteration (no-op without Neo4j)
-    try:
-        await memory_ingest.enqueue_ingest(
-            request.app.state.sessionmaker, settings, project_id=process.project_id, phase="iteration",
-            scope=f"iteration:{row.n}", source={"iteration_id": row.id, "process_id": process_id},
-            actor=principal.actor, ingest_key=f"iteration:{row.id}", iteration=row.n)
-    except Exception:  # the iteration is open and designing: memory catches up on a re-ingest
-        log.exception("memory ingest of iteration %s not queued", row.id)
+    await memory_ingest.enqueue_iteration_ingest(  # no-op without Neo4j; never fails the open
+        request.app.state.sessionmaker, settings, project_id=process.project_id, iteration_id=row.id, n=row.n,
+        process_id=process_id, actor=principal.actor)
     return IterationOut.model_validate(row).model_copy(update={"job_id": job_id})
 
 

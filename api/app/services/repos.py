@@ -39,7 +39,7 @@ from api.app.connectors.registry import connector_for
 from api.app.db import new_id
 from api.app.jobs.locks import try_advisory_lock
 from api.app.jobs.runner import enqueue
-from api.app.models import AuditLog, Build, File, Process, ProjectRepo, Upload
+from api.app.models import AuditLog, Build, EditSet, File, Iteration, Process, ProjectRepo, Upload
 from api.app.services import edits as edits_svc
 from api.app.services import gates as gate_svc
 from api.app.services import github_push as github_push_svc
@@ -304,6 +304,17 @@ async def fetch(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     if out["kind"] == "upload":
         await enqueue(w.sessionmaker, "scan", {"project_id": row.project_id, "upload_id": out["id"]},
                       project_id=row.project_id)
+    if out["kind"] == "edit_set":  # the repository iteration's memory revision (spec section 5)
+        from api.app.services import (
+            memory_ingest,  # it imports the analysis service, which imports a lot
+        )
+
+        async with w.sessionmaker() as s:
+            es = await s.get(EditSet, out["id"])
+            it = await s.get(Iteration, es.iteration_id)
+        await memory_ingest.enqueue_iteration_ingest(w.sessionmaker, w.settings, project_id=row.project_id,
+                                                     iteration_id=it.id, n=it.n, process_id=row.process_id,
+                                                     actor=actor)
     if out["kind"] != "edit_set":  # an edit set's root_dir is the clone: it stays
         shutil.rmtree(tree, ignore_errors=True)
     return out

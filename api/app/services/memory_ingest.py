@@ -192,6 +192,21 @@ async def enqueue_ingest(sessionmaker: async_sessionmaker[AsyncSession], setting
                          process_id=source.get("process_id"))
 
 
+async def enqueue_iteration_ingest(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings, *,
+                                   project_id: str, iteration_id: str, n: int, process_id: str | None,
+                                   actor: str) -> str | None:
+    """Queue the ``iteration`` revision of an opened iteration (re-entry, edit set, repository
+    branch); never raises: an iteration that is open stays open, and a re-ingest catches up."""
+    try:
+        return await enqueue_ingest(sessionmaker, settings, project_id=project_id, phase="iteration",
+                                    scope=f"iteration:{n}",
+                                    source={"iteration_id": iteration_id, **({"process_id": process_id} if process_id else {})},
+                                    actor=actor, ingest_key=f"iteration:{iteration_id}", iteration=n)
+    except Exception:
+        log.exception("memory ingest of iteration %s not queued", iteration_id)
+        return None
+
+
 def seed_ingest_key() -> str:
     return f"seed:{hashlib.sha256(SEED_FILE.read_bytes()).hexdigest()[:12]}"
 

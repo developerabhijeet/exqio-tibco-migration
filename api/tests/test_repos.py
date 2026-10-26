@@ -364,3 +364,22 @@ async def test_a_refetch_never_touches_an_edit_set_folder(client, app, fake_gith
     again = await repos_svc.queue_fetch(app.state.sessionmaker, row, "main", "engineer.ravi")  # forced re-fetch of A
     assert (await wait_job(client, again))["status"] == "failed"
     assert root.is_dir() and (root / AGENT_FILE).read_text().endswith("// fixed by hand\n}\n")
+
+
+async def test_a_repository_iteration_queues_its_memory_revision(client, fake_github, finished_build, engineer,
+                                                                 edited_export, monkeypatch):  # T5 M4
+    from api.app.services import memory_ingest
+
+    calls = []
+
+    async def record(*args, **kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(memory_ingest, "enqueue_ingest", record)
+    fake_github.add_repo("gmf/svc", tree=await edited_export(finished_build, {AGENT_FILE: replace_body}))
+    r = await client.post(f"/projects/{P}/repos", headers=engineer,
+                          json={"repo": "gmf/svc", "branch": "main", "purpose": "build", "process_id": PROC})
+    out = await wait_terminal(client, r.json()["job_id"])
+    es = (await client.get(f"/edit-sets/{out['id']}")).json()
+    assert [(c["phase"], c["iteration"], c["source"]) for c in calls] == \
+        [("iteration", es["iteration"], {"iteration_id": es["iteration_id"], "process_id": PROC})]

@@ -107,7 +107,8 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         await ctx.log("migration memory not needed: no model will read it")
     else:
         try:
-            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} design decisions")
+            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} design decisions",
+                                                           prefer_iteration=iteration if iteration > 1 else None)
             await ctx.log(f"{len(memory_items)} prior decision(s) or pattern(s) from migration memory "
                           "passed to the designer")
         except KnowledgeUnavailable as exc:
