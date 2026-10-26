@@ -44,7 +44,7 @@ test.describe("personas", () => {
     }
     await page.getByTestId("user-menu").click();
     await expect(page.getByTestId("persona-viewer.val")).toContainText("read only");
-    await expect(page.getByRole("menuitemradio")).toHaveCount(6);
+    await expect(page.getByRole("group", { name: "Act as" }).getByRole("menuitemradio")).toHaveCount(6);
   });
 
   test("the menu says what each persona owns, and switching changes what is view only", async ({ page }) => {
@@ -71,4 +71,17 @@ test.describe("personas", () => {
     await expect(page.getByTestId("step-build")).not.toHaveAttribute("data-view-only", "true");
     await expect(page.getByTestId("step-design")).toHaveAttribute("data-view-only", "true");
   });
+});
+
+// The theme switch in the user menu: System by default (follows the OS), and an explicit choice is
+// kept over a reload, applied before first paint.
+test("theme follows the system and the choice persists", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(15, 11, 20)");
+  await page.getByTestId("user-menu").click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  await page.reload();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(250, 249, 247)");
 });

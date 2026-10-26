@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, LogIn, LogOut, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, LogIn, LogOut, Monitor, Moon, ShieldCheck, Sun } from "lucide-react";
 import { signOutOidc, type Principal } from "@/lib/auth";
 import { PERSONAS, personaOf, stepsOf, useActingPersona, type Persona } from "@/lib/personas";
 import { useSession } from "@/lib/signin";
 import { useAppState } from "@/lib/state";
 import { STEP_LABELS } from "@/lib/steps";
+import { useTheme, type ThemeChoice } from "@/lib/theme";
 import type { UserName } from "@/lib/types";
 
 /** "Design to Deploy", or just "Deploy" when the persona owns one step. */
@@ -70,47 +71,53 @@ export function UserMenu() {
         <SignedInMenu me={signedIn} persona={me} />
       ) : open ? (
         <div role="menu" className="card absolute right-0 top-14 z-50 w-[360px] overflow-hidden p-0 shadow-pop">
-          <p className="label border-b border-line bg-warm px-4 py-2.5">Act as</p>
-          {PERSONAS.map((p) => {
-            const mine = p.id === user;
-            return (
-              <button
-                key={p.id}
-                role="menuitemradio"
-                aria-checked={mine}
-                // The accessible name leads with the user id, so a caller that picks a persona by
-                // the name it sends as X-User finds it; the role and the summary are below, read.
-                aria-label={`${p.id}, ${p.role}`}
-                data-testid={`persona-${p.id}`}
-                type="button"
-                onClick={() => {
-                  setUser(p.id as UserName);
-                  setOpen(false);
-                }}
-                className={`flex w-full gap-3 border-b border-line/60 px-4 py-3 text-left transition-colors last:border-0 ${
-                  mine ? "bg-purple-lt" : "hover:bg-warm"
-                }`}
-              >
-                <span className="mt-0.5 w-4 shrink-0">
-                  {mine ? <Check size={16} className="text-purple" aria-hidden /> : null}
-                </span>
-                <span className="min-w-0">
-                  <span className="flex flex-wrap items-baseline gap-x-2">
-                    <span className={`text-[14px] font-semibold ${mine ? "text-purple" : "text-plum"}`}>{p.role}</span>
-                    <span className="font-mono text-[11.5px] text-slate">{p.id}</span>
+          <ThemeOptions />
+          <p id="user-menu-act-as" className="label border-b border-line bg-warm px-4 py-2.5">
+            Act as
+          </p>
+          {/* A group of its own, so the persona choices are told apart from the theme choices. */}
+          <div role="group" aria-labelledby="user-menu-act-as">
+            {PERSONAS.map((p) => {
+              const mine = p.id === user;
+              return (
+                <button
+                  key={p.id}
+                  role="menuitemradio"
+                  aria-checked={mine}
+                  // The accessible name leads with the user id, so a caller that picks a persona by
+                  // the name it sends as X-User finds it; the role and the summary are below, read.
+                  aria-label={`${p.id}, ${p.role}`}
+                  data-testid={`persona-${p.id}`}
+                  type="button"
+                  onClick={() => {
+                    setUser(p.id as UserName);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full gap-3 border-b border-line/60 px-4 py-3 text-left transition-colors last:border-0 ${
+                    mine ? "bg-purple-lt" : "hover:bg-warm"
+                  }`}
+                >
+                  <span className="mt-0.5 w-4 shrink-0">
+                    {mine ? <Check size={16} className="text-purple" aria-hidden /> : null}
                   </span>
-                  <span className="mt-0.5 block text-[12.5px] leading-snug text-slate">{p.responsibility}</span>
-                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px]">
-                    <span className="rounded-full bg-warm px-2 py-0.5 font-medium text-plum">{range(p)}</span>
-                    <span className="flex items-center gap-1 rounded-full bg-gate-bg px-2 py-0.5 font-medium text-gate">
-                      <ShieldCheck size={11} aria-hidden />
-                      {p.gates.join(", ")}
+                  <span className="min-w-0">
+                    <span className="flex flex-wrap items-baseline gap-x-2">
+                      <span className={`text-[14px] font-semibold ${mine ? "text-purple" : "text-plum"}`}>{p.role}</span>
+                      <span className="font-mono text-[11.5px] text-slate">{p.id}</span>
+                    </span>
+                    <span className="mt-0.5 block text-[12.5px] leading-snug text-slate">{p.responsibility}</span>
+                    <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+                      <span className="rounded-full bg-warm px-2 py-0.5 font-medium text-plum">{range(p)}</span>
+                      <span className="flex items-center gap-1 rounded-full bg-gate-bg px-2 py-0.5 font-medium text-gate">
+                        <ShieldCheck size={11} aria-hidden />
+                        {p.gates.join(", ")}
+                      </span>
                     </span>
                   </span>
-                </span>
-              </button>
-            );
-          })}
+                </button>
+              );
+            })}
+          </div>
           {/* The sign-in screen records which account was chosen on this browser. It decides
               nothing here: the role is the user's to pick either way. */}
           <div
@@ -162,6 +169,54 @@ export function UserMenu() {
   );
 }
 
+const THEMES: { id: ThemeChoice; label: string; Icon: typeof Sun }[] = [
+  { id: "system", label: "System", Icon: Monitor },
+  { id: "light", label: "Light", Icon: Sun },
+  { id: "dark", label: "Dark", Icon: Moon },
+];
+
+/**
+ * The theme switch at the top of either menu: System (the default, follows the operating system),
+ * Light or Dark, kept per browser. Picking one applies at once and leaves the menu open.
+ */
+function ThemeOptions() {
+  const { choice, setChoice } = useTheme();
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+      <span id="user-menu-theme" className="label">
+        Theme
+      </span>
+      {/* ARIA's owner for menu radio items is a group (a radiogroup owns plain radios). */}
+      <div
+        role="group"
+        aria-labelledby="user-menu-theme"
+        data-testid="theme-switch"
+        className="flex rounded-btn border border-line bg-sunken p-0.5"
+      >
+        {THEMES.map(({ id, label, Icon }) => {
+          const on = choice === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={on}
+              data-testid={`theme-${id}`}
+              onClick={() => setChoice(id)}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-fast ${
+                on ? "bg-surface text-heading shadow-e1" : "text-slate hover:text-heading"
+              }`}
+            >
+              <Icon size={13} aria-hidden />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * AUTH_MODE=oidc: who signed in with Entra ID and the roles their groups grant. There is no
  * switcher; a role is granted in Entra, not chosen here.
@@ -170,6 +225,7 @@ function SignedInMenu({ me, persona }: { me: Principal; persona: Persona }) {
   const [busy, setBusy] = useState(false);
   return (
     <div role="menu" className="card absolute right-0 top-14 z-50 w-[360px] overflow-hidden p-0 shadow-pop">
+      <ThemeOptions />
       <div className="border-b border-line px-4 py-3" data-testid="user-menu-identity">
         <p className="text-[14px] font-semibold text-plum">{me.name || me.upn}</p>
         <p className="break-all font-mono text-[11.5px] text-slate">{me.upn}</p>

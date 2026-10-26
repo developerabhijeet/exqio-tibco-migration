@@ -37,7 +37,7 @@ test.describe("sign-in (oidc)", () => {
     await expect(page.getByTestId("user-menu-identity")).toContainText("pat@gmf.example");
     await expect(page.getByTestId("user-menu-identity")).toContainText("engineer");
     await expect(page.getByTestId("user-menu-identity")).toContainText("qa");
-    await expect(page.getByRole("menuitemradio")).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Act as" }).getByRole("menuitemradio")).toHaveCount(0);
     await expect(page.getByTestId("persona-ops.sam")).toHaveCount(0);
   });
 
@@ -114,7 +114,7 @@ test.describe("sign-in (dev)", () => {
   test("without /auth/me the persona switcher stays", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("user-menu").click();
-    await expect(page.getByRole("menuitemradio")).toHaveCount(6);
+    await expect(page.getByRole("group", { name: "Act as" }).getByRole("menuitemradio")).toHaveCount(6);
     await expect(page.getByTestId("user-menu-identity")).toHaveCount(0);
   });
 });
