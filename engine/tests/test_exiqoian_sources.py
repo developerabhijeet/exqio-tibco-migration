@@ -174,3 +174,17 @@ async def test_a_failed_group_is_dropped_and_logged_but_all_failing_propagates(c
 def test_question_and_history_lose_their_markers_in_the_prompt():
     _, user = render_prompt("What is [S1]?", [], [("assistant", "It funds [S2].")], "sme", "c")
     assert "[S1]" not in user and "[S2]" not in user
+
+
+def test_prompt_masks_credentials_and_configured_fields() -> None:
+    """X24: sources, history and the question go through the shared mask (credentials plus the
+    deployment's configured sensitive fields), not a local copy."""
+    from engine import masking
+    masking.configure(["dealerPin"])
+    try:
+        _, user = render_prompt("password=hunter2 ok?", [src("S1", text="<dealerPin>4321</dealerPin> Authorization: Bearer abc.def")],
+                                [("user", "api_key=sk-123")], "sme", "c")
+    finally:
+        masking.configure([])
+    for secret in ("hunter2", "4321", "abc.def", "sk-123"):
+        assert secret not in user

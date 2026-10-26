@@ -25,7 +25,7 @@ from api.app.models import (
 )
 from api.app.services.gates import audit
 from api.app.services.knowledge import KnowledgeUnavailable
-from engine.agents.provider import mask_sensitive
+from engine import masking
 from engine.agents.routing import RoutedProvider
 from engine.citations.model import CitedText
 from engine.exiqoian.lexicon import Lexicon
@@ -203,7 +203,7 @@ def history_turns(messages: list[ChatMessage]) -> list[Turn]:
                 kept.pop()
             continue
         kept.append(m)
-    return [Turn(role=m.role, text=mask_sensitive(strip_markers(m.text) if m.role == "assistant" else m.text)[:HISTORY_CHARS])
+    return [Turn(role=m.role, text=masking.mask(strip_markers(m.text) if m.role == "assistant" else m.text)[:HISTORY_CHARS])
             for m in kept[-HISTORY_MESSAGES:]]
 
 
@@ -230,7 +230,7 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
     conv = await get_conversation(session, project_id, owner, conversation_id)
     prior = await list_messages(session, conv.id)
     started = time.monotonic()
-    masked = mask_sensitive(text)
+    masked = masking.mask(text)
     # Count and insert under the owner's lock, and commit the user row before the (slow) answer,
     # so concurrent requests see each other's slots and the 12 a minute cap holds.
     await check_rate(session, owner, lock=True)

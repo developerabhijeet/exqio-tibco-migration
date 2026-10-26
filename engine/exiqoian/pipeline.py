@@ -10,9 +10,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from engine import masking
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.prompting import ask_json
-from engine.agents.provider import ProviderError, mask_sensitive
+from engine.agents.provider import ProviderError
 from engine.agents.routing import RoutedProvider
 from engine.citations.model import CitedText, CiteRef
 from engine.citations.spans import from_markers, sentence_bounds
@@ -161,7 +162,7 @@ def validate_answer(answer: str, sources: list[Source], canary: str,
     that would be shown must itself pass the injection check."""
     if _leaks_prompt(answer, canary, system_prompt):
         return "injection", CitedText.plain(REPLY_FOR["injection"]), "output_leak"
-    cited, _dropped = from_markers(_trailing_markers(mask_sensitive(answer)), {s.marker: s.ref for s in sources})
+    cited, _dropped = from_markers(_trailing_markers(masking.mask(answer)), {s.marker: s.ref for s in sources})
     if not cited.refs:
         return "not_covered", CitedText.plain(REPLY_FOR["not_covered"]), "uncited"
     if detect_output_injection(cited.text) is not None:
@@ -179,7 +180,7 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
         if on_stage is not None:
             await on_stage(name)
 
-    question = mask_sensitive(question)
+    question = masking.mask(question)
     await stage("checking")
     guard = check(question, lexicon, has_context=bool(history))
     if guard.verdict is not None:
