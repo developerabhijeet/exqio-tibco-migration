@@ -19,7 +19,13 @@ from engine.citations.spans import from_markers, sentence_bounds
 from engine.exiqoian.guard import check
 from engine.exiqoian.personas import PersonaKey
 from engine.exiqoian.replies import REPLY_FOR, Verdict
-from engine.exiqoian.sources import Source, gather_sources, render_prompt, retrieval_query
+from engine.exiqoian.sources import (
+    Source,
+    gather_sources,
+    render_prompt,
+    retrieval_query,
+    strip_markers,
+)
 from engine.memory.search import MemoryRetriever
 
 ANSWER_MAX_TOKENS = 900
@@ -37,7 +43,6 @@ COMPOSER_CHARS = 240
 _LEAK_TAG = re.compile(r"<\s*/?\s*(?:source|history|question|system)", re.IGNORECASE)
 _FIRST_SENTENCE = re.compile(r"^.*?\.(?=\s|$)", re.DOTALL)
 _LEADING_MARKERS = re.compile(r"\s*((?:\[S\d+(?:\s*,\s*S\d+)*\]\s*)+)")
-_MARKER_ANY = re.compile(r"\s*\[S\d+(?:\s*,\s*S\d+)*\]")
 
 
 class Turn(BaseModel):
@@ -61,7 +66,7 @@ def _fixed(verdict: Verdict, rule: str | None = None, *, used_model: bool = Fals
 
 
 def _first_sentence(text: str, limit: int = COMPOSER_CHARS) -> str:
-    flat = " ".join(_MARKER_ANY.sub("", text).split())
+    flat = " ".join(strip_markers(text).split())
     m = _FIRST_SENTENCE.match(flat)
     return (m.group().rstrip(".!? ") if m else flat)[:limit].rstrip()
 
