@@ -51,6 +51,9 @@ async def second_scanned(memory_client, memory_app) -> str:
     delta = ScopedDelta(scope="estate", nodes=[MemNode(
         label="Process", uid=OTHER_UID, name="Isolation B", text=OTHER_TEXT,
         props={"module": "b"})])
+    # POST /projects queues the seed ingest (revision 1); applying beside it, outside the ingest's
+    # per-project lock, would race it for revision 1 (Revision.rid is unique)
+    await wait_ingests(memory_app, pid)
     await apply(memory_app.state.memory, "b-1", delta, project=pid)
     return pid
 
