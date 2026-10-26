@@ -15,7 +15,12 @@
   "control_only_defects": 1,
   "counterfactual": false,
   "report_hash": "fixture-hash",
-  "noise_rules": [{ "path_glob": "*At", "reason": "timestamps differ run to run" }],
+  "noise_rules": [
+    {
+      "path_glob": "*At",
+      "reason": "timestamps differ run to run"
+    }
+  ],
   "reports": [
     {
       "scenario_id": "FundingStatusLookup:happy",
@@ -28,19 +33,147 @@
       "unconfirmed_intended": 1,
       "control_only_defects": 1,
       "fields": [
-        { "path": "output.status", "expected": 200, "actual": 200, "status": "match", "finding_id": null },
-        { "path": "output.body.dealId", "expected": "DL-50001", "actual": "DL-50001", "status": "match", "finding_id": null },
-        { "path": "output.body.amount", "expected": "31500.00", "actual": "31500.00", "status": "match", "finding_id": null },
-        { "path": "output.body.dealerName", "expected": "Lakeside Motors", "actual": "Lakeside Motors", "status": "match", "finding_id": null },
-        { "path": "output.body.currency", "expected": "USD", "actual": "USD", "status": "match", "finding_id": null },
-        { "path": "output.body.status", "expected": "FUNDED", "actual": "PENDING", "status": "defect", "finding_id": null },
+        {
+          "path": "output.status",
+          "expected": 200,
+          "actual": 200,
+          "status": "match",
+          "finding_id": null
+        },
+        {
+          "path": "output.body.dealId",
+          "expected": "DL-50001",
+          "actual": "DL-50001",
+          "status": "match",
+          "finding_id": null
+        },
+        {
+          "path": "output.body.amount",
+          "expected": "31500.00",
+          "actual": "31500.00",
+          "status": "match",
+          "finding_id": null
+        },
+        {
+          "path": "output.body.dealerName",
+          "expected": "Lakeside Motors",
+          "actual": "Lakeside Motors",
+          "status": "match",
+          "finding_id": null
+        },
+        {
+          "path": "output.body.currency",
+          "expected": "USD",
+          "actual": "USD",
+          "status": "match",
+          "finding_id": null
+        },
+        {
+          "path": "output.body.status",
+          "expected": "FUNDED",
+          "actual": "PENDING",
+          "status": "defect",
+          "finding_id": null,
+          "cited": {
+            "text": "output.body.status: expected \"FUNDED\", got \"PENDING\".",
+            "spans": [
+              {
+                "start": 0,
+                "end": 52,
+                "refs": [
+                  "c1"
+                ]
+              }
+            ],
+            "refs": [
+              {
+                "id": "c1",
+                "phase": "verify",
+                "kind": "test",
+                "label": "happy path",
+                "preview": "Scenario run happy path: differs, parity 67%",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "verify",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              }
+            ]
+          }
+        },
         {
           "path": "output.body.dealerId",
           "expected": "d10021",
           "actual": "D10021",
           "status": "intended",
           "finding_id": "S2-trim-dealer",
-          "confirmed": false
+          "confirmed": false,
+          "cited": {
+            "text": "output.body.dealerId: expected \"d10021\", got \"D10021\".",
+            "spans": [
+              {
+                "start": 0,
+                "end": 53,
+                "refs": [
+                  "c1",
+                  "c2"
+                ]
+              }
+            ],
+            "refs": [
+              {
+                "id": "c1",
+                "phase": "verify",
+                "kind": "test",
+                "label": "happy path",
+                "preview": "Scenario run happy path: differs, parity 67%",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "verify",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              },
+              {
+                "id": "c2",
+                "phase": "validate",
+                "kind": "finding",
+                "label": "S2-trim-dealer",
+                "preview": "Finding S2-trim-dealer, decided Fix at G2",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "validate",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              }
+            ]
+          }
         },
         {
           "path": "output.body.dealerRegion",
@@ -48,12 +181,116 @@
           "actual": "UNKNOWN",
           "status": "defect",
           "finding_id": "S2-trim-dealer",
-          "via": "control"
+          "via": "control",
+          "cited": {
+            "text": "output.body.dealerRegion: expected \"MIDWEST\", got \"UNKNOWN\".",
+            "spans": [
+              {
+                "start": 0,
+                "end": 59,
+                "refs": [
+                  "c1",
+                  "c2"
+                ]
+              }
+            ],
+            "refs": [
+              {
+                "id": "c1",
+                "phase": "verify",
+                "kind": "test",
+                "label": "happy path",
+                "preview": "Scenario run happy path: differs, parity 67%",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "verify",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              },
+              {
+                "id": "c2",
+                "phase": "validate",
+                "kind": "finding",
+                "label": "S2-trim-dealer",
+                "preview": "Finding S2-trim-dealer, touched through a branch decision",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "validate",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              }
+            ]
+          }
         },
-        { "path": "output.body.fundedAt", "expected": "2026-09-02T10:00:00Z", "actual": "2026-09-02T10:00:01Z", "status": "noise", "finding_id": null }
+        {
+          "path": "output.body.fundedAt",
+          "expected": "2026-09-02T10:00:00Z",
+          "actual": "2026-09-02T10:00:01Z",
+          "status": "noise",
+          "finding_id": null,
+          "cited": {
+            "text": "output.body.fundedAt: expected \"2026-09-02T10:00:00Z\", got \"2026-09-02T10:00:01Z\".",
+            "spans": [
+              {
+                "start": 0,
+                "end": 81,
+                "refs": [
+                  "c1"
+                ]
+              }
+            ],
+            "refs": [
+              {
+                "id": "c1",
+                "phase": "verify",
+                "kind": "test",
+                "label": "happy path",
+                "preview": "Scenario run happy path: differs, parity 67%",
+                "memory_uid": null,
+                "revision": null,
+                "verified": null,
+                "reason": null,
+                "target": {
+                  "kind": "step",
+                  "step": "verify",
+                  "process_id": null,
+                  "activity_id": null,
+                  "path": null,
+                  "line": null,
+                  "uid": null,
+                  "hash": null
+                }
+              }
+            ]
+          }
+        }
       ],
       "side_effects": [
-        { "path": "message_published[funding.status][0].dealId", "expected": "DL-50001", "actual": "DL-50001", "status": "match", "finding_id": null }
+        {
+          "path": "message_published[funding.status][0].dealId",
+          "expected": "DL-50001",
+          "actual": "DL-50001",
+          "status": "match",
+          "finding_id": null
+        }
       ]
     },
     {
@@ -64,7 +301,15 @@
       "status": "match",
       "parity": 1.0,
       "unexplained": 0,
-      "fields": [{ "path": "output.status", "expected": 404, "actual": 404, "status": "match", "finding_id": null }],
+      "fields": [
+        {
+          "path": "output.status",
+          "expected": 404,
+          "actual": 404,
+          "status": "match",
+          "finding_id": null
+        }
+      ],
       "side_effects": []
     }
   ]

@@ -20,6 +20,7 @@ import { ProcessPicker } from "@/components/tabs/ProcessPicker";
 import { JiraIssues, questionCandidates } from "@/components/connectors/JiraIssues";
 import { DesignConnectorPanels } from "@/components/connectors/PublishConfluence";
 import { shortKey } from "@/components/tabs/validate/FindingCard";
+import { CitedText } from "@/components/citations/CitedText";
 import { ConfigTable } from "./ConfigTable";
 import { DecisionList, OpenQuestions } from "./DecisionList";
 import { MappingTable } from "./MappingTable";
@@ -195,7 +196,11 @@ export function DesignTab() {
               </div>
 
               <Panel title="Narrative" eyebrow={narrativeEyebrow} testId="design-narrative">
-                {rec.narrative ? (
+                {rec.narrative_cited ? (
+                  <p className="text-base leading-relaxed text-ink" data-testid="narrative-text">
+                    <CitedText value={rec.narrative_cited} />
+                  </p>
+                ) : rec.narrative ? (
                   <div className="space-y-2 text-base leading-relaxed text-ink">
                     {rec.narrative.split(/\n{2,}/).map((p, i) => (
                       <p key={i} className="whitespace-pre-wrap">

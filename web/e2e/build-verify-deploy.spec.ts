@@ -278,7 +278,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await expect(rows).toHaveCount(13);
   await expect(rows.filter({ hasText: "Compilable .NET" })).toHaveAttribute("data-status", restoreOk ? /^(met|partial)$/ : "partial");
   await expect(rows.filter({ hasText: "Reference estate" })).toHaveAttribute("data-status", "met");
-  await expect(rows.first().getByTestId("evidence-link").first()).toBeVisible();
+  await expect(rows.first().getByTestId("cite-chip").first()).toBeVisible();
 
   await page.getByRole("link", { name: "History" }).click();
   await expect(page.getByTestId("history-timeline")).toContainText("build");
@@ -361,17 +361,21 @@ test("the parity table shows a committed fixture: 70 %, one defect, one control-
   await expect(defects).toHaveCount(2);
   const defect = defects.filter({ hasText: "output.body.status" });
   await expect(defect).toHaveCount(1);
+  // The note is the cited difference sentence: a chip for the scenario run, and one for the finding
+  // when a finding explains it (no separate finding link).
+  const finding = '[data-testid="cite-chip"][data-phase="validate"]';
   await expect(defect.getByTestId("finding-pill")).toHaveCount(0);
+  await expect(defect.locator(finding)).toHaveCount(0);
+  await expect(defect.getByTestId("parity-note").locator('[data-testid="cite-chip"][data-phase="verify"]')).toHaveCount(1);
   const controlOnly = defects.filter({ hasText: "output.body.dealerRegion" });
-  await expect(controlOnly.getByTestId("finding-pill")).toHaveText("S2");
-  await expect(controlOnly.getByTestId("finding-pill")).toHaveAttribute(
-    "title",
-    "touched only through a branch decision by this finding; not accepted as intended without a TIBCO sandbox run",
-  );
+  await expect(controlOnly.getByTestId("finding-pill")).toHaveCount(0);
+  await expect(controlOnly.locator(finding)).toHaveAttribute("aria-label", /S2-trim-dealer/);
   const intended = rows.and(page.locator('[data-status="intended"]'));
   await expect(intended).toHaveCount(1);
   await expect(intended.getByTestId("unconfirmed-pill")).toHaveText("not confirmed");
   await expect(intended).toContainText("d10021");
-  await expect(intended).toContainText("S2");
+  await expect(intended.locator(finding)).toHaveAttribute("aria-label", /S2-trim-dealer/);
+  // A match no finding explains carries no citation.
+  await expect(rows.and(page.locator('[data-status="match"]')).getByTestId("cite-chip")).toHaveCount(0);
   await expect(rows.and(page.locator('[data-status="noise"]'))).toHaveCount(1);
 });

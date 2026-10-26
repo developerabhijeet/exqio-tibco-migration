@@ -84,7 +84,7 @@ export function DeployTab() {
             hint="Operations approves the plan, or the acknowledged connect-later state."
           />
           {buildId ? <PlanView buildId={buildId} stream={stream} onPlanJob={watch} /> : null}
-          <SecurityPanel buildId={buildId} />
+          <SecurityPanel buildId={buildId} processId={processId} />
           <AzureConnectForm
             projectId={projectId}
             onConnectLater={connectLater}

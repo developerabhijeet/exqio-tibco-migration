@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, RotateCcw, X } from "lucide-react";
+import { CitedText } from "@/components/citations/CitedText";
 import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { useBuildReviews, useDecideAllReviews, useDecideReview } from "@/lib/buildQueries";
@@ -52,7 +53,10 @@ const TRIAGE: Record<string, { tone: "gate" | "decision" | "det" | "error"; text
  * Each finding takes a verdict. Keeping one hands it to the next build, which asks the model for a
  * diff that applies it and rolls that diff back unless the solution still compiles and every test
  * that passed still passes; rejecting one records that it was read and dismissed. Nothing here
- * edits code directly: the build is the only thing that writes. */
+ * edits code directly: the build is the only thing that writes.
+ *
+ * A finding's text carries its file and line as a chip (opening the code viewer at that line), so
+ * the separate file:line label shows only for a payload without `cited`. */
 export function ReviewPanel({ buildId, builder }: { buildId: string; builder: BuilderResult | null }) {
   const reviews = useBuildReviews(buildId);
   const decide = useDecideReview(buildId);
@@ -65,6 +69,7 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
       title="Review panel"
       eyebrow="Equivalence, security, standards"
       testId="review-panel"
+      id="review"
       actions={
         list.length > 0 ? (
           <span className="flex flex-wrap items-center gap-2">
@@ -123,14 +128,16 @@ export function ReviewPanel({ buildId, builder }: { buildId: string; builder: Bu
                 <div className="flex flex-wrap items-center gap-2">
                   <Pill tone="ai">{r.reviewer}</Pill>
                   <Pill tone={t.tone}>{t.text}</Pill>
-                  {r.file ? (
+                  {r.file && !r.cited ? (
                     <span className="font-mono text-xs text-slate">
                       {r.file}
                       {r.line ? `:${r.line}` : ""}
                     </span>
                   ) : null}
                 </div>
-                <p className="mt-1.5 text-ink">{r.text}</p>
+                <p className="mt-1.5 text-ink" data-testid="review-text">
+                  {r.cited ? <CitedText value={r.cited} /> : r.text}
+                </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line/60 pt-2">
                   <button
                     type="button"

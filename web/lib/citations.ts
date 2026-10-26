@@ -9,11 +9,37 @@ import { STEP_KEYS, useAppState, type StepKey } from "./state";
 
 export * from "./citations-model";
 
+/** How long a hash target waits for its panel to render before giving up. */
+const REVEAL_TIMEOUT_MS = 10_000;
+
+/**
+ * Scroll to the element `hash` names ("#tests") once it has rendered, and focus it so keyboard
+ * and screen reader users land there too (a panel that takes no focus gets tabIndex -1). The
+ * element may not exist yet: the step it lives on mounts after the navigation.
+ */
+export function revealHash(hash: string): void {
+  const id = hash.replace(/^#/, "");
+  if (!id || typeof window === "undefined") return;
+  const started = Date.now();
+  const tick = () => {
+    const el = document.getElementById(id);
+    if (!el) {
+      if (Date.now() - started < REVEAL_TIMEOUT_MS) window.setTimeout(tick, 100);
+      return;
+    }
+    el.scrollIntoView({ block: "start" });
+    if (el.tabIndex < 0 && !el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+    el.focus({ preventScroll: true });
+  };
+  window.setTimeout(tick, 0);
+}
+
 /**
  * Go where a citation points. activity: the step on the Discover canvas with its XML; step: that
- * phase of the process; file: the generated file in Build's source and target explorer; memory:
- * the node in the memory explorer. Off the main screen (on /memory, say) the main screen is opened
- * on the step afterwards.
+ * phase of the process, scrolled to its `hash` panel when it names one; file: the generated file
+ * in Build's source and target explorer, at `line` when it has one; memory: the node in the memory
+ * explorer; page: a screen that is no phase (/settings, /history), at its `hash`. Off the main
+ * screen (on /memory, say) the main screen is opened on the step afterwards.
  */
 export function useCiteNavigate(): (target: CiteTarget) => void {
   const { jumpToStep, openProcess, setStep, openBuildFile } = useAppState();
@@ -25,8 +51,12 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
         router.push(target.uid ? `/memory?uid=${encodeURIComponent(target.uid)}` : "/memory");
         return;
       }
-      // TODO(SP4 Task 10, ruling X18): route `page` targets to `path` (+ `hash`) and append a step
-      // target's `hash`; today a page target falls through to the step branch below.
+      const hash = target.hash ? `#${target.hash.replace(/^#/, "")}` : "";
+      if (target.kind === "page") {
+        router.push(`${target.path || "/"}${hash}`);
+        if (hash) revealHash(hash);
+        return;
+      }
       let step: StepKey;
       if (target.kind === "activity" && target.activity_id) {
         jumpToStep(target.activity_id, target.process_id);
@@ -44,8 +74,9 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
       if (pathname !== "/") {
         const q = new URLSearchParams({ step });
         if (target.process_id) q.set("process", target.process_id);
-        router.push(`/?${q.toString()}`);
+        router.push(`/?${q.toString()}${hash}`);
       }
+      if (hash) revealHash(hash);
     },
     [jumpToStep, openProcess, setStep, openBuildFile, router, pathname],
   );

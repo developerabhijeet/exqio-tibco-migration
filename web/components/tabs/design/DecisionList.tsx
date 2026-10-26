@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, MessageSquareReply, RotateCcw, X } from "lucide-react";
+import { CitedText } from "@/components/citations/CitedText";
 import { Pill } from "@/components/ui/Pill";
 import { useAnswerDesignQuestion } from "@/lib/queries";
 import type { DesignRecord } from "@/lib/types";
@@ -10,17 +11,21 @@ import type { DesignRecord } from "@/lib/types";
 const NOT_A_DECISION = /\s*A recommendation, not a decision[^.]*\.?\s*$/i;
 const NOT_A_DECISION_PREFIX = /^\s*(A )?recommendation, not a decision:\s*/i;
 
-/** Design decisions with the alternatives that were weighed and the reason for the choice. */
+/** Design decisions with the alternatives that were weighed and the reason for the choice.
+ *
+ * With `cited` (the API's "<choice>. <reason>", masked) the reason follows the choice in one cited
+ * run, a chip after each sentence that names an activity, rule, finding, table or queue; without
+ * it, the choice and the reason are shown as they are. */
 export function DecisionList({ decisions }: { decisions: DesignRecord["decisions"] }) {
   if (decisions.length === 0) return <p className="text-md text-slate">No design decisions recorded.</p>;
   return (
     <ul className="space-y-3">
       {decisions.map((d, i) => (
-        <li key={i} className="rounded-btn border border-line p-3">
+        <li key={i} className="rounded-btn border border-line p-3" data-testid="design-decision">
           <p className="font-semibold text-heading">{d.title}</p>
-          <p className="mt-1 text-md">
+          <p className="mt-1 text-md" data-testid="decision-text">
             <span className="label mr-1.5">Choice</span>
-            {d.choice}
+            {d.cited ? <CitedText value={d.cited} /> : d.choice}
           </p>
           {d.alternatives.length > 0 ? (
             <p className="mt-1 text-md text-slate">
@@ -28,10 +33,12 @@ export function DecisionList({ decisions }: { decisions: DesignRecord["decisions
               {d.alternatives.join("; ")}
             </p>
           ) : null}
-          <p className="mt-1 text-md text-ink">
-            <span className="label mr-1.5">Reason</span>
-            {d.reason}
-          </p>
+          {d.cited ? null : (
+            <p className="mt-1 text-md text-ink">
+              <span className="label mr-1.5">Reason</span>
+              {d.reason}
+            </p>
+          )}
         </li>
       ))}
     </ul>

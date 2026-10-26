@@ -150,3 +150,56 @@ export function segments(ct: CitedText): Segment[] {
   plain(pos, total);
   return out;
 }
+
+const CLOSING = ".!?";
+const isSpace = (c: string) => /\s/u.test(c);
+
+/**
+ * Sentence bounds in code points, trimmed of surrounding whitespace and including the closing
+ * punctuation: engine/citations/spans.py `sentence_bounds` (a sentence ends at a run of `.!?`
+ * followed by whitespace or the end, or at a newline).
+ */
+export function sentenceBounds(text: string | readonly string[]): [number, number][] {
+  const chars = typeof text === "string" ? codePoints(text) : text;
+  const out: [number, number][] = [];
+  const add = (a: number, b: number) => {
+    while (a < b && isSpace(chars[a])) a++;
+    while (b > a && isSpace(chars[b - 1])) b--;
+    if (a < b) out.push([a, b]);
+  };
+  let start = 0;
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] === "\n") {
+      add(start, i);
+      start = i + 1;
+    } else if (CLOSING.includes(chars[i])) {
+      let j = i;
+      while (j < chars.length && CLOSING.includes(chars[j])) j++;
+      if (j === chars.length || isSpace(chars[j])) {
+        add(start, j);
+        start = j;
+      }
+      i = j - 1;
+    }
+  }
+  add(start, chars.length);
+  return out;
+}
+
+/**
+ * Every ref on the last sentence, its closing punctuation left out of the span, ids renumbered
+ * `c1..cn`: engine/citations/claims.py `tail`, for claims the web assembles itself (the Deploy
+ * security checks). No refs gives plain text; refs on text with no sentence throw, as in Python.
+ */
+export function tail(text: string, refs: CiteRef[]): CitedText {
+  if (refs.length === 0) return { text, spans: [], refs: [] };
+  const chars = codePoints(text);
+  const bounds = sentenceBounds(chars);
+  if (bounds.length === 0) throw new Error("cannot anchor citations on empty text");
+  const [a, b] = bounds[bounds.length - 1];
+  let e = b;
+  while (e > a && CLOSING.includes(chars[e - 1])) e--;
+  while (e > a && isSpace(chars[e - 1])) e--;
+  const renumbered = refs.map((r, i) => ({ ...r, id: `c${i + 1}` }));
+  return { text, spans: [{ start: a, end: e > a ? e : b, refs: renumbered.map((r) => r.id) }], refs: renumbered };
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import dynamic from "next/dynamic";
 import { Crosshair, FileCode2 } from "lucide-react";
 import { Pill } from "@/components/ui/Pill";
@@ -37,7 +38,8 @@ export function OriginPill({ origin, testId }: { origin: string; testId?: string
   );
 }
 
-/** The selected generated file: path, origin, the TIBCO steps it implements, then the code. */
+/** The selected generated file: path, origin, the TIBCO steps it implements, then the code, at
+ * `line` when one is asked for. */
 export function CodeViewer({
   buildId,
   entry,
@@ -45,6 +47,7 @@ export function CodeViewer({
   testId = "code-viewer",
   showRef = true,
   height = 520,
+  line = null,
 }: {
   buildId: string;
   entry: BuildFileEntry | null;
@@ -53,9 +56,13 @@ export function CodeViewer({
   /** false when the caller shows the TIBCO steps itself (the source and target explorer). */
   showRef?: boolean;
   height?: number;
+  /** A 1-based line to highlight and scroll to (a citation chip's file and line). */
+  line?: number | null;
 }) {
   const { jumpToStep, processId } = useAppState();
   const file = useBuildFile(buildId, entry?.path ?? null);
+  // Memoised: a new object each render would scroll the editor back to the line every time.
+  const highlight = useMemo(() => (line && line > 0 ? { start: line, end: line, focus: line } : null), [line]);
   if (!entry) {
     return (
       <div
@@ -123,6 +130,7 @@ export function CodeViewer({
           value={file.data.content}
           language={monacoLanguage(file.data.language, entry.path)}
           height={height}
+          highlight={highlight}
           testId={`${testId}-editor`}
         />
       ) : file.isLoading ? (

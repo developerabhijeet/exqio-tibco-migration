@@ -1,5 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { codePointLength, codePoints, segments, sliceCodePoints, type CiteRef, type CitedText } from "../lib/citations-model";
+import {
+  codePointLength,
+  codePoints,
+  segments,
+  sentenceBounds,
+  sliceCodePoints,
+  tail,
+  type CiteRef,
+  type CitedText,
+} from "../lib/citations-model";
 
 // The shared cited-text model, without a browser: span offsets from the server are code points
 // (Python indices), so an emoji or other astral character before a span must not shift it. The
@@ -163,4 +172,29 @@ test("sliceCodePoints takes a pre-split text", () => {
   const chars = codePoints("a😀b");
   expect(sliceCodePoints(chars, 1, 2)).toBe("😀");
   expect(sliceCodePoints(chars, 2)).toBe("b");
+});
+
+// Expected values are what engine/citations (sentence_bounds, claims.tail) returns for the same text.
+const TAIL_CASES: [string, [number, number][], [number, number]][] = [
+  ["Every endpoint requires a bearer token.", [[0, 39]], [0, 38]],
+  ["😀 First one. Second?!", [[0, 12], [13, 21]], [13, 19]],
+  ["No closing", [[0, 10]], [0, 10]],
+  ["A.\nB line\n", [[0, 2], [3, 9]], [3, 9]],
+  ["Ends with dots...  ", [[0, 17]], [0, 14]],
+  ["v1.2 is fine. Next.", [[0, 13], [14, 19]], [14, 18]],
+];
+
+test("tail puts every ref on the last sentence without its closing punctuation, as the Python tail", () => {
+  for (const [text, bounds, [start, end]] of TAIL_CASES) {
+    expect(sentenceBounds(text), text).toEqual(bounds);
+    const ct = tail(text, [ref("z", "deploy"), ref("y", "deploy")]);
+    expect(ct.spans, text).toEqual([{ start, end, refs: ["c1", "c2"] }]);
+    expect(ct.refs.map((r) => r.id)).toEqual(["c1", "c2"]);
+    expect(ct.text).toBe(text);
+  }
+  expect(tail("Plain.", [])).toEqual({ text: "Plain.", spans: [], refs: [] });
+  expect(() => tail("   ", [ref("a")])).toThrow();
+  // Rendered, the whole check sentence is one cited run followed by its chip.
+  const parts = segments(tail("Tokens are validated, not trusted.", [ref("a", "deploy")]));
+  expect(parts.map((p) => [p.text, p.refs.length])).toEqual([["Tokens are validated, not trusted", 1], [".", 0]]);
 });

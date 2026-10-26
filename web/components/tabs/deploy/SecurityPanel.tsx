@@ -8,7 +8,9 @@
  * Program.cs, a Terraform unit in the generated infrastructure, the test run, the review panel or
  * the parity report. A control this build produced no evidence for is left out of the panel
  * altogether rather than counted as met; one that ran and failed is always shown. The ring is
- * therefore only ever as green as the evidence behind it.
+ * therefore only ever as green as the evidence behind it. The evidence is a chip at the end of the
+ * check's sentence (built with `tail`, as the API builds its claims): its preview is the evidence
+ * as read, and it opens where it was read from (the line in the generated file, or the panel).
  */
 import { ChevronRight, ShieldCheck } from "lucide-react";
 import { Panel } from "@/components/tabs/build/Panel";
@@ -23,6 +25,8 @@ import {
   useParity,
 } from "@/lib/buildQueries";
 import { useIdentity } from "@/lib/identity";
+import { tail, type CiteRef, type CiteTarget } from "@/lib/citations";
+import { CitedText } from "@/components/citations/CitedText";
 
 type State = "met" | "unmet" | "unknown";
 
@@ -37,6 +41,8 @@ interface Check {
   source: string;
   /** The evidence itself: a line of generated code, a unit name, a count. */
   evidence?: string | null;
+  /** Where the evidence opens, and the chip's name for it. */
+  at?: { label: string; target: CiteTarget };
 }
 
 const TONE: Record<State, "gate" | "error" | "det"> = { met: "gate", unmet: "error", unknown: "det" };
@@ -47,6 +53,22 @@ function lineWith(text: string | undefined, needle: string): string | null {
   if (!text) return null;
   const line = text.split("\n").find((l) => l.includes(needle));
   return line ? line.trim() : null;
+}
+
+/** The 1-based number of that line, or null. */
+function lineNo(text: string | undefined, needle: string): number | null {
+  if (!text) return null;
+  const i = text.split("\n").findIndex((l) => l.includes(needle));
+  return i >= 0 ? i + 1 : null;
+}
+
+/** The check's sentence with its evidence as one chip at the end; plain without evidence. */
+function citedCheck(check: Check) {
+  const refs: CiteRef[] =
+    check.evidence && check.at
+      ? [{ id: "c1", phase: "deploy", kind: "evidence", label: check.at.label, preview: check.evidence, target: check.at.target }]
+      : [];
+  return tail(check.title, refs);
 }
 
 function has(text: string | undefined, needle: string): State {
@@ -95,10 +117,19 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
 
 function Row({ check }: { check: Check }) {
   return (
-    <details className="group/chk border-b border-line last:border-0">
+    <details className="group/chk border-b border-line last:border-0" data-testid="security-check" data-key={check.key}>
       <summary className="flex cursor-pointer list-none items-center gap-2 py-2.5">
         <ChevronRight size={14} className="shrink-0 text-slate transition-transform group-open/chk:rotate-90" aria-hidden />
-        <span className="min-w-0 flex-1 text-md text-ink">{check.title}</span>
+        {/* A click on the chip goes to the evidence; it must not also open or close the row. */}
+        <span
+          className="min-w-0 flex-1 text-md text-ink"
+          data-testid="security-check-text"
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('[data-testid="cite-chip"]')) e.preventDefault();
+          }}
+        >
+          <CitedText value={citedCheck(check)} />
+        </span>
         <Pill tone={TONE[check.state]}>{LABEL[check.state]}</Pill>
       </summary>
       <div className="pb-3 pl-[22px] text-sm text-slate">
@@ -106,9 +137,6 @@ function Row({ check }: { check: Check }) {
         <p className="mt-1">
           <span className="label">Read from</span> {check.source}
         </p>
-        {check.evidence ? (
-          <pre className="mt-1 overflow-x-auto rounded bg-page p-2 font-mono text-xs text-ink">{check.evidence}</pre>
-        ) : null}
       </div>
     </details>
   );
@@ -205,7 +233,7 @@ function RequestPath() {
   );
 }
 
-export function SecurityPanel({ buildId }: { buildId: string | null }) {
+export function SecurityPanel({ buildId, processId = null }: { buildId: string | null; processId?: string | null }) {
   const { config } = useIdentity();
   const files = useBuildFiles(buildId);
   const program = files.data?.files.find((f) => f.path.endsWith("Program.cs"))?.path ?? null;
@@ -224,6 +252,19 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
   const openSecurity = (reviews.data ?? []).filter((r) => r.reviewer === "security" && r.decision !== "reject");
   const summary = tests.data?.summary;
   const authority = config.instance.trim() && config.audience.trim();
+  const programName = program?.split("/").pop() ?? "Program.cs";
+  const maskingPath = files.data?.files.find((f) => f.path.endsWith("Masking.cs"))?.path ?? null;
+  // Evidence read from a line of the generated Program.cs opens the code viewer at that line.
+  const inProgram = (needle: string) => {
+    const line = lineNo(code, needle);
+    return program
+      ? { label: line ? `${programName}:${line}` : programName, target: { kind: "file" as const, step: "build" as const, process_id: processId, path: program, line } }
+      : undefined;
+  };
+  const panel = (label: string, step: "build" | "verify", hash: string) => ({
+    label,
+    target: { kind: "step" as const, step, process_id: processId, hash },
+  });
 
   const checks: Check[] = [
     {
@@ -234,6 +275,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: has(code, "MapControllers().RequireAuthorization()"),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
       evidence: lineWith(code, "MapControllers().RequireAuthorization()"),
+      at: inProgram("MapControllers().RequireAuthorization()"),
     },
     {
       key: "health",
@@ -243,6 +285,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: has(code, 'MapHealthChecks("/health").AllowAnonymous()'),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
       evidence: lineWith(code, "MapHealthChecks"),
+      at: inProgram("MapHealthChecks"),
     },
     {
       key: "jwt",
@@ -254,6 +297,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       evidence: authority
         ? `${lineWith(code, "AddJwtBearer") ?? "AddJwtBearer"}\n${config.instance}  ·  audience ${config.audience}`
         : lineWith(code, "AddJwtBearer"),
+      at: inProgram("AddJwtBearer"),
     },
     {
       key: "vault",
@@ -265,6 +309,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
         : code.includes("AddAzureKeyVault") && unit("key_vault") === "met" ? "met" : "unmet",
       source: "the generated service and the key_vault unit of the generated infrastructure",
       evidence: lineWith(code, "AddAzureKeyVault"),
+      at: inProgram("AddAzureKeyVault"),
     },
     {
       key: "identity",
@@ -274,6 +319,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: unit("identity"),
       source: "the identity unit of the generated infrastructure",
       evidence: infraPaths?.find((p) => p.includes("/identity/")) ?? null,
+      at: panel("identity unit", "build", "#infra"),
     },
     {
       key: "masking",
@@ -282,7 +328,10 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       what: "Account numbers and similar values are masked before a log line or a fault message leaves the service.",
       state: masking,
       source: "the generated Masking helper",
-      evidence: files.data?.files.find((f) => f.path.endsWith("Masking.cs"))?.path ?? null,
+      evidence: maskingPath,
+      at: maskingPath
+        ? { label: "Masking.cs", target: { kind: "file", step: "build", process_id: processId, path: maskingPath } }
+        : undefined,
     },
     {
       key: "review",
@@ -296,6 +345,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
         : openSecurity.length === 0
           ? "no open finding from the security reviewer"
           : `${openSecurity.length} open finding(s): ${openSecurity.map((r) => r.text).slice(0, 3).join(" · ")}`,
+      at: panel("review panel", "build", "#review"),
     },
     {
       key: "tests",
@@ -305,6 +355,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: !summary || summary.total === 0 ? "unknown" : summary.passed === summary.total ? "met" : "unmet",
       source: "the test run of this build",
       evidence: summary ? `${summary.passed} passed, ${summary.failed} failed, ${summary.total} in total` : null,
+      at: panel("test run", "build", "#tests"),
     },
     {
       key: "parity",
@@ -316,6 +367,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       evidence: parity.data
         ? `${parity.data.matched} of ${parity.data.compared} fields match, ${parity.data.unexplained} unexplained`
         : null,
+      at: panel("parity report", "verify", "#parity"),
     },
     {
       key: "infra",
@@ -331,6 +383,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       evidence: infra.data?.validation?.modules
         ? `${infra.data.validation.modules.filter((m) => m.validate_ok).length} of ${infra.data.validation.modules.length} units valid`
         : null,
+      at: panel("infrastructure validation", "build", "#infra"),
     },
   ];
 

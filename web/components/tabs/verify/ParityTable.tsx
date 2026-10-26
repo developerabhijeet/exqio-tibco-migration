@@ -8,6 +8,7 @@ import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { shortKey } from "@/components/tabs/validate/FindingCard";
 import { Panel } from "@/components/tabs/build/Panel";
+import { CitedText } from "@/components/citations/CitedText";
 import { JiraIssues, parityCandidates } from "@/components/connectors/JiraIssues";
 
 const STATUS: Record<string, { tone: "gate" | "error" | "decision" | "det"; text: string }> = {
@@ -28,6 +29,9 @@ function show(v: unknown): string {
   return typeof v === "string" ? v : JSON.stringify(v);
 }
 
+/** One row per compared field. A difference's note is its cited sentence (masked), with chips for
+ * the scenario run and the finding that explains it; a payload without `cited` keeps the finding
+ * link in the status cell instead. A match no finding explains has nothing to cite. */
 function DiffRows({ rows }: { rows: FieldDiff[] }) {
   const { setStep } = useAppState();
   return (
@@ -47,7 +51,7 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
                     not confirmed
                   </Pill>
                 ) : null}
-                {(f.status === "intended" || f.status === "defect") && f.finding_id ? (
+                {!f.cited && (f.status === "intended" || f.status === "defect") && f.finding_id ? (
                   <button
                     type="button"
                     data-testid="finding-pill"
@@ -63,6 +67,9 @@ function DiffRows({ rows }: { rows: FieldDiff[] }) {
                   </button>
                 ) : null}
               </span>
+            </td>
+            <td className="break-words px-3 py-1.5 text-xs text-ink" data-testid="parity-note">
+              {f.cited ? <CitedText value={f.cited} /> : null}
             </td>
           </tr>
         );
@@ -89,20 +96,21 @@ function ScenarioCard({ r }: { r: ScenarioReport }) {
         <p className="px-3 py-2 text-sm text-error">{r.error ?? "the scenario did not run"}</p>
       ) : (
         <div className="table-scroll">
-          <table className="table min-w-[680px] table-fixed text-sm">
+          <table className="table min-w-[900px] table-fixed text-sm">
             <thead>
               <tr className="text-left text-2xs uppercase tracking-wide text-slate">
-                <th className="w-[34%] px-3 py-1.5">Field</th>
-                <th className="w-[24%] px-3 py-1.5">Expected (TIBCO model)</th>
-                <th className="w-[24%] px-3 py-1.5">Actual (.NET service)</th>
-                <th className="px-3 py-1.5">Status</th>
+                <th className="w-[24%] px-3 py-1.5">Field</th>
+                <th className="w-[16%] px-3 py-1.5">Expected (TIBCO model)</th>
+                <th className="w-[16%] px-3 py-1.5">Actual (.NET service)</th>
+                <th className="w-[13%] px-3 py-1.5">Status</th>
+                <th className="px-3 py-1.5">Note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               <DiffRows rows={fields} />
               {effects.length > 0 ? (
                 <tr>
-                  <td colSpan={4} className="bg-sunken px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-slate">
+                  <td colSpan={5} className="bg-sunken px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-slate">
                     Side effects: rows written and messages published
                   </td>
                 </tr>

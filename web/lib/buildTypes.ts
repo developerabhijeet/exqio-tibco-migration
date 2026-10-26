@@ -1,4 +1,5 @@
 // Shapes of the Build, Verify, Deploy, Settings, History and Readiness routes (Task 19 API).
+import type { CitedText } from "./citations-model";
 import type { Gate } from "./types";
 
 export interface BuildSummary {
@@ -178,6 +179,9 @@ export interface ReviewFinding {
   note?: string | null;
   /** The build that acted on a kept finding, once one has. */
   applied_in?: string | null;
+  /** The text with a chip for its file and line (and named activities). `cited.text` is the
+   * MASKED text and is what is rendered; null on a finding with no text. */
+  cited?: CitedText | null;
 }
 
 export interface InfraFile {
@@ -237,6 +241,9 @@ export interface FieldDiff {
   confirmed?: boolean;
   /** "control" on a defect a Fix finding touches only through a branch decision; it stays a defect (newer API). */
   via?: "control" | string;
+  /** "<path>: expected <e>, got <a>." plus its note, with chips for the scenario run and the
+   * finding. MASKED (values of sensitive fields never show); absent on a match no finding explains. */
+  cited?: CitedText | null;
 }
 
 export interface ScenarioReport {
@@ -549,6 +556,9 @@ export interface ReadinessRow {
   status: "met" | "partial" | "missing" | string;
   evidence: { kind: string; ref: string; label: string }[];
   gap: string | null;
+  /** "<expectation>: <status>; <gap>." with one chip per evidence item on it. MASKED; rendered
+   * instead of the evidence list. */
+  cited?: CitedText | null;
 }
 
 export interface ReadinessView {

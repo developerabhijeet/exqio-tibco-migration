@@ -226,6 +226,8 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
   const [selected, setSelected] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [note, setNote] = useState<string | null>(null);
+  // The line a citation asked for in a generated file; it holds while that file stays selected.
+  const [cited, setCited] = useState<{ path: string; line: number } | null>(null);
   // The step to highlight in the TIBCO source, and a TIBCO file opened on its own (no generated file of it).
   const [activity, setActivity] = useState<string | null>(null);
   const [manualSource, setManualSource] = useState<string | null>(null);
@@ -277,6 +279,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     if (buildFile.processId && buildFile.processId !== process.id) return;
     if (list.some((f) => f.path === buildFile.path)) {
       setSelected(buildFile.path);
+      setCited(buildFile.line && buildFile.line > 0 ? { path: buildFile.path, line: buildFile.line } : null);
       setActivity(null);
       setManualSource(null);
       setNote(null);
@@ -441,6 +444,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
           entry={entry}
           showRef={false}
           height={PANE_HEIGHT}
+          line={cited && cited.path === selected ? cited.line : null}
           testId="code-viewer"
           empty={
             manualSource

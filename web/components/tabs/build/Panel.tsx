@@ -23,7 +23,7 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section id={id} className={`card scroll-mt-4 ${className}`} data-testid={testId}>
+    <section id={id} className={`card scroll-mt-[calc(var(--pinned-h,0px)+6rem)] ${className}`} data-testid={testId}>
       <div className="card-header">
         <div className="min-w-0">
           {eyebrow ? <p className="label">{eyebrow}</p> : null}

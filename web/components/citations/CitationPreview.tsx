@@ -80,6 +80,10 @@ function MemoryRevision({ refItem }: { refItem: CiteRef }) {
   return null;
 }
 
+/** A preview that is an excerpt read from the build (a line of generated code, a unit path, a
+ * count), shown in mono as it was read: code refs, and the Deploy checks' evidence. */
+const excerpt = (r: CiteRef) => r.kind === "code" || (r.kind === "evidence" && r.phase === "deploy");
+
 export function CitationPreview({
   refItem,
   anchor,
@@ -216,7 +220,14 @@ export function CitationPreview({
         {refItem.label}
       </p>
       {refItem.preview ? (
-        <p className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-slate">{refItem.preview}</p>
+        <p
+          data-testid="cite-preview-text"
+          className={`mt-1 break-words leading-relaxed text-slate ${
+            excerpt(refItem) ? "whitespace-pre-wrap font-mono text-xs" : "whitespace-pre-line text-sm"
+          }`}
+        >
+          {refItem.preview}
+        </p>
       ) : null}
       {unverified ? (
         <p

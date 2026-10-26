@@ -399,7 +399,15 @@ export interface DesignRecord {
   messaging: { kind: string; name: string; direction: string }[];
   resilience: { resource_id: string; timeout_ms?: number | null; retry?: unknown; breaker?: unknown }[];
   sequence: { from_?: string; from?: string; to: string; label: string }[];
-  decisions: { title: string; choice: string; alternatives: string[]; reason: string }[];
+  decisions: {
+    title: string;
+    choice: string;
+    alternatives: string[];
+    reason: string;
+    /** "<choice>. <reason>" with a chip for each activity, rule, finding, table or queue it names.
+     * MASKED, and what is rendered when present. */
+    cited?: CitedText | null;
+  }[];
   /** Diagrams derived by code from the record and the process; never drawn by a model. */
   views?: {
     classes: {
@@ -440,6 +448,8 @@ export interface DesignRecord {
   }[];
   expected_differences: { finding_id: string; description: string }[];
   narrative: string | null;
+  /** The narrative with chips for what it names; MASKED, rendered when present. */
+  narrative_cited?: CitedText | null;
   design_hash: string;
 }
 
