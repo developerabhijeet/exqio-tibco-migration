@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import re
+import threading
 import warnings
 from typing import Any
 
@@ -54,8 +55,29 @@ def _processor() -> Any:
     if _saxon_processor is None:
         from saxonche import PySaxonProcessor
 
+        if threading.current_thread() is not threading.main_thread():
+            warnings.warn("SaxonC processor created off the main thread; call xslt.warm_up() at startup "
+                          "or the GraalVM isolate aborts the process at exit", RuntimeWarning, stacklevel=2)
         _saxon_processor = PySaxonProcessor(license=False)
     return _saxon_processor
+
+
+def warm_up() -> bool:
+    """Create the shared SaxonC processor now, on the main thread.
+
+    SaxonC-HE is a GraalVM native image: the isolate is bound to the thread that creates the
+    first PySaxonProcessor. Created on a worker thread (the evaluator runs under
+    ``asyncio.to_thread``), the process dies at exit with a GraalVM "StackOverflowError: Enabling
+    the yellow zone..." fatal error (exit 99). Created on the main thread it is safe to use from
+    any thread. Returns True when the processor exists afterwards; off the main thread, or
+    without saxonche, it does nothing and returns False (unless it already existed).
+    """
+    if _saxon_processor is not None:
+        return True
+    if threading.current_thread() is not threading.main_thread() or not _saxon_available():
+        return False
+    _processor()
+    return True
 
 
 # --- tib: function bridge -------------------------------------------------------

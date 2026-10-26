@@ -57,6 +57,7 @@ from api.app.services.memory_ingest import open_memory
 from api.app.services.memory_migrate import MIGRATE_KIND, legacy_pending
 from api.app.services.settings import apply_stored, load_stored
 from api.app.services.verify import clear_stale_runs
+from engine.parity import xslt
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ def _create_api(settings: Settings) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        xslt.warm_up()  # SaxonC's GraalVM isolate must be created on the main thread
         engine = make_engine(settings.database_url)
         sessionmaker = make_sessionmaker(engine)
         fernet, fernet_generated = make_fernet(settings)

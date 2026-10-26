@@ -40,6 +40,7 @@ from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
 from api.app.services.memory_ingest import open_memory
 from api.app.services.settings import apply_stored, load_stored
+from engine.parity import xslt
 
 log = logging.getLogger("api.app.worker")
 
@@ -104,6 +105,7 @@ async def run(settings: Settings) -> None:
     if not settings.internal_token:
         raise RuntimeError("INTERNAL_TOKEN (or INTERNAL_TOKEN_FILE) is required in role worker: the API "
                            "pods authenticate to this worker's internal listener with it")
+    xslt.warm_up()  # SaxonC's GraalVM isolate must be created on the main thread
     engine = make_engine(settings.database_url)
     sessionmaker = make_sessionmaker(engine)
     fernet, _ = make_fernet(settings)
