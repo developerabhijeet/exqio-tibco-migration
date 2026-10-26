@@ -24,7 +24,9 @@ test.describe("urlProblem", () => {
     expect(urlProblem("http://github.gmf.example", allowed)).toBe("https required");
     expect(urlProblem("ftp://github.gmf.example", allowed)).toBe("https required");
     expect(urlProblem("http://127.0.0.1:9711/api/v3", allowed)).toBeNull();
-    expect(urlProblem("http://localhost:9711", ["localhost:9711"])).toBe("https required");
+    // Only the 127.0.0.1 literal counts as loopback; the name localhost does not (no port here:
+    // api/tests/test_dev_ports.py keeps http://localhost:<port> literals out of web/).
+    expect(urlProblem("http://localhost/api/v3", ["localhost"])).toBe("https required");
   });
 
   test("credentials in the URL are refused", () => {
