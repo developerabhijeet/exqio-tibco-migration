@@ -46,6 +46,9 @@ interface AppState {
   /** Open a step on the canvas with its XML lines, remembering the step to come back to. */
   jumpToStep: (activityId: string, processId?: string | null) => void;
   returnTo: StepKey | null;
+  /** A generated file asked for (by a citation, say), opened by Build's source and target explorer. */
+  buildFile: { path: string; line: number | null } | null;
+  openBuildFile: (path: string | null, line?: number | null) => void;
   askOpen: boolean;
   setAskOpen: (open: boolean) => void;
 }
@@ -80,6 +83,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("Config");
   const [returnTo, setReturnTo] = useState<StepKey | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  const [buildFile, setBuildFile] = useState<{ path: string; line: number | null } | null>(null);
+  const openBuildFile = useCallback((path: string | null, line?: number | null) => {
+    setBuildFile(path ? { path, line: line ?? null } : null);
+  }, []);
   const processRef = useRef<string | null>(null);
   useEffect(() => {
     processRef.current = processId;
@@ -231,6 +238,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setInspectorTab,
       jumpToStep,
       returnTo,
+      buildFile,
+      openBuildFile,
       askOpen,
       setAskOpen,
     }),
@@ -251,6 +260,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       inspectorTab,
       jumpToStep,
       returnTo,
+      buildFile,
+      openBuildFile,
       askOpen,
     ],
   );

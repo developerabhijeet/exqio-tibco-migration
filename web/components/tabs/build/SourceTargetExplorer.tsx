@@ -216,7 +216,7 @@ function StepChips({
  * on the canvas opens the file that implements it.
  */
 export function SourceTargetExplorer({ buildId, process }: { buildId: string; process: ProcessSummary }) {
-  const { projectId, nodeId, selectNode } = useAppState();
+  const { projectId, nodeId, selectNode, buildFile, openBuildFile } = useAppState();
   const design = useDesign(process.id);
   const sources = useFiles(projectId);
   const processes = useProcesses(projectId);
@@ -269,6 +269,20 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
       setNote(`No generated file names step ${nodeId}: it maps to shared code or has no mapping row.`);
     }
   }, [nodeId, list, process.ir_id, design.data]);
+
+  // A generated file asked for from elsewhere (a citation chip) opens once the files arrive.
+  useEffect(() => {
+    if (!buildFile || list.length === 0) return;
+    if (list.some((f) => f.path === buildFile.path)) {
+      setSelected(buildFile.path);
+      setActivity(null);
+      setManualSource(null);
+      setNote(null);
+    } else {
+      setNote(`${buildFile.path} is not in this build.`);
+    }
+    openBuildFile(null);
+  }, [buildFile, list, openBuildFile]);
 
   const openSource = (f: FileEntry) => {
     const p = procByPath.get(f.path);
