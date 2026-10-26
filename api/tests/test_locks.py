@@ -95,3 +95,23 @@ async def test_cancelled_waiter_leaves_no_lock(app):
     async with asyncio.timeout(2):
         async with advisory_lock(sm, "scenario"):
             pass
+
+
+def test_a_second_pytest_run_on_the_same_test_database_stops():
+    """This session holds the test database's lock; a second run against it exits naming this one
+    rather than resetting schema ``api`` under this session's tests."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from api.tests.conftest import TEST_DSN
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "api/tests/test_db_urls.py::test_psycopg_url_translates_every_asyncpg_ssl_mode[disable]"],
+        cwd=repo, env={**os.environ, "TEST_DATABASE_URL": TEST_DSN}, capture_output=True, text=True,
+        timeout=120, check=False)
+    assert proc.returncode == 3, proc.stdout[-800:] + proc.stderr[-800:]
+    assert f"pid {os.getpid()}" in proc.stdout + proc.stderr

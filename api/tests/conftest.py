@@ -30,6 +30,43 @@ from api.tests.fakes.jira import FakeJira
 TEST_DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localhost:5432/exiqo_test")
 
 
+def _db_lock_path(dsn: str) -> Path:
+    """The per-machine lock file of one test database (host, port and name, not the password)."""
+    import tempfile
+    from urllib.parse import urlsplit
+
+    url = urlsplit(dsn)
+    key = f"{url.hostname or 'localhost'}-{url.port or 5432}-{url.path.lstrip('/') or 'postgres'}"
+    return Path(tempfile.gettempdir()) / f"exiqo-pytest-{key}.lock"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _one_session_per_test_database():
+    """Every API test drops and recreates schema ``api`` of ``TEST_DATABASE_URL``. Two pytest runs on
+    one database (a second checkout that left ``TEST_DATABASE_URL`` unset falls back to the same
+    ``exiqo_test``) wipe each other's rows mid-test: jobs, processes and rules then come back 404.
+    The second run stops here instead, naming the first."""
+    import fcntl
+
+    path = _db_lock_path(TEST_DSN)
+    handle = open(path, "a+")  # noqa: SIM115  held for the whole session
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.seek(0)
+        holder = handle.read().strip() or "another pytest run"
+        handle.close()
+        pytest.exit(f"test database {TEST_DSN.rsplit('@', 1)[-1]} is in use by {holder}: set "
+                    "TEST_DATABASE_URL to a database of this checkout's own (ending in _test)", returncode=3)
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"pid {os.getpid()} in {os.getcwd()}\n")
+    handle.flush()
+    yield
+    fcntl.flock(handle, fcntl.LOCK_UN)
+    handle.close()
+
+
 CONNECTOR_SECRET_VARS = ("GITHUB_TOKEN", "ATLASSIAN_TOKEN", "ATLASSIAN_USER", "FIGMA_TOKEN")
 
 
