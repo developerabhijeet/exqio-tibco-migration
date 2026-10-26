@@ -31,4 +31,6 @@ def test_web_prerequisites_exist():
               "web/app/memory/page.tsx"):
         assert (REPO_ROOT / p).exists(), f"missing prerequisite {p} (sub-project 2 or 3 not done)"
     src = (REPO_ROOT / "web/lib/citations.ts").read_text()
-    assert "useCiteNavigate" in src and "sliceCodePoints" in src
+    model = (REPO_ROOT / "web/lib/citations-model.ts").read_text()  # re-exported by citations.ts
+    assert "useCiteNavigate" in src and 'export * from "./citations-model"' in src
+    assert "export function sliceCodePoints" in model
