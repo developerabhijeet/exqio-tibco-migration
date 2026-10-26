@@ -18,6 +18,7 @@ import { ValidationPanel } from "./ValidationPanel";
 import { ScanProgress } from "./ScanProgress";
 import { ParseReportTable, ReportCounters, UnknownsPanel } from "./ParseReport";
 import { RepoPanel } from "@/components/iterations/RepoPanel";
+import { ExpertRulesCard } from "./ExpertRulesCard";
 
 export function UploadTab() {
   const { projectId, scan, watchScan, openProcess, setStep } = useAppState();
@@ -80,6 +81,7 @@ export function UploadTab() {
       ) : null}
       <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
       <RepoPanel purpose="estate" />
+      <ExpertRulesCard />
       {upload.isPending ? (
         <p className="flex items-center gap-2 text-md text-slate">
           <Loader2 size={16} className="animate-spin" aria-hidden /> Uploading

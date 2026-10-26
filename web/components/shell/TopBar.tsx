@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardCheck, Coins, Headphones, History, MoreHorizontal, Network, Settings } from "lucide-react";
+import { ChevronDown, ClipboardCheck, Coins, Headphones, History, MoreHorizontal, Network, ScrollText, Settings } from "lucide-react";
 import { useBrand } from "@/lib/brand";
 import { useStepStates } from "@/lib/steps";
 import { ExiQoianLauncher } from "@/components/exiqoian/ExiQoianLauncher";
@@ -15,6 +15,7 @@ const LINKS = [
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/history", label: "History", icon: History },
   { href: "/memory", label: "Memory", icon: Network },
+  { href: "/rules", label: "Rules", icon: ScrollText },
   { href: "/tokenomics", label: "Tokenomics", icon: Coins },
   { href: "/readiness", label: "Readiness", icon: ClipboardCheck },
   { href: "/help", label: "Help & Support", icon: Headphones },
