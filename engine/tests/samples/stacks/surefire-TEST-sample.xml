@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.gmf.gmfcredit.DealerFundingRequestRulesTests" tests="3" failures="1" errors="0" skipped="1">
+  <testcase name="r1_dealerMustBeActive" classname="com.gmf.gmfcredit.DealerFundingRequestRulesTests" time="0.012"/>
+  <testcase name="r2_amountWithinLimit" classname="com.gmf.gmfcredit.DealerFundingRequestRulesTests" time="0.004">
+    <failure message="expected: &lt;true&gt; but was: &lt;false&gt;" type="org.opentest4j.AssertionFailedError">trace</failure>
+  </testcase>
+  <testcase name="r3_pending" classname="com.gmf.gmfcredit.DealerFundingRequestRulesTests" time="0.0">
+    <skipped message="no test body"/>
+  </testcase>
+</testsuite>

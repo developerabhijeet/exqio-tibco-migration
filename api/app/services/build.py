@@ -81,6 +81,7 @@ from engine.dotnet_gen.trx import BRANCH_SUFFIX, RULES_SUFFIX, SCENARIO_SUFFIX, 
 from engine.infra_gen.generator import generate_infra
 from engine.infra_gen.validators import validate_infra
 from engine.parity.models import Scenario as EngineScenario
+from engine.stacks.testindex import INDEX_PATH, IndexEntry
 
 STAGES = ["design check", "generate", "tests", "test engineer", "builder", "review", "restore", "build", "format", "test",
           "repair", "infra", "infra validate", "metrics", "persist"]
@@ -240,9 +241,20 @@ def _cs_literal(lit: str) -> str:
         return lit.strip('"')
 
 
-def test_inventory(files: list[GenFile], app_name: str) -> list[dict[str, Any]]:
-    """Every generated ``[Fact]`` with its rule, branch or scenario id and whether it has a body."""
+def test_inventory(files: list[GenFile], app_name: str, stack: str = "dotnet") -> list[dict[str, Any]]:
+    """Every generated ``[Fact]`` with its rule, branch or scenario id and whether it has a body.
+
+    Other stacks carry the same facts in ``.exiqo/test-index.json`` (written with the project)."""
     out: list[dict[str, Any]] = []
+    if stack != "dotnet":
+        for f in files:
+            if f.path != INDEX_PATH:
+                continue
+            for e in (IndexEntry.model_validate(d) for d in json.loads(f.content)):
+                out.append({"name": e.name, "display_name": e.display_name or e.name, "kind": e.kind,
+                            "rule_key": e.rule_id, "ref": e.branch_id or e.scenario_id, "file": e.path or None,
+                            "has_body": e.has_body, "outcome": "not_run", "message": None, "duration_ms": None})
+        return out
     for f in files:
         name = Path(f.path).stem
         if not f.path.startswith("tests/") or not name.endswith((RULES_SUFFIX, BRANCH_SUFFIX, SCENARIO_SUFFIX)):

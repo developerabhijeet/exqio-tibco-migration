@@ -1,0 +1,10 @@
+{"Action":"run","Package":"gmfcredit","Test":"TestRulesR1"}
+{"Action":"output","Package":"gmfcredit","Test":"TestRulesR1","Output":"=== RUN   TestRulesR1\n"}
+{"Action":"pass","Package":"gmfcredit","Test":"TestRulesR1","Elapsed":0.01}
+{"Action":"run","Package":"gmfcredit","Test":"TestRulesR2"}
+{"Action":"run","Package":"gmfcredit","Test":"TestRulesR2/sub_case"}
+{"Action":"fail","Package":"gmfcredit","Test":"TestRulesR2/sub_case","Elapsed":0}
+{"Action":"output","Package":"gmfcredit","Test":"TestRulesR2","Output":"    r2_test.go:9: amount too high\n"}
+{"Action":"fail","Package":"gmfcredit","Test":"TestRulesR2","Elapsed":0.02}
+{"Action":"skip","Package":"gmfcredit","Test":"TestRulesR3","Elapsed":0}
+{"Action":"fail","Package":"gmfcredit","Elapsed":0.05}

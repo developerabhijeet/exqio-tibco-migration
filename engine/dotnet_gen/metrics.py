@@ -104,7 +104,8 @@ def accuracy(values: dict[str, float | None], compile_ok: bool) -> tuple[float |
 
 
 def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: BuildResult,
-                    format_ok: bool, infra_ok: bool | None, process: str | None = None) -> Metrics:
+                    format_ok: bool, infra_ok: bool | None, process: str | None = None,
+                    source_files: int | None = None) -> Metrics:
     """Metrics per spec 2.5 from the approved rules, the IR branch count and the runner results.
 
     ``build.files`` (C# files counted by ``DotnetRunner.build``) is the standards denominator.
@@ -131,7 +132,7 @@ def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: 
     passing_branches = {c.branch_id for c in test_run.cases if c.branch_id and c.outcome == "passed" and mine(c)}
     covered_branches = min(len(passing_branches), branches)
 
-    files = max(build.files, 0)
+    files = max(build.files if source_files is None else source_files, 0)
     if not format_ok:
         standards = 0.0
     elif files:
@@ -145,7 +146,7 @@ def compute_metrics(rules: list[Rule], branches: int, test_run: TestRun, build: 
         "branch_coverage": f"{covered_branches} of {branches} IR branches have a passing test",
         "code_coverage": ("no coverage report" if test_run.coverage_line is None
                           else f"{test_run.coverage_line:.1%} of lines covered"),
-        "standards_adherence": (f"{build.warnings} warnings over {files} C# files; dotnet format "
+        "standards_adherence": (f"{build.warnings} warnings over {files} {'C#' if source_files is None else 'source'} files; dotnet format "
                                 f"{'passed' if format_ok else 'failed'}"),
         "compile": f"{'pass' if build.ok else 'fail'}, {build.warnings} warnings, {len(build.errors)} errors",
         "infra_validity": "not run" if infra_ok is None else ("pass" if infra_ok else "fail"),
