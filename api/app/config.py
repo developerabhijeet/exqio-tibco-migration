@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     connectors: str = ""
     connector_secret_names: str = ""
     connectors_allow_insecure_loopback: bool = False  # tests and local fakes only: http://127.0.0.1
+    # PEM bundle the connectors verify TLS against (GMF's private CA); empty: SSL_CERT_FILE, else certifi
+    connectors_ca_bundle: str = ""
     github_token: str = ""
     atlassian_token: str = ""
     atlassian_user: str = ""

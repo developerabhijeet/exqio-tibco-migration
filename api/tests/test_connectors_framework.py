@@ -11,11 +11,13 @@ import pytest
 from fastapi import Depends, FastAPI
 from sqlalchemy import select
 
+from api.app.connectors import registry
 from api.app.connectors.audit import audit_connector
-from api.app.connectors.base import ConnectorError, HostNotAllowed
+from api.app.connectors.base import ConnectorDisabled, ConnectorError, HostNotAllowed
 from api.app.connectors.config import load_install, secret, validate_app
-from api.app.connectors.http import ConnectorClient, redact
+from api.app.connectors.http import ConnectorClient, redact, ssl_context
 from api.app.connectors.links import links_for, upsert_link
+from api.app.connectors.registry import BaseConnector, get_connector
 from api.app.deps import require_roles
 from api.app.main import create_app
 from api.app.models import Application, AuditLog, Process, Project, Upload
@@ -388,3 +390,189 @@ async def test_require_roles_messages(client_oidc):
         assert r.status_code == 403 and r.json()["detail"] == "this needs one of: architect, admin"
         assert (await c.post("/probe", headers=as_roles("architect"))).status_code == 200
         assert (await c.post("/probe", headers=as_roles("admin"))).status_code == 200
+
+
+# ------------------------------------------------------------------ review fixes (round 1)
+
+
+def _ca_and_leaf(tmp_path):
+    """A private CA (like GMF's) and a server certificate it signed for 127.0.0.1."""
+    import datetime as dt
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    now = dt.datetime.now(dt.UTC)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "GMF Test Root CA")])
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name).public_key(ca_key.public_key())
+          .serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(minutes=5))
+          .not_valid_after(now + dt.timedelta(days=1))
+          .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+          .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True,
+                                       content_commitment=False, key_encipherment=False,
+                                       data_encipherment=False, key_agreement=False, encipher_only=False,
+                                       decipher_only=False), critical=True)
+          .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+          .sign(ca_key, hashes.SHA256()))
+    key = ec.generate_private_key(ec.SECP256R1())
+    leaf = (x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]))
+            .issuer_name(ca_name).public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+                           critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                           critical=False)
+            .sign(ca_key, hashes.SHA256()))
+    ca_pem = tmp_path / "gmf-ca.pem"
+    ca_pem.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    cert_pem = tmp_path / "server.pem"
+    cert_pem.write_bytes(leaf.public_bytes(serialization.Encoding.PEM) + key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return ca_pem, cert_pem
+
+
+@pytest.fixture
+def tls_server(tmp_path):
+    """An https server on 127.0.0.1 whose certificate only the private CA verifies."""
+    import ssl
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    ca_pem, cert_pem = _ca_and_leaf(tmp_path)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            return
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert_pem)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host = f"127.0.0.1:{httpd.server_address[1]}"
+    yield f"https://{host}", host, str(ca_pem)
+    httpd.shutdown()
+    httpd.server_close()
+
+
+async def test_private_ca_bundle_is_trusted(tls_server, monkeypatch):
+    url, host, ca = tls_server
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    r = await ConnectorClient(url, [host], dict, ca_bundle=ca).request("GET", "/")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    with pytest.raises(ConnectorError, match="(?i)certificate"):  # certifi alone does not know the CA
+        await ConnectorClient(url, [host], dict).request("GET", "/")
+
+
+async def test_ssl_cert_file_is_the_default_bundle(tls_server, monkeypatch):
+    url, host, ca = tls_server
+    monkeypatch.setenv("SSL_CERT_FILE", ca)
+    assert (await ConnectorClient(url, [host], dict).request("GET", "/")).status_code == 200
+
+
+def test_ca_bundle_setting_reaches_the_client(settings, tmp_path):
+    ca_pem, _ = _ca_and_leaf(tmp_path)
+    s = settings.model_copy(update={"connectors": json.dumps(GITHUB_INSTALL), "connectors_ca_bundle": str(ca_pem)})
+    connector = get_connector("github", settings=s, stored={"connectors": {"github": {"enabled": True}}})
+    client = connector.client("https://github.gmf.example.com")
+    assert client.ca_bundle == str(ca_pem)
+    names = [dict(x[0] for x in c["subject"]).get("commonName") for c in ssl_context(client.ca_bundle).get_ca_certs()]
+    assert names == ["GMF Test Root CA"]
+
+
+def test_disabled_connector_has_no_client(settings):
+    connector = get_connector("github", settings=settings.model_copy(update={"connectors": json.dumps(GITHUB_INSTALL)}),
+                              stored={})
+    with pytest.raises(ConnectorDisabled):
+        connector.client("https://github.gmf.example.com")
+
+
+async def test_streamed_oversized_response_is_refused():
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})  # no content-length
+        chunk = b"x" * (1024 * 1024)
+        for _ in range(21):
+            await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        await send({"type": "http.response.body", "body": b""})
+
+    with FakeServer(app) as srv, pytest.raises(ConnectorError, match="20 MB"):
+        await ConnectorClient(srv.url, [srv.host], dict, allow_insecure_loopback=True).request("GET", "/")
+
+
+async def test_post_is_not_retried_on_502(monkeypatch):
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _noop())
+    with FakeServer(responder(lambda m, p, h: (502, {"retry-after": "1"}, b"bad gateway"))) as srv:
+        c = ConnectorClient(srv.url, [srv.host], dict, allow_insecure_loopback=True)
+        assert (await c.request("POST", "/issue", json={"a": 1})).status_code == 502
+        assert len(srv.requests) == 1
+
+
+async def test_post_is_retried_on_503_with_retry_after_and_429(monkeypatch):
+    monkeypatch.setattr(asyncio, "sleep", lambda s: _noop())
+    answers = iter([(503, {"retry-after": "1"}, b""), (429, {}, b""), (201, {}, {"id": 1})])
+    with FakeServer(responder(lambda m, p, h: next(answers))) as srv:
+        c = ConnectorClient(srv.url, [srv.host], dict, allow_insecure_loopback=True)
+        assert (await c.request("POST", "/issue", json={"a": 1})).status_code == 201
+        assert len(srv.requests) == 3
+
+
+async def test_params_are_not_reapplied_after_a_redirect():
+    def handle(method, path, headers):
+        return (302, {"location": "/b?page=2"}, b"") if path == "/a" else (200, {}, {"ok": True})
+
+    with FakeServer(responder(handle)) as srv:
+        c = ConnectorClient(srv.url, [srv.host], dict, allow_insecure_loopback=True)
+        assert (await c.request("GET", "/a", params={"page": "1"})).status_code == 200
+        assert [(r.path, r.query) for r in srv.requests] == [("/a", "page=1"), ("/b", "page=2")]
+
+
+async def test_userinfo_and_bad_urls_are_refused(fake_ok, settings):
+    c = ConnectorClient(fake_ok.url, [fake_ok.host], dict, allow_insecure_loopback=True)
+    with pytest.raises(HostNotAllowed, match="credentials"):
+        await c.request("GET", f"http://user:pw@{fake_ok.host}/")
+    with pytest.raises(ConnectorError):
+        await c.request("GET", "http://127.0.0.1:99999/")
+    assert fake_ok.requests == []
+    install = load_install(settings.model_copy(update={"connectors": json.dumps(GITHUB_INSTALL)}))
+    with pytest.raises(ValueError, match="credentials in the URL"):
+        validate_app("github", install["github"], {"base_url": "https://u:p@github.gmf.example.com"})
+
+
+async def test_architect_cannot_test(client_with_github_install, client_oidc):
+    r = await client_with_github_install.post("/connectors/github/test", headers=ARCHITECT)
+    assert r.status_code == 403 and r.json()["detail"] == "this needs the admin role"
+    r = await client_oidc.post("/connectors/github/test", headers=as_roles("architect"))
+    assert r.status_code == 403 and r.json()["detail"] == "this needs the admin role"
+
+
+async def test_unexpected_test_error_is_failed_redacted_and_recorded(client_with_fake_github, admin, monkeypatch):
+    class Broken(BaseConnector):
+        async def test(self):
+            raise RuntimeError(f"boom with {self.credential()}")
+
+    monkeypatch.setitem(registry._CLASSES, "github", Broken)
+    c = client_with_fake_github
+    assert (await c.put("/settings/connectors", json={"github": {"enabled": True}}, headers=admin)).status_code == 200
+    r = await c.post("/connectors/github/test", headers=admin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False and "RuntimeError" in body["message"] and "t0k-secret" not in r.text
+    view = (await c.get("/settings/connectors", headers=admin)).json()["github"]
+    assert view["last_test"]["result"]["ok"] is False
+    async with c.app.state.sessionmaker() as s:
+        row = (await s.execute(select(AuditLog).where(AuditLog.action == "connector github test"))).scalar_one()
+    assert row.detail["outcome"] == "failed" and "t0k-secret" not in json.dumps(row.detail)

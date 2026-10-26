@@ -5,6 +5,7 @@ behind the settings router's ``require_admin_writes``."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Annotated, Any
 
@@ -30,6 +31,7 @@ from api.app.models import AuditLog, Process, Setting
 from api.app.schemas.connector import ConnectorsPatch, LinkOut
 from api.app.services.settings import load_stored
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["connectors"])
 
 TEST_TIMEOUT_S = 15.0
@@ -118,6 +120,11 @@ async def test_connector(kind: ConnectorKind, session: SessionDep, settings: Set
         result = ConnectionTest(ok=False, message=f"the connection test timed out after {int(TEST_TIMEOUT_S)} s")
     except ConnectorError as exc:
         result = ConnectionTest(ok=False, message=redact(str(exc), secrets))
+    except Exception as exc:  # noqa: BLE001  a connector bug still answers, is audited and recorded
+        log.warning("connection test of %s failed unexpectedly: %s", kind,
+                    redact(f"{type(exc).__name__}: {exc}", secrets))
+        result = ConnectionTest(ok=False, message=redact(f"the connection test failed: {type(exc).__name__}: "
+                                                         f"{exc}", secrets))
     if not result.latency_ms:
         result.latency_ms = int((time.monotonic() - started) * 1000)
     result.message = redact(result.message, secrets)

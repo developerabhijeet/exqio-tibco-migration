@@ -70,10 +70,15 @@ class BaseConnector:
 
     def client(self, base_url: str, *, auth: Callable[[], dict[str, str]] | None = None,
                allowed_hosts: list[str] | None = None) -> ConnectorClient:
+        """A client over the allowlist; ``ConnectorDisabled`` when the connector is off, so no code
+        path reaches the network without the switch (``ready()`` also checks the credential)."""
+        if not self.enabled:
+            raise ConnectorDisabled(self.kind)
         return ConnectorClient(base_url, allowed_hosts if allowed_hosts is not None else self.config.allowed_hosts,
                                auth or self.auth_header,
                                allow_insecure_loopback=self.config.allow_insecure_loopback,
-                               user_agent=f"{self.settings.brand_name}-Migrate")
+                               user_agent=f"{self.settings.brand_name}-Migrate",
+                               ca_bundle=self.settings.connectors_ca_bundle or None)
 
     async def test(self) -> ConnectionTest:
         raise NotImplementedError

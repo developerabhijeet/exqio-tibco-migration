@@ -208,7 +208,13 @@ def host_allowed(netloc: str, allowed: list[str], scheme: str = "https") -> bool
 def check_url(field: str, url: str, allowed: list[str], *, allow_insecure_loopback: bool = False,
               check_host: bool = True) -> None:
     """``https`` (``http://127.0.0.1`` only with the loopback flag) and a host in ``allowed``."""
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018  a malformed port raises here
+    except ValueError:
+        raise ValueError(f"{field}: not a valid URL") from None
+    if "@" in parts.netloc:
+        raise ValueError(f"{field}: credentials in the URL are not allowed")
     if parts.scheme == "http" and allow_insecure_loopback and parts.hostname == LOOPBACK:
         pass
     elif parts.scheme != "https" or not parts.netloc:
