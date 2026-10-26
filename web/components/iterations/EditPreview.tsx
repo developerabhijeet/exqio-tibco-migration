@@ -32,7 +32,7 @@ function errorText(e: unknown): string {
 function Diff({ editSetId, file }: { editSetId: string; file: FileChange }) {
   const diff = useEditDiff(editSetId, file.path);
   if (diff.error) return <ErrorNote error={errorText(diff.error)} />;
-  if (!diff.data) return <p className="text-[13px] text-slate">Loading {file.path}</p>;
+  if (!diff.data) return <p className="text-sm text-slate">Loading {file.path}</p>;
   return <CodeDiff path={file.path} baseline={diff.data.baseline} edited={diff.data.edited} />;
 }
 
@@ -96,11 +96,11 @@ export function EditPreview({
         </span>
       }
     >
-      <p className="mb-3 text-[13px] text-slate">{RESUME_HINT[es.resume_phase] ?? ""}</p>
-      {reason ? <p className="mb-2 text-[12.5px] text-slate">{reason}</p> : null}
+      <p className="mb-3 text-sm text-slate">{RESUME_HINT[es.resume_phase] ?? ""}</p>
+      {reason ? <p className="mb-2 text-sm text-slate">{reason}</p> : null}
       {error ? <ErrorNote error={error} /> : null}
       {es.files.length === 0 ? (
-        <p className="text-[13.5px] text-slate">The upload is identical to the build: nothing to apply.</p>
+        <p className="text-md text-slate">The upload is identical to the build: nothing to apply.</p>
       ) : (
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
           <ul className="space-y-1" aria-label="Changed files">
@@ -111,13 +111,13 @@ export function EditPreview({
                   data-testid={`edit-row-${f.path}`}
                   aria-pressed={selected === f.path}
                   onClick={() => setSelected(f.path)}
-                  className={`flex w-full flex-wrap items-center gap-1.5 rounded-btn border px-2.5 py-1.5 text-left text-[12.5px] ${
-                    selected === f.path ? "border-purple bg-purple-lt" : "border-line hover:bg-warm"
+                  className={`flex w-full flex-wrap items-center gap-1.5 rounded-btn border px-2.5 py-1.5 text-left text-sm ${
+                    selected === f.path ? "border-accent bg-accent-soft" : "border-line hover:bg-sunken"
                   }`}
                 >
                   <Pill tone={CHANGE_TONE[f.change] ?? "decision"}>{f.change}</Pill>
                   <OriginPill origin={f.origin} />
-                  <span className="min-w-0 break-all font-mono text-plum">{f.path}</span>
+                  <span className="min-w-0 break-all font-mono text-heading">{f.path}</span>
                 </button>
               </li>
             ))}
@@ -125,7 +125,7 @@ export function EditPreview({
           {file ? (
             <Diff editSetId={es.id} file={file} />
           ) : (
-            <p className="rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[13.5px] text-slate">
+            <p className="rounded-btn border border-dashed border-line bg-sunken/60 p-6 text-center text-md text-slate">
               Select a file to see the build&apos;s version beside yours.
             </p>
           )}

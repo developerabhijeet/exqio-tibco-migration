@@ -47,18 +47,18 @@ function HandEdits({ rows, carriedFrom }: { rows: HandEditResult[]; carriedFrom?
       testId="hand-edits"
     >
       {carriedFrom ? (
-        <p className="mb-2 text-[13px] text-slate">
+        <p className="mb-2 text-sm text-slate">
           Infrastructure only: the code and its test evidence are carried from build{" "}
           <span className="font-mono">{carriedFrom.slice(0, 8)}</span>.
         </p>
       ) : null}
       {conflicts.length ? (
-        <div role="status" data-testid="hand-conflicts" className="mb-3 rounded-card border border-error/30 bg-error-bg px-4 py-3 text-[13.5px] text-error">
+        <div role="status" data-testid="hand-conflicts" className="mb-3 rounded-card border border-error/30 bg-error-bg px-4 py-3 text-md text-error">
           <p className="font-semibold">
             {conflicts.length} conflict(s): the hand edit was kept as uploaded and the regenerated version is beside it for
             review.
           </p>
-          <ul className="mt-1 space-y-0.5 font-mono text-[12.5px]">
+          <ul className="mt-1 space-y-0.5 font-mono text-sm">
             {conflicts.map((c) => (
               <li key={c.path}>
                 {c.path}
@@ -68,12 +68,12 @@ function HandEdits({ rows, carriedFrom }: { rows: HandEditResult[]; carriedFrom?
           </ul>
         </div>
       ) : null}
-      <ul className="space-y-1 text-[13px]">
+      <ul className="space-y-1 text-sm">
         {rows.map((r) => (
           <li key={r.path} className="flex flex-wrap items-center gap-2" data-outcome={r.outcome}>
             <HandBadge detail={r.detail} />
             <OutcomePill outcome={r.outcome} text={r.outcome} />
-            <span className="font-mono text-plum">{r.path}</span>
+            <span className="font-mono text-heading">{r.path}</span>
             {r.detail && r.outcome !== "conflict" ? <span className="text-slate">{r.detail}</span> : null}
           </li>
         ))}
@@ -296,8 +296,8 @@ export function BuildTab() {
                 </p>
               ) : null}
               {finished && build.data?.status === "failed" && processId ? (
-                <div className="rounded-card border border-line bg-white px-4 py-3" data-testid="build-reenter">
-                  <p className="mb-2 text-[13.5px] text-ink">
+                <div className="rounded-card border border-line bg-surface px-4 py-3" data-testid="build-reenter">
+                  <p className="mb-2 text-md text-ink">
                     Take what failed back to the design: the next iteration&apos;s designer reads these failures, any logs you add
                     and the requirements.
                   </p>

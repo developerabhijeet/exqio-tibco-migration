@@ -108,22 +108,22 @@ function Row({
   };
 
   return (
-    <li className="rounded-btn border border-line px-3 py-2 text-[13px]" data-testid={`repo-${repo.id}`}>
+    <li className="rounded-btn border border-line px-3 py-2 text-sm" data-testid={`repo-${repo.id}`}>
       <div className="flex flex-wrap items-center gap-2">
         <GitBranch size={14} aria-hidden className="text-slate" />
-        <span className="font-mono font-semibold text-plum">
+        <span className="font-mono font-semibold text-heading">
           {repo.repo}@{repo.branch}
         </span>
-        <span className="text-[12px] text-slate">
+        <span className="text-xs text-slate">
           {repo.last_commit ? `at ${repo.last_commit.slice(0, 12)}` : "not fetched yet"}
         </span>
         <span className="ml-auto flex items-center gap-2">
-          <label className="flex items-center gap-1 text-[12.5px] text-slate" htmlFor={`repo-branch-${repo.id}`}>
+          <label className="flex items-center gap-1 text-sm text-slate" htmlFor={`repo-branch-${repo.id}`}>
             Branch
             <select
               id={`repo-branch-${repo.id}`}
               data-testid="repo-branch"
-              className="input py-1 font-mono text-[12.5px]"
+              className="input py-1 font-mono text-sm"
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
               disabled={!canPull || busy !== null}
@@ -154,12 +154,12 @@ function Row({
         </span>
       </div>
       {status ? (
-        <p role="status" className="mt-1 text-[12.5px] text-slate">
+        <p role="status" className="mt-1 text-sm text-slate">
           {status}
           {pr ? (
             <>
               {" "}
-              <a className="inline-flex items-center gap-1 text-purple underline" href={pr.url} target="_blank" rel="noreferrer">
+              <a className="inline-flex items-center gap-1 text-accent-ink underline" href={pr.url} target="_blank" rel="noreferrer">
                 <GitPullRequest size={12} aria-hidden /> pull request #{pr.number}
               </a>
             </>
@@ -167,7 +167,7 @@ function Row({
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="mt-1 text-[12.5px] text-error">
+        <p role="alert" className="mt-1 text-sm text-error">
           {error}
         </p>
       ) : null}
@@ -247,16 +247,16 @@ export function RepoPanel({
   return (
     <section className="card space-y-3 p-4" data-testid="repo-panel" aria-labelledby={`${id}-title`}>
       <div>
-        <h3 id={`${id}-title`} className="flex items-center gap-2 text-[16px] font-semibold text-plum">
+        <h3 id={`${id}-title`} className="flex items-center gap-2 text-lg font-semibold text-heading">
           <GitBranch size={16} aria-hidden /> GitHub repository
         </h3>
-        <p className="text-[12.5px] text-slate">
+        <p className="text-sm text-slate">
           {purpose === "estate"
             ? "Take the estate from a branch instead of a zip: each pull of a new commit is a new upload and scan."
             : "A branch holding this build's export: a reviewer's commits come back as an edit set, and an iteration's build can be pushed to it."}
         </p>
       </div>
-      {access.reason ? <p className="text-[12.5px] text-slate">{access.reason}</p> : null}
+      {access.reason ? <p className="text-sm text-slate">{access.reason}</p> : null}
       {rows.length > 0 ? (
         <ul className="space-y-1.5" aria-label="Connected repositories">
           {rows.map((r) => (
@@ -273,7 +273,7 @@ export function RepoPanel({
         </ul>
       ) : null}
       <form className="flex flex-wrap items-end gap-2" onSubmit={connect}>
-        <label className="block text-[13px]" htmlFor={`${id}-repo`}>
+        <label className="block text-sm" htmlFor={`${id}-repo`}>
           <span className="label">Repository (owner/name)</span>
           <input
             id={`${id}-repo`}
@@ -285,7 +285,7 @@ export function RepoPanel({
             disabled={!access.allowed}
           />
         </label>
-        <label className="block text-[13px]" htmlFor={`${id}-branch`}>
+        <label className="block text-sm" htmlFor={`${id}-branch`}>
           <span className="label">Branch</span>
           <input
             id={`${id}-branch`}
@@ -305,12 +305,12 @@ export function RepoPanel({
         </span>
       </form>
       {note ? (
-        <p role="status" className="text-[12.5px] text-slate">
+        <p role="status" className="text-sm text-slate">
           {note}
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-[13px] text-error">
+        <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-sm text-error">
           {error}
         </p>
       ) : null}

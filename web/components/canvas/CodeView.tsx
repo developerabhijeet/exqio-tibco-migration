@@ -167,6 +167,7 @@ export function DiffView({
   height: number | string;
   testId?: string;
 }) {
+  const dark = useThemed(isDarkNow);
   return (
     <div data-testid={testId} className="overflow-hidden rounded-btn border border-line">
       <DiffEditor
@@ -174,8 +175,8 @@ export function DiffView({
         language={language}
         original={original}
         modified={modified}
-        theme="vs"
-        loading={<div className="p-4 text-[13px] text-slate">Loading editor</div>}
+        theme={dark ? "vs-dark" : "vs"}
+        loading={<div className="p-4 text-sm text-slate">Loading editor</div>}
         options={{
           readOnly: true,
           originalEditable: false,

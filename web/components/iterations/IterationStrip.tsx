@@ -57,17 +57,17 @@ function IterationPanel({ iterationId, onClose }: { iterationId: string; onClose
       <div className="flex items-start gap-2">
         <div className="min-w-0">
           <p className="label">Read only</p>
-          <h3 id="iteration-panel-title" className="flex items-center gap-2 text-[16px] font-semibold text-plum">
+          <h3 id="iteration-panel-title" className="flex items-center gap-2 text-lg font-semibold text-heading">
             {it ? (
               <>
-                Iteration {it.n} <span className="text-[13px] font-normal text-slate">{KIND[it.kind] ?? it.kind}</span>
+                Iteration {it.n} <span className="text-sm font-normal text-slate">{KIND[it.kind] ?? it.kind}</span>
                 <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
               </>
             ) : (
               "Iteration"
             )}
           </h3>
-          {it ? <p className="text-[12.5px] text-slate">{describe(it)}</p> : null}
+          {it ? <p className="text-sm text-slate">{describe(it)}</p> : null}
         </div>
         <button ref={close} type="button" className="btn-secondary ml-auto" onClick={onClose} aria-label="Close the iteration">
           <X size={14} aria-hidden />
@@ -77,7 +77,7 @@ function IterationPanel({ iterationId, onClose }: { iterationId: string; onClose
       {it?.requirements ? (
         <div>
           <p className="label">Requirements</p>
-          <p className="whitespace-pre-wrap text-[13.5px] text-ink">{it.requirements}</p>
+          <p className="whitespace-pre-wrap text-md text-ink">{it.requirements}</p>
         </div>
       ) : null}
       {it && it.inputs.length > 0 ? (
@@ -94,21 +94,21 @@ function IterationPanel({ iterationId, onClose }: { iterationId: string; onClose
         <div>
           <p className="label">What happened</p>
           {it.timeline.length === 0 ? (
-            <p className="text-[13px] text-slate">No design, build or gate decision in this iteration.</p>
+            <p className="text-sm text-slate">No design, build or gate decision in this iteration.</p>
           ) : (
-            <ol className="mt-1 space-y-1 text-[13px]" data-testid="iteration-panel-timeline">
+            <ol className="mt-1 space-y-1 text-sm" data-testid="iteration-panel-timeline">
               {it.timeline.map((t) => (
                 <li key={`${t.kind}-${t.id}`} data-kind={t.kind}>
                   <span className="text-slate">{t.at ? new Date(t.at).toLocaleString() : ""}</span>{" "}
                   {t.kind === "build" && t.process_id ? (
-                    <a className="text-purple underline" href={`/?step=build&process=${t.process_id}`} data-testid="iteration-build-link">
+                    <a className="text-accent-ink underline" href={`/?step=build&process=${t.process_id}`} data-testid="iteration-build-link">
                       {t.summary}
                     </a>
                   ) : (
                     <span className="text-ink">{t.summary}</span>
                   )}
                   {t.decisions && t.decisions.length > 0 ? (
-                    <ul className="ml-4 list-disc text-[12.5px] text-slate" data-testid="iteration-decisions">
+                    <ul className="ml-4 list-disc text-sm text-slate" data-testid="iteration-decisions">
                       {t.decisions.map((d) => (
                         <li key={d}>{d}</li>
                       ))}
@@ -137,7 +137,7 @@ export function IterationStrip() {
   const rows = [...iterations.data].sort((a, b) => a.n - b.n);
   const current = [...rows].reverse().find(isActive) ?? rows[rows.length - 1];
   return (
-    <div data-testid="iteration-strip" className="mt-2 border-t border-line px-2 pt-2 text-[12.5px]">
+    <div data-testid="iteration-strip" className="mt-2 border-t border-line px-2 pt-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="label flex items-center gap-1">
           <Repeat size={13} aria-hidden /> Iterations
@@ -154,11 +154,11 @@ export function IterationStrip() {
                 title={describe(it)}
                 onClick={() => setOpened(opened === it.id ? null : it.id)}
                 className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${
-                  it.id === current.id ? "border-purple bg-purple-lt text-plum" : "border-line text-slate"
-                } hover:bg-warm`}
+                  it.id === current.id ? "border-accent bg-accent-soft text-heading" : "border-line text-slate"
+                } hover:bg-sunken`}
               >
                 <span className="font-semibold">Iteration {it.n}</span>
-                <span className="text-[11.5px]">{KIND[it.kind] ?? it.kind}</span>
+                <span className="text-xs">{KIND[it.kind] ?? it.kind}</span>
                 <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
               </button>
             </li>
@@ -191,17 +191,17 @@ function InputRow({ iterationId, input }: { iterationId: string; input: Iteratio
         type="button"
         aria-expanded={open}
         onClick={toggle}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-warm"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-sunken"
       >
         {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
         <Pill tone="det">{input.kind.replace(/_/g, " ")}</Pill>
-        <span className="min-w-0 truncate font-medium text-plum">{input.title}</span>
+        <span className="min-w-0 truncate font-medium text-heading">{input.title}</span>
       </button>
       {open ? (
         <div className="border-t border-line px-3 py-2">
           {error ? <ErrorNote error={error} /> : null}
           {/* Text only: a log is never rendered as HTML. */}
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[12px] text-ink">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs text-ink">
             {text ?? "Loading"}
           </pre>
         </div>
@@ -221,13 +221,13 @@ export function IterationInputs({ processId }: { processId: string }) {
   return (
     <section className="card p-5" data-testid="iteration-inputs" aria-labelledby="iteration-inputs-title">
       <p className="label">What the designer reads for this iteration</p>
-      <h3 id="iteration-inputs-title" className="flex items-center gap-2 text-[18px] font-semibold text-plum">
+      <h3 id="iteration-inputs-title" className="flex items-center gap-2 text-xl font-semibold text-heading">
         Iteration {it.n} inputs <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
       </h3>
       {it.requirements ? (
         <div className="mt-3">
           <p className="label">Requirements</p>
-          <p className="whitespace-pre-wrap text-[14px] text-ink" data-testid="iteration-requirements">
+          <p className="whitespace-pre-wrap text-md text-ink" data-testid="iteration-requirements">
             {it.requirements}
           </p>
         </div>
@@ -240,7 +240,7 @@ export function IterationInputs({ processId }: { processId: string }) {
           ))}
         </ul>
       ) : detail.data && !it.requirements ? (
-        <p className="mt-2 text-[13.5px] text-slate">No failures, logs or requirements were brought in.</p>
+        <p className="mt-2 text-md text-slate">No failures, logs or requirements were brought in.</p>
       ) : null}
     </section>
   );

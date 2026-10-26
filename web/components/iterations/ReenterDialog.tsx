@@ -87,17 +87,17 @@ function FailureRow({
   const id = `failure-${item.key}`;
   return (
     <li data-testid={id} className="rounded-btn border border-line px-3 py-2">
-      <label className="flex items-start gap-2 text-[13px]">
+      <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={checked} disabled={locked} onChange={onToggle} />
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-1.5">
             <Pill tone={item.kind === "uploaded_log" ? "det" : "error"}>{KIND_LABEL[item.kind] ?? item.kind}</Pill>
-            <span className="font-medium text-plum">{item.title}</span>
+            <span className="font-medium text-heading">{item.title}</span>
           </span>
           <details className="mt-1">
-            <summary className="cursor-pointer text-[12px] text-slate">Excerpt</summary>
+            <summary className="cursor-pointer text-xs text-slate">Excerpt</summary>
             {/* Text only: a log excerpt is never rendered as HTML. */}
-            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-btn bg-page p-2 font-mono text-[11.5px] text-ink">
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-btn bg-page p-2 font-mono text-xs text-ink">
               {item.text}
             </pre>
           </details>
@@ -201,7 +201,7 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
         </button>
       </span>
       {access.reason ? (
-        <span id="reenter-design-reason" data-testid="reenter-design-reason" className="text-[12.5px] text-slate">
+        <span id="reenter-design-reason" data-testid="reenter-design-reason" className="text-sm text-slate">
           {access.reason}
         </span>
       ) : null}
@@ -216,7 +216,7 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
             aria-labelledby="reenter-heading"
             aria-describedby="reenter-summary"
             data-testid="reenter-dialog"
-            className="relative max-h-[90vh] w-[640px] max-w-full space-y-4 overflow-y-auto rounded-card bg-white p-5 shadow-pop"
+            className="relative max-h-[90vh] w-[640px] max-w-full space-y-4 overflow-y-auto rounded-card bg-surface p-5 shadow-pop"
             onSubmit={submit}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -227,10 +227,10 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h4 id="reenter-heading" className="text-[17px] font-semibold text-plum">
+                <h4 id="reenter-heading" className="text-lg font-semibold text-heading">
                   Re-enter design{processName ? ` for ${processName}` : ""}
                 </h4>
-                <p id="reenter-summary" className="mt-0.5 text-[13px] text-slate">
+                <p id="reenter-summary" className="mt-0.5 text-sm text-slate">
                   Opens a new iteration: G3 to G6 go back to pending and the designer runs again with what you bring in.
                 </p>
               </div>
@@ -242,15 +242,15 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
             <fieldset className="space-y-2">
               <legend className="label">What failed</legend>
               {smeOnly ? (
-                <p className="text-[12.5px] text-slate">
+                <p className="text-sm text-slate">
                   As an SME you add requirements only; the failures below go in as they are, and an architect may choose
                   among them.
                 </p>
               ) : null}
-              {preview.isLoading ? <p className="text-[13px] text-slate">Collecting the failures</p> : null}
-              {preview.error ? <p className="text-[13px] text-error">{errorText(preview.error)}</p> : null}
+              {preview.isLoading ? <p className="text-sm text-slate">Collecting the failures</p> : null}
+              {preview.error ? <p className="text-sm text-error">{errorText(preview.error)}</p> : null}
               {preview.data && items.length === 0 ? (
-                <p className="text-[13px] text-slate">Nothing failed in the latest build, verify or plan.</p>
+                <p className="text-sm text-slate">Nothing failed in the latest build, verify or plan.</p>
               ) : null}
               <ul className="space-y-1.5" data-testid="failure-list">
                 {items.map((item) => (
@@ -284,22 +284,22 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
                 data-testid="log-drop"
                 disabled={smeOnly || busy}
                 aria-describedby="reenter-logs-hint"
-                className="block w-full text-[13px] file:mr-3 file:rounded-btn file:border file:border-line file:bg-warm file:px-3 file:py-1.5 file:text-plum disabled:opacity-60"
+                className="block w-full text-sm file:mr-3 file:rounded-btn file:border file:border-line file:bg-sunken file:px-3 file:py-1.5 file:text-heading disabled:opacity-60"
                 onChange={(e) => {
                   pickLogs(e.target.files);
                   e.target.value = "";
                 }}
               />
-              <span id="reenter-logs-hint" className="block text-[12px] text-slate">
+              <span id="reenter-logs-hint" className="block text-xs text-slate">
                 {smeOnly
                   ? "An SME may open an iteration with requirements only: logs need an architect."
                   : "Masked before they are stored; never shown as HTML."}
               </span>
-              {logError ? <p role="alert" className="text-[12.5px] text-error">{logError}</p> : null}
+              {logError ? <p role="alert" className="text-sm text-error">{logError}</p> : null}
               {logs.length > 0 ? (
                 <ul className="flex flex-wrap gap-1.5">
                   {logs.map((f) => (
-                    <li key={`${f.name}:${f.size}`} className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[12px]">
+                    <li key={`${f.name}:${f.size}`} className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-xs">
                       <FileText size={12} aria-hidden />
                       {f.name}
                       <button
@@ -332,13 +332,13 @@ export function ReenterDesign({ processId, processName }: { processId: string; p
                 aria-describedby="reenter-requirements-count"
                 required={smeOnly}
               />
-              <span id="reenter-requirements-count" className="block text-right text-[12px] text-slate">
+              <span id="reenter-requirements-count" className="block text-right text-xs text-slate">
                 {requirements.length} of {MAX_REQUIREMENTS.toLocaleString()} characters
               </span>
             </div>
 
             {error ? (
-              <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-[13px] text-error">
+              <p role="alert" className="rounded-btn border border-error/30 bg-error-bg px-3 py-2 text-sm text-error">
                 {error}
               </p>
             ) : null}
@@ -377,8 +377,8 @@ export function ReenterOnFailure({
   const failed = (preview.data?.items ?? []).filter((i) => kinds.includes(i.kind));
   if (failed.length === 0) return null;
   return (
-    <div className="rounded-card border border-line bg-white px-4 py-3" data-testid="reenter-on-failure">
-      <p className="mb-2 text-[13.5px] text-ink">
+    <div className="rounded-card border border-line bg-surface px-4 py-3" data-testid="reenter-on-failure">
+      <p className="mb-2 text-md text-ink">
         {failed.length} {what} to take back to the design: the next iteration&apos;s designer reads them with any logs and
         requirements you add.
       </p>

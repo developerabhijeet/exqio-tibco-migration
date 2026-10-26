@@ -18,7 +18,7 @@ const CodeView = dynamic(() => import("@/components/canvas/CodeView"), {
 
 const DiffView = dynamic(() => import("@/components/canvas/CodeView").then((m) => m.DiffView), {
   ssr: false,
-  loading: () => <div className="h-[420px] rounded-btn border border-line bg-page p-4 text-[13px] text-slate">Loading editor</div>,
+  loading: () => <div className="h-[420px] rounded-btn border border-line bg-page p-4 text-sm text-slate">Loading editor</div>,
 });
 
 /** The Monaco language of a path, for a file the API reports no language for (an edit preview). */
@@ -53,8 +53,8 @@ export function CodeDiff({
     <div className="flex min-w-0 flex-col gap-2" data-testid={testId}>
       <div className="flex min-h-[28px] flex-wrap items-center gap-2">
         <FileCode2 size={15} className="text-slate" aria-hidden />
-        <span className="min-w-0 truncate font-mono text-[12.5px] font-semibold text-plum">{path}</span>
-        <span className="ml-auto text-[12px] text-slate">baseline build, left; edited, right</span>
+        <span className="min-w-0 truncate font-mono text-sm font-semibold text-heading">{path}</span>
+        <span className="ml-auto text-xs text-slate">baseline build, left; edited, right</span>
       </div>
       <DiffView original={baseline} modified={edited} language={languageOfPath(path)} height={height} />
     </div>
