@@ -382,3 +382,34 @@ def test_repository_methods_are_unique_with_a_warning(tmp_path, gmf_app, caplog)
     service = _file(sol, "dealer_funding_request_service.py").content
     assert ".lookup_dealer(" in service and ".lookup_dealer2(" in service
     assert any("repository method lookup_dealer is taken" in r.message for r in caplog.records)
+
+
+def _conninfo(python_solution):
+    """The generated ``conninfo`` function, run on its own (the module imports the project)."""
+    import urllib.parse
+
+    import psycopg
+
+    src = _file(python_solution, "database.py").content
+    body = src[src.index("def _sslmode"):src.index("CONNECT_TIMEOUT_S")]
+    scope = {"psycopg": psycopg, "urllib": urllib}
+    exec(body, scope)  # noqa: S102 - generated code under test
+    return scope["conninfo"]
+
+
+def test_connection_string_keeps_the_ssl_mode(python_solution):
+    conninfo = _conninfo(python_solution)
+
+    def parse(value):
+        import psycopg
+        return psycopg.conninfo.conninfo_to_dict(conninfo(value))
+
+    base = "Host=db.example;Port=5432;Database=x;Username=u;Password=p;"
+    assert parse(base + "SSL Mode=Require")["sslmode"] == "verify-full"
+    assert parse(base + "SSL Mode=Require;Trust Server Certificate=true")["sslmode"] == "require"
+    assert parse(base + "SSL Mode=VerifyCA")["sslmode"] == "verify-ca"
+    assert parse(base + "SSL Mode=Disable")["sslmode"] == "disable"
+    assert "sslmode" not in parse(base.rstrip(";"))
+    azure = "Host=x.postgres.database.azure.com;Database=x;Username=u;Password=p"
+    assert parse(azure)["sslmode"] == "verify-full"
+    assert parse("jdbc:postgresql://h:5432/d?user=u&sslmode=require")["sslmode"] == "require"

@@ -17,6 +17,24 @@ from psycopg.rows import dict_row
 from {{ pkg }}.config import Settings
 
 
+def _sslmode(pairs: dict[str, str], host: str) -> str:
+    """The libpq sslmode of the Npgsql ``SSL Mode`` setting: Require and VerifyFull verify the server
+    certificate and host name (verify-full) unless ``Trust Server Certificate`` is true (require:
+    encrypted, not verified); VerifyCA, Prefer, Allow and Disable keep their meaning. Without a
+    setting an Azure Database for PostgreSQL host gets verify-full, any other host libpq's default."""
+    mode = pairs.get("ssl mode", pairs.get("sslmode", "")).replace(" ", "").lower()
+    trust = pairs.get("trust server certificate", pairs.get("trustservercertificate", "")).lower() == "true"
+    if mode in ("require", "verifyfull", "verify-full"):
+        return "require" if trust else "verify-full"
+    if mode in ("verifyca", "verify-ca"):
+        return "verify-ca"
+    if mode in ("prefer", "allow", "disable"):
+        return mode
+    if not mode and host.lower().endswith(".postgres.database.azure.com"):
+        return "verify-full"
+    return ""
+
+
 def conninfo(value: str) -> str:
     """A libpq connection string or URL for any of the three forms."""
     value = value.strip()
@@ -28,6 +46,8 @@ def conninfo(value: str) -> str:
             parts["user"] = query["user"]
         if "password" in query:
             parts["password"] = query["password"]
+        if query.get("sslmode") in ("disable", "allow", "prefer", "require", "verify-ca", "verify-full"):
+            parts["sslmode"] = query["sslmode"]
         return psycopg.conninfo.make_conninfo(**parts)
     if value.startswith(("postgresql://", "postgres://")):
         return value
@@ -43,6 +63,9 @@ def conninfo(value: str) -> str:
         parts["user"] = user
     if "password" in pairs:
         parts["password"] = pairs["password"]
+    sslmode = _sslmode(pairs, parts["host"])
+    if sslmode:
+        parts["sslmode"] = sslmode
     return psycopg.conninfo.make_conninfo(**parts)
 
 

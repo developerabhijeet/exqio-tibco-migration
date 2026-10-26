@@ -497,3 +497,12 @@ def test_review_fixes_on_the_whole_sample_application(tmp_path, gmf_app):
     assert "ResponseEntity.badRequest()" in controller
     lookup = _file(sol, "FundingStatusLookupController.java").content
     assert "TibValue.invalid" not in lookup  # a GET has no body
+
+
+def test_connection_string_keeps_the_ssl_mode(java_solution):
+    src = _file(java_solution, "DataSources.java").content
+    assert 'static String sslMode(Map<String, String> parts, String host)' in src
+    assert 'sslmode=" + sslMode' in src  # the Npgsql form carries it into the JDBC URL
+    assert 'case "require", "verifyfull", "verify-full":' in src and 'return trust ? "require" : "verify-full"' in src
+    assert ".postgres.database.azure.com" in src
+    assert 'uri.getRawQuery()' in src  # a postgresql:// URL keeps its own query (sslmode=...)

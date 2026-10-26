@@ -59,7 +59,8 @@ public class DataSources implements DisposableBean {
             URI uri = URI.create(value);
             String[] user = uri.getUserInfo() == null ? new String[0] : uri.getUserInfo().split(":", 2);
             int port = uri.getPort() > 0 ? uri.getPort() : 5432;
-            config.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath());
+            config.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath()
+                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()));
             if (user.length > 0) {
                 config.setUsername(user[0]);
             }
@@ -77,11 +78,39 @@ public class DataSources implements DisposableBean {
             String host = parts.getOrDefault("host", parts.getOrDefault("server", "localhost"));
             String port = parts.getOrDefault("port", "5432");
             String database = parts.getOrDefault("database", "");
-            config.setJdbcUrl("jdbc:postgresql://" + host + ":" + port + "/" + database);
+            String sslMode = sslMode(parts, host);
+            config.setJdbcUrl("jdbc:postgresql://" + host + ":" + port + "/" + database
+                    + (sslMode.isEmpty() ? "" : "?sslmode=" + sslMode));
             config.setUsername(parts.getOrDefault("username", parts.get("user id")));
             config.setPassword(parts.get("password"));
         }
         return new HikariDataSource(config);
+    }
+
+    /**
+     * The pgjdbc sslmode of the Npgsql {@code SSL Mode} setting: Require and VerifyFull verify the
+     * server certificate and host name (verify-full) unless {@code Trust Server Certificate} is true
+     * (require: encrypted, not verified); VerifyCA, Prefer, Allow and Disable keep their meaning.
+     * Without a setting an Azure Database for PostgreSQL host gets verify-full, any other host the
+     * driver's default.
+     */
+    static String sslMode(Map<String, String> parts, String host) {
+        String mode = parts.getOrDefault("ssl mode", parts.getOrDefault("sslmode", ""))
+                .replace(" ", "").toLowerCase(Locale.ROOT);
+        boolean trust = "true".equalsIgnoreCase(parts.getOrDefault("trust server certificate",
+                parts.getOrDefault("trustservercertificate", "")));
+        switch (mode) {
+            case "require", "verifyfull", "verify-full":
+                return trust ? "require" : "verify-full";
+            case "verifyca", "verify-ca":
+                return "verify-ca";
+            case "prefer", "allow", "disable":
+                return mode;
+            case "":
+                return host.toLowerCase(Locale.ROOT).endsWith(".postgres.database.azure.com") ? "verify-full" : "";
+            default:
+                return "";
+        }
     }
 
     @Override
