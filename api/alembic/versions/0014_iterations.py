@@ -4,8 +4,8 @@ Design records and builds gain ``iteration`` (default 1: every existing row belo
 iteration 1, created on first read), builds gain ``edit_set_id`` (a foreign key added after
 ``edit_sets``, which refers to builds) and rules ``source``.
 
-Revision ID: 0011
-Revises: 0010
+Revision ID: 0014_iterations
+Revises: 0013
 Create Date: 2026-10-26 18:00:00.000000
 """
 from collections.abc import Sequence
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = '0011'
-down_revision: str | None = '0010'
+revision: str = '0014_iterations'
+down_revision: str | None = '0013'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
