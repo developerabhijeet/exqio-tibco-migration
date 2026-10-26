@@ -70,9 +70,10 @@ def engineer() -> dict[str, str]:
     return ENGINEER
 
 
-async def _seed_build(app, root: Path) -> tuple[str, str]:
+async def _seed_build(app, root: Path, files: dict[str, str] | None = None,
+                      stack: str = "dotnet") -> tuple[str, str]:
     """A process and a finished build whose solution is ``root`` (with folders that never ship)."""
-    files = {"GmfCredit.sln": "sln", "src/Credit/Program.cs": "class P {}", "run-local.sh": "echo hi\n",
+    files = files or {"GmfCredit.sln": "sln", "src/Credit/Program.cs": "class P {}", "run-local.sh": "echo hi\n",
              "bin/Debug/app.dll": "dll", "src/Credit/obj/x.json": "{}", ".exiqo/state.json": "{}",
              "TestResults/r.trx": "<x/>"}
     for rel, text in files.items():
@@ -94,7 +95,8 @@ async def _seed_build(app, root: Path) -> tuple[str, str]:
                        source_path="loanservicing/AccountLookup.process", ir={}, spec_hash="s" * 64)
         s.add(proc)
         await s.flush()
-        build = Build(process_id=proc.id, status="passed", output_dir=str(root), build_hash="b" * 64)
+        build = Build(process_id=proc.id, status="passed", output_dir=str(root), build_hash="b" * 64,
+                      stack=stack)
         s.add(build)
         await s.commit()
         return proc.id, build.id
@@ -191,6 +193,32 @@ async def test_push_build_and_open_pr(client, app, fake_github, finished_build, 
     assert all(lk["local_ref"] == finished_build for lk in links)
     actions = {(a.action, a.detail["outcome"]) for a in await _audit_rows(app)}
     assert {("connector github push", "ok"), ("connector github pull-request", "ok")} <= actions
+
+
+STACK_TREES = {  # (built tree, the files that ship): the stack's build output never does
+    "java": ({"pom.xml": "<project/>", "src/main/java/com/x/target/Contract.java": "class C {}",
+              ".exiqo/maven-settings.xml": "<settings/>", ".exiqo/logs/service.log": "dsn",
+              "target/app.jar": "jar", "target/classes/A.class": "c"},
+             {"pom.xml", "src/main/java/com/x/target/Contract.java", ".exiqo/maven-settings.xml"}),
+    "python": ({"pyproject.toml": "[project]", "app/main.py": "x = 1", ".venv/bin/python": "elf",
+                "app/__pycache__/main.cpython-312.pyc": "pyc", ".pytest_cache/v": "x"},
+               {"pyproject.toml", "app/main.py"}),
+    "go": ({"go.mod": "module x", "cmd/server/main.go": "package main", ".exiqo-bin/server": "elf"},
+           {"go.mod", "cmd/server/main.go"}),
+}
+
+
+@pytest.mark.parametrize("stack", sorted(STACK_TREES))
+async def test_push_leaves_out_the_build_stacks_output(client, app, fake_github, engineer, wait_terminal,
+                                                       tmp_path, stack):
+    tree, shipped = STACK_TREES[stack]
+    root = tmp_path / f"out-{stack}"
+    root.mkdir()
+    _, build_id = await _seed_build(app, root, tree, stack=stack)
+    fake_github.add_repo("gmf/credit")
+    out = await wait_terminal(client, (await client.post(f"/builds/{build_id}/github/push",
+                                                         json={"repo": "gmf/credit"}, headers=engineer)).json()["job_id"])
+    assert set(fake_github.branch_files("gmf/credit", out["branch"])) == shipped | {"EXPORTED_FROM.md"}
 
 
 async def test_second_push_reuses_the_open_pr(client, app, fake_github, pushed_once, engineer, wait_terminal):

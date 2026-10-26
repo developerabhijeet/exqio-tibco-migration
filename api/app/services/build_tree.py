@@ -3,7 +3,7 @@
 One answer for every place a build leaves the platform: the zip download, the GitHub push and the
 edit-set diff (cross-ruling X3). A shipped file is a regular file under the build root, reached
 without following a symbolic link, outside the excluded folders (``bin``, ``obj``, ``TestResults``,
-``.exiqo``: the stack's ``download_excluded`` once stacks exist) and outside any ``.git`` folder,
+``.exiqo`` for .NET: the build stack's ``download_excluded``, see ``download_excluded``) and outside any ``.git`` folder,
 whose config or hooks would otherwise travel with the build.
 """
 from __future__ import annotations
@@ -21,28 +21,47 @@ DOWNLOAD_EXCLUDED = frozenset({"bin", "obj", "TestResults", ".exiqo"})
 ALWAYS_EXCLUDED = frozenset({".git"})
 
 
+def is_excluded(rel: str, excluded: Iterable[str]) -> bool:
+    """Whether the posix path ``rel`` (relative to the build root) is left out by ``excluded``: a
+    plain name (``bin``) excludes any path with that part; an entry with a ``/`` (``target/``,
+    ``.exiqo/logs``) excludes that folder or file from the root only, so a package folder named
+    ``target`` deeper down still ships. A ``.git`` part is always excluded."""
+    parts = rel.split("/")
+    for e in excluded:
+        if "/" in e:
+            anchor = e.strip("/")
+            if rel == anchor or rel.startswith(anchor + "/"):
+                return True
+        elif e in parts:
+            return True
+    return any(part.lower() in ALWAYS_EXCLUDED for part in parts)  # ``.GIT`` is ``.git`` on macOS
+
+
 def build_tree_files(root: Path, excluded: Iterable[str] = DOWNLOAD_EXCLUDED) -> list[str]:
-    """The posix paths, relative to ``root`` and sorted, of the build's files that ship."""
+    """The posix paths, relative to ``root`` and sorted, of the build's files that ship (see
+    ``is_excluded`` for what ``excluded`` leaves out)."""
     skip = frozenset(excluded)
 
-    def skipped(name: str) -> bool:  # ``.GIT`` is ``.git`` on macOS and Windows
-        return name in skip or name.lower() in ALWAYS_EXCLUDED
+    def rel_of(path: Path) -> str:
+        return path.relative_to(root).as_posix()
 
     out: list[str] = []
     for current, dirs, files in os.walk(root, followlinks=False):
         here = Path(current)
         # os.walk lists a symlink to a folder among ``dirs``; it is not entered, and not kept
-        dirs[:] = sorted(d for d in dirs if not skipped(d) and not (here / d).is_symlink())
+        dirs[:] = sorted(d for d in dirs
+                         if not is_excluded(rel_of(here / d), skip) and not (here / d).is_symlink())
         for name in files:
-            if skipped(name):
-                continue
             path = here / name
+            rel = rel_of(path)
+            if is_excluded(rel, skip):
+                continue
             try:
                 mode = path.lstat().st_mode
             except OSError:
                 continue
             if stat.S_ISREG(mode):
-                out.append(path.relative_to(root).as_posix())
+                out.append(rel)
     return sorted(out)
 
 

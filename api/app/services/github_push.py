@@ -26,7 +26,7 @@ from api.app.connectors.registry import connector_for
 from api.app.jobs.locks import try_advisory_lock
 from api.app.jobs.registry import RetryLater
 from api.app.models import Build, Process
-from api.app.services.build_tree import DOWNLOAD_EXCLUDED, export_note
+from api.app.services.build_tree import download_excluded, export_note
 
 if TYPE_CHECKING:
     from api.app.jobs.registry import WorkerServices
@@ -127,7 +127,7 @@ async def _push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
             f"{proc.name}: build {build.id[:8]} from {w.settings.brand_name} Migrate",
             base_branch=base if base_exists else None,
             extra_files={EXPORT_NOTE: export_note(build, proc).encode()},
-            excluded=DOWNLOAD_EXCLUDED)  # SP5: the stack's download_excluded
+            excluded=download_excluded(build.stack))  # the build stack's own exclusions
         await ctx.log(f"pushed commit {commit[:12]} to {branch}")
         async with w.sessionmaker() as s:
             await upsert_link(s, **where, kind="github", object_type="branch", local_ref=build.id,

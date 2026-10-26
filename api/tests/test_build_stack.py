@@ -241,3 +241,19 @@ def test_alembic_has_one_head_and_it_is_the_stacks_revision():
     script = ScriptDirectory.from_config(cfg)
     assert script.get_heads() == ["0011_target_stack"]  # X25
     assert script.get_revision("0011_target_stack").down_revision == "0010"
+
+
+@pytest.mark.parametrize("stack", ["java", "python", "go"])
+def test_download_leaves_out_the_build_stacks_output(tmp_path, stack):
+    """I2: the zip (and, through ``build_tree_files``, the push) never ships a stack's build output."""
+    import io
+    import zipfile
+
+    from api.tests.test_connector_github import STACK_TREES
+    tree, shipped = STACK_TREES[stack]
+    for rel, text in tree.items():
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    with zipfile.ZipFile(io.BytesIO(_zip_solution(tmp_path, None, download_excluded(stack)))) as zf:
+        assert set(zf.namelist()) == shipped
