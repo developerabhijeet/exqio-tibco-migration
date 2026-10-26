@@ -61,6 +61,19 @@ async def test_toolchain_presence_is_not_checked_on_the_api(client, monkeypatch)
     assert go["selectable"] is False  # not implemented: refused whatever the tools
 
 
+async def test_only_an_admin_changes_the_default_stack(client):
+    ok = await client.put("/settings", json={"default_stack": "java"}, headers=ADMIN)
+    assert ok.status_code == 200 and ok.json()["default_stack"] == "java"
+    for user in ("architect.lee", "viewer.val"):
+        r = await client.put("/settings", json={"default_stack": "dotnet"}, headers={"X-User": user})
+        assert r.status_code == 403 and r.json()["detail"] == "this needs the admin role", user
+    # a request that leaves the default as it is stays open to the roles that may edit other settings
+    same = await client.put("/settings", json={"default_stack": "java", "langfuse_enabled": False},
+                            headers={"X-User": "architect.lee"})
+    assert same.status_code == 200 and same.json()["default_stack"] == "java"
+    await client.put("/settings", json={"default_stack": "dotnet"}, headers=ADMIN)
+
+
 async def test_stacks_report_what_the_caller_may_do(client):
     for user, change, default in [("architect.lee", True, False), ("ops.sam", True, True), ("viewer.val", False, False)]:
         body = (await client.get("/stacks", headers={"X-User": user})).json()

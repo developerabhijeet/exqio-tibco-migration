@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
+from api.app.deps import ADMIN_ONLY, PrincipalDep, RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.models import Eval, Process
 from api.app.routers.stacks import require_available
 from api.app.services import providers as provider_svc
@@ -49,8 +49,10 @@ async def get_settings(settings: SettingsDep, session: SessionDep) -> dict[str, 
 
 @router.put("/settings")
 async def put_settings(body: SettingsPatch, session: SessionDep, settings: SettingsDep,
-                       user: UserDep) -> dict[str, Any]:
-    if body.default_stack is not None:
+                       user: UserDep, principal: PrincipalDep) -> dict[str, Any]:
+    if body.default_stack is not None and body.default_stack != settings.default_stack:
+        if "admin" not in principal.roles:  # the install default is an admin's call
+            raise HTTPException(status_code=403, detail=ADMIN_ONLY)
         require_available(body.default_stack, settings)
     try:
         await svc.update(session, settings, body.model_dump(exclude_none=True), user)

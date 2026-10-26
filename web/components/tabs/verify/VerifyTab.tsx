@@ -61,7 +61,7 @@ export function VerifyTab() {
             difference is a defect unless a finding decided Fix explains it. QA approves parity (G5).
           </p>
           <div className="mt-2 max-w-[720px]">
-            <StackNote recordStack={recordStack} kind="build" />
+            <StackNote recordStack={recordStack} kind={build.data?.stack ? "build" : "design"} />
           </div>
         </div>
         <ProcessPicker />

@@ -120,7 +120,7 @@ export function BuildTab() {
             same job. An engineer approves the build (G4).
           </p>
           <div className="mt-2 max-w-[720px]">
-            <StackNote recordStack={recordStack} kind="build" />
+            <StackNote recordStack={recordStack} kind={build.data?.stack ? "build" : "design"} />
           </div>
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">

@@ -26,7 +26,7 @@ export function StackNote({ recordStack, kind }: { recordStack: string | undefin
   };
   return (
     <p role="status" data-testid="stack-note" className="rounded-card border border-line bg-warm px-3 py-2 text-[13.5px] text-ink">
-      {kind === "design" ? "Designed" : "Built"} for {name(recordStack)}; the project now targets {name(projectStack)}.
+      {kind === "build" ? "Built" : "Designed"} for {name(recordStack)}; the project now targets {name(projectStack)}.
       Re-run Design for {name(projectStack)}{kind === "build" ? " and build again" : ""}.
     </p>
   );
