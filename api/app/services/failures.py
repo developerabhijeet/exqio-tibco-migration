@@ -17,9 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
-from api.app.connectors.confluence_page import PAGE_MASKED_FIELDS
-from api.app.connectors.figma import one_line
 from api.app.models import Build, FieldDiff, Plan, Scenario, ScenarioRun, TestResult
+from api.app.services.text_safety import MASKED_FIELDS, one_line
 from api.app.services.uploads import UploadError
 from engine.agents.provider import mask_sensitive
 from engine.memory.model import KnowledgeError, guard_text
@@ -30,6 +29,7 @@ TITLE_LIMIT = 200
 STEP_LOG_LINES = 60
 COMPILER_ERRORS = 25
 MAX_TESTS = 100
+MAX_ITEMS = 100
 
 _MATCH = re.compile(r"(?i)error|exception|fail|fatal|denied|refused|timeout")
 _COMPILER = re.compile(r"(?i)\berror\s+(?:CS|MSB|NU)\d+|:\s*error\b|\[ERROR\]")
@@ -56,27 +56,40 @@ class FailureItem(BaseModel):
 
 
 def clean(text: str) -> str:
-    """``text`` masked, without control characters (newlines and tabs stay) or literal citation
-    markers. Masked first so a secret is never cut into an unrecognisable half."""
-    return _MARKER.sub("", _CONTROL.sub("", mask_sensitive(text or "", PAGE_MASKED_FIELDS)))
+    """``text`` without control characters (newlines and tabs stay) or literal citation markers,
+    masked. Control characters go first so one inside a secret cannot dodge the masker; the
+    markers are stripped until none is left (``[[S1]S2]`` must not leave ``[S2]``)."""
+    out = mask_sensitive(_CONTROL.sub("", text or ""), MASKED_FIELDS)
+    while True:
+        stripped = _MARKER.sub("", out)
+        if stripped == out:
+            return mask_sensitive(out, MASKED_FIELDS)
+        out = stripped
 
 
 def _cap(text: str, limit: int) -> str:
-    """Head and tail of ``text`` when it is longer than ``limit``."""
+    """Head and tail of ``text`` when it is longer than ``limit``, with a note of what is missing."""
     if len(text) <= limit:
         return text
-    half = (limit - 3) // 2
-    return f"{text[:half]}\n…\n{text[-half:]}"
+    keep = max(limit - 60, 0) // 2
+    omitted = len(text) - 2 * keep
+    return f"{text[:keep]}\n[… {omitted} characters omitted …]\n{text[len(text) - keep:]}"
+
+
+def _gap(n: int) -> str:
+    return f"[… {n} line{'s' if n != 1 else ''} omitted …]"
 
 
 def excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
     """The lines that matter in a log: those mentioning an error with two lines of context,
-    overlapping ranges merged and gaps marked with ``…``. A log without any gives its last 200
-    lines. Cut to ``limit`` characters, keeping head and tail."""
+    overlapping ranges merged and each gap noted as ``[… N lines omitted …]``. A log without any
+    gives its last 200 lines. Cut to ``limit`` characters, keeping head and tail."""
     lines = text.splitlines()
     hits = [i for i, line in enumerate(lines) if _MATCH.search(line)]
     if not hits:
-        return _cap("\n".join(lines[-200:]), limit)
+        tail = lines[-200:]
+        head = [_gap(len(lines) - len(tail))] if len(lines) > len(tail) else []
+        return _cap("\n".join(head + tail), limit)
     ranges: list[list[int]] = []
     for i in hits:
         lo, hi = max(0, i - 2), min(len(lines) - 1, i + 2)
@@ -84,13 +97,16 @@ def excerpt(text: str, limit: int = EXCERPT_LIMIT) -> str:
             ranges[-1][1] = max(ranges[-1][1], hi)
         else:
             ranges.append([lo, hi])
-    parts = ["\n".join(lines[lo : hi + 1]) for lo, hi in ranges]
-    out = "\n…\n".join(parts)
-    if ranges[0][0] > 0:
-        out = "…\n" + out
-    if ranges[-1][1] < len(lines) - 1:
-        out += "\n…"
-    return _cap(out, limit)
+    out: list[str] = []
+    last = -1
+    for lo, hi in ranges:
+        if lo > last + 1:
+            out.append(_gap(lo - last - 1))
+        out.extend(lines[lo : hi + 1])
+        last = hi
+    if last < len(lines) - 1:
+        out.append(_gap(len(lines) - 1 - last))
+    return _cap("\n".join(out), limit)
 
 
 def _title(value: str) -> str:
@@ -108,7 +124,10 @@ def read_log_upload(name: str, data: bytes) -> FailureItem:
     try:
         raw = data.decode("utf-8")
     except UnicodeDecodeError:
-        raw = data.decode("latin-1")
+        try:
+            raw = data.decode("cp1252")
+        except UnicodeDecodeError:  # the five bytes cp1252 leaves undefined
+            raw = data.decode("latin-1")
     try:
         guard_text(raw)
     except KnowledgeError as exc:
@@ -139,7 +158,21 @@ def store_log(settings: Settings, iteration_id: str, item: FailureItem) -> Path:
 
 
 def _tail(text: str, n: int) -> str:
-    return "\n".join(text.splitlines()[-n:])
+    """The last ``n`` lines of ``text`` (the first of them a note when some are left out)."""
+    lines = text.splitlines()
+    if len(lines) <= n:
+        return "\n".join(lines)
+    return "\n".join([_gap(len(lines) - (n - 1)), *lines[-(n - 1):]])
+
+
+def _dedupe_and_cap(items: list[FailureItem]) -> list[FailureItem]:
+    """One item per key (the first wins) and at most ``MAX_ITEMS``; a plan error is kept over the
+    tail of the list."""
+    seen: set[str] = set()
+    unique = [i for i in items if not (i.key in seen or seen.add(i.key))]
+    plans = [i for i in unique if i.kind == "plan_error"]
+    rest = [i for i in unique if i.kind != "plan_error"]
+    return rest[: MAX_ITEMS - len(plans)] + plans
 
 
 async def collect_failures(session: AsyncSession, process_id: str) -> list[FailureItem]:
@@ -162,12 +195,12 @@ async def collect_failures(session: AsyncSession, process_id: str) -> list[Failu
             continue
         name = str(step.get("name") or "step")
         log = str(step.get("log") or "")
-        add("build_failure", build.id, name, _tail(clean(log), STEP_LOG_LINES) or "(no log)")
+        add("build_failure", build.id, name, _tail(log, STEP_LOG_LINES) or "(no log)")
         errors = [ln for ln in log.splitlines() if _COMPILER.search(ln)][:COMPILER_ERRORS]
         if errors:
             add("build_failure", build.id, f"{name}: compiler errors", "\n".join(errors))
     if build.error and not any(i.kind == "build_failure" for i in items):
-        add("build_failure", build.id, "build error", excerpt(clean(build.error)))
+        add("build_failure", build.id, "build error", excerpt(build.error))
 
     tests = (await session.scalars(
         select(TestResult).where(TestResult.build_id == build.id, TestResult.outcome == "failed")
@@ -200,5 +233,5 @@ async def collect_failures(session: AsyncSession, process_id: str) -> list[Failu
         select(Plan).where(Plan.build_id == build.id).order_by(Plan.created_at.desc(), Plan.id.desc()).limit(1)
     )
     if plan is not None and plan.status == "failed":
-        add("plan_error", plan.id, "infrastructure plan", excerpt(clean(plan.output or "")) or "(no output)")
-    return items
+        add("plan_error", plan.id, "infrastructure plan", excerpt(plan.output or "") or "(no output)")
+    return _dedupe_and_cap(items)

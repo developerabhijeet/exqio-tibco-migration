@@ -17,11 +17,12 @@ from xml.sax.saxutils import escape
 
 from pydantic import BaseModel, Field
 
+from api.app.services.text_safety import MASKED_FIELDS
 from engine.agents.provider import mask_sensitive
 from engine.stacks import get_stack
 
 #: Field names masked on the page on top of ``SENSITIVE_FIELDS`` (connection strings, keys).
-PAGE_MASKED_FIELDS = ("password", "pwd", "secret", "token", "api_key", "access_key")
+PAGE_MASKED_FIELDS = MASKED_FIELDS
 GATE_NAMES = ("G1", "G2", "G3", "G4", "G5", "G6")
 NONE = "<p><em>None.</em></p>"
 SECRET_LABEL = "secret (Key Vault; value not shown)"  # fixed text: not masked

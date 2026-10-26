@@ -20,6 +20,7 @@ from api.app.models import (
 )
 from api.app.services.failures import (
     FailureItem,
+    clean,
     collect_failures,
     excerpt,
     read_log_upload,
@@ -126,8 +127,20 @@ def test_excerpt_keeps_error_lines_with_context():
 def test_excerpt_without_errors_is_the_tail_and_is_capped():
     text = "\n".join(f"row {i}" for i in range(500))
     out = excerpt(text, limit=300)
-    assert len(out) <= 300 and "row 499" not in out.split("…")[0] and out.endswith("row 499")
-    assert excerpt("\n".join(f"row {i}" for i in range(500))).splitlines()[0] == "row 300"
+    assert len(out) <= 300 and "characters omitted" in out and out.endswith("row 499")
+    assert excerpt("\n".join(f"row {i}" for i in range(500))).splitlines()[:2] == ["[… 300 lines omitted …]", "row 300"]
+
+
+def test_excerpt_notes_what_it_leaves_out():
+    text = "\n".join(["ok"] * 50 + ["fatal: boom"] + ["ok"] * 50)
+    out = excerpt(text)
+    assert out.splitlines()[0] == "[… 48 lines omitted …]" and out.splitlines()[-1] == "[… 48 lines omitted …]"
+    assert "fatal: boom" in out
+
+
+def test_clean_strips_nested_markers_and_control_characters_inside_secrets():
+    assert "[S" not in clean("a [[S1]S2] b [[[S3]S4]S5]")
+    assert "hunter2" not in clean("pass\x00word=hunter2")
 
 
 def test_binary_log_is_refused():
@@ -165,3 +178,51 @@ def test_sample_maven_log_and_store(settings, tmp_path):
     with pytest.raises(ValueError):
         store_log(settings, "it123", FailureItem(kind="uploaded_log", ref="a", title="a", text="t",
                                                  process_id="", sha256="../../x"))
+
+
+def test_upload_at_exactly_5_mb_is_accepted_and_cp1252_is_decoded():
+    assert read_log_upload("ok.log", b"x" * (5 * 1024 * 1024)).kind == "uploaded_log"
+    assert "\u201cquoted\u201d failed" in read_log_upload("w.log", b"\x93quoted\x94 failed").text
+
+
+async def test_error_run_without_diffs_falls_back_to_status_and_report(session, proc):
+    build = Build(process_id=proc.id, status="passed", steps=[])
+    scenario = Scenario(process_id=proc.id, key="boom", name="boom", data={})
+    session.add_all([build, scenario])
+    await session.flush()
+    session.add(ScenarioRun(build_id=build.id, scenario_id=scenario.id, status="error",
+                            report={"error": "connection refused"}))
+    await session.commit()
+    item = next(i for i in await collect_failures(session, proc.id) if i.kind == "parity_defect")
+    assert "status: error" in item.text and "connection refused" in item.text
+
+
+async def test_caps_and_dedupe(session, proc):
+    log = "\n".join(f"error CS{1000 + i}: e{i}" for i in range(80))
+    build = Build(process_id=proc.id, status="failed", steps=[{"name": "build", "ok": False, "log": log}])
+    session.add(build)
+    await session.flush()
+    session.add_all([TestResult(build_id=build.id, name=f"T.t{i}", outcome="failed", message="m") for i in range(150)])
+    scenarios = [Scenario(process_id=proc.id, key=f"s{i}", name="s", data={}) for i in range(30)]
+    session.add_all(scenarios)
+    await session.flush()
+    session.add_all([ScenarioRun(build_id=build.id, scenario_id=sc.id, status="error", report={}) for sc in scenarios])
+    session.add(Plan(build_id=build.id, status="failed", output="Error: nope"))
+    await session.commit()
+    items = await collect_failures(session, proc.id)
+    step = next(i for i in items if i.title == "build")
+    assert len(step.text.splitlines()) <= 60 and "lines omitted" in step.text
+    errors = next(i for i in items if i.title == "build: compiler errors")
+    assert len(errors.text.splitlines()) == 25
+    assert len(items) == 100 and items[-1].kind == "plan_error"
+    assert len([i for i in items if i.kind == "test_failure"]) <= 100
+    assert len({i.key for i in items}) == len(items)
+
+
+async def test_same_named_tests_are_one_item(session, proc):
+    build = Build(process_id=proc.id, status="failed", steps=[])
+    session.add(build)
+    await session.flush()
+    session.add_all([TestResult(build_id=build.id, name="T.same", outcome="failed", message=m) for m in "ab"])
+    await session.commit()
+    assert len([i for i in await collect_failures(session, proc.id) if i.kind == "test_failure"]) == 1

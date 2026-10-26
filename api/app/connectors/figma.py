@@ -28,9 +28,8 @@ from pydantic import BaseModel
 
 from api.app.connectors.base import ConnectionTest, ConnectorError
 from api.app.connectors.config import host_allowed
-from api.app.connectors.confluence_page import PAGE_MASKED_FIELDS
 from api.app.connectors.registry import BaseConnector, register
-from engine.agents.provider import mask_sensitive
+from api.app.services.text_safety import one_line
 
 FRAME_TYPES = frozenset({"FRAME", "COMPONENT", "COMPONENT_SET"})
 TEXT_MAX = 4000
@@ -70,20 +69,6 @@ def frame_url(web_url: str, file_key: str, node_id: str) -> str:
 
 
 LABEL_MAX = 120
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\s]+")
-
-
-def _mask(value: str) -> str:
-    return mask_sensitive(value, PAGE_MASKED_FIELDS)
-
-
-def one_line(value: str, limit: int | None = None) -> str:
-    """``value`` masked, on one line (whitespace and control characters collapsed, ``<`` and ``>``
-    removed), cut to ``limit`` characters."""
-    out = _CONTROL.sub(" ", _mask(str(value)).replace("<", "").replace(">", "")).strip()
-    return out[:limit] if limit else out
-
-
 def collect_text(node: dict[str, Any]) -> str:
     """The ``characters`` of the TEXT nodes under ``node``, depth first, one per line, masked and cut
     to 4 000 characters (masked first, so a secret is never cut into an unrecognisable half)."""
