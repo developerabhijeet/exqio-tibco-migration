@@ -355,33 +355,6 @@ export interface AuditEntry {
   detail: Record<string, unknown>;
 }
 
-/** The memory node version an Ask hit came from (api/app/schemas/analysis.py MemoryCitationOut). */
-export interface MemoryCitation {
-  uid: string;
-  label: string;
-  phase: string;
-  revision: number;
-  artifact_type: string;
-  artifact_id?: string | null;
-  process_id?: string | null;
-  path?: string | null;
-}
-
-export interface AskCitation {
-  id: string;
-  kind: string;
-  process_id: string | null;
-  text: string;
-  score?: number;
-  citation?: MemoryCitation | null;
-}
-
-export interface AskAnswer {
-  text: string;
-  used_model: boolean;
-  citations: AskCitation[];
-}
-
 // Design record (engine/dotnet_gen/models.py DesignRecord, served by GET /processes/{id}/design).
 export interface DesignMappingRow {
   activity_id: string;

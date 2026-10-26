@@ -7,7 +7,6 @@ import type {
   FigmaFrame,
   FigmaFrameLink,
   JiraItem,
-  AskAnswer,
   AuditEntry,
   DesignRecord,
   Domain,
@@ -130,7 +129,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+export async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   const oidc = isOidc();
   if (!oidc) headers.set("X-User", currentUser);
@@ -231,7 +230,6 @@ export const api = {
   decideGate: (processId: string, gate: string, state: "approved" | "rejected", note?: string) =>
     json<Gate>(`/gates/${processId}/${gate}`, post({ state, note: note ?? null })),
   audit: (processId: string) => json<AuditEntry[]>(`/processes/${processId}/audit`),
-  ask: (projectId: string, question: string) => json<AskAnswer>("/ask", post({ project_id: projectId, question })),
 
   // Task 19
   generateDesign: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/design`, post()),

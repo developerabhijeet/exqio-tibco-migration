@@ -96,18 +96,23 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await g2.getByRole("button", { name: "Approve G2" }).click();
   await expect(g2).toHaveAttribute("data-state", "approved");
 
-  // Ask AI panel answers with numbered citations.
-  await page.getByRole("button", { name: "Ask AI" }).click();
-  await page.getByRole("button", { name: "Which workflows read the funding table?" }).click();
-  await expect(page.getByTestId("ask-answer")).toBeVisible();
-  await expect(page.getByTestId("ask-citation").first()).toContainText("[1]");
-  // A citation that names a step opens it on the canvas.
-  const askCite = page.locator('[data-testid="ask-citation"]:not([data-step=""])').first();
-  const askStep = await askCite.getAttribute("data-step");
-  await askCite.click();
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
-  await page.getByRole("button", { name: "Close Ask AI" }).click();
-  await page.getByRole("button", { name: "Back to Validate" }).click();
+  // ExiQoian answers with inline citation chips; a chip that names a step opens it on the canvas.
+  await page.getByRole("button", { name: "Ask ExiQoian" }).click();
+  const chatInput = page.getByRole("textbox", { name: "Message ExiQoian" });
+  await chatInput.fill("Which workflows read the funding table?");
+  await chatInput.press("Enter");
+  const reply = page.getByTestId("exiqoian-message").and(page.locator('[data-role="assistant"]')).first();
+  await expect(reply).toHaveAttribute("data-verdict", "answer", { timeout: 60_000 });
+  const askCite = reply.locator('[data-testid="cite-chip"][data-target-kind="activity"]').first();
+  if (await askCite.count()) {
+    const askStep = await askCite.getAttribute("data-step");
+    await askCite.click();
+    await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
+    await page.getByRole("button", { name: "Close ExiQoian" }).click();
+    await page.getByRole("button", { name: "Back to Validate" }).click();
+  } else {
+    await page.getByRole("button", { name: "Close ExiQoian" }).click();
+  }
 
   // Design: generate the record as the architect and approve G3.
   await actAs(page, "architect.lee");

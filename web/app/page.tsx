@@ -11,7 +11,6 @@ import { DesignTab } from "@/components/tabs/design/DesignTab";
 import { BuildTab } from "@/components/tabs/build/BuildTab";
 import { VerifyTab } from "@/components/tabs/verify/VerifyTab";
 import { DeployTab } from "@/components/tabs/deploy/DeployTab";
-import { AskPanel } from "@/components/tabs/validate/AskPanel";
 import { Empty } from "@/components/ui/Empty";
 import { RoleNotice } from "@/components/shell/RoleNotice";
 import { useProjects, useReport } from "@/lib/queries";
@@ -163,7 +162,6 @@ export default function Home() {
           <NextStep steps={steps} active={active} onGo={(i) => setStep(STEP_KEYS[i])} />
         </div>
       ) : null}
-      <AskPanel key={projectId ?? "none"} />
     </div>
   );
 }

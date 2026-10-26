@@ -2,6 +2,8 @@
 
 import { usePathname } from "next/navigation";
 import { TopBar } from "./TopBar";
+import { ExiQoianPanel } from "@/components/exiqoian/ExiQoianPanel";
+import { useAppState } from "@/lib/state";
 import { Footer } from "./Footer";
 
 /**
@@ -17,6 +19,7 @@ const BARE = ["/signin"];
  */
 export function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  const { projectId } = useAppState();
   if (BARE.some((p) => path === p || path.startsWith(`${p}/`))) {
     return <main className="flex-1 overflow-y-auto">{children}</main>;
   }
@@ -31,6 +34,7 @@ export function Chrome({ children }: { children: React.ReactNode }) {
         <div className="mx-auto flex min-h-full w-full max-w-content flex-col px-[var(--gutter)] py-8 print:block">{children}</div>
       </main>
       <Footer />
+      {projectId ? <ExiQoianPanel key={projectId} /> : null}
     </>
   );
 }

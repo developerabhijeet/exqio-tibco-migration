@@ -64,8 +64,9 @@ interface AppState {
    */
   buildFile: BuildFileRequest | null;
   openBuildFile: (path: string | null, line?: number | null, processId?: string | null) => void;
-  askOpen: boolean;
-  setAskOpen: (open: boolean) => void;
+  /** The ExiQoian slide-over (components/exiqoian), open across steps and screens. */
+  chatOpen: boolean;
+  setChatOpen: (open: boolean) => void;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -97,7 +98,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [nodeId, selectNode] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("Config");
   const [returnTo, setReturnTo] = useState<StepKey | null>(null);
-  const [askOpen, setAskOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [buildFile, setBuildFile] = useState<BuildFileRequest | null>(null);
   const openBuildFile = useCallback((path: string | null, line?: number | null, pid?: string | null) => {
     setBuildFile(path ? { path, line: line ?? null, processId: pid ?? null, at: Date.now() } : null);
@@ -265,8 +266,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       returnTo,
       buildFile,
       openBuildFile,
-      askOpen,
-      setAskOpen,
+      chatOpen,
+      setChatOpen,
     }),
     [
       auth,
@@ -287,7 +288,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       returnTo,
       buildFile,
       openBuildFile,
-      askOpen,
+      chatOpen,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

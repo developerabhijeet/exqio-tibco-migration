@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ClipboardCheck, Coins, Headphones, History, MoreHorizontal, Network, Settings } from "lucide-react";
 import { useBrand } from "@/lib/brand";
 import { useStepStates } from "@/lib/steps";
+import { ExiQoianLauncher } from "@/components/exiqoian/ExiQoianLauncher";
 import { ProjectSelector } from "./ProjectSelector";
 import { UserMenu } from "./UserMenu";
 
@@ -170,6 +171,7 @@ export function TopBar() {
           <div className="md:max-lg:hidden">
             <PhasePill />
           </div>
+          <ExiQoianLauncher />
         </div>
         <div className="ml-auto flex h-16 min-w-0 items-center gap-1">
           <nav className="flex min-w-0 items-center gap-0.5 max-xl:hidden" aria-label="Secondary">

@@ -29,7 +29,7 @@ function Count({ n, label, tone }: { n: number; label: string; tone: "gate" | "d
 
 export function ValidateTab() {
   const qc = useQueryClient();
-  const { processId, setAskOpen } = useAppState();
+  const { processId, setChatOpen } = useAppState();
   const { projectId } = useAppState();
   const may = usePermission("validate");
   const processes = useProcesses(projectId);
@@ -81,8 +81,8 @@ export function ValidateTab() {
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <ProcessPicker />
-          <button type="button" className="btn-secondary" onClick={() => setAskOpen(true)}>
-            <MessageSquare size={16} aria-hidden /> Ask AI
+          <button type="button" className="btn-secondary" onClick={() => setChatOpen(true)}>
+            <MessageSquare size={16} aria-hidden /> Ask ExiQoian
           </button>
           <button type="button" className="btn-secondary" disabled={!processId} onClick={() => setAuditOpen(true)}>
             <History size={16} aria-hidden /> Audit trail

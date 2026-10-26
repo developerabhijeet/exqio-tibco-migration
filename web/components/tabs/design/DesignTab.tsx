@@ -83,7 +83,7 @@ export function DesignTab() {
   const running = stream?.status === "running";
   const rec = design.data?.record ?? null;
   const g3 = (gates.data ?? []).find((g) => g.gate === "G3");
-  // The active provider, as AskPanel reads it. The built-in provider writes the narrative without
+  // The active provider, as the Settings screen reads it. The built-in provider writes the narrative without
   // calling a model, and the eyebrow says so: the design record must not imply a model read it.
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 60_000 });
   const provider = health.data?.provider;
