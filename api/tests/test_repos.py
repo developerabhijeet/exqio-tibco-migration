@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -329,3 +330,37 @@ async def test_a_pull_without_changes_opens_no_iteration(client, fake_github, fi
     out = await wait_terminal(client, r.json()["job_id"])
     assert out["kind"] == "none" and "no changes" in out["message"]
     assert [i["kind"] for i in (await client.get(f"/projects/{P}/iterations")).json()] == ["initial"]
+
+
+async def test_a_refetch_never_touches_an_edit_set_folder(client, app, fake_github, finished_build, engineer,
+                                                          edited_export):  # final I5
+    from api.app.models import EditSet
+    from api.app.services import repos as repos_svc
+
+    files = await edited_export(finished_build, {AGENT_FILE: replace_body})
+    fake_github.add_repo("gmf/svc", tree=files)
+    r = await client.post(f"/projects/{P}/repos", headers=engineer,
+                          json={"repo": "gmf/svc", "branch": "main", "purpose": "build", "process_id": PROC})
+    repo_id = r.json()["id"]
+    first = await wait_terminal(client, r.json()["job_id"])
+    async with app.state.sessionmaker() as s:
+        es = await s.get(EditSet, first["id"])
+        root = Path(es.root_dir)
+        build = Build(process_id=PROC, status="queued", edit_set_id=es.id)  # its build is queued
+        s.add(build)
+        await s.flush()
+        s.add(Job(kind="build", status="queued", project_id=P, process_id=PROC, payload={"build_id": build.id},
+                  not_before=datetime.now(UTC) + timedelta(hours=1)))  # held: no worker claims it
+        await s.commit()
+    fake_github.commit("fix", {AGENT_FILE: lambda t: t + "// more\n"}, repo="gmf/svc")
+    other = await client.post(f"/repos/{repo_id}/pull", json={"branch": "fix"}, headers=engineer)
+    assert other.status_code == 202
+    assert (await wait_job(client, other.json()["job_id"]))["status"] == "failed"  # busy: the build is queued
+    # main again: unchanged for main (the other branch's fetch did not move main's last commit)
+    assert (await client.post(f"/repos/{repo_id}/pull", json={"branch": "main"}, headers=engineer)).json() == \
+        {"changed": False}
+    async with app.state.sessionmaker() as s:
+        row = await s.get(ProjectRepo, repo_id)
+    again = await repos_svc.queue_fetch(app.state.sessionmaker, row, "main", "engineer.ravi")  # forced re-fetch of A
+    assert (await wait_job(client, again))["status"] == "failed"
+    assert root.is_dir() and (root / AGENT_FILE).read_text().endswith("// fixed by hand\n}\n")

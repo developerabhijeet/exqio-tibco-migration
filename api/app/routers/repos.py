@@ -144,7 +144,7 @@ async def pull(repo_id: str, request: Request, principal: ConnectorDep, session:
         await session.commit()
         raise connector_errors(exc) from exc
     await session.commit()
-    if head == row.last_commit:
+    if head == await svc.last_fetched(session, row, branch):
         return {"changed": False}
     job_id = await svc.queue_fetch(request.app.state.sessionmaker, row, branch, principal.actor)
     return JSONResponse(status_code=202, content={"changed": True, "job_id": job_id, "commit": head})

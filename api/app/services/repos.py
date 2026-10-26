@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
@@ -38,7 +39,7 @@ from api.app.connectors.registry import connector_for
 from api.app.db import new_id
 from api.app.jobs.locks import try_advisory_lock
 from api.app.jobs.runner import enqueue
-from api.app.models import Build, File, Process, ProjectRepo, Upload
+from api.app.models import AuditLog, Build, File, Process, ProjectRepo, Upload
 from api.app.services import edits as edits_svc
 from api.app.services import gates as gate_svc
 from api.app.services import github_push as github_push_svc
@@ -168,6 +169,18 @@ async def queue_fetch(sessionmaker, row: ProjectRepo, branch: str, actor: str) -
                          process_id=row.process_id)
 
 
+async def last_fetched(session: AsyncSession, row: ProjectRepo, branch: str) -> str | None:
+    """The commit last fetched from ``branch``: ``last_commit`` for the connected branch, else the
+    newest ``repo pulled`` audit line of that branch."""
+    if branch == row.default_branch:
+        return row.last_commit
+    line = await session.scalar(
+        select(AuditLog).where(AuditLog.action == "repo pulled", AuditLog.project_id == row.project_id,
+                               AuditLog.detail["repo_id"].astext == row.id, AuditLog.detail["branch"].astext == branch)
+        .order_by(AuditLog.id.desc()).limit(1))
+    return (line.detail or {}).get("commit") if line is not None else None
+
+
 async def remote_head(session: AsyncSession, settings: Settings, row: ProjectRepo, branch: str, actor: str) -> str:
     gh = await github(session, settings)
     repo = full_name(row)
@@ -210,8 +223,10 @@ def manifest_root(root: Path) -> Path | None:
 
 
 async def _clone(gh: GitHubConnector, settings: Settings, row: ProjectRepo, branch: str) -> tuple[str, Path]:
-    """Clone into a scratch folder of the repo, then move it to ``<commit>``; refused when larger
-    than ``upload_max_bytes`` (nothing is kept then)."""
+    """Clone into a scratch folder of the repo, then move it to ``<commit>-<nonce>``, a folder of
+    this fetch alone: an earlier fetch of the same commit may be an edit set's tree, which is never
+    replaced or removed (final review I5). Refused when larger than ``upload_max_bytes`` (nothing is
+    kept then)."""
     base = repos_dir(settings) / row.id
     base.mkdir(parents=True, exist_ok=True)
     scratch = base / f".clone-{uuid.uuid4().hex}"
@@ -221,9 +236,7 @@ async def _clone(gh: GitHubConnector, settings: Settings, row: ProjectRepo, bran
         if size > settings.upload_max_bytes:
             raise uploads.UploadTooLarge(f"{full_name(row)}@{branch} is larger than the configured upload limit "
                                          f"({size} > {settings.upload_max_bytes} bytes)")
-        dest = base / commit
-        if dest.exists():
-            shutil.rmtree(dest)
+        dest = base / f"{commit}-{uuid.uuid4().hex[:12]}"
         scratch.rename(dest)
         return commit, dest
     finally:
@@ -315,7 +328,8 @@ async def _classify(w: WorkerServices, repo_id: str, tree: Path, branch: str, co
         else:
             out = {"kind": "none", "id": None, "commit": commit, "message": NOTHING.format(branch=branch)}
             await ctx.log(out["message"])
-        row.last_commit = commit
+        if branch == row.default_branch:  # last_commit is the connected branch's; others are in the audit
+            row.last_commit = commit
         gate_svc.audit(s, None, actor, "repo pulled", project_id=row.project_id,
                        detail={"repo_id": row.id, "repo": full_name(row), "branch": branch, "commit": commit,
                                "result": out["kind"], "id": out["id"]})
