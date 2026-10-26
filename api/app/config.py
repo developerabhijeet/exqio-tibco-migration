@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     deploy_credential_mode: Literal["workload_identity", "local"] = "local"
     api_base_path: str = ""
     nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
+    # Target stacks this install may build (comma separated; the chart's stacks.enabled, default dotnet)
+    enabled_stacks: str = "dotnet,java,go,python"
     tf_cli_config_file: str = ""  # Terraform CLI config (provider network mirror) for the validators
     # terraform init in the infra validation downloads providers. False skips init and module validate
     # (recorded as skipped, never as passed): for e2e and machines with no registry or mirror.
@@ -184,6 +186,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def enabled_stack_list(self) -> list[str]:
+        return [k.strip() for k in self.enabled_stacks.split(",") if k.strip()]
 
     @property
     def uploads_dir(self) -> Path:
