@@ -439,7 +439,8 @@ RELS_CLOSED_AT = _render_rels_at_revision("closed_in")
 REVISION_AT = "MATCH (r:Revision {project_id: $project_id, n: $n}) RETURN r {.*} AS revision"
 REVISIONS_BEFORE = (
     "MATCH (r:Revision {project_id: $project_id}) USING INDEX SEEK r:Revision(project_id, n) "
-    "WHERE r.n < $before RETURN r {.*} AS revision ORDER BY r.n DESC LIMIT $limit"
+    "WHERE r.n < $before AND ($iteration IS NULL OR r.iteration = $iteration) "
+    "RETURN r {.*} AS revision ORDER BY r.n DESC LIMIT $limit"
 )
 
 # ------------------------------------------------------------------ hybrid search

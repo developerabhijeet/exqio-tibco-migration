@@ -237,10 +237,11 @@ class MemoryGraph:
                                                 "k": _moment(None)})
 
     async def revisions(self, project_id: str, *, before: int | None = None,
-                        limit: int = 50) -> list[RevisionOut]:
-        """Revisions below ``before`` (all when None), newest first."""
+                        limit: int = 50, iteration: int | None = None) -> list[RevisionOut]:
+        """Revisions below ``before`` (all when None), newest first; only those of ``iteration``
+        when given."""
         return await self._read(_revisions, {
-            "project_id": project_id, "limit": limit,
+            "project_id": project_id, "limit": limit, "iteration": iteration,
             "before": OPEN_VALID_TO if before is None else before})
 
     async def latest_revision(self, project_id: str) -> RevisionOut | None:

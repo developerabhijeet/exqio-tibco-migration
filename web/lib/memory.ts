@@ -263,8 +263,9 @@ export const memoryApi = {
     ),
   node: (projectId: string, uid: string, asOf: number | null) =>
     json<NodeDetail>(`${base(projectId)}/node${qs({ uid, as_of: asOf })}`),
-  revisions: (projectId: string, before?: number, limit = 200) =>
-    json<{ revisions: RevisionOut[] }>(`${base(projectId)}/revisions${qs({ before, limit })}`).then((r) => r.revisions),
+  /** Newest first; `iteration` keeps only that iteration's revisions (sub-project 6). */
+  revisions: (projectId: string, before?: number, limit = 200, iteration?: number) =>
+    json<{ revisions: RevisionOut[] }>(`${base(projectId)}/revisions${qs({ before, limit, iteration })}`).then((r) => r.revisions),
   diff: (projectId: string, n: number) => json<RevisionDiff>(`${base(projectId)}/revisions/${n}/diff`),
   curate: (projectId: string, body: CurationIn) =>
     json<CurationOut>(`${base(projectId)}/curations`, { method: "POST", body: JSON.stringify(body) }),

@@ -67,11 +67,13 @@ async def hybrid(graph: MemoryGraph, project_id: str, query: str, *,
                  labels: Sequence[str] = KNOWLEDGE_LABELS, side: str | None = None,
                  phase: str | None = None, k: int = 8, as_of: int | None = None,
                  min_terms: int = 2, vector_floor: float | None = None,
-                 include_obsolete: bool = False) -> list[MemoryHit]:
+                 include_obsolete: bool = False, prefer_iteration: int | None = None) -> list[MemoryHit]:
     """The ``k`` best nodes of ``labels`` for ``query`` as of revision ``as_of`` (current when
     None); ``side`` and ``phase`` filter on the version's properties. ``vector_floor=None``
     uses the active embedding backend's floor (raw cosine). A Memory made obsolete by a
-    curation is left out unless ``include_obsolete``."""
+    curation is left out unless ``include_obsolete``. ``prefer_iteration`` boosts no score: of the
+    hits that cleared the floors, those of that iteration (property ``iteration``) come first,
+    each group in score order."""
     unknown = set(labels) - set(NODE_LABELS)
     if unknown:
         raise ValueError(f"unknown node labels {sorted(unknown)}")
@@ -92,7 +94,15 @@ async def hybrid(graph: MemoryGraph, project_id: str, query: str, *,
         "v": vector, "want": k, "ft_limit": FT_OVERFETCH,
     }
     keyword, vec = await graph._read(_halves, p, embeddings.backend_name(), graph.exact_scan_max)
-    return _combine(keyword, vec, k)
+    if prefer_iteration is None:
+        return _combine(keyword, vec, k)
+    hits = _combine(keyword, vec, len(keyword.keys() | vec.keys()))
+    return prefer(hits, prefer_iteration)[:k]
+
+
+def prefer(hits: list[MemoryHit], iteration: int) -> list[MemoryHit]:
+    """``hits`` with those of ``iteration`` first; the order within each group is kept."""
+    return sorted(hits, key=lambda h: h.props.get("iteration") != iteration)
 
 
 async def _rows(tx: AsyncManagedTransaction, statement: str, p: dict[str, Any],
@@ -187,4 +197,4 @@ class MemoryRetriever(Protocol):
                        labels: Sequence[str] = KNOWLEDGE_LABELS, side: str | None = None,
                        phase: str | None = None, k: int = 8, as_of: int | None = None,
                        min_terms: int = 2, vector_floor: float | None = None,
-                       include_obsolete: bool = False) -> list[MemoryHit]: ...
+                       include_obsolete: bool = False, prefer_iteration: int | None = None) -> list[MemoryHit]: ...

@@ -19,7 +19,7 @@ _COMPILER_AT = re.compile(r"([\w./-]+\.cs)\((\d+),(\d+)\)")
 
 class BuildFileInput(BaseModel):
     path: str  # relative to the solution root
-    origin: str
+    origin: str  # BuildFile.origin, passed through as is (``hand``: a person's edit, sub-project 6)
     sha256: str = ""
     size: int = 0
 

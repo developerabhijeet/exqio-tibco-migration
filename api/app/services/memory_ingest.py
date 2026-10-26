@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, get_args
@@ -51,10 +52,13 @@ from api.app.models import (
     BuildFile,
     DesignRecord,
     Domain,
+    EditSet,
     FieldDiff,
     Gate,
     GraphEdge,
     GraphNode,
+    Iteration,
+    IterationInput,
     Job,
     MemoryEvent,
     Plan,
@@ -64,6 +68,7 @@ from api.app.models import (
 )
 from api.app.services import evidence as evidence_svc
 from api.app.services import gates as gate_svc
+from api.app.services import iterations as iteration_svc
 from api.app.services.analysis import chunk_entries
 from engine.domains.models import Graph
 from engine.dotnet_gen.models import DesignRecord as EngineDesign
@@ -85,6 +90,13 @@ from engine.memory.projectors.design import project_design
 from engine.memory.projectors.estate import DomainInput, project_estate
 from engine.memory.projectors.events import EventInput, project_event
 from engine.memory.projectors.gate import GateInput, project_gate
+from engine.memory.projectors.iteration import (
+    EditedFile,
+    IterationIngest,
+    IterationInputRef,
+    IterationProcess,
+    project_iteration,
+)
 from engine.memory.projectors.seed import project_seed
 from engine.memory.projectors.verify import DefectInput, ParityInput, RunInput, project_verify
 
@@ -131,11 +143,20 @@ def dedupe_key(project_id: str | None, scope: str, source: dict[str, Any] | None
 
 
 def _payload(*, project_id: str | None, phase: Phase, scope: str, source: dict[str, Any],
-             actor: str, ingest_key: str, source_kind: str, source_job_id: str | None) -> dict[str, Any]:
-    return {"project_id": project_id, "phase": phase, "scope": scope, "source_kind": source_kind,
-            "source_job_id": source_job_id, "source": source, "actor": actor,
-            "ingest_key": ingest_key,
-            "dedupe_key": dedupe_key(project_id or source.get("process_id"), scope, source, phase)}
+             actor: str, ingest_key: str, source_kind: str, source_job_id: str | None,
+             iteration: int | None = None) -> dict[str, Any]:
+    out = {"project_id": project_id, "phase": phase, "scope": scope, "source_kind": source_kind,
+           "source_job_id": source_job_id, "source": source, "actor": actor,
+           "ingest_key": ingest_key,
+           "dedupe_key": dedupe_key(project_id or source.get("process_id"), scope, source, phase)}
+    if iteration is not None:  # the iteration the source job was stamped with (sub-project 6)
+        out["iteration"] = iteration
+    return out
+
+
+def _stamped(payload: dict[str, Any]) -> int | None:
+    value = payload.get("iteration")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def followup_payload(kind: str, job_id: str, project_id: str | None, process_id: str | None,
@@ -155,18 +176,18 @@ def followup_payload(kind: str, job_id: str, project_id: str | None, process_id:
     scope = template.format(process=process)
     return _payload(project_id=project_id, phase=phase, scope=scope, source=source,
                     actor=SYSTEM_ACTOR, ingest_key=f"{phase}:{job_id}", source_kind=kind,
-                    source_job_id=job_id)
+                    source_job_id=job_id, iteration=_stamped(payload))
 
 
 async def enqueue_ingest(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings, *,
                          project_id: str, phase: Phase, scope: str, source: dict[str, Any],
-                         actor: str, ingest_key: str) -> str | None:
-    """Queue an ingest outside a phase job (gates, seeds); ``None`` when memory is not
-    configured or a queued ingest of the scope already covers it."""
+                         actor: str, ingest_key: str, iteration: int | None = None) -> str | None:
+    """Queue an ingest outside a phase job (gates, seeds, an opened iteration); ``None`` when
+    memory is not configured or a queued ingest of the scope already covers it."""
     if settings.neo4j_uri == "":
         return None
     payload = _payload(project_id=project_id, phase=phase, scope=scope, source=source, actor=actor,
-                       ingest_key=ingest_key, source_kind=phase, source_job_id=None)
+                       ingest_key=ingest_key, source_kind=phase, source_job_id=None, iteration=iteration)
     return await enqueue(sessionmaker, INGEST_KIND, payload, project_id=project_id,
                          process_id=source.get("process_id"))
 
@@ -391,6 +412,52 @@ def load_seed() -> list[dict[str, Any]]:
     return load_seed_patterns()
 
 
+def named_path(text: str, paths: list[str]) -> str | None:
+    """The build file an input names: a path that appears whole in ``text``, else the one file
+    whose base name appears as a word (``Svc.cs(3,1): error``)."""
+    whole = [p for p in paths if p in text]
+    if whole:
+        return max(whole, key=len)
+    by_name: dict[str, list[str]] = {}
+    for p in paths:
+        by_name.setdefault(p.rsplit("/", 1)[-1], []).append(p)
+    for name, found in sorted(by_name.items(), key=lambda kv: -len(kv[0])):
+        if len(found) == 1 and re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", text):
+            return found[0]
+    return None
+
+
+async def load_iteration(s: AsyncSession, iteration_id: str) -> IterationIngest:
+    """An iteration's processes (IR ids), its requirements, its inputs (each with the build file
+    it names, from the process's latest build) and its edit set's files."""
+    row = await s.get(Iteration, iteration_id)
+    if row is None:
+        raise ValueError(f"iteration {iteration_id!r} not found")
+    inputs = (await s.execute(select(IterationInput).where(IterationInput.iteration_id == row.id)
+                              .order_by(IterationInput.created_at, IterationInput.id))).scalars().all()
+    processes: list[IterationProcess] = []
+    for pid in row.process_ids or []:
+        process = await s.get(Process, pid)
+        if process is None:
+            continue
+        build = await evidence_svc.latest_build(s, pid)
+        paths = list((await s.execute(select(BuildFile.path).where(BuildFile.build_id == build.id))).scalars()) \
+            if build else []
+        mine = [i for i in inputs if i.process_id in (pid, None)]
+        processes.append(IterationProcess(ir_id=process.ir_id, api_id=pid, requirements=row.requirements or "", inputs=[
+            IterationInputRef(id=i.id, kind=i.kind, title=i.title, text=i.text or "", ref=i.ref,
+                              path=named_path(f"{i.title}\n{i.text or ''}", paths))
+            for i in mine]))
+    edit_set = None
+    es = await s.scalar(select(EditSet).where(EditSet.iteration_id == row.id).order_by(EditSet.created_at.desc())
+                        .limit(1))
+    if es is not None:
+        edit_set = [EditedFile(path=str(f.get("path")), change=str(f.get("change")))
+                    for f in (es.files or []) if f.get("path") and f.get("change") != "unchanged"]
+    return IterationIngest(project_id=row.project_id, n=row.n, iteration_id=row.id, processes=processes,
+                           edit_set=edit_set)
+
+
 # ------------------------------------------------------------------ the job
 @dataclass
 class _Projected:
@@ -457,10 +524,14 @@ async def _seed(s, memory, project_id, source):
     return _Projected([project_seed(load_seed())])
 
 
+async def _iteration_phase(s, memory, project_id, source):
+    return _Projected(project_iteration(await load_iteration(s, source["iteration_id"])))
+
+
 PROJECTORS: dict[str, Projector] = {
     "discover": _discover, "analysis": _analysis, "design": _design, "build": _build,
     "verify": _verify, "deploy": _deploy, "gate": _gate, "decision": _event, "curation": _event,
-    "seed": _seed,
+    "seed": _seed, "iteration": _iteration_phase,
 }
 assert set(PROJECTORS) <= set(get_args(Phase))
 
@@ -474,12 +545,17 @@ async def _project_id(s: AsyncSession, payload: dict[str, Any]) -> str:
     return process.project_id
 
 
-async def _iteration(s: AsyncSession, process: Process | None) -> int:
-    """The process's current DesignRecord version (1 without one, and for project-wide scopes)."""
-    if process is None:
-        return 1
-    return await s.scalar(select(func.max(DesignRecord.version))
-                          .where(DesignRecord.process_id == process.id)) or 1
+async def _iteration(s: AsyncSession, project_id: str, process: Process | None,
+                     payload: dict[str, Any]) -> int:
+    """The revision's ``Iteration.n`` (rulings X12): the one the ingest (its source job) was
+    stamped with, else the process's current iteration, else (project-wide scopes) the project's
+    highest iteration; 1 when there is none."""
+    stamped = _stamped(payload)
+    if stamped is not None:
+        return stamped
+    if process is not None:
+        return (await iteration_svc.current_iteration(s, process.id)).n
+    return await s.scalar(select(func.max(Iteration.n)).where(Iteration.project_id == project_id)) or 1
 
 
 def _backoff(attempt: int) -> float:
@@ -509,6 +585,7 @@ async def blocking_job(s: AsyncSession) -> str | None:
 PREREQUISITE: dict[str, Phase] = {
     "analysis": "discover", "design": "discover", "build": "discover", "gate": "discover",
     "decision": "discover", "curation": "discover", "verify": "build", "deploy": "build",
+    "iteration": "discover",
 }
 _FAMILY = {"discover": "estate", "build": "build"}
 
@@ -602,7 +679,7 @@ async def ingest(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
                     await ctx.log(f"{phase} source {source} is not the latest of its process; "
                                   "superseded")
                     return dict(SUPERSEDED)
-                iteration = await _iteration(s, projected.process)
+                iteration = await _iteration(s, project_id, projected.process, p)
             meta = RevisionMeta(project_id=project_id, phase=phase, ingest_key=p["ingest_key"],
                                 actor=p.get("actor") or SYSTEM_ACTOR,
                                 source_job_id=p.get("source_job_id"), ingest_job_id=ctx.job_id,

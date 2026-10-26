@@ -129,9 +129,12 @@ async def node(project_id: str, request: Request, session: SessionDep, uid: Uid,
 @router.get("/revisions", response_model=RevisionsOut)
 async def revisions(project_id: str, request: Request, session: SessionDep,
                     before: Annotated[int | None, Query(ge=1)] = None,
-                    limit: Annotated[int, Query(ge=1, le=200)] = 50) -> RevisionsOut:
+                    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+                    iteration: Annotated[int | None, Query(ge=1)] = None) -> RevisionsOut:
+    """Revisions newest first, each with its ``iteration``; ``iteration=<n>`` keeps that one's."""
     await _project(session, project_id)
-    found = await _read(request, lambda m: m.revisions(project_id, before=before, limit=limit))
+    found = await _read(request, lambda m: m.revisions(project_id, before=before, limit=limit,
+                                                       iteration=iteration))
     return RevisionsOut(revisions=found)
 
 

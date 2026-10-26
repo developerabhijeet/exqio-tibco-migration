@@ -72,7 +72,7 @@ OPEN_VALID_TO = 2**62
 
 Phase = Literal[
     "discover", "analysis", "design", "build", "verify", "deploy", "gate", "decision", "seed",
-    "curation", "migration", "reingest",
+    "curation", "migration", "reingest", "iteration",
 ]
 
 
@@ -338,7 +338,7 @@ def backend_mismatch(recorded: str, active: str) -> KnowledgeError:
 # ------------------------------------------------------------------ retrieval
 ArtifactType = Literal[
     "process", "analysis", "design", "build", "build_file", "verify_run", "plan", "gate",
-    "memory", "curation",
+    "memory", "curation", "iteration",
 ]
 ARTIFACT_TYPES: tuple[str, ...] = get_args(ArtifactType)
 # The artifact a node cites when its projector set no `artifact_type` (nodes written before the

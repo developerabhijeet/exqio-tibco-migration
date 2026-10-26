@@ -33,6 +33,7 @@ from api.app.schemas.iteration import (
 )
 from api.app.services import gates as gate_svc
 from api.app.services import iterations as iteration_svc
+from api.app.services import memory_ingest
 from api.app.services.context import active_job
 from api.app.services.failures import (
     MAX_UPLOAD_BYTES,
@@ -236,6 +237,11 @@ async def open_iteration(process_id: str, request: Request, principal: OpenerDep
         await iteration_svc.abandon(session, row.id, iteration_svc.INITIAL_ACTOR, QUEUE_FAILED)
         await session.commit()
         raise HTTPException(status_code=503, detail=QUEUE_FAILED) from exc
+    # what the iteration brought in, as one memory revision of that iteration (no-op without Neo4j)
+    await memory_ingest.enqueue_ingest(
+        request.app.state.sessionmaker, settings, project_id=process.project_id, phase="iteration",
+        scope=f"iteration:{row.n}", source={"iteration_id": row.id, "process_id": process_id},
+        actor=principal.actor, ingest_key=f"iteration:{row.id}", iteration=row.n)
     return IterationOut.model_validate(row).model_copy(update={"job_id": job_id})
 
 

@@ -12,8 +12,9 @@ from engine.memory.model import OPEN_VALID_TO, MemNode, MemRel, RevisionMeta, Sc
 P = "proj-memory-test"
 
 
-def meta(ingest_key: str, phase: str = "discover", project: str = P) -> RevisionMeta:
-    return RevisionMeta(project_id=project, phase=phase, ingest_key=ingest_key, actor="tester")
+def meta(ingest_key: str, phase: str = "discover", project: str = P, iteration: int = 1) -> RevisionMeta:
+    return RevisionMeta(project_id=project, phase=phase, ingest_key=ingest_key, actor="tester",
+                        iteration=iteration)
 
 
 def estate(n_processes: int, changed: set[str] = frozenset(), vanished: set[str] = frozenset(),
