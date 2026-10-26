@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.10
 # exiqo-platform: the engine, the API and the job worker (EXIQO_ROLE=api|worker|migrate), with the
-# toolchains the migration steps run: the .NET 10 SDK, Python, Terraform, Terragrunt, a JDK and Maven.
+# toolchains the migration steps run: the .NET 10 SDK, Python, Terraform, Terragrunt, a JDK, Maven and Go.
 #
 # Build (context: the repo root; .dockerignore is an allowlist):
 #   docker build -f deploy/docker/platform.Dockerfile -t exiqo-platform:<tag> .
@@ -14,8 +14,8 @@
 #
 # Stages:
 #   toolchain  the SDK base plus Python 3.12 (Ubuntu 24.04's), tini, Terraform, Terragrunt,
-#              Temurin JDK 21 and Maven 3.9, each download checked against a SHA256 (Maven: SHA512)
-#              build argument; the JDK is per target architecture
+#              Temurin JDK 21, Maven 3.9 and Go, each download checked against a SHA256 (Maven:
+#              SHA512) build argument; the JDK and Go are per target architecture
 #   uv         only the uv binary: exports uv.lock as a hash-pinned requirements file, and runs the
 #              Python target stack's builds in the final image
 #   deps       the locked Python dependencies in /opt/venv and the fastembed model in /opt/models
@@ -61,6 +61,13 @@ ARG TEMURIN_SHA256_ARM64=e3522e707fc7dbe2a72c30746b1e7068301a0213ecd213d4491f35a
 ARG MAVEN_BASE_URL=https://archive.apache.org/dist/maven/maven-3
 ARG MAVEN_VERSION=3.9.16
 ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+# Go for the Go target stack (engine/stacks/go/versions.py GO_VERSION). GMF's mirror of the release
+# site keeps the same paths; the checksums are the "sha256" of go<version>.linux-<arch>.tar.gz on
+# https://go.dev/dl/?mode=json.
+ARG GO_BASE_URL=https://dl.google.com/go
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256_AMD64=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_SHA256_ARM64=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -114,6 +121,23 @@ RUN case "${TARGETARCH}" in \
  && rm -rf "$work" /opt/java/lib/src.zip \
  && JAVA_HOME=/opt/java /opt/java/bin/java -version \
  && JAVA_HOME=/opt/java /opt/maven/bin/mvn -v
+
+# Go: fetched for the target architecture, refused unless the checksum matches, unpacked into
+# /usr/local/go and smoke-tested. The module and build caches are not here: GOMODCACHE and GOCACHE
+# point at /cache/stacks (a writable pod volume); GOTOOLCHAIN=local means a go.mod never makes it
+# download another toolchain.
+RUN case "${TARGETARCH}" in \
+      amd64) go_sha="${GO_SHA256_AMD64}" ;; \
+      arm64) go_sha="${GO_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && work="$(mktemp -d)" \
+ && curl -fsSL --proto '=https' --tlsv1.2 -o "$work/go.tar.gz" \
+      "${GO_BASE_URL}/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
+ && echo "${go_sha}  $work/go.tar.gz" | sha256sum -c - \
+ && tar -xzf "$work/go.tar.gz" -C /usr/local \
+ && rm -rf "$work" /usr/local/go/test /usr/local/go/api \
+ && GOTOOLCHAIN=local GOTELEMETRY=off GOCACHE="$(mktemp -d)" /usr/local/go/bin/go version
 
 # ------------------------------------------------------------------------------------------ deps
 FROM toolchain AS deps
@@ -207,9 +231,15 @@ RUN /opt/venv/bin/python -m compileall -q /app/engine /app/api /app/scripts
 # build servers.
 # JAVA_HOME and the Maven repository: the repository is under /cache/stacks (the worker's emptyDir),
 # never under the read-only root or $HOME. Maven's user settings come from the generated project.
-ENV PATH=/opt/venv/bin:/opt/java/bin:/opt/maven/bin:/usr/local/bin:/usr/bin:/bin:/usr/share/dotnet \
+ENV PATH=/opt/venv/bin:/opt/java/bin:/opt/maven/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/share/dotnet \
     JAVA_HOME=/opt/java \
     MAVEN_OPTS=-Dmaven.repo.local=/cache/stacks/m2 \
+    GOMODCACHE=/cache/stacks/gomod \
+    GOCACHE=/cache/stacks/gobuild \
+    GOTOOLCHAIN=local \
+    GOTELEMETRY=off \
+    GOFLAGS=-mod=readonly \
+    GOSUMDB=off \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \

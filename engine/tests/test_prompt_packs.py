@@ -49,3 +49,26 @@ def test_python_prompts_load_through_the_stack():
     system, _ = load_prompt("test_engineer", "python")
     assert 'pytest.fail("no test body for ...")' in system and "ScenarioSupport" in system
     assert "{references}" in load_prompt("designer", "python")[1]
+
+
+def test_the_go_pack_is_present_with_the_integration_placeholders():
+    assert "go" in PACKS
+    for name in ("builder", "designer", "repair", "test_engineer"):
+        assert "{iteration}" in (PROMPT_DIR / "go" / f"{name}.md").read_text(), name
+    assert "{references}" in (PROMPT_DIR / "go" / "designer.md").read_text()
+
+
+def test_go_prompts_load_through_the_stack():
+    system, user = load_prompt("builder", "go")
+    assert 'panic("agent fills: ...")' in system and "ctx context.Context" in system and "{targets}" in user
+    system, _ = load_prompt("test_engineer", "go")
+    assert 't.Fatal("no test body for ...")' in system and "newScenario" in system and "t.Fatalf" in system
+
+
+@pytest.mark.parametrize("pack", PACKS)
+def test_pack_renders_without_stray_braces(pack):
+    """A literal brace in a prompt (Go or Java code in the rules) would break str.format_map."""
+    from engine.agents.prompting import render_prompt
+
+    for name in STACK_PROMPTS:
+        render_prompt(name, pack, process_name="P")

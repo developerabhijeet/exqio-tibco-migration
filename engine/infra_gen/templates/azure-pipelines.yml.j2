@@ -94,6 +94,36 @@ stages:
               testResultsFiles: "**/*.trx"
               searchFolder: $(Agent.TempDirectory)/TestResults
 
+[% elif stack == "go" %]
+  - stage: Build
+    jobs:
+      - job: build_test
+        variables:
+          # the committed go.sum is the only source of checksums; no toolchain download
+          GOFLAGS: -mod=readonly
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
+          GOTELEMETRY: "off"
+        steps:
+          - task: GoTool@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              version: "[[ ci.go_version ]]"
+          - script: [[ ci.restore ]]
+            displayName: Restore
+            env:
+              GOPROXY: $(GOPROXY)
+          - script: [[ ci.build ]]
+            displayName: Build
+          - script: [[ ci.test ]]
+            displayName: Test
+          - task: PublishPipelineArtifact@1
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: .exiqo-bin
+              artifact: test-results
+
 [% else %]
   - stage: Build
     jobs:

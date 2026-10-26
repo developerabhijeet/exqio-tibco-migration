@@ -30,6 +30,15 @@ tests:
     set: {stacks.enabled: [dotnet, go]}
     asserts:
       - failedTemplate: {errorPattern: "mirrors.goproxy"}
+  - it: go alone passes its module proxy and no Maven mirror, and the proxy host is an egress entry
+    template: templates/configmap.yaml
+    documentIndex: 0
+    set: {stacks.enabled: [dotnet, go], mirrors.goproxy: "https://goproxy.gmf.internal/go"}
+    asserts:
+      - equal: {path: data.ENABLED_STACKS, value: "dotnet,go"}
+      - equal: {path: data.GOPROXY, value: "https://goproxy.gmf.internal/go"}
+      - equal: {path: data.MAVEN_MIRROR_URL, value: ""}
+      - matchRegex: {path: data.EGRESS_ALLOWLIST, pattern: '"goproxy.gmf.internal"'}
   - it: refuses python without a PyPI index
     template: templates/configmap.yaml
     set: {stacks.enabled: [dotnet, python]}

@@ -28,6 +28,18 @@ env:
   DOTNET_VERSION: 10.0.x
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   SOLUTION: [[ sln ]]
+[% elif stack == "go" %]
+  GO_VERSION: "[[ ci.go_version ]]"
+  # the committed go.sum is the only source of checksums; no toolchain download
+  GOFLAGS: -mod=readonly
+  GOSUMDB: "off"
+  GOTOOLCHAIN: local
+  GOTELEMETRY: "off"
+  # Image build arguments, set as repository variables (empty ones are not passed):
+  # [[ build_args | join(', ') ]]
+[% for arg in build_args %]
+  [[ arg ]]: ${{ vars.[[ arg ]] }}
+[% endfor %]
 [% elif stack == "python" %]
   PYTHON_VERSION: "[[ ci.python_version ]]"
   # Image build arguments, set as repository variables (empty ones are not passed); UV_INDEX_URL is
@@ -87,6 +99,26 @@ jobs:
         with:
           name: test-results
           path: TestResults/**
+          if-no-files-found: warn
+[% elif stack == "go" %]
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Restore
+        run: [[ ci.restore ]]
+      - name: Build
+        run: [[ ci.build ]]
+      - name: Test
+        run: [[ ci.test ]]
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            [[ ci.results ]]
+            [[ ci.coverage ]]
           if-no-files-found: warn
 [% else %]
 [% if stack == "python" %]

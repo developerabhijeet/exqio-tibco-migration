@@ -158,6 +158,19 @@ expect_ok "mvn is Apache Maven 3.9" \
 expect_ok "MAVEN_OPTS puts the local repository on /cache/stacks/m2, writable by 10001" \
   docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
   'case "$MAVEN_OPTS" in *-Dmaven.repo.local=/cache/stacks/m2*) ;; *) exit 1 ;; esac; mkdir -p /cache/stacks/m2 && touch /cache/stacks/m2/probe'
+# Go stack toolchain: the pinned release, never another toolchain (GOTOOLCHAIN=local), checksums
+# only from the generated go.sum (GOFLAGS=-mod=readonly, GOSUMDB=off), the caches on /cache/stacks;
+# a module-free program builds and runs offline as 10001 (on /cache/stacks: /tmp is noexec here).
+GO_VERSION="$(sed -n 's/^ARG GO_VERSION=//p' deploy/docker/platform.Dockerfile)"
+expect_ok "go is $GO_VERSION with GOTOOLCHAIN=local" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  "go version | grep -q 'go$GO_VERSION ' && test \"\$(go env GOTOOLCHAIN)\" = local"
+expect_ok "Go settings: -mod=readonly, GOSUMDB=off, telemetry off, caches on /cache/stacks" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'test "$GOFLAGS" = -mod=readonly && test "$GOSUMDB" = off && test "$GOTELEMETRY" = off && test "$GOMODCACHE" = /cache/stacks/gomod && test "$GOCACHE" = /cache/stacks/gobuild'
+expect_ok "go builds and runs a program as 10001, offline" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'mkdir -p /cache/stacks/hello && cd /cache/stacks/hello && printf "module hello\n\ngo 1.25\n" > go.mod && printf "package main\n\nfunc main() { println(\"hello\") }\n" > main.go && go build -o hello . && ./hello 2>&1 | grep -q hello'
 # A mirror CA (MIRROR_CA_BUNDLE) is imported into a copy of the JDK trust store under /tmp.
 ca_dir="$(mktemp -d)"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$ca_dir/key.pem" -out "$ca_dir/ca.pem" \

@@ -551,6 +551,19 @@ def _ci(stack: str) -> dict[str, str]:
             "results": ".exiqo-bin/junit.xml",
             "coverage": ".exiqo-bin/coverage.xml",
         }
+    if stack == "go":
+        from engine.stacks.go import versions as go_versions
+        return {
+            "label": f"Go {go_versions.GO_VERSION}",
+            "go_version": go_versions.GO_VERSION,
+            # GoRunner's steps: GOFLAGS=-mod=readonly and GOSUMDB=off come from the pipeline env
+            "restore": "go mod download",
+            "build": "go build -o .exiqo-bin/server ./cmd/server && go vet ./...",
+            "test": ("go test -json -coverpkg=./internal/... -coverprofile=.exiqo-bin/cover.out ./... "
+                     "> .exiqo-bin/test.json"),
+            "results": ".exiqo-bin/test.json",
+            "coverage": ".exiqo-bin/cover.out",
+        }
     return {}
 
 

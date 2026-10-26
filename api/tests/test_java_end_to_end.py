@@ -1,9 +1,9 @@
-"""Java end to end (target stacks, Task 9): Verify starts the Java service through the stack runner,
-with the runtime contract's environment, and parity runs against it.
+"""Java and Go end to end (target stacks, Tasks 9 and 13): Verify starts the service through the stack
+runner, with the runtime contract's environment, and parity runs against it.
 
 The start/ownership tests stand a fake runner in for ``MavenRunner``, so they run without a JDK;
-``test_seven_steps_parity_clean`` is the real thing per stack (scan, analyse, design, build with
-Maven or uv, ``java -jar`` or uvicorn, Verify) and skips a stack whose tools the machine lacks.
+``test_seven_steps_parity_clean[java|go|python]`` is the real thing (scan, analyse, design, build with
+Maven, go or uv, ``java -jar``, the Go binary or uvicorn, Verify) and skips without the stack's tools.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from api.app.models import Build
 from api.app.services import verify as verify_svc
 from api.tests.test_build_verify import ARCHITECT, FSL, SME, _scanned, _wait_job
 from engine.stacks import get_stack
+from engine.stacks.go.runner import find_tool as find_go
 from engine.stacks.java import stack as java_stack_mod
 from engine.stacks.java.runner import find_tool
 
@@ -125,6 +126,9 @@ def test_connection_names_from_the_contract(tmp_path):
     ("dotnet", "dotnet run --project {root}/src/X.Api", True),
     ("dotnet", "/usr/bin/java -jar {root}/target/gmfcredit.jar", False),
     ("java", "/usr/bin/java -jar /elsewhere/target/gmfcredit.jar", False),
+    ("go", "{root}/.exiqo-bin/server", True),
+    ("go", "/elsewhere/.exiqo-bin/server", False),
+    ("go", "/usr/bin/java -jar {root}/target/gmfcredit.jar", False),
 ])
 def test_owned_service_follows_the_stack_marker(monkeypatch, tmp_path, stack, cmdline, owned):
     root = str(tmp_path / "build")
@@ -160,13 +164,15 @@ def _stack_tools(stack: str) -> bool:
     if stack == "python":
         from engine.stacks.python.runner import find_tool as find_python_tool
         return bool(find_python_tool("uv") and find_python_tool("python3"))
+    if stack == "go":
+        return bool(find_go("go"))
     return bool(find_tool("mvn") and find_tool("java"))
 
 
-@pytest.fixture(params=["java", "python"])
+@pytest.fixture(params=["java", "go", "python"])
 async def project_through_g4(request, client, settings):
     """FundingStatusLookup of a project on the stack: scanned, analysed, decided, designed (G3), built
-    with the stack's tools (Maven, uv); skipped when the machine lacks them."""
+    with the stack's tools (Maven, go, uv); skipped when the machine lacks them."""
     stack = request.param
     if not _stack_tools(stack):
         pytest.skip(f"the {stack} toolchain is not found (scripts/toolchain.py)")
