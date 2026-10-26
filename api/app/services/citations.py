@@ -237,12 +237,16 @@ def cite_design(design: dict[str, Any], entities: dict[str, CiteRef]) -> dict[st
 
 # ------------------------------------------------------------------ build reviews
 def cite_review(finding: dict[str, Any], build_id: str, process: Any,
-                tibco_ref: dict[str, Any] | None = None) -> CitedText:
+                tibco_ref: dict[str, Any] | None = None) -> CitedText | None:
     """A review finding's text with a ``file`` ref to where it points (``line`` is ``None`` when the
     reviewer gave none, which it records as 0) and a ref for each activity of that file the text
     names. The file ref is hinted by the file's basename, stem and the class and method names its
-    design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise."""
+    design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise. A
+    finding with no text has no sentence to carry the ref: ``None`` (no ``cited``), and clients
+    show ``text``, ``file`` and ``line`` as before."""
     text = mask_sensitive(str(finding.get("text") or ""))
+    if not text.strip():
+        return None
     path = str(finding.get("file") or "")
     hinted: list[HintedRef] = []
     rows = (tibco_ref or {}).get("rows") or []
@@ -271,29 +275,32 @@ def cite_review(finding: dict[str, Any], build_id: str, process: Any,
         for n in (aid, name):
             if _identifier_like(n or ""):
                 entities.setdefault(n, ref)
-    hinted += _unique(link_entities(text, entities)) if text.strip() else []
+    hinted += _unique(link_entities(text, entities))
     if not hinted:
         return CitedText.plain(text)
-    if not text.strip():
-        return tail(cut(PurePosixPath(path).name or "review finding", LABEL_MAX),
-                    [h.ref for h in hinted])
     return anchor(text, hinted)
 
 
 # ------------------------------------------------------------------ verify parity
-def _show(path: str, value: Any) -> str:
-    """``value`` as JSON, masked: wholly when the field is a sensitive one (``ssn``), else any SSN
-    in it. The sentence is not masked as a whole, where ``ssn: expected ...`` would read as a
-    ``key: value`` pair and mask the prose."""
-    shown = json.dumps(value, ensure_ascii=False, default=str)
-    if value is None:
-        return shown
+VALUE_MAX = 120  # a parity value is cut to this many code points in the sentence
+
+
+def _sensitive_field(path: str) -> bool:
     leaf = re.split(r"[./\[\]@]+", path.strip("./[]@"))[-1] if path.strip("./[]@") else ""
-    if leaf:
-        probe = mask_sensitive(f"{leaf}: {shown}")
-        if probe != f"{leaf}: {shown}" and probe.startswith(f"{leaf}: "):
-            return probe[len(leaf) + 2:]
-    return mask_sensitive(shown)
+    return bool(leaf) and mask_sensitive(f"{leaf}: x") != f"{leaf}: x"
+
+
+def _show(path: str, value: Any) -> str:
+    """``value`` as JSON, masked and cut to ``VALUE_MAX``: a sensitive field's value (``ssn``),
+    scalar, object or list alike, is ``"***"`` whole; any other value has its SSNs masked. The
+    sentence is not masked as a whole, where ``ssn: expected ...`` would read as a ``key: value``
+    pair and mask the prose. Masking comes before the cut, so a cut never splits an SSN out of the
+    mask's reach."""
+    if value is None:
+        return "null"
+    if _sensitive_field(path):
+        return '"***"'
+    return cut(mask_sensitive(json.dumps(value, ensure_ascii=False, default=str)), VALUE_MAX)
 
 
 def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = None) -> CitedText:
@@ -327,13 +334,15 @@ def cite_diff(diff: dict[str, Any], run: dict[str, Any], process: Any | None = N
 
 
 def cite_parity(view: dict[str, Any], process: Any) -> dict[str, Any]:
-    """``view`` with a ``cited`` on every field and side-effect difference of every run."""
+    """``view`` with a ``cited`` on every field and side-effect difference of every run; a
+    ``match`` that no finding explains has nothing to cite and gets none."""
     reports = []
     for rep in view.get("reports") or []:
         rep = dict(rep)
         for key in ("fields", "side_effects"):
             if isinstance(rep.get(key), list):
-                rep[key] = [{**d, "cited": cite_diff(d, rep, process).model_dump(mode="json")}
+                rep[key] = [d if d.get("status") == "match" and not d.get("finding_id") else
+                            {**d, "cited": cite_diff(d, rep, process).model_dump(mode="json")}
                             for d in rep[key]]
         reports.append(rep)
     return {**view, "reports": reports}
@@ -342,28 +351,34 @@ def cite_parity(view: dict[str, Any], process: Any) -> dict[str, Any]:
 # ------------------------------------------------------------------ readiness
 _STEP_OF_PROCESS_PAGE = {"canvas": "discover", "scenarios": "verify", "test-data": "verify",
                          "analysis": "validate", "design": "design"}
+_PROCESS_PAGE_HASH = {"scenarios": "#scenarios", "test-data": "#test-data"}
+_BUILD_PAGE_HASH = {"tests": "#tests", "infra": "#infra", "metrics": "#metrics", "parity": "#parity"}
 
 
 def _readiness_target(kind: str, ref: str,
                       build_process: dict[str, str]) -> tuple[UiPhase, CiteTarget]:
-    """Where an evidence link goes, as ``web/app/readiness/page.tsx``'s ``target()`` resolves it.
-    Settings and history are no phase: a ``step`` target without a step, ``path`` the page."""
+    """Where an evidence link goes, as ``web/app/readiness/page.tsx``'s ``target()`` resolves it
+    (X18): a phase is a ``step`` target with its ``hash``; a page that is no phase (settings,
+    history) is a ``page`` target. ``/ask`` and anything unknown are the page ``/`` until SP3's
+    ExiQoian panel has a target of its own."""
     path = ref.split("?")[0]
-    if path.startswith("/ask"):
-        return "memory", CiteTarget(kind="step", step="memory")
     if path.startswith(("/settings", "/history")):
-        return "deploy", CiteTarget(kind="step", path=path)
+        return "deploy", CiteTarget(kind="page", path=path.rstrip("/") or "/")
+    if path.startswith("/ask"):
+        return "memory", CiteTarget(kind="page", path="/")
     if m := re.match(r"^/projects/[^/]+/(report|domains|graph|files)", path):
         step: UiPhase = "upload" if m[1] in ("report", "files") else "discover"
         return step, CiteTarget(kind="step", step=step)
     if m := re.match(r"^/processes/([^/]+)/(canvas|scenarios|test-data|analysis|design)", path):
         step = _STEP_OF_PROCESS_PAGE[m[2]]  # type: ignore[assignment]
-        return step, CiteTarget(kind="step", step=step, process_id=m[1])
+        return step, CiteTarget(kind="step", step=step, process_id=m[1],
+                                hash=_PROCESS_PAGE_HASH.get(m[2]))
     if m := re.match(r"^/builds/([^/]+)(?:/(\w[\w-]*))?", path):
         sub = m[2] or kind
         step = "verify" if sub == "parity" else "deploy" if sub == "plan" else "build"
-        return step, CiteTarget(kind="step", step=step, process_id=build_process.get(m[1]))
-    return "upload", CiteTarget(kind="step")
+        return step, CiteTarget(kind="step", step=step, process_id=build_process.get(m[1]),
+                                hash=_BUILD_PAGE_HASH.get(sub))
+    return "upload", CiteTarget(kind="page", path="/")
 
 
 def cite_readiness_row(row: dict[str, Any], build_process: dict[str, str] | None = None) -> CitedText:

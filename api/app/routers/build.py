@@ -197,7 +197,8 @@ async def get_tests(build_id: str, session: SessionDep) -> dict[str, Any]:
 
 async def _cited_reviews(session, build: Build, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Each finding plus ``cited``: a ``file`` ref to its file and line (``line`` ``None`` when the
-    reviewer gave none) and refs to the activities of that file it names. ``cited.text`` is the
+    reviewer gave none) and refs to the activities of that file it names; ``null`` for a finding with
+    no text (no sentence to carry the ref). ``cited.text`` is the
     MASKED finding text and the spans index into it (code points), so it can differ from ``text``:
     clients render ``cited.text`` when present."""
     proc = await session.get(Process, build.process_id)
@@ -205,8 +206,11 @@ async def _cited_reviews(session, build: Build, findings: list[dict[str, Any]]) 
     refs = {r.path: r.tibco_ref for r in (await session.execute(
         select(BuildFile).where(BuildFile.build_id == build.id, BuildFile.path.in_(paths)))).scalars()} \
         if paths else {}
-    return [{**f, "cited": cite_review(f, build.id, proc, refs.get(f.get("file"))).model_dump(mode="json")}
-            for f in findings]
+    out = []
+    for f in findings:
+        ct = cite_review(f, build.id, proc, refs.get(f.get("file")))
+        out.append({**f, "cited": ct.model_dump(mode="json") if ct is not None else None})
+    return out
 
 
 @router.get("/builds/{build_id}/reviews")

@@ -260,6 +260,7 @@ async def built(client, app, analysed) -> SimpleNamespace:
          "triage": "defer"},
         {"reviewer": "standards", "file": "", "line": 0, "text": "The solution has no README.",
          "triage": "defer"},
+        {"reviewer": "standards", "file": path, "line": 5, "text": "", "triage": "defer"},
     ]
     async with app.state.sessionmaker() as s:
         build = Build(process_id=analysed.proc, status="passed", reviews=reviews)
@@ -352,6 +353,9 @@ async def test_design_prose_naming_an_activity_and_a_rule_gets_chips(client, app
 async def test_review_findings_cite_their_file(client, built):
     findings = (await client.get(f"/builds/{built.build}/reviews")).json()
     for f in findings:
+        if not f["text"]:
+            assert f["cited"] is None  # no sentence to carry the file chip: no cited
+            continue
         ct = CitedText.model_validate(f["cited"])
         if f["file"]:
             ref = next(r for r in f["cited"]["refs"] if r["target"]["kind"] == "file")
@@ -377,7 +381,11 @@ async def test_parity_differences_cite_their_finding(client, verified_with_defec
     diff = next(d for d in all_field_diffs(view) if d["status"] == "defect")
     kinds = {r["phase"] for r in diff["cited"]["refs"]}
     assert "verify" in kinds and ("validate" in kinds) == bool(diff["finding_id"])
+    match = next(d for d in all_field_diffs(view) if d["status"] == "match")
+    assert "cited" not in match  # nothing to cite
     for d in all_field_diffs(view):
+        if d["status"] == "match":
+            continue
         ct = CitedText.model_validate(d["cited"])
         assert ("validate" in {r.phase for r in ct.refs}) == bool(d["finding_id"])
         verify = next(r for r in ct.refs if r.phase == "verify")
@@ -396,6 +404,18 @@ async def test_readiness_rows_cite_every_evidence_item(client, scanned):
         ct = CitedText.model_validate(row["cited"])
         assert ct.text.startswith(f'{row["expectation"]}: {row["status"]}')
         assert [r.label for r in ct.refs] == [cut(e["label"], 60) for e in row["evidence"]]
+
+
+async def test_readiness_settings_and_history_evidence_are_page_targets(client, scanned):
+    """X18: /settings and /history are no phase: their refs are ``page`` targets on that route."""
+    rows = (await client.get(f"/projects/{scanned}/readiness")).json()["rows"]
+    pages = {}
+    for row in rows:
+        for ev, ref in zip(row["evidence"], row["cited"]["refs"], strict=True):
+            if ev["ref"].startswith(("/settings", "/history")):
+                pages[ev["ref"].split("?")[0]] = ref["target"]
+    assert set(pages) == {"/settings", "/history"}  # provider choice and routing; tokenomics
+    assert all(t["kind"] == "page" and t["path"] == p and t["step"] is None for p, t in pages.items())
 
 
 async def test_cited_text_on_reviews_and_parity_is_masked(client, built, verified_with_defect):
@@ -461,36 +481,54 @@ def test_cite_review_hints_class_and_method():
     assert ct.text[ct.spans[0].start:ct.spans[0].end] == "MapRequest drops a field"
     assert ct.refs[0].target.kind == "file" and ct.refs[0].label == "FundingMapper.cs:7"
     assert len(ct.refs) == 1  # a1 is not named in the text: no activity chip
-    assert cite_review({"file": "x.cs", "line": 0, "text": ""}, "b1", DPROC).text == "x.cs"
+    assert cite_review({"file": "x.cs", "line": 0, "text": ""}, "b1", DPROC) is None
 
 
 def test_cite_diff_note_and_no_finding():
     ct = cite_diff({"path": "out.a", "expected": 1, "actual": 2, "status": "defect", "note": "Rounded."},
                    {"scenario_key": "k1", "status": "differs"})
     assert ct.text == "out.a: expected 1, got 2. Rounded."
-    assert cite_diff({"path": "x.note", "expected": "id 123-45-6789", "actual": "a"}, {}).text == (
-        'x.note: expected "id ***-**-****", got "a".')
     assert [r.phase for r in ct.refs] == ["verify"] and ct.refs[0].label == "k1"
     assert ct.text[ct.spans[0].start:ct.spans[0].end] == "out.a: expected 1, got 2"
+    assert cite_diff({"path": "x.note", "expected": "id 123-45-6789", "actual": "a"}, {}).text == (
+        'x.note: expected "id ***-**-****", got "a".')
+
+
+def test_cite_diff_masks_sensitive_objects_and_cuts_long_values():
+    ct = cite_diff({"path": "out.ssn", "expected": {"area": "123", "rest": "45-6789"},
+                    "actual": ["123-45-6789"]}, {})
+    assert ct.text == 'out.ssn: expected "***", got "***".'
+    ct = cite_diff({"path": "out.blob", "expected": "x" * 500 + " 123-45-6789", "actual": 1}, {})
+    expected = ct.text.split(": expected ", 1)[1].split(", got ")[0]
+    assert len(expected) == 120 and expected.endswith("…") and "123-45-6789" not in ct.text
 
 
 def test_readiness_targets_follow_the_page():
     row = {"expectation": "Swagger", "status": "partial", "gap": "2 unexplained", "evidence": [
         {"kind": "parity", "ref": "/builds/b1/parity", "label": "runs"},
         {"kind": "build", "ref": "/builds/b1", "label": "log"},
+        {"kind": "metrics", "ref": "/builds/b1", "label": "m"},
+        {"kind": "tests", "ref": "/builds/b1/tests", "label": "t"},
         {"kind": "canvas", "ref": "/processes/p9/canvas", "label": "c"},
+        {"kind": "scenarios", "ref": "/processes/p9/scenarios", "label": "sc"},
         {"kind": "domains", "ref": "/projects/x/domains", "label": "d"},
         {"kind": "report", "ref": "/projects/x/report", "label": "r"},
         {"kind": "settings", "ref": "/settings", "label": "s"},
         {"kind": "history", "ref": "/history?project_id=x", "label": "h"},
-        {"kind": "ask", "ref": "/ask", "label": "k"}]}
+        {"kind": "ask", "ref": "/ask", "label": "k"},
+        {"kind": "odd", "ref": "/somewhere", "label": "o"}]}
     ct = cite_readiness_row(row, {"b1": "p1"})
     assert ct.text == "Swagger: partial; 2 unexplained." and [s.refs for s in ct.spans] == [
-        [f"c{i}" for i in range(1, 9)]]
-    got = [(r.phase, r.target.kind, r.target.step, r.target.process_id, r.target.path) for r in ct.refs]
-    assert got == [("verify", "step", "verify", "p1", None), ("build", "step", "build", "p1", None),
-                   ("discover", "step", "discover", "p9", None), ("discover", "step", "discover", None, None),
-                   ("upload", "step", "upload", None, None), ("deploy", "step", None, None, "/settings"),
-                   ("deploy", "step", None, None, "/history"), ("memory", "step", "memory", None, None)]
+        [f"c{i}" for i in range(1, 13)]]
+    got = [(r.phase, r.target.kind, r.target.step, r.target.process_id, r.target.path, r.target.hash)
+           for r in ct.refs]
+    assert got == [
+        ("verify", "step", "verify", "p1", None, "#parity"), ("build", "step", "build", "p1", None, None),
+        ("build", "step", "build", "p1", None, "#metrics"), ("build", "step", "build", "p1", None, "#tests"),
+        ("discover", "step", "discover", "p9", None, None),
+        ("verify", "step", "verify", "p9", None, "#scenarios"),
+        ("discover", "step", "discover", None, None, None), ("upload", "step", "upload", None, None, None),
+        ("deploy", "page", None, None, "/settings", None), ("deploy", "page", None, None, "/history", None),
+        ("memory", "page", None, None, "/", None), ("upload", "page", None, None, "/", None)]
     assert cite_readiness_row({"expectation": "X", "status": "missing", "gap": "none",
                                "evidence": []}) == CitedText.plain("X: missing; none.")

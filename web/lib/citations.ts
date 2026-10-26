@@ -25,6 +25,8 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
         router.push(target.uid ? `/memory?uid=${encodeURIComponent(target.uid)}` : "/memory");
         return;
       }
+      // TODO(SP4 Task 10, ruling X18): route `page` targets to `path` (+ `hash`) and append a step
+      // target's `hash`; today a page target falls through to the step branch below.
       let step: StepKey;
       if (target.kind === "activity" && target.activity_id) {
         jumpToStep(target.activity_id, target.process_id);

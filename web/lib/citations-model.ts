@@ -9,7 +9,8 @@
 export type UiPhase = "upload" | "discover" | "validate" | "design" | "build" | "verify" | "deploy" | "memory";
 
 export interface CiteTarget {
-  kind: "activity" | "step" | "memory" | "file";
+  /** page: a screen that is no phase (/settings, /history); `path` is its route (ruling X18). */
+  kind: "activity" | "step" | "memory" | "file" | "page";
   step?: UiPhase | null;
   /** API process id. */
   process_id?: string | null;
@@ -18,6 +19,8 @@ export interface CiteTarget {
   line?: number | null;
   /** Memory uid. */
   uid?: string | null;
+  /** Step or page anchor: "#tests", "#infra", "#metrics", "#parity", "#scenarios", "#test-data". */
+  hash?: string | null;
 }
 
 export interface CiteRef {

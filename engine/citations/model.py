@@ -16,13 +16,15 @@ PREVIEW_MAX = 280
 
 
 class CiteTarget(BaseModel):
-    kind: Literal["activity", "step", "memory", "file"]
+    # page: a screen that is no phase (/settings, /history); ``path`` is its route (ruling X18)
+    kind: Literal["activity", "step", "memory", "file", "page"]
     step: UiPhase | None = None
     process_id: str | None = None  # API process id
     activity_id: str | None = None
     path: str | None = None
     line: int | None = None
     uid: str | None = None  # memory uid
+    hash: str | None = None  # step or page anchor: "#tests", "#infra", "#parity", "#scenarios", ...
 
 
 class CiteRef(BaseModel):
