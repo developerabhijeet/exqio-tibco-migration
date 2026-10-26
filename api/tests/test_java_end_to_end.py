@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -160,13 +161,14 @@ async def run_verify_and_wait(client, build_id: str) -> dict:
 
 
 def _stack_tools(stack: str) -> bool:
-    """Whether this machine has the stack's build tools (``scripts/toolchain.py``)."""
+    """Whether this machine has the stack's build tools (``scripts/toolchain.py``) and its mirror: every
+    stack's restore refuses without GMF's mirror (X26), so the real build needs the variable too."""
     if stack == "python":
         from engine.stacks.python.runner import find_tool as find_python_tool
-        return bool(find_python_tool("uv") and find_python_tool("python3"))
+        return bool(find_python_tool("uv") and find_python_tool("python3") and os.environ.get("UV_INDEX_URL"))
     if stack == "go":
-        return bool(find_go("go"))
-    return bool(find_tool("mvn") and find_tool("java"))
+        return bool(find_go("go") and os.environ.get("GOPROXY"))
+    return bool(find_tool("mvn") and find_tool("java") and os.environ.get("MAVEN_MIRROR_URL"))
 
 
 @pytest.fixture(params=["java", "go", "python"])
@@ -175,7 +177,7 @@ async def project_through_g4(request, client, settings):
     with the stack's tools (Maven, go, uv); skipped when the machine lacks them."""
     stack = request.param
     if not _stack_tools(stack):
-        pytest.skip(f"the {stack} toolchain is not found (scripts/toolchain.py)")
+        pytest.skip(f"the {stack} toolchain or its mirror variable is not set (scripts/toolchain.py, X26)")
     settings.test_database_url = settings.scenario_database_url
     pid, procs = await _scanned(client)
     r = await client.patch(f"/projects/{pid}", json={"target_stack": stack}, headers=ARCHITECT)
