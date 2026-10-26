@@ -735,6 +735,14 @@ def test_java_dockerfile_builds_the_jar_the_layout_names(java_infra, java_soluti
     assert "**/target" in ignore and "**/bin" not in ignore and ".exiqo" not in ignore.split()
 
 
+def test_java_bundle_explains_the_local_run(java_infra):
+    md = java_infra["RUN_LOCALLY.md"]
+    assert "docker compose -f docker-compose.override.yml up --build" in md
+    assert "mvn -B -ntp -s .exiqo/maven-settings.xml" in md and "/auth/dev-token" in md
+    assert "MAVEN_MIRROR_URL" in md and "localhost:8080" in md
+    assert "run-local.sh" not in java_infra and "run-local.ps1" not in java_infra
+
+
 def test_java_infra_has_no_dotnet_and_no_public_host(java_infra):
     assert "run-local.sh" not in java_infra  # the scripts drive dotnet; compose is the local run
     for path, text in java_infra.items():

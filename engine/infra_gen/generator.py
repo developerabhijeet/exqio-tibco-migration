@@ -38,8 +38,8 @@ differs comes from the stack:
     design keys are not repeated in the container environment: the service's own configuration file
     carries the same values;
   * the pipelines build and test with the stack's tool, and pass the build arguments that are set;
-  * the local run is the compose file; ``run-local.sh``/``.ps1``/``RUN_LOCALLY.md`` drive the .NET SDK
-    and are written for .NET only.
+  * the local run is the compose file; ``run-local.sh``/``.ps1`` drive the .NET SDK and are written for
+    .NET only, other stacks get a ``RUN_LOCALLY.md`` for the compose file and the stack's own commands.
 """
 from __future__ import annotations
 
@@ -690,6 +690,12 @@ def generate_infra(
         files["run-local.sh"] = jenv.get_template("run-local.sh.j2").render(**local)
         files["run-local.ps1"] = jenv.get_template("run-local.ps1.j2").render(**local)
         files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.md.j2").render(**local)
+    else:  # the compose file is the local run; the .NET scripts have no equivalent
+        ci = _ci(stack)
+        files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.stack.md.j2").render(
+            solution=solution_name, app_id=app.id, label=ci["label"], port=TARGET_PORT,
+            build_args=layout["dockerfile_context"].get("build_args", []), databases=facts.databases,
+            tools=get_stack(stack).required_tools, restore=ci["restore"], build=ci["build"], test=ci["test"])
     if len(facts.databases) > 1:
         files["infra/local/initdb/01-databases.sql"] = "".join(
             f"CREATE DATABASE {db};\n" for db in facts.databases[1:])
