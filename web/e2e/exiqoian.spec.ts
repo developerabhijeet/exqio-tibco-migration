@@ -251,3 +251,23 @@ test("New chat during an in-flight send leaves the new chat idle, with no second
   await expect(panel(page).getByRole("button", { name: "Send" })).toBeVisible();
   expect(posts).toBeLessThanOrEqual(1); // none when New chat beat the conversation create
 });
+
+test("an evidence link to /ask opens the ExiQoian panel", async ({ page }) => {
+  await uploadSample(page);
+  // The readiness row's evidence as the API serves it, with its citation pointing at the old /ask page.
+  await page.route(/\/projects\/[^/]+\/readiness$/, async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    body.rows[0].cited = {
+      text: "Ask the project.",
+      spans: [{ start: 0, end: 15, refs: ["c1"] }],
+      refs: [{ id: "c1", phase: "memory", kind: "evidence", label: "Ask", preview: "", target: { kind: "page", path: "/exiqoian" } }],
+    };
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/readiness");
+  await expect(panel(page)).toBeHidden();
+  await page.getByTestId("readiness-row").first().getByTestId("cite-chip").first().click();
+  await expect(panel(page)).toBeVisible();
+  await expect(page).toHaveURL(/\/readiness/);
+});

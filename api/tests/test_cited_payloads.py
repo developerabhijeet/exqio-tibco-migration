@@ -621,7 +621,7 @@ def test_readiness_targets_follow_the_page():
         ("verify", "step", "verify", "p9", None, "#scenarios"),
         ("discover", "step", "discover", None, None, None), ("upload", "step", "upload", None, None, None),
         ("deploy", "page", None, None, "/settings", None), ("deploy", "page", None, None, "/history", None),
-        ("memory", "page", None, None, "/", None), ("upload", "page", None, None, "/", None)]
+        ("memory", "page", None, None, "/exiqoian", None), ("upload", "page", None, None, "/", None)]
     assert cite_readiness_row({"expectation": "X", "status": "missing", "gap": "none",
                                "evidence": []}) == CitedText.plain("X: missing; none.")
 

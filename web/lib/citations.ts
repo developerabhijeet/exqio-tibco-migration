@@ -48,11 +48,11 @@ export function revealHash(hash: string, path = "/"): void {
  * Go where a citation points. activity: the step on the Discover canvas with its XML; step: that
  * phase of the process, scrolled to its `hash` panel when it names one; file: the generated file
  * in Build's source and target explorer, at `line` when it has one; memory: the node in the memory
- * explorer; page: a screen that is no phase (/settings, /history), at its `hash`. Off the main
+ * explorer; page: a screen that is no phase (/settings, /history), at its `hash`, except /exiqoian, which opens the ExiQoian panel. Off the main
  * screen (on /memory, say) the main screen is opened on the step afterwards.
  */
 export function useCiteNavigate(): (target: CiteTarget) => void {
-  const { jumpToStep, openProcess, setStep, openBuildFile } = useAppState();
+  const { jumpToStep, openProcess, setStep, openBuildFile, setChatOpen } = useAppState();
   const router = useRouter();
   const pathname = usePathname();
   return useCallback(
@@ -62,6 +62,10 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
         return;
       }
       const hash = target.hash ? `#${target.hash.replace(/^#/, "")}` : "";
+      if (target.kind === "page" && target.path === "/exiqoian") {
+        setChatOpen(true); // the assistant is a panel, not a screen
+        return;
+      }
       if (target.kind === "page") {
         const path = target.path || "/";
         router.push(`${path}${hash}`);
@@ -89,6 +93,6 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
       }
       if (hash) revealHash(hash);
     },
-    [jumpToStep, openProcess, setStep, openBuildFile, router, pathname],
+    [jumpToStep, openProcess, setStep, openBuildFile, setChatOpen, router, pathname],
   );
 }

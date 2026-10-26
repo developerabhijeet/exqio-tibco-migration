@@ -99,6 +99,8 @@ export function ExiQoianPanel() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       if (document.querySelector('[data-testid="cite-preview"]')) return;
+      // A dialog on the page closes itself with this key: leave it to that dialog.
+      if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return;
       e.preventDefault();
       close();
     };

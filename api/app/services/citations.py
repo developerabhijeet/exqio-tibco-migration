@@ -414,13 +414,13 @@ def _readiness_target(kind: str, ref: str,
                       build_process: dict[str, str]) -> tuple[UiPhase, CiteTarget]:
     """Where an evidence link goes, as ``web/app/readiness/page.tsx``'s ``target()`` resolves it
     (X18): a phase is a ``step`` target with its ``hash``; a page that is no phase (settings,
-    history) is a ``page`` target. ``/ask`` and anything unknown are the page ``/`` until SP3's
-    ExiQoian panel has a target of its own."""
+    history) is a ``page`` target. ``/ask`` is the page ``/exiqoian`` (ExiQoian replaced Ask AI: the
+    web opens its panel instead of navigating); anything unknown is the page ``/``."""
     path = ref.split("?")[0]
     if path.startswith(("/settings", "/history")):
         return "deploy", CiteTarget(kind="page", path=path.rstrip("/") or "/")
     if path.startswith("/ask"):
-        return "memory", CiteTarget(kind="page", path="/")
+        return "memory", CiteTarget(kind="page", path="/exiqoian")
     if m := re.match(r"^/projects/[^/]+/(report|domains|graph|files)", path):
         step: UiPhase = "upload" if m[1] in ("report", "files") else "discover"
         return step, CiteTarget(kind="step", step=step)
