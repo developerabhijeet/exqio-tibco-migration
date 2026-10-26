@@ -1,7 +1,7 @@
 """FastAPI dependencies: database session, job runner, settings, and the user principal."""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 from urllib.parse import urlsplit
 
@@ -148,6 +148,23 @@ async def require_curator(principal: Annotated[Principal, Depends(require_user)]
     if not principal.roles & WRITE_ROLES:
         raise HTTPException(status_code=403, detail=CURATE_ONLY)
     return principal
+
+
+def require_roles(*roles: str) -> Callable[..., Awaitable[Principal]]:
+    """A dependency for an action that needs one of ``roles`` (``admin`` always counts), in both
+    auth modes: 403 ``"viewer is read only"`` for a principal that holds only ``viewer``, else
+    403 ``"this needs one of: <roles>"`` when no role matches."""
+    allowed = frozenset(roles) | {"admin"}
+    needs = f"this needs one of: {', '.join(roles)}"
+
+    async def dependency(principal: Annotated[Principal, Depends(require_user)]) -> Principal:
+        if principal.roles and principal.roles <= {"viewer"}:
+            raise HTTPException(status_code=403, detail=READ_ONLY)
+        if not principal.roles & allowed:
+            raise HTTPException(status_code=403, detail=needs)
+        return principal
+
+    return dependency
 
 
 async def require_browser_user(request: Request, x_user: Annotated[str | None, Header()] = None,

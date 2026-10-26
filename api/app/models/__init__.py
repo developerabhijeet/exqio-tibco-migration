@@ -1,6 +1,7 @@
 """ORM models; importing this package registers every table on ``Base.metadata``."""
 from api.app.models.analysis import AnalysisRun, Challenge, CoverageItem, Finding, Rule
 from api.app.models.build import Build, BuildFile, Metric, TestResult
+from api.app.models.connector import ConnectorLink
 from api.app.models.design import DesignRecord
 from api.app.models.domain import Domain, GraphEdge, GraphNode
 from api.app.models.gate import AuditLog, Gate
@@ -20,6 +21,7 @@ __all__ = [
     "Build",
     "BuildFile",
     "Challenge",
+    "ConnectorLink",
     "CoverageItem",
     "DesignRecord",
     "Domain",

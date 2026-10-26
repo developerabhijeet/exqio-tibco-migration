@@ -137,6 +137,19 @@ class Settings(BaseSettings):
     # was never verified, because it was never verified.
     build_toolchain: bool = True
 
+    # Connectors (GitHub, Atlassian, Figma): the install layer, set by the chart. ``CONNECTORS`` is the
+    # JSON of the non-secret fields per connector (``api/app/connectors/config.py``); empty means
+    # every connector is off. ``CONNECTOR_SECRET_NAMES`` names each connector secret's Key Vault
+    # object, for the Settings screen. The tokens are read from ``<NAME>_FILE`` on every call
+    # (``connectors.config.secret``); the fields below are only the plain-variable fallback.
+    connectors: str = ""
+    connector_secret_names: str = ""
+    connectors_allow_insecure_loopback: bool = False  # tests and local fakes only: http://127.0.0.1
+    github_token: str = ""
+    atlassian_token: str = ""
+    atlassian_user: str = ""
+    figma_token: str = ""
+
     # Runtime
     job_workers: int = 2
     cors_origins: str = "http://localhost:3000"  # comma separated

@@ -393,6 +393,10 @@ Secrets User on the vault. The object names below are the defaults of `keyVault.
 | `AZURE_OPENAI_API_KEY` | (`keyVault.secrets.azureOpenaiApiKey`), omit with `providers.azureOpenAI.auth: managed_identity` | Azure OpenAI owner | api, worker | regenerate the key in Azure, new Key Vault version, restart |
 | `CLAUDE_CODE_OAUTH_TOKEN` | (`keyVault.secrets.claudeCodeOauthToken`), only with `providers.claude.enabled` | platform team | api, worker | new version, restart |
 | `LANGFUSE_SECRET_KEY` | (`keyVault.secrets.langfuseSecretKey`), only with `langfuse.enabled` | platform team | api, worker | new version, restart |
+| `GITHUB_TOKEN` | named in the chart's connector secret values, only when the GitHub connector is enabled | GitHub org owner | api, worker | new version; read on every call, so the CSI driver's rotation needs no restart |
+| `ATLASSIAN_TOKEN` | same, only when the Atlassian connector is enabled | Atlassian admin | api, worker | same |
+| `ATLASSIAN_USER` | same, Atlassian cloud only: the account email | Atlassian admin | api, worker | with the token |
+| `FIGMA_TOKEN` | same, only when the Figma connector is enabled | Figma org admin | api, worker | same as `GITHUB_TOKEN` |
 
 Terraform creates the two database URLs. Create the rest in the same vault, using the names in
 `keyVault.secrets` (commands in `deploy/azure/README.md`, "Not created here"). Generated with

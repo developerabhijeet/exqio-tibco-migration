@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.app.auth import router as auth_router
 from api.app.auth.oidc import Oidc
 from api.app.config import Settings
+from api.app.connectors.config import load_install, secret_names
 from api.app.db import make_engine, make_sessionmaker, psycopg_url
 from api.app.deps import require_admin_writes, require_signed_in
 from api.app.jobs import handlers  # noqa: F401  registers the job kinds
@@ -35,6 +36,7 @@ from api.app.routers import (
     analysis,
     ask,
     build,
+    connectors,
     design,
     domains,
     gates,
@@ -99,10 +101,20 @@ def check_auth_settings(settings: Settings) -> None:
         raise RuntimeError(f"AUTH_MODE=oidc needs {', '.join(missing)} (or the *_FILE variant)")
 
 
+def check_connector_settings(settings: Settings) -> None:
+    """A malformed ``CONNECTORS`` or ``CONNECTOR_SECRET_NAMES`` stops the start, not a request."""
+    try:
+        load_install(settings)
+        secret_names(settings)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 def _create_api(settings: Settings) -> FastAPI:
     if settings.exiqo_role == "worker":
         raise RuntimeError("EXIQO_ROLE=worker runs python -m api.app.worker, not the HTTP app")
     check_auth_settings(settings)
+    check_connector_settings(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -187,7 +199,7 @@ def _create_api(settings: Settings) -> FastAPI:
     for module in (projects, processes, jobs, domains, analysis, gates, ask, design, build, memory_router):
         app.include_router(module.router, dependencies=guarded)
     app.include_router(run_proxy.router)  # its own check: the session cookie, never the bearer
-    for module in (verify, infra, readiness):
+    for module in (verify, infra, readiness, connectors):  # connectors: AdminDep on its writes
         app.include_router(module.router, dependencies=guarded)
     for module in (settings_router, history):  # oidc: writing these needs admin
         app.include_router(module.router, dependencies=[*guarded, Depends(require_admin_writes)])

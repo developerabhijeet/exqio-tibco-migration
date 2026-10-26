@@ -23,6 +23,10 @@ SECRET_FILE_FIELDS = (
     "session_secret",
     "internal_token",
     "langfuse_secret_key",
+    "github_token",
+    "atlassian_token",
+    "atlassian_user",
+    "figma_token",
 )
 
 
