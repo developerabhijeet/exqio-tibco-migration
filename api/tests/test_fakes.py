@@ -208,15 +208,20 @@ async def test_fake_confluence_version_rule(fake_confluence_dc):
 
 async def test_fake_confluence_v1_create_get_and_auth(fake_confluence_dc):
     h = bearer(fake_confluence_dc)
+    parent = fake_confluence_dc.create_page("S", "Parent", "")
     async with httpx.AsyncClient(base_url=fake_confluence_dc.url) as c:
         assert (await c.get("/rest/api/user/current")).status_code == 401
         assert (await c.get("/rest/api/user/current", headers=h)).status_code == 200
+        orphan = await c.post("/rest/api/content", headers=h, json={
+            "type": "page", "title": "O", "space": {"key": "S"}, "ancestors": [{"id": "999"}],
+            "body": {"storage": {"value": "", "representation": "storage"}}})
+        assert orphan.status_code == 400 and "parent" in orphan.text
         r = await c.post("/rest/api/content", headers=h, json={
-            "type": "page", "title": "P", "space": {"key": "S"}, "ancestors": [{"id": "7"}],
+            "type": "page", "title": "P", "space": {"key": "S"}, "ancestors": [{"id": parent}],
             "body": {"storage": {"value": "<p>b</p>", "representation": "storage"}}})
         assert r.status_code == 200 and r.json()["version"]["number"] == 1
         got = (await c.get(f"/rest/api/content/{r.json()['id']}?expand=version", headers=h)).json()
-        assert got["title"] == "P" and got["ancestors"] == [{"id": "7"}] and "body" not in got
+        assert got["title"] == "P" and got["ancestors"] == [{"id": parent}] and "body" not in got
         full = (await c.get(f"/rest/api/content/{r.json()['id']}?expand=version,body.storage", headers=h)).json()
         assert full["body"]["storage"]["value"] == "<p>b</p>"
         assert (await c.get("/wiki/rest/api/user/current", headers=h)).status_code == 404  # Cloud-only path
@@ -231,15 +236,26 @@ async def test_fake_confluence_v1_create_get_and_auth(fake_confluence_dc):
         assert up.json()["results"][0]["title"] == "diagram.png"
         listed = (await c.get(f"/rest/api/content/{r.json()['id']}/child/attachment", headers=h)).json()
         assert [a["title"] for a in listed["results"]] == ["diagram.png"]
+        base = f"/rest/api/content/{r.json()['id']}/child/attachment"
+        xsrf = {**h, "X-Atlassian-Token": "no-check"}
+        again = await c.post(base, headers=xsrf, files={"file": ("diagram.png", b"v2", "image/png")})
+        assert again.status_code == 400 and "same file name" in again.text
+        aid = listed["results"][0]["id"]
+        assert (await c.post(f"{base}/{aid}/data", headers=h,
+                             files={"file": ("diagram.png", b"v2", "image/png")})).status_code == 403
+        new = await c.post(f"{base}/{aid}/data", headers=xsrf, files={"file": ("diagram.png", b"v2", "image/png")})
+        assert new.status_code == 200 and new.json()["version"]["number"] == 2
+        assert (await c.get(base, headers=h, params={"filename": "other.png"})).json()["results"] == []
 
 
 async def test_fake_confluence_cloud_v2_and_basic_auth(fake_confluence_cloud):
     f = fake_confluence_cloud
+    parent = f.create_page("42", "Parent", "")
     async with httpx.AsyncClient(base_url=f.url) as c:
         assert (await c.get("/wiki/rest/api/user/current", headers=bearer(f))).status_code == 401
         assert (await c.get("/wiki/rest/api/user/current", headers=basic(f))).status_code == 200
         made = await c.post("/wiki/api/v2/pages", headers=basic(f), json={
-            "spaceId": "42", "status": "current", "title": "P", "parentId": "9",
+            "spaceId": "42", "status": "current", "title": "P", "parentId": parent,
             "body": {"representation": "storage", "value": "<p>1</p>"}})
         pid = made.json()["id"]
         assert made.json()["version"]["number"] == 1

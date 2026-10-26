@@ -44,6 +44,8 @@ from api.app.deps import (
 )
 from api.app.models import AuditLog, Build, Process, Setting
 from api.app.schemas.connector import ConnectorsPatch, GithubPushIn, JobAccepted, LinkOut
+from api.app.services.confluence_publish import NO_DESIGN, PUBLISH_KIND, page_link
+from api.app.services.evidence import latest_design
 from api.app.services.github_push import PUSH_KIND
 from api.app.services.settings import load_stored
 
@@ -205,3 +207,46 @@ async def push_build_to_github(build_id: str, body: GithubPushIn, session: Sessi
     if job_id is None:  # submit answers None only for a payload with a dedupe_key, which this has not
         raise RuntimeError("the push job was not queued")
     return JobAccepted(job_id=job_id)
+
+
+PublishRoles = Annotated[Principal, Depends(require_roles("architect", "admin"))]
+
+
+@router.post("/processes/{process_id}/confluence/publish", status_code=202)
+async def publish_to_confluence(process_id: str, session: SessionDep, settings: SettingsDep, runner: RunnerDep,
+                                principal: PublishRoles) -> JobAccepted:
+    """Queue ``connector.confluence.publish``: 409 when Atlassian is off, has no credential, no
+    Confluence URL or space key (no request is made), or the process has no design record."""
+    proc = await session.get(Process, process_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail=f"process {process_id} not found")
+    connector = await connector_for(session, settings, "atlassian")
+    try:
+        connector.ready()
+    except (ConnectorDisabled, ConnectorNotConfigured) as exc:
+        await audit_connector(session, principal.actor, "confluence", "publish", project_id=proc.project_id,
+                              process_id=proc.id, target=proc.ir_id, outcome="refused",
+                              detail={"message": str(exc)})
+        await session.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not connector.config.url("confluence_url"):
+        raise HTTPException(status_code=409, detail="the Atlassian connector has no Confluence URL "
+                                                    "(connectors.atlassian.confluenceUrl)")
+    if not getattr(connector.config.app, "space_key", ""):
+        raise HTTPException(status_code=409, detail="set the Confluence space key in Settings → Connectors")
+    if await latest_design(session, proc.id) is None:
+        raise HTTPException(status_code=409, detail=NO_DESIGN)
+    job_id = await runner.submit(PUBLISH_KIND, {"process_id": proc.id, "actor": principal.actor},
+                                 project_id=proc.project_id, process_id=proc.id)
+    return JobAccepted(job_id=job_id or "")
+
+
+@router.get("/processes/{process_id}/confluence")
+async def confluence_page(process_id: str, session: SessionDep) -> LinkOut:
+    """The process's architecture page link (its id, URL and published version)."""
+    if await session.get(Process, process_id) is None:
+        raise HTTPException(status_code=404, detail=f"process {process_id} not found")
+    link = await page_link(session, process_id)
+    if link is None:
+        raise HTTPException(status_code=404, detail="not published to Confluence yet")
+    return LinkOut.model_validate(link)

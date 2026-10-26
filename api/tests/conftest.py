@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from api.app.config import Settings
 from api.app.db import asyncpg_url, make_engine, reset_schema
 from api.app.main import create_app
+from api.tests.fakes.atlassian import AtlassianFakes
 from api.tests.fakes.confluence import FakeConfluence
 from api.tests.fakes.figma import FakeFigma, images_server
 from api.tests.fakes.github import FakeGitHub
@@ -294,3 +295,70 @@ async def client_github_disabled(settings: Settings) -> AsyncIterator[httpx.Asyn
 def github_disabled(client_github_disabled: httpx.AsyncClient) -> httpx.AsyncClient:
     """The name sub-project 6 uses for ``client_github_disabled``."""
     return client_github_disabled
+
+
+ATLASSIAN_SPACE = "GMF"
+ATLASSIAN_PARENT_PAGE = "1001"  # the first page each Confluence fake makes: the seeded parent
+
+
+@pytest.fixture
+async def atlassian_app(settings: Settings):
+    """An app whose admin layer has Atlassian on (space ``GMF``, parent page ``1001``); the install
+    layer is set by ``client_atlassian(flavor)``, so processes can be seeded before a flavor is
+    chosen."""
+    from api.app.connectors.config import STORED_KEY
+    from api.app.models import Setting
+
+    own = settings.model_copy(update={"connectors": "", "connectors_allow_insecure_loopback": True})
+    engine = make_engine(own.database_url)
+    try:
+        await reset_schema(engine)
+    except Exception as exc:  # noqa: BLE001  no database: skip, do not fail the suite
+        await engine.dispose()
+        pytest.skip(f"Postgres is not available: {exc}")
+    await engine.dispose()
+    application = create_app(own)
+    async with application.router.lifespan_context(application):
+        async with application.state.sessionmaker() as s:
+            s.add(Setting(key=STORED_KEY, updated_by="ops.sam", value={"atlassian": {
+                "enabled": True, "space_key": ATLASSIAN_SPACE, "parent_page_id": ATLASSIAN_PARENT_PAGE}}))
+            await s.commit()
+        yield application
+
+
+@pytest.fixture
+async def atlassian_client(atlassian_app) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=atlassian_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
+        c.app = atlassian_app  # type: ignore[attr-defined]
+        yield c
+
+
+@pytest.fixture
+def client_atlassian(atlassian_app, atlassian_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """``client_atlassian(flavor) -> (client, fake)``: points the install layer at that flavor's
+    Confluence and Jira fakes (started once per flavor, each Confluence seeded with the parent
+    page) and mounts the Atlassian secret files. ``fake`` is an ``AtlassianFakes``."""
+    started: dict[str, AtlassianFakes] = {}
+    settings = atlassian_app.state.settings
+
+    def make(flavor: str = "datacenter") -> tuple[httpx.AsyncClient, AtlassianFakes]:
+        if flavor not in started:
+            conf, jira = FakeConfluence(flavor).start(), FakeJira(flavor).start()
+            assert conf.create_page(ATLASSIAN_SPACE, "Architecture", "<p>parent</p>") == ATLASSIAN_PARENT_PAGE
+            started[flavor] = AtlassianFakes(conf, jira)
+        fakes = started[flavor]
+        conf, jira = fakes.confluence, fakes.jira
+        settings.connectors = json.dumps({"atlassian": {
+            "enabled": True, "flavor": flavor, "confluenceUrl": conf.url, "jiraUrl": jira.url,
+            "allowedHosts": [conf.host, jira.host]}})
+        for field, value in (("atlassian_token", conf.token), ("atlassian_user", conf.user)):
+            path = tmp_path / f"{field}.secret"
+            path.write_text(value, encoding="utf-8")
+            monkeypatch.setenv(f"{field.upper()}_FILE", str(path))
+        return atlassian_client, fakes
+
+    yield make
+    for fakes in started.values():
+        fakes.confluence.stop()
+        fakes.jira.stop()

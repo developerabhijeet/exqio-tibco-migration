@@ -17,6 +17,7 @@ from api.app.jobs.runner import JobContext
 from api.app.models import AzureConnection, Build, Plan, Process
 from api.app.services import analysis as analysis_svc
 from api.app.services import build as build_svc
+from api.app.services import confluence_publish as confluence_svc
 from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
@@ -137,3 +138,10 @@ async def github_push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Push a build to an ``exiqo/`` branch of a GitHub repository and open its pull request
     (``services.github_push``); the token is read from its mounted file now, never stored."""
     return await github_push_svc.push_job(ctx, w)
+
+
+@job(confluence_svc.PUBLISH_KIND)
+async def confluence_publish(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Create or update the process's architecture page in Confluence (``services.confluence_publish``);
+    the Atlassian credential is read from its mounted file now, never stored."""
+    return await confluence_svc.publish_job(ctx, w)

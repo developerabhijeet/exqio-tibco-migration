@@ -7,6 +7,7 @@ its credential on every request.
 """
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ from api.app.connectors.base import (
     KINDS,
     ConnectionTest,
     ConnectorDisabled,
+    ConnectorError,
     ConnectorKind,
     ConnectorNotConfigured,
 )
@@ -32,6 +34,7 @@ from api.app.services.settings import load_stored
 
 if TYPE_CHECKING:
     from api.app.config import Settings
+    from api.app.connectors.confluence import ConfluencePublisher
 
 
 class BaseConnector:
@@ -84,12 +87,38 @@ class BaseConnector:
         raise NotImplementedError
 
 
+class AtlassianConnector(BaseConnector):
+    """Confluence and Jira share the Atlassian credential (separate URLs): ``Bearer <PAT>`` on Data
+    Center, basic ``ATLASSIAN_USER:ATLASSIAN_TOKEN`` on Cloud."""
+
+    @property
+    def flavor(self) -> str:
+        return getattr(self.config.install, "flavor", "datacenter")
+
+    def auth_header(self) -> dict[str, str]:
+        if self.flavor == "cloud":
+            pair = f"{self.credential('user')}:{self.credential()}".encode()
+            return {"Authorization": f"Basic {base64.b64encode(pair).decode()}"}
+        return {"Authorization": f"Bearer {self.credential()}"}
+
+    @property
+    def confluence(self) -> ConfluencePublisher:
+        from api.app.connectors.confluence import ConfluencePublisher  # imports this module
+
+        return ConfluencePublisher(self)
+
+    async def test(self) -> ConnectionTest:
+        if self.config.url("confluence_url"):
+            return await self.confluence.test()
+        raise ConnectorError("the Atlassian connector has no Confluence URL (connectors.atlassian.confluenceUrl)")
+
+
 class _Pending(BaseConnector):
     async def test(self) -> ConnectionTest:
         return ConnectionTest(ok=False, message="not implemented yet")
 
 
-_CLASSES: dict[str, type[BaseConnector]] = {}
+_CLASSES: dict[str, type[BaseConnector]] = {"atlassian": AtlassianConnector}
 
 
 def register(kind: ConnectorKind, cls: type[BaseConnector]) -> None:
