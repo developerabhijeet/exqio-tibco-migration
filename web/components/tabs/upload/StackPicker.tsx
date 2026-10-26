@@ -1,6 +1,6 @@
 "use client";
 
-import { selectable, useStacks } from "@/lib/stacks";
+import { useStacks } from "@/lib/stacks";
 
 /** The target stack as a radio group. A stack the API reports unavailable is shown but cannot be chosen. */
 export function StackPicker({
@@ -19,7 +19,7 @@ export function StackPicker({
       <p className="label">Target stack</p>
       <div role="radiogroup" aria-label="Target stack" className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" title={disabledReason}>
         {(stacks.data?.stacks ?? []).map((s) => {
-          const unavailable = !selectable(s);
+          const unavailable = !s.selectable;
           const disabled = unavailable || !!disabledReason;
           const checked = s.key === value;
           return (

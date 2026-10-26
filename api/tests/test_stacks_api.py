@@ -55,6 +55,10 @@ async def test_toolchain_presence_is_not_checked_on_the_api(client, monkeypatch)
     assert p.status_code == 201
     stacks = (await client.get("/stacks")).json()["stacks"]
     assert stacks[0]["reason"] == "toolchain missing: dotnet"  # shown, not enforced
+    assert stacks[0]["available"] is False and stacks[0]["selectable"] is True
+    assert stacks[0]["toolchain_missing"] == stacks[0]["required_tools"]
+    go = next(s for s in stacks if s["key"] == "go")
+    assert go["selectable"] is False  # not implemented: refused whatever the tools
 
 
 async def test_patch_stack_needs_architect_or_admin(client, project_id):

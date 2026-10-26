@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { StackStatus } from "./types";
 import { useProjects } from "./queries";
 import { useAppState } from "./state";
 import { useActingPersona } from "./personas";
@@ -28,14 +27,6 @@ export function useProjectStack(): string {
   const projects = useProjects();
   return projects.data?.find((p) => p.id === projectId)?.target_stack ?? "dotnet";
 }
-
-/**
- * Whether a stack can be chosen. The API's `available` also folds in the toolchain check, which is
- * informational here (the API pods of a split deployment have no toolchains; the worker checks when
- * a build starts), so a stack missing only its tools stays selectable.
- */
-export const selectable = (s: StackStatus) => s.available || (s.reason ?? "").startsWith(TOOLCHAIN_MISSING);
-export const TOOLCHAIN_MISSING = "toolchain missing";
 
 /** The short name of a stack label: its first segment ("Java 21 · Spring Boot 3.5 · Maven" is "Java 21"). */
 export const shortLabel = (label: string) => label.split(" · ")[0];

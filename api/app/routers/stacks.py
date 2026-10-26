@@ -23,9 +23,18 @@ class _AnyToolPresent:
 
 
 def stack_views(settings: Settings, toolchains: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every stack key with its status (toolchains included, informationally) and the install default."""
-    return [stack_status(k, toolchains, settings.enabled_stack_list).model_dump() | {"default": k == settings.default_stack}
-            for k in STACK_KEYS]
+    """Every stack key with its status and the install default. ``available``/``reason`` fold in the
+    toolchain check; ``selectable`` is the registry check alone (implemented and enabled, what create,
+    PATCH and Settings accept, X14) and ``toolchain_missing`` lists the absent required tools."""
+    enabled = settings.enabled_stack_list
+    views = []
+    for k in STACK_KEYS:
+        status = stack_status(k, toolchains, enabled)
+        registry = stack_status(k, _AnyToolPresent(), enabled)
+        missing = [t for t in status.required_tools if not (toolchains.get(t) or {}).get("present")]
+        views.append(status.model_dump() | {"default": k == settings.default_stack, "selectable": registry.available,
+                                            "toolchain_missing": missing})
+    return views
 
 
 def require_available(key: str, settings: Settings) -> None:

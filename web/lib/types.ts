@@ -27,6 +27,9 @@ export interface StackStatus {
   available: boolean;
   reason: string | null;
   required_tools: string[];
+  /** Implemented and enabled: what the API accepts (toolchains are informational, X14). */
+  selectable: boolean;
+  toolchain_missing: string[];
   default: boolean;
 }
 
