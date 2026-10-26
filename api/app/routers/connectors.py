@@ -396,23 +396,30 @@ async def attach_figma_frames(process_id: str, body: FigmaFramesIn, session: Ses
     if proc is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
     node_ids = list(dict.fromkeys(body.node_ids))
+
+    async def refuse(status: int, message: str) -> HTTPException:
+        await audit_connector(session, principal.actor, "figma", "sync", project_id=proc.project_id,
+                              process_id=proc.id, target=body.file_key, outcome="refused",
+                              detail={"node_ids": node_ids, "message": message})
+        await session.commit()
+        return HTTPException(status_code=status, detail=message)
+
     if not valid_file_key(body.file_key):
-        raise HTTPException(status_code=422, detail=f"file_key: not a Figma file key: {body.file_key!r}")
+        raise await refuse(422, f"file_key: not a Figma file key: {body.file_key!r}")
     for node_id in node_ids:
         if not valid_node_id(node_id):
-            raise HTTPException(status_code=422, detail=f"node_ids: not a Figma node id: {node_id!r}")
+            raise await refuse(422, f"node_ids: not a Figma node id: {node_id!r}")
     connector = await _figma_ready(session, settings)
-    _check_figma_file(connector, body.file_key)
+    try:
+        connector.check_file(body.file_key)
+    except FileNotAllowed as exc:
+        raise await refuse(422, str(exc)) from exc
     try:
         connector.ready()
     except (ConnectorDisabled, ConnectorNotConfigured) as exc:
-        await audit_connector(session, principal.actor, "figma", "sync", project_id=proc.project_id,
-                              process_id=proc.id, target=body.file_key, outcome="refused",
-                              detail={"node_ids": node_ids, "message": str(exc)})
-        await session.commit()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise await refuse(409, str(exc)) from exc
     if not connector.config.url("api_url"):
-        raise HTTPException(status_code=409, detail=NO_FIGMA_URL)
+        raise await refuse(409, NO_FIGMA_URL)
     job_id = await runner.submit(FIGMA_SYNC_KIND, {
         "process_id": proc.id, "file_key": body.file_key, "node_ids": node_ids, "actor": principal.actor,
         "dedupe_key": figma_dedupe_key(proc.id, body.file_key, node_ids)},

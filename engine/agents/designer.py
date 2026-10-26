@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from engine.analysis.models import Finding, Rule
@@ -89,13 +90,22 @@ def findings_block(findings: list[Finding]) -> str:
     return "\n".join(lines) or "(none)"
 
 
+def _ref_line(value: Any, limit: int) -> str:
+    """One line: whitespace and control characters collapsed, angle brackets removed."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\s]+", " ", str(value or "").replace("<", "").replace(">", "")).strip()[:limit]
+
+
 def references_block(references: list[dict[str, Any]] | None) -> str:
-    """Design references (Figma frames an architect attached): name, page, link and screen text."""
+    """Design references (Figma frames an architect attached), one line per frame: name, page, link
+    and screen text. Every value is made single-line here too, so text cannot start another entry."""
     lines: list[str] = []
     for r in references or []:
-        where = f" (page {r['page']})" if r.get("page") else ""
-        lines.append(f"- frame {r.get('name') or 'unnamed'}{where}" + (f", {r['url']}" if r.get("url") else ""))
-        lines += [f"    text: {line}" for line in str(r.get("text") or "").splitlines() if line.strip()]
+        where = f" (page {_ref_line(r.get('page'), 120)})" if r.get("page") else ""
+        parts = [_ref_line(x, 4000) for x in str(r.get("text") or "").splitlines()]
+        text = " | ".join(x for x in parts if x)
+        url = _ref_line(r.get("url"), 500)
+        lines.append(f"- frame {_ref_line(r.get('name'), 120) or 'unnamed'}{where}" + (f", {url}" if url else "")
+                     + (f": {text}" if text else ""))
     return "\n".join(lines) or "(none)"
 
 

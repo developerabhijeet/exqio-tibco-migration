@@ -132,6 +132,7 @@ class ConnectorClient:
         self.transport = transport
         self.user_agent = user_agent
         self.ca_bundle = ca_bundle
+        self.max_bytes = MAX_RESPONSE_BYTES  # a caller may lower it (Figma thumbnails: 5 MB)
 
     def _resolve(self, path_or_url: str) -> str:
         if urlsplit(path_or_url).scheme:
@@ -214,14 +215,14 @@ class ConnectorClient:
             raise ConnectorError(f"{method} {urlsplit(url).netloc}: {detail}") from None
         try:
             declared = response.headers.get("content-length", "")
-            if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
-                raise ConnectorError(f"the response from {urlsplit(url).netloc} is over 20 MB: refused")
+            if declared.isdigit() and int(declared) > self.max_bytes:
+                raise ConnectorError(f"the response from {urlsplit(url).netloc} is over {self.max_bytes // (1024 * 1024)} MB: refused")
             chunks: list[bytes] = []
             size = 0
             async for chunk in response.aiter_bytes():
                 size += len(chunk)
-                if size > MAX_RESPONSE_BYTES:
-                    raise ConnectorError(f"the response from {urlsplit(url).netloc} is over 20 MB: refused")
+                if size > self.max_bytes:
+                    raise ConnectorError(f"the response from {urlsplit(url).netloc} is over {self.max_bytes // (1024 * 1024)} MB: refused")
                 chunks.append(chunk)
         except httpx.HTTPError as exc:
             raise ConnectorError(f"{method} {urlsplit(url).netloc}: "

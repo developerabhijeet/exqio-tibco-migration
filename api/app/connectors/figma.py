@@ -9,8 +9,12 @@ separate allowlist (``imageHosts``) and a URL the API returns is fetched only wh
 it; with none configured, or for a URL elsewhere, the thumbnail is off and the reason says why.
 The image request carries no Figma token.
 
-Frame text is design data that reaches model prompts, so it is masked (``mask_sensitive``), cut to
-4 000 characters, and never treated as instructions by the designer (it sits inside ``<source>``).
+Frame text is design data that reaches model prompts, so name, page and every text line are
+masked (``mask_sensitive``), reduced to single lines (control characters and newlines collapsed,
+angle brackets removed so no ``<source>`` tag can be written), cut (name and page 120 characters,
+text 4 000) and rendered one frame per line. The repo has no injection-pattern sanitiser; the
+defence is that structure plus the ``<source>`` data wrapper and the designer's system rule that
+references are not instructions.
 """
 from __future__ import annotations
 
@@ -65,8 +69,19 @@ def frame_url(web_url: str, file_key: str, node_id: str) -> str:
     return f"{web_url.rstrip('/')}/design/{quote(file_key, safe='')}?node-id={quote(node_id.replace(':', '-'), safe='-')}"
 
 
+LABEL_MAX = 120
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\s]+")
+
+
 def _mask(value: str) -> str:
     return mask_sensitive(value, PAGE_MASKED_FIELDS)
+
+
+def one_line(value: str, limit: int | None = None) -> str:
+    """``value`` masked, on one line (whitespace and control characters collapsed, ``<`` and ``>``
+    removed), cut to ``limit`` characters."""
+    out = _CONTROL.sub(" ", _mask(str(value)).replace("<", "").replace(">", "")).strip()
+    return out[:limit] if limit else out
 
 
 def collect_text(node: dict[str, Any]) -> str:
@@ -77,9 +92,9 @@ def collect_text(node: dict[str, Any]) -> str:
     while stack:
         current = stack.pop()
         if current.get("type") == "TEXT" and str(current.get("characters") or "").strip():
-            lines.append(str(current["characters"]))
+            lines.extend(x for x in (one_line(part) for part in str(current["characters"]).splitlines()) if x)
         stack.extend(reversed(current.get("children") or []))
-    return _mask("\n".join(lines))[:TEXT_MAX]
+    return "\n".join(lines)[:TEXT_MAX]
 
 
 class FigmaConnector(BaseConnector):
@@ -138,8 +153,8 @@ class FigmaConnector(BaseConnector):
                 if node.get("type") not in FRAME_TYPES or not node.get("id"):
                     continue
                 box = node.get("absoluteBoundingBox") or node.get("size") or {}
-                out.append(Frame(node_id=str(node["id"]), name=_mask(str(node.get("name") or node["id"])),
-                                 page=_mask(str(page.get("name") or "")),
+                out.append(Frame(node_id=str(node["id"]), name=one_line(str(node.get("name") or node["id"]), LABEL_MAX) or str(node["id"]),
+                                 page=one_line(str(page.get("name") or ""), LABEL_MAX),
                                  width=float(box.get("width") or 0), height=float(box.get("height") or 0)))
         return out
 
@@ -182,6 +197,7 @@ class FigmaConnector(BaseConnector):
                                       headers=JSON) or {}
         urls = data.get("images") or {}
         images = self.client(self.api_url, auth=dict, allowed_hosts=self.image_hosts)  # no Figma token
+        images.max_bytes = IMAGE_MAX_BYTES
         paths: dict[str, Path | None] = {}
         notes: dict[str, str] = {}
         for node_id in node_ids:
@@ -197,7 +213,8 @@ class FigmaConnector(BaseConnector):
             try:
                 response = await images.request("GET", str(url))
             except ConnectorError as exc:
-                notes[node_id] = f"the image could not be fetched: {exc.message}"
+                notes[node_id] = ("the image is over 5 MB: dropped" if "is over" in exc.message
+                                  else f"the image could not be fetched: {exc.message}")
                 continue
             kind = response.headers.get("content-type", "").split(";")[0].strip().lower()
             if response.status_code != 200:
