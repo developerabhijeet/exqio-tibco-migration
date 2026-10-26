@@ -81,6 +81,16 @@ def test_every_mapping_row_has_lineage_activity_to_method():
                for m in build_input().design.mapping)
 
 
+@pytest.mark.parametrize("key", ["dotnet", "java", "go", "python"])
+def test_lineage_reaches_methods_of_every_stack(key):
+    """MIGRATED_TO ends at ``method:<stack>:`` and every new-code node carries the stack."""
+    d = project_build(ref, build_input(stack=key))
+    mig = [r.dst for r in d.rels if r.type == "MIGRATED_TO"]
+    assert any(u.startswith(f"method:{key}:{IR}/") for u in mig)
+    assert all(u.split(":")[1] == key for u in mig)  # no edge ends in another stack's node
+    assert {n.props["stack"] for n in d.nodes if n.label in NEW_LABELS} == {key}
+
+
 def test_new_code_nodes_carry_stack_dotnet():
     nodes = [n for n in project_build(ref, build_input()).nodes if n.label in NEW_LABELS]
     assert nodes and {n.props["stack"] for n in nodes} == {"dotnet"}
