@@ -21,6 +21,13 @@ export interface TimelineProps {
   hasEarlier?: boolean;
   loadingEarlier?: boolean;
   onLoadEarlier?(): void;
+  /** The iteration the revisions are filtered to (sub-project 6), null for all of them. */
+  iteration?: number | null;
+  /** The project's iteration numbers, for the filter; it is hidden with fewer than two. */
+  iterations?: number[];
+  onIteration?(n: number | null): void;
+  /** The newest revision overall when `revisions` is filtered (the current memory). */
+  latestOverall?: number | null;
 }
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -32,9 +39,22 @@ function tickHeight(r: RevisionOut, max: number): number {
   return Math.round(8 + 28 * (Math.log1p(size) / Math.log1p(max)));
 }
 
-export function Timeline({ revisions, value, onChange, onShowChanges, showing, hasEarlier, loadingEarlier, onLoadEarlier }: TimelineProps) {
+export function Timeline({
+  revisions,
+  value,
+  onChange,
+  onShowChanges,
+  showing,
+  hasEarlier,
+  loadingEarlier,
+  onLoadEarlier,
+  iteration = null,
+  iterations = [],
+  onIteration,
+  latestOverall,
+}: TimelineProps) {
   const ordered = useMemo(() => [...revisions].sort((a, b) => a.n - b.n), [revisions]);
-  const latest = ordered.at(-1)?.n ?? null;
+  const latest = latestOverall ?? ordered.at(-1)?.n ?? null;
   const active = value ?? latest;
   const activeRev = ordered.find((r) => r.n === active) ?? null;
   const max = useMemo(() => Math.max(0, ...ordered.map((r) => r.added + r.changed + r.removed)), [ordered]);
@@ -97,6 +117,27 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           </p>
         )}
 
+        {onIteration && (iterations.length > 1 || iteration !== null) ? (
+          <label className="flex items-center gap-1.5 text-sm text-slate">
+            <span className="sr-only sm:not-sr-only">Iteration</span>
+            <select
+              data-testid="timeline-iteration-filter"
+              className="rounded-btn border border-line bg-surface px-2 py-0.5 text-sm text-heading"
+              value={iteration ?? ""}
+              onChange={(e) => onIteration(e.target.value === "" ? null : Number(e.target.value))}
+            >
+              <option value="">All</option>
+              {[...new Set([...iterations, ...(iteration !== null ? [iteration] : [])])]
+                .sort((a, b) => a - b)
+                .map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+            </select>
+          </label>
+        ) : null}
+
         {/* What the hovered (else the active) revision did. */}
         <div className="ml-auto flex min-w-0 items-center gap-3 text-sm text-slate">
           {shown ? (
@@ -104,6 +145,9 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
               <span className="inline-flex items-center gap-1.5 font-semibold text-heading">
                 <span className="h-2 w-2 rounded-full" style={{ background: phaseCss(shown.phase) }} aria-hidden />
                 Revision {shown.n} · {shown.phase}
+              </span>
+              <span className="whitespace-nowrap" data-testid="timeline-iteration">
+                Iteration {shown.iteration}
               </span>
               <span className="hidden truncate xl:inline">
                 {[shown.actor, relativeTime(shown.at)].filter(Boolean).join(" · ")}
@@ -153,7 +197,11 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
           onMouseLeave={() => setHover(null)}
           className={`flex h-full min-w-0 flex-1 items-end gap-[3px] overflow-x-auto overflow-y-hidden [scrollbar-width:thin]`}
         >
-          {ordered.length === 0 ? <p className="self-center text-sm text-slate">No revisions yet.</p> : null}
+          {ordered.length === 0 ? (
+            <p className="self-center text-sm text-slate">
+              {iteration !== null ? `No revisions in iteration ${iteration}.` : "No revisions yet."}
+            </p>
+          ) : null}
           {ordered.map((r) => {
             const on = r.n === active;
             const colour = phaseCss(r.phase);
@@ -163,7 +211,8 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing, h
                 type="button"
                 data-n={r.n}
                 data-testid={`rev-${r.n}`}
-                aria-label={`Revision ${r.n}, ${r.phase}`}
+                data-iteration={r.iteration}
+                aria-label={`Revision ${r.n}, ${r.phase}, iteration ${r.iteration}`}
                 aria-current={on ? "true" : undefined}
                 tabIndex={on ? 0 : -1}
                 onClick={() => pick(r.n)}

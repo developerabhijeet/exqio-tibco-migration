@@ -33,6 +33,7 @@ import {
   type Side,
   type Subgraph,
 } from "@/lib/memory";
+import { useIterations } from "@/lib/iterations";
 import { useCan } from "@/lib/personas";
 import { DiffPanel } from "./DiffPanel";
 import { MemoryCanvas, type CanvasHighlight } from "./MemoryCanvas";
@@ -347,7 +348,10 @@ export function MemoryExplorer() {
     }
   }, [revision, view.rev, projectId, qc]);
 
-  const revisions = useRevisions(ready ? projectId : null);
+  // The timeline's iteration filter (sub-project 6): null is every iteration.
+  const [iteration, setIteration] = useState<number | null>(null);
+  const iterations = useIterations(ready ? projectId : null);
+  const revisions = useRevisions(ready ? projectId : null, iteration);
   // A link to an older revision than the loaded pages reach: read back until it is there.
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = revisions;
   const oldestLoaded = revisions.revisions?.at(-1)?.n ?? null;
@@ -664,6 +668,10 @@ export function MemoryExplorer() {
             showing={view.changes}
             onChange={(n) => set({ rev: n === null ? null : String(n) })}
             onShowChanges={(n) => set({ changes: view.changes === n ? null : String(n) })}
+            iteration={iteration}
+            iterations={(iterations.data ?? []).map((i) => i.n)}
+            onIteration={setIteration}
+            latestOverall={iteration !== null ? revision : undefined}
           />
         </>
       )}

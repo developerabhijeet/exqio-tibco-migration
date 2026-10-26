@@ -312,11 +312,13 @@ export const useMemoryNode = (projectId: string | null, uid: string | null, asOf
 export const REVISIONS_PAGE = 200;
 
 /** The revisions, newest first, a page at a time: `fetchNextPage` reads the page before the
- * oldest one loaded (`before`). `revisions` is every loaded page, newest first. */
-export function useRevisions(projectId: string | null) {
+ * oldest one loaded (`before`). `revisions` is every loaded page, newest first. With `iteration`
+ * only that iteration's revisions (the API's `?iteration=`). */
+export function useRevisions(projectId: string | null, iteration: number | null = null) {
   const q = useInfiniteQuery({
-    queryKey: ["memory-revisions", projectId],
-    queryFn: ({ pageParam }) => memoryApi.revisions(projectId!, pageParam ?? undefined, REVISIONS_PAGE),
+    queryKey: ["memory-revisions", projectId, iteration],
+    queryFn: ({ pageParam }) =>
+      memoryApi.revisions(projectId!, pageParam ?? undefined, REVISIONS_PAGE, iteration ?? undefined),
     initialPageParam: null as number | null,
     getNextPageParam: (last) => (last.length === REVISIONS_PAGE && last[last.length - 1].n > 1 ? last[last.length - 1].n : undefined),
     enabled: !!projectId,
