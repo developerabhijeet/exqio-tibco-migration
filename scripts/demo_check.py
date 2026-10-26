@@ -28,7 +28,14 @@ when none answers. It never prints key values.
 
     python scripts/demo_check.py [--api URL | --base-url URL] [--token TOKEN]
                                  [--mode full|offline|toolchain-off]
-                                 [--zip PATH]
+                                 [--stack dotnet|java|go|python] [--zip PATH]
+
+``--stack`` (default dotnet) creates the project on that target stack and runs the same seven steps:
+the build must report the stack, the metrics keys must be present, parity must have no unexplained
+difference, and (when memory is configured) the lineage must reach ``method:<stack>:`` Method nodes
+through MIGRATED_TO. For a stack other than dotnet the NuGet probe is not used (its packages come from
+GMF's mirrors) and the offline mode asserts a failed restore with its reason. Through make:
+``make demo-check DEMO_ARGS="--stack java"``.
 
 The ``connectors`` step (also ``--only connectors``) runs each enabled connector's connection test,
 which needs the ``admin`` role: ``ops.sam`` locally, and with ``--token`` a user who holds ``admin``.
@@ -88,6 +95,9 @@ TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
 CONNECTOR_KINDS = ("github", "atlassian", "figma")
 ONLY_STEPS = ("connectors",)
 MODES = ("full", "offline", "toolchain-off")
+STACKS = ("dotnet", "java", "go", "python")
+METRIC_KEYS = ("rule_carry_forward", "test_pass_rate", "code_coverage", "standards_adherence", "compile_ok",
+               "infra_ok", "conversion_accuracy")  # the fixed formulas of spec 2.5, the same for every stack
 TOOLCHAIN_OFF_MARKER = "BUILD_TOOLCHAIN=false"
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
 NUGET_INDEX = "https://api.nuget.org/v3/index.json"
@@ -156,9 +166,11 @@ def registry_probe(terraform_version: str | None) -> tuple[bool, str]:
 # ------------------------------------------------------------------ the flow
 class Flow:
     def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path,
-                 token: bool = False, publish: bool = False, github_repo: str = "") -> None:
+                 token: bool = False, publish: bool = False, github_repo: str = "",
+                 stack: str = "dotnet") -> None:
         self.run, self.c, self.mode, self.zip = run, client, mode, zip_path
         self.publish, self.github_repo = publish, github_repo  # connectors step: --publish, --github-repo
+        self.stack = stack  # the project's target stack: its build, parity and memory lineage are checked
         self.token = token  # a bearer token signs in (oidc install): X-User is ignored
         self.actor = ""  # the token's user, as the audit trail names them
         self.full = mode == "full"
@@ -197,6 +209,16 @@ class Flow:
         for name in ("dotnet", "terraform", "terragrunt"):
             t = tools.get(name) or {}
             self.run.check(s, f"{name} present", t.get("present") is True, t.get("version") or "missing")
+        if self.stack != "dotnet":
+            listing = self.get("/stacks")
+            row = next((x for x in (listing.json().get("stacks") or [] if listing.status_code == 200 else [])
+                        if x.get("key") == self.stack), {})
+            self.run.check(s, f"{self.stack} stack selectable", row.get("selectable") is True,
+                           f"{row.get('label')}" if row.get("selectable") else
+                           f"HTTP {listing.status_code}: {row.get('reason') or 'not listed'}", fatal=True)
+            missing = row.get("toolchain_missing") or []
+            self.run.check(s, f"{self.stack} toolchain present", not missing,
+                           "found" if not missing else f"missing {', '.join(missing)}")
         if self.token:
             me = self.get("/auth/me")
             who = me.json() if me.status_code == 200 else {}
@@ -210,7 +232,8 @@ class Flow:
 
     def upload(self) -> None:
         s = "upload"
-        project = self.post("/projects", json={"name": f"acceptance {time.strftime('%Y-%m-%d %H:%M:%S')}"})
+        project = self.post("/projects", json={"name": f"acceptance {self.stack} {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                                               "target_stack": self.stack})
         self.run.check(s, "project created", project.status_code == 201, project.status_code, fatal=True)
         self.project_id = project.json()["id"]
         with self.zip.open("rb") as fh:
@@ -316,6 +339,7 @@ class Flow:
         self.builds[name] = build_id
         self.job_ok(s, self.wait_job(r.json()["job_id"], "build"))
         b = self.get(f"/builds/{build_id}").json()
+        self.run.check(s, "build stack", (b.get("stack") or "dotnet") == self.stack, b.get("stack"))
         steps = {st["name"]: st for st in b["steps"]}
         tests = self.get(f"/builds/{build_id}/tests").json()["summary"]
         files = self.get(f"/builds/{build_id}/files").json()["counts"]
@@ -358,11 +382,20 @@ class Flow:
                            f"{tests['not_run']} not run")
             self.run.check(s, "build status passed", b["status"] == "passed", b["status"])
             self.run.check(s, "G4 enabled", g4.get("enabled") is True, g4.get("reason") or "enabled")
+            m = self.get(f"/builds/{build_id}/metrics")
+            metrics = m.json() if m.status_code == 200 else {}
+            absent = [k for k in METRIC_KEYS if k not in metrics]
+            self.run.check(s, "metrics keys", m.status_code == 200 and not absent,
+                           f"{len(METRIC_KEYS)} keys" if not absent else f"HTTP {m.status_code}, missing {absent}")
         else:
             log = restore.get("log") or ""
-            self.run.check(s, "restore failed honestly", restore.get("ok") is False and "NuGet unreachable" in log,
-                           _tail_line(log, "NuGet unreachable"))
-            self.run.check(s, "remedy named", "make nuget-cache" in log, "restore log names `make nuget-cache`")
+            if self.stack == "dotnet":
+                self.run.check(s, "restore failed honestly", restore.get("ok") is False and "NuGet unreachable" in log,
+                               _tail_line(log, "NuGet unreachable"))
+                self.run.check(s, "remedy named", "make nuget-cache" in log, "restore log names `make nuget-cache`")
+            else:  # the package mirror is GMF's: the honest state is a failed restore with its reason
+                self.run.check(s, "restore failed honestly", restore.get("ok") is False and bool(log.strip()),
+                               _first_line(log))
             skipped = [n for n in ("build", "test") if steps.get(n, {}).get("skipped") is True]
             self.run.check(s, "build and test skipped", skipped == ["build", "test"],
                            "; ".join(_first_line(steps.get(n, {}).get("log")) for n in ("build", "test")))
@@ -444,8 +477,9 @@ class Flow:
                                f"HTTP {start.status_code}: {_first_line(detail)}")
             else:
                 nu = re.search(r"NU1301[^.]*\.", detail)
-                self.run.check(s, "start refused with the NuGet reason",
-                               start.status_code == 409 and "nuget" in detail.lower(),
+                reason = start.status_code == 409 and (self.stack != "dotnet" or "nuget" in detail.lower())
+                self.run.check(s, "start refused with the restore reason" if self.stack != "dotnet"
+                               else "start refused with the NuGet reason", reason,
                                f"HTTP {start.status_code}: {detail.split(':')[0]}: "
                                f"{nu.group(0) if nu else _first_line(detail)}")
             ver = self.post(f"/builds/{build_id}/verify")
@@ -531,8 +565,12 @@ class Flow:
             node = self.get(f"{base}/node", params={"uid": uid})
             lineage = (node.json().get("lineage") or []) if node.status_code == 200 else []
             migrated = [x for x in lineage if x["edge"]["type"] == "MIGRATED_TO"]
+            methods = sorted({u for x in migrated for u in _lineage_uids(x) if u.startswith(f"method:{self.stack}:")})
             self.run.check(s, f"lineage {t}", len(migrated) > 0,
                            f"{len(migrated)} MIGRATED_TO from {uid}" if migrated else f"HTTP {node.status_code}, no MIGRATED_TO")
+            self.run.check(s, f"lineage {t} to {self.stack}", len(methods) > 0,
+                           f"MIGRATED_TO {methods[0]} (+{len(methods) - 1})" if methods
+                           else f"no MIGRATED_TO to a method:{self.stack}: uid")
             hits = self.get(f"{base}/search", params={"q": t, "labels": "Process", "k": 8})
             found = [h for h in (hits.json().get("hits") or []) if h["label"] == "Process"
                      and (h.get("props") or {}).get("name", t) == t] if hits.status_code == 200 else []
@@ -625,6 +663,13 @@ class Flow:
         self.run.notes.append(f"connectors: {name} {'ok' if ok else 'FAILED: ' + detail}")
 
 
+def _lineage_uids(entry: dict[str, Any]) -> list[str]:
+    """The node uids a lineage entry reaches: the edge's ends and the other node."""
+    edge = entry.get("edge") or {}
+    other = entry.get("other") or entry.get("node") or {}
+    return [u for u in (edge.get("dst"), edge.get("src"), other.get("uid")) if isinstance(u, str)]
+
+
 def _first_line(text: str | None) -> str:
     for line in (text or "").splitlines():
         if line.strip():
@@ -676,6 +721,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Entra access token for an AUTH_MODE=oidc install (default: EXIQO_TOKEN)")
     ap.add_argument("--mode", choices=MODES, help="force a mode (default: decided by the probes; "
                     "toolchain-off for workers with BUILD_TOOLCHAIN=false)")
+    ap.add_argument("--stack", choices=STACKS, default="dotnet",
+                    help="the project's target stack (default %(default)s): its build, metrics, parity and "
+                    "memory lineage are checked")
     ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
                     help="the synthetic estate zip (make samples-zip)")
     ap.add_argument("--only", choices=ONLY_STEPS, help="run just this step (connectors: the connection "
@@ -721,7 +769,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if any(not r.ok for r in run.rows) else 0
     nuget_ok, nuget_why = nuget_probe()
     registry_ok, registry_why = registry_probe((tools.get("terraform") or {}).get("version"))
-    probes_pass = nuget_ok and registry_ok
+    # NuGet is the .NET stack's feed: another stack's packages come from GMF's mirrors (not probed here)
+    probes_pass = (nuget_ok if args.stack == "dotnet" else True) and registry_ok
     if args.mode:
         mode, why = args.mode, "selected with --mode"
     elif args.base_url:
@@ -731,11 +780,12 @@ def main(argv: list[str] | None = None) -> int:
         why = "both probes passed" if probes_pass else "a probe failed"
     header = [f"ExiQO Migrate acceptance run against {args.api}",
               f"mode: {mode} ({why})",
+              f"target stack: {args.stack}",
               f"  NuGet probe:    {'pass' if nuget_ok else 'fail'}: {nuget_why}",
               f"  registry probe: {'pass' if registry_ok else 'fail'}: {registry_why}"]
 
     flow = Flow(run, client, mode, args.zip, token=bool(args.token), publish=args.publish,
-                github_repo=args.github_repo)
+                github_repo=args.github_repo, stack=args.stack)
     # (name, function, later steps depend on it): a failure in a step others depend on stops the
     # run; infra, verify, plan and evidence only end their own step.
     steps: list[tuple[str, Callable[[], None], bool]] = [

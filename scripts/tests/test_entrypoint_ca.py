@@ -11,7 +11,7 @@ def _run(tmp_path: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
     script = tmp_path / "entrypoint.sh"
     script.write_text(ENTRYPOINT.read_text().replace("cd /app", "cd ."), encoding="utf-8")
     base = {"PATH": "/usr/bin:/bin", "EXIQO_ROLE": "nonsense"}  # an unknown role exits 64 if reached
-    return subprocess.run(["sh", str(script)], env={**base, **env}, cwd=tmp_path,
+    return subprocess.run(["sh", str(script)], check=False, env={**base, **env}, cwd=tmp_path,
                           capture_output=True, text=True, timeout=30)
 
 

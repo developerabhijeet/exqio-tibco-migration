@@ -11,11 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import demo_check as dc
 
 ROWS = ["memory available", "revisions per phase", "lineage DealerFundingRequest",
-        "search DealerFundingRequest", "lineage CreditApplicationIntake",
+        "lineage DealerFundingRequest to dotnet", "search DealerFundingRequest",
+        "lineage CreditApplicationIntake", "lineage CreditApplicationIntake to dotnet",
         "search CreditApplicationIntake", "latest diff", "curation applied", "ask cites memory"]
 
 
-def fake(available: bool = True):
+def fake(available: bool = True, stack: str = "dotnet"):
     state = {"curated": False}
     revs = [{"n": i + 1, "phase": p} for i, p in
             enumerate(["discover", "analysis", "analysis", "design", "design", "build", "build"])]
@@ -35,7 +36,8 @@ def fake(available: bool = True):
             return httpx.Response(200, json=[{"name": t, "id": f"id-{t}", "ir_id": f"ir-{t}"}
                                              for t in dc.TARGETS])
         if path.endswith("/node"):
-            return httpx.Response(200, json={"lineage": [{"edge": {"type": "MIGRATED_TO"}}]})
+            return httpx.Response(200, json={"lineage": [{"edge": {"type": "MIGRATED_TO", "src": "activity:ir/a1",
+                                                                  "dst": f"method:{stack}:ir/Api/Flow.Run"}}]})
         if path.endswith("/search"):
             return httpx.Response(200, json={"hits": [{"label": "Process",
                                                        "props": {"name": request.url.params["q"]}}]})
@@ -50,10 +52,11 @@ def fake(available: bool = True):
     return handler
 
 
-def run_step(available: bool = True) -> list[dc.Row]:
-    client = httpx.Client(base_url="http://t", transport=httpx.MockTransport(fake(available)))
+def run_step(available: bool = True, stack: str = "dotnet", served: str | None = None) -> list[dc.Row]:
+    """``served``: the stack the fake memory holds lineage for (default: the project's)."""
+    client = httpx.Client(base_url="http://t", transport=httpx.MockTransport(fake(available, served or stack)))
     run = dc.Run(api="http://t")
-    flow = dc.Flow(run, client, "full", Path("x.zip"))
+    flow = dc.Flow(run, client, "full", Path("x.zip"), stack=stack)
     flow.project_id = "p1"
     try:
         flow.memory()
@@ -71,3 +74,16 @@ def test_all_rows_pass_on_good_responses() -> None:
 def test_unavailable_memory_stops_the_step() -> None:
     rows = run_step(available=False)
     assert [(r.check, r.ok) for r in rows] == [("memory available", False)]
+
+
+def test_lineage_reaches_methods_of_the_projects_stack() -> None:
+    for stack in ("java", "go", "python"):
+        rows = run_step(stack=stack)
+        assert all(r.ok for r in rows), [r for r in rows if not r.ok]
+        assert any(r.detail.startswith(f"MIGRATED_TO method:{stack}:") for r in rows)
+
+
+def test_lineage_to_another_stack_fails() -> None:
+    rows = run_step(stack="python", served="dotnet")
+    assert [r.check for r in rows if not r.ok] == ["lineage DealerFundingRequest to python",
+                                                   "lineage CreditApplicationIntake to python"]
