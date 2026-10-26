@@ -459,3 +459,29 @@ kbd,
     animation: none;
   }
 }
+
+/* Memory graph (components/memory/MemoryCanvas.tsx): the lit neighbourhood's edges flow towards
+   their target; relayouts glide rather than jump. */
+@keyframes mem-edge-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+.mem-edge-live {
+  stroke-dasharray: 7 3;
+  animation: mem-edge-flow 0.9s linear infinite;
+}
+.mem-flow .react-flow__node {
+  transition: transform var(--dur-panel) var(--ease);
+}
+.mem-flow .react-flow__minimap {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-e1);
+  border: 1px solid rgb(var(--c-line));
+}
+@media (prefers-reduced-motion: reduce) {
+  .mem-edge-live {
+    animation: none;
+  }
+}

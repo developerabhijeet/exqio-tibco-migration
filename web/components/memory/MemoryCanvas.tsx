@@ -1,23 +1,31 @@
 "use client";
 
-// The memory graph on a cytoscape canvas. Neighbourhood mode lays the subgraph out with `cose`;
-// lineage mode places it with elkjs (layered, left to right: old code, then new code, then
-// knowledge) and hands cytoscape the positions as a `preset`. Selecting a node highlights its
-// lineage chain (the `lineage` subgraph) and dims the rest.
-import { useEffect, useMemo, useRef } from "react";
-import type { Core, ElementDefinition } from "cytoscape";
-import type { ElkNode } from "elkjs/lib/elk-api";
-import { Focus, Maximize, Minus, Plus } from "lucide-react";
+// The memory graph on React Flow. graph/layout.ts decides what is drawn (processes and classes
+// become containers holding their steps and the knowledge about only them) and places it with
+// elkjs, layered left to right (lineage mode partitions old code, new code, then knowledge).
+// Hovering or selecting a node lights its neighbourhood (or the selected node's lineage chain)
+// and dims the rest; the lit edges flow towards their targets.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  GROUP_TOKEN,
-  groupCss,
-  GROUP_LABEL,
-  displayName,
-  type GraphMode,
-  type Side,
-  type Subgraph,
-} from "@/lib/memory";
-import { cssColor, useThemeChange } from "@/lib/theme";
+  Background,
+  BackgroundVariant,
+  ControlButton,
+  Controls,
+  MarkerType,
+  MiniMap,
+  Panel,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Node,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { Focus } from "lucide-react";
+import { displayName, type GraphMode, type Subgraph } from "@/lib/memory";
+import { kindOf, LABEL_ORDER, LINEAGE_TYPES, relColor, tok } from "./graph/kinds";
+import { buildModel, CARD, layoutModel, type MemFlowEdge, type MemFlowNode, type MemNodeData, type Model } from "./graph/layout";
+import { CanvasStateContext, memoryNodeTypes, type CanvasState } from "./graph/MemoryNodes";
+import { memoryEdgeTypes } from "./graph/MemoryEdge";
 
 export interface CanvasHighlight {
   added: string[];
@@ -42,645 +50,81 @@ export interface MemoryCanvasProps {
   onExpand(uid: string): void;
 }
 
-type Size = { w: number; h: number };
-
-// Shape by label family: containers and flows are rounded boxes, steps and methods ellipses,
-// data stores barrels, messaging diamonds, configuration tags and knowledge its own set.
-const SHAPE: Record<string, string> = {
-  Domain: "round-rectangle",
-  Application: "round-rectangle",
-  Solution: "round-rectangle",
-  CodeProject: "round-rectangle",
-  Process: "round-rectangle",
-  Class: "round-rectangle",
-  CodeFile: "cut-rectangle",
-  Activity: "ellipse",
-  Method: "ellipse",
-  Contract: "round-tag",
-  SubstVar: "round-tag",
-  ConfigKey: "round-tag",
-  SharedResource: "round-hexagon",
-  Endpoint: "hexagon",
-  Table: "barrel",
-  Queue: "round-diamond",
-  Topic: "round-diamond",
-  MessagingEntity: "round-diamond",
-  Test: "round-triangle",
-  Chunk: "round-pentagon",
-  Memory: "round-heptagon",
-  GateDecision: "star",
-  Error: "vee",
-  Curation: "round-tag",
-};
-
-const CONTAINERS = new Set([
-  "Domain",
-  "Application",
-  "Solution",
-  "CodeProject",
-]);
-const FLOWS = new Set(["Process", "Class"]);
-const LINEAGE_TYPES = new Set(["MIGRATED_TO", "TESTS", "FAILED_AT"]);
-
-function sizeOf(label: string): Size {
-  if (CONTAINERS.has(label)) return { w: 46, h: 32 };
-  if (FLOWS.has(label)) return { w: 38, h: 26 };
-  return { w: 24, h: 24 };
-}
-
-const short = (s: string, n = 30) =>
-  s.length > n ? `${s.slice(0, n - 1)}…` : s;
-
-export interface CanvasElements {
-  elements: ElementDefinition[];
-  nodeCount: number;
-  /** Edges the read returned whose other end is not among the nodes (filtered or truncated). */
-  dropped: number;
-  /** Dashed links drawn from the focus to nodes whose own path to it was filtered out. */
-  indirect: number;
-}
-
-/** Cytoscape elements for a subgraph: edges to nodes outside the set are dropped, never drawn
- * to nowhere; a node left with no edge in a focused neighbourhood links back to the focus with a
- * dashed "filtered path" edge, since the read guarantees it lies within reach of it. */
-export function canvasElements(
-  graph: Subgraph,
-  mode: GraphMode,
-  focus?: string | null,
-): CanvasElements {
-  const uids = new Set(graph.nodes.map((n) => n.uid));
-  const nodes: ElementDefinition[] = graph.nodes.map((n) => {
-    const size = sizeOf(n.label);
-    const scale = n.uid === focus ? 1.3 : 1;
-    return {
-      data: {
-        id: n.uid,
-        label: short(displayName(n)),
-        kind: n.label,
-        side: n.side,
-        shape: SHAPE[n.label] ?? "ellipse",
-        w: size.w * scale,
-        h: size.h * scale,
-      },
-      classes: [
-        n.curated ? "curated" : "",
-        n.obsolete ? "obsolete" : "",
-        n.uid === focus ? "focus" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-    };
-  });
-  const edges: ElementDefinition[] = [];
-  const linked = new Set<string>();
-  let dropped = 0;
-  for (const e of graph.edges) {
-    if (!uids.has(e.src) || !uids.has(e.dst)) {
-      dropped += 1;
-      continue;
-    }
-    linked.add(e.src);
-    linked.add(e.dst);
-    edges.push({
-      data: {
-        id: e.uid,
-        source: e.src,
-        target: e.dst,
-        type: e.type,
-        status: e.status ?? "",
-      },
-      classes: [
-        e.type === "MIGRATED_TO" ? "migrated" : "",
-        e.status ?? "",
-        LINEAGE_TYPES.has(e.type) ? "lineage-type" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-    });
-  }
-  let indirect = 0;
-  if (mode === "neighbourhood" && focus && uids.has(focus)) {
-    for (const n of graph.nodes) {
-      if (n.uid === focus || linked.has(n.uid)) continue;
-      indirect += 1;
-      edges.push({
-        data: {
-          id: `indirect:${focus}->${n.uid}`,
-          source: focus,
-          target: n.uid,
-          type: "filtered path",
-          status: "",
-        },
-        classes: "indirect",
-      });
-    }
-  }
-  return {
-    elements: [...nodes, ...edges],
-    nodeCount: nodes.length,
-    dropped,
-    indirect,
-  };
-}
-
-const PARTITION: Record<Side, number> = { old: 0, new: 1, knowledge: 2 };
-
-/** Lineage positions from elkjs: layered, left to right, old code in the first partition. */
-async function lineagePositions(
-  graph: Subgraph,
-  els: ElementDefinition[],
-): Promise<Record<string, { x: number; y: number }>> {
-  const { default: ELK } = await import("elkjs/lib/elk.bundled.js");
-  const elk = new ELK();
-  const nodeEls = els.filter((e) => !("source" in e.data));
-  const edgeEls = els.filter((e) => "source" in e.data);
-  const sideOf = new Map(graph.nodes.map((n) => [n.uid, n.side]));
-  // Room for the label under each node, so neighbouring labels do not overlap.
-  const root: ElkNode = {
-    id: "root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.partitioning.activate": "true",
-      "elk.spacing.nodeNode": "34",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "120",
-      "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
-      "elk.spacing.componentComponent": "60",
-    },
-    children: nodeEls.map((n) => ({
-      id: String(n.data.id),
-      width: Math.max(Number(n.data.w), 150),
-      height: Number(n.data.h) + 22,
-      layoutOptions: {
-        "elk.partitioning.partition": String(
-          PARTITION[sideOf.get(String(n.data.id)) ?? "old"],
-        ),
-      },
-    })),
-    edges: edgeEls.map((e) => ({
-      id: String(e.data.id),
-      sources: [String(e.data.source)],
-      targets: [String(e.data.target)],
-    })),
-  };
-  const out = await elk.layout(root);
-  const pos: Record<string, { x: number; y: number }> = {};
-  for (const c of out.children ?? [])
-    pos[c.id] = { x: (c.x ?? 0) + (c.width ?? 0) / 2, y: (c.y ?? 0) + 14 };
-  return pos;
-}
-
-const FONT = "Inter, ui-sans-serif, system-ui, sans-serif";
-
-/** Per-group fills and outlines (and the picked node's strong fill) from the current theme. */
-function groupStyles(c: typeof cssColor) {
-  const sides = Object.keys(GROUP_TOKEN) as Side[];
-  return {
-    base: sides.map((side) => ({
-      selector: `node[side = "${side}"]`,
-      style: { "background-color": c(GROUP_TOKEN[side].fill), "border-color": c(GROUP_TOKEN[side].border) },
-    })),
-    picked: sides.map((side) => ({
-      selector: `node.picked[side = "${side}"]`,
-      style: { "background-color": c(GROUP_TOKEN[side].strong), "border-color": c(GROUP_TOKEN[side].strong) },
-    })),
-  };
-}
-
-/** The canvas styles from the current theme's tokens; re-applied on every theme change. */
-function memoryStyle() {
-  const c = cssColor;
-  const groups = groupStyles(c);
-  return [
-    {
-      selector: "node",
-      style: {
-        shape: "data(shape)",
-        width: "data(w)",
-        height: "data(h)",
-        "border-width": 1.5,
-        label: "data(label)",
-        "font-family": FONT,
-        "font-size": 11.5,
-        color: c("slate"),
-        "text-valign": "bottom",
-        "text-margin-y": 6,
-        "text-wrap": "ellipsis",
-        "text-max-width": "140px",
-        "min-zoomed-font-size": 6,
-        "transition-property": "opacity, border-width, background-color",
-        "transition-duration": 150,
-      },
-    },
-    ...groups.base,
-    // Labels kept when zoomed out (keyLabels sizes them for the zoom).
-    { selector: "node.key-label", style: { "min-zoomed-font-size": 0, "text-margin-y": 3 } },
-    {
-      selector: "node.focus",
-      style: {
-        "border-width": 2.5,
-        "font-weight": 600,
-        color: c("heading"),
-        "font-size": 12.5,
-      },
-    },
-    {
-      selector: "node.curated",
-      style: {
-        "underlay-color": c("accent"),
-        "underlay-padding": 6,
-        "underlay-opacity": 0.22,
-        "underlay-shape": "ellipse",
-      },
-    },
-    {
-      selector: "node.obsolete",
-      style: { "border-style": "dashed", opacity: 0.6 },
-    },
-    {
-      selector: "node.picked",
-      style: {
-        "border-width": 3,
-        color: c("heading"),
-        "font-weight": 600,
-        "underlay-color": c("accent"),
-        "underlay-padding": 7,
-        "underlay-opacity": 0.18,
-      },
-    },
-    ...groups.picked,
-    {
-      selector: "node.added",
-      style: { "border-color": c("gate"), "border-width": 3.5 },
-    },
-    {
-      selector: "node.changed",
-      style: { "border-color": c("decision"), "border-width": 3.5 },
-    },
-    {
-      selector: "node.removed",
-      style: {
-        "border-color": c("error"),
-        "border-width": 3.5,
-        "border-style": "dashed",
-        opacity: 0.4,
-      },
-    },
-    {
-      selector: "edge",
-      style: {
-        width: 1.2,
-        "line-color": c("line-strong"),
-        "target-arrow-color": c("line-strong"),
-        "target-arrow-shape": "triangle",
-        "arrow-scale": 0.75,
-        "curve-style": "bezier",
-        "font-family": FONT,
-        "font-size": 9.5,
-        color: c("slate"),
-        "text-background-color": c("surface"),
-        "text-background-opacity": 0.92,
-        "text-background-padding": "2px",
-        "text-rotation": "autorotate",
-        "transition-property": "opacity, line-color",
-        "transition-duration": 150,
-      },
-    },
-    {
-      selector: "edge.lineage-type",
-      style: { "line-color": c("accent", 0.55), "target-arrow-color": c("accent", 0.55) },
-    },
-    {
-      selector: "edge.migrated",
-      style: {
-        width: 3,
-        "line-color": c("accent"),
-        "target-arrow-color": c("accent"),
-      },
-    },
-    {
-      selector: "edge.rejected",
-      style: {
-        "line-style": "dashed",
-        "line-color": c("error"),
-        "target-arrow-color": c("error"),
-      },
-    },
-    {
-      selector: "edge.corrected",
-      style: {
-        "line-style": "solid",
-        "line-color": c("gate"),
-        "target-arrow-color": c("gate"),
-      },
-    },
-    {
-      selector: "edge.indirect",
-      style: {
-        "line-style": "dashed",
-        "line-dash-pattern": [3, 4],
-        "line-color": c("line-strong"),
-        "target-arrow-shape": "none",
-        width: 1,
-      },
-    },
-    {
-      selector: "edge.added",
-      style: {
-        "line-color": c("gate"),
-        "target-arrow-color": c("gate"),
-        width: 2.5,
-      },
-    },
-    {
-      selector: "edge.changed",
-      style: {
-        "line-color": c("decision"),
-        "target-arrow-color": c("decision"),
-        width: 2.5,
-      },
-    },
-    {
-      selector: "edge.removed",
-      style: {
-        "line-color": c("error"),
-        "target-arrow-color": c("error"),
-        "line-style": "dashed",
-        opacity: 0.4,
-      },
-    },
-    // The selected node's chain: labelled edges, everything else at 25 %.
-    { selector: "edge.chain", style: { label: "data(type)", width: 2 } },
-    { selector: "edge.chain.migrated", style: { width: 3.5 } },
-    { selector: ".dim", style: { opacity: 0.25 } },
-    { selector: "edge.lineage-mode", style: { label: "data(type)" } },
-  ];
-}
-
-function ToolButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="flex h-9 w-9 items-center justify-center text-slate transition-colors hover:bg-sunken hover:text-heading"
-    >
-      {children}
-    </button>
-  );
-}
-
-/** Short transitions (layout, fit, selection), none for a reader who asked for reduced motion. */
-const MOTION_MS = 280;
+/** Short transitions (fit, centre), none for a reader who asked for reduced motion. */
 function motion(): number {
-  if (typeof window === "undefined" || !window.matchMedia) return MOTION_MS;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : MOTION_MS;
+  if (typeof window === "undefined" || !window.matchMedia) return 280;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
 }
 
-type Point = { x: number; y: number };
+const fmt = (n: number) => n.toLocaleString("en-US");
+const EMPTY = new Set<string>();
+const FIT = { padding: 0.12, maxZoom: 1.1 };
 
-/**
- * Bring a live instance in step with `els` without a new layout: elements no longer wanted go,
- * existing ones take the new data and classes in place (a renamed or newly curated node), and new
- * nodes start at the node they hang off and spread around it, so nothing that was already on the
- * canvas moves. Returns the nodes added.
- */
-function syncElements(inst: Core, els: ElementDefinition[], fallbackAnchor: string | null | undefined): number {
-  const want = new Map(els.map((e) => [String(e.data.id), e]));
-  const isEdge = (e: ElementDefinition) => "source" in e.data;
-  const fresh = els.filter((e) => inst.getElementById(String(e.data.id)).empty());
-  const freshNodes = fresh.filter((e) => !isEdge(e));
-  const freshEdges = fresh.filter(isEdge);
-  const ms = motion();
-
-  inst.batch(() => {
-    inst.elements().forEach((ele) => {
-      if (!want.has(ele.id())) inst.remove(ele);
-    });
-    for (const [id, def] of want) {
-      const ele = inst.getElementById(id);
-      if (ele.empty()) continue;
-      ele.data(def.data);
-      ele.classes(def.classes ?? "");
-    }
-  });
-  if (freshNodes.length === 0) {
-    if (freshEdges.length) inst.add(freshEdges);
-    return 0;
-  }
-
-  // Each new node hangs off an existing neighbour (or the focus); spread each family on a ring
-  // around its anchor, opening away from the middle of the graph.
-  const freshIds = new Set(freshNodes.map((n) => String(n.data.id)));
-  const anchorOf = new Map<string, string>();
-  for (const e of freshEdges) {
-    const [s, t] = [String(e.data.source), String(e.data.target)];
-    if (freshIds.has(t) && !freshIds.has(s) && !anchorOf.has(t)) anchorOf.set(t, s);
-    if (freshIds.has(s) && !freshIds.has(t) && !anchorOf.has(s)) anchorOf.set(s, t);
-  }
-  const bb = inst.nodes().length ? inst.nodes().boundingBox({}) : { x1: 0, y1: 0, w: 0, h: 0 };
-  const middle: Point = { x: bb.x1 + bb.w / 2, y: bb.y1 + bb.h / 2 };
-  const anchorPos = (id: string | undefined): Point => {
-    const a = id ? inst.getElementById(id) : null;
-    if (a && a.nonempty()) return { ...a.position() };
-    const f = fallbackAnchor ? inst.getElementById(fallbackAnchor) : null;
-    return f && f.nonempty() ? { ...f.position() } : middle;
+/** A grid, when elk cannot place a scene: everything still drawn and reachable. */
+function fallbackLayout(model: Model): { nodes: MemFlowNode[]; edges: MemFlowEdge[] } {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(model.nodes.length)));
+  return {
+    nodes: model.nodes.map((n, i) => ({
+      id: n.uid,
+      type: "entity",
+      position: { x: (i % cols) * (CARD.w + 60), y: Math.floor(i / cols) * (CARD.h + 40) },
+      width: CARD.w,
+      height: CARD.h,
+      data: { node: n, isFocus: false, compact: false },
+    })),
+    edges: model.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: "mem",
+      data: { type: e.type, status: e.status, internal: false, indirect: e.indirect },
+    })),
   };
-  const families = new Map<string, string[]>();
-  for (const id of freshIds) {
-    const a = anchorOf.get(id) ?? "";
-    families.set(a, [...(families.get(a) ?? []), id]);
-  }
-  const start = new Map<string, Point>();
-  const target = new Map<string, Point>();
-  for (const [anchor, ids] of families) {
-    const at = anchorPos(anchor || undefined);
-    const away = Math.atan2(at.y - middle.y, at.x - middle.x) || 0;
-    // A fan facing away from the middle, widening with the family up to a full ring; families
-    // of more than 14 continue on outer rings.
-    const perRing = Math.min(ids.length, 14);
-    const fan = Math.min(Math.PI * 2, Math.max(Math.PI / 2, perRing * 0.45));
-    const step = perRing <= 1 ? 0 : fan >= Math.PI * 2 ? fan / perRing : fan / (perRing - 1);
-    ids.forEach((id, i) => {
-      const r = 130 + Math.floor(i / 14) * 70;
-      const angle = away - (perRing <= 1 ? 0 : fan / 2) + step * (i % 14);
-      start.set(id, at);
-      target.set(id, { x: at.x + r * Math.cos(angle), y: at.y + r * Math.sin(angle) });
-    });
-  }
-  const added = inst.add(freshNodes.map((n) => ({ ...n, position: start.get(String(n.data.id)) ?? middle })));
-  inst.add(freshEdges);
-  added.forEach((n) => {
-    const to = target.get(n.id());
-    if (!to) return;
-    if (ms) n.animate({ position: to }, { duration: ms, easing: "ease-out-cubic" });
-    else n.position(to);
-  });
-  // Keep the newcomers in view.
-  if (ms) inst.animate({ fit: { eles: inst.elements(), padding: 48 } }, { duration: ms, easing: "ease-out-cubic" });
-  else inst.fit(undefined, 48);
-  return added.length;
 }
 
-export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus, filtered, onSelect, onExpand }: MemoryCanvasProps) {
+function Inner({ graph, mode, selected, highlight, lineage, focus, filtered, onSelect, onExpand }: MemoryCanvasProps) {
+  const flow = useReactFlow<MemFlowNode, MemFlowEdge>();
   const box = useRef<HTMLDivElement>(null);
-  const cy = useRef<Core | null>(null);
-  const scene = useRef<string | null>(null);
-  // Whether the reader has panned or zoomed since the scene was laid out: until they do, a
-  // resize (the drawer opening) re-fits the graph; after, their viewport is left alone.
-  const moved = useRef(false);
-  const handlers = useRef({ onSelect, onExpand });
-  handlers.current = { onSelect, onExpand };
-  const classes = useRef({ selected, lineage, highlight, focus });
-  classes.current = { selected, lineage, highlight, focus };
-
-  const built = useMemo(() => canvasElements(graph, mode, focus), [graph, mode, focus]);
-  // A scene is laid out once: a neighbourhood per focus (expansions and filter changes update it
-  // in place), a lineage view per element set (elk places the whole chain).
+  const model = useMemo(() => buildModel(graph, mode, focus), [graph, mode, focus]);
+  // A scene is fitted once: a neighbourhood per focus (expansions and filter changes relayout in
+  // place, keeping the reader's viewport once they have moved it), a lineage view per node set.
   const sceneKey =
-    mode === "lineage"
-      ? `lineage|${built.elements.map((e) => e.data.id).join("|")}`
-      : `neighbourhood|${focus ?? ""}`;
+    mode === "lineage" ? `lineage|${graph.nodes.map((n) => n.uid).join("|")}` : `neighbourhood|${focus ?? ""}`;
+  const [laid, setLaid] = useState<{ nodes: MemFlowNode[]; edges: MemFlowEdge[]; scene: string; fresh: boolean } | null>(null);
+  const [laidOut, setLaidOut] = useState("");
+  const [hovered, setHovered] = useState<string | null>(null);
+  const scene = useRef<string | null>(null);
+  // Whether the reader has panned or zoomed since the scene was fitted.
+  const moved = useRef(false);
 
   useEffect(() => {
     let live = true;
-    (async () => {
-      const current = cy.current;
-      // In place when most of what is wanted is already drawn; a mostly new set is a new scene.
-      const kept = current ? built.elements.filter((e) => !("source" in e.data) && current.getElementById(String(e.data.id)).nonempty()).length : 0;
-      if (current && scene.current === sceneKey && kept * 2 >= built.nodeCount) {
-        syncElements(current, built.elements, focus);
-        if (mode === "lineage") current.edges().addClass("lineage-mode");
-        const c = classes.current;
-        applyClasses(current, c.selected, c.lineage, c.highlight);
-        keyLabels(current, c);
-        return;
-      }
-      // Test and tooling hook: which scene is laid out (empty while one is being laid out).
-      if (box.current) box.current.dataset.laidOut = "";
-      const { default: cytoscape } = await import("cytoscape");
-      const positions =
-        mode === "lineage" && built.nodeCount > 0 ? await lineagePositions(graph, built.elements).catch(() => null) : null;
-      if (!live || !box.current) return;
-      cy.current?.destroy();
-      const inst = cytoscape({
-        container: box.current,
-        elements: built.elements,
-        style: memoryStyle() as never,
-        layout: { name: "preset" },
-        wheelSensitivity: 0.2,
-        minZoom: 0.15,
-        maxZoom: 2.5,
-        boxSelectionEnabled: false,
-        // Selection is the drawer's (the `picked` class), not cytoscape's own tap-to-select.
-        autounselectify: true,
+    const fresh = scene.current !== sceneKey;
+    if (fresh) setLaidOut("");
+    layoutModel(model, mode, focus)
+      .then((r) => ({ ...r, ok: true }))
+      .catch(() => ({ ...fallbackLayout(model), ok: false }))
+      .then((r) => {
+        if (!live) return;
+        scene.current = sceneKey;
+        if (fresh) moved.current = false;
+        setLaid({ nodes: r.nodes, edges: r.edges, scene: sceneKey, fresh });
+        setLaidOut(mode === "lineage" && model.nodeCount > 0 && !r.ok ? "lineage-fallback" : mode);
       });
-      if (mode === "lineage") inst.edges().addClass("lineage-mode");
-      const fit = () => {
-        inst.resize();
-        inst.fit(undefined, 48);
-        if (inst.zoom() > 1.3) {
-          inst.zoom(1.3);
-          inst.center();
-        }
-      };
-      // A lineage scene elk could not place falls back to breadthfirst: marked apart.
-      const laidOut = () => {
-        if (box.current) box.current.dataset.laidOut = mode === "lineage" && built.nodeCount > 0 && !positions ? "lineage-fallback" : mode;
-      };
-      if (positions) {
-        inst.layout({ name: "preset", positions: (n: { id: () => string }) => positions[n.id()] ?? { x: 0, y: 0 }, fit: false } as never).run();
-        fit();
-        laidOut();
-      } else {
-        // A focused neighbourhood of up to 60 nodes sits in rings around its focus, nearest hops
-        // first: calm, and round enough to fit any canvas shape (a ring of hundreds would not).
-        // Larger ones and the overview use cose, turned to landscape when it comes out tall.
-        const hops = focus && built.nodeCount <= 60 && inst.getElementById(focus).nonempty() ? hopsFrom(inst, focus) : null;
-        const layout = inst.layout(
-          (mode === "lineage"
-            ? { name: "breadthfirst", animate: false, fit: false, directed: true, spacingFactor: 1.1 }
-            : hops
-              ? {
-                  name: "concentric",
-                  animate: false,
-                  fit: false,
-                  concentric: (n: { id: () => string }) => 10 - Math.min(9, hops.get(n.id()) ?? 9),
-                  levelWidth: () => 1,
-                  // Spacing, not label widths: labels sit under their nodes and a ring sized
-                  // for 140 px labels fits the canvas at an unreadable zoom.
-                  minNodeSpacing: 46,
-                  avoidOverlap: true,
-                  nodeDimensionsIncludeLabels: false,
-                  startAngle: (3 / 2) * Math.PI,
-                }
-              : {
-                  name: "cose",
-                  animate: false,
-                  fit: false,
-                  randomize: true,
-                  nodeRepulsion: () => 4500,
-                  idealEdgeLength: () => 70,
-                  gravity: 0.8,
-                  componentSpacing: 60,
-                  nodeDimensionsIncludeLabels: true,
-                  // No bounding box: the canvas may be about to change shape (the drawer
-                  // opening), and a layout squeezed into the old shape fits the new one badly.
-                }) as never,
-        );
-        layout.one("layoutstop", () => {
-          if (!hops && mode !== "lineage") landscape(inst);
-          fit();
-          laidOut();
-        });
-        layout.run();
-      }
-      // Zoomed out past where labels hide, the nodes that matter keep theirs.
-      let zoomFrame = 0;
-      inst.on("zoom", () => {
-        cancelAnimationFrame(zoomFrame);
-        zoomFrame = requestAnimationFrame(() => keyLabels(inst, classes.current));
-      });
-      inst.on("tap", "node", (evt) => handlers.current.onSelect(evt.target.id()));
-      inst.on("dbltap", "node", (evt) => handlers.current.onExpand(evt.target.id()));
-      cy.current = inst;
-      scene.current = sceneKey;
-      moved.current = false;
-      const c = classes.current;
-      applyClasses(inst, c.selected, c.lineage, c.highlight);
-      keyLabels(inst, c);
-      // A new scene fades in rather than popping.
-      const ms = motion();
-      if (ms && box.current) {
-        box.current.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: ms, easing: "ease-out" });
-      }
-    })();
     return () => {
       live = false;
     };
-  }, [built, sceneKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(
-    () => () => {
-      cy.current?.destroy();
-      cy.current = null;
-    },
-    [],
-  );
-  // Recolour in place on a theme change (no new layout).
-  useThemeChange(() => cy.current?.style(memoryStyle() as never));
+  // Fit a new scene (or a relayout the reader has not moved away from) once it is drawn.
+  useEffect(() => {
+    if (!laid || !laid.nodes.length) return;
+    if (!laid.fresh && moved.current) return;
+    const frame = requestAnimationFrame(() => void flow.fitView({ ...FIT, duration: laid.fresh ? 0 : motion() }));
+    return () => cancelAnimationFrame(frame);
+  }, [laid, flow]);
 
-  // The drawer opening or closing (or the window) resizes the canvas: keep cytoscape's viewport
-  // in step so taps land on the nodes drawn under them.
+  // The drawer opening or closing resizes the canvas: re-fit until the reader takes over.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -688,306 +132,259 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const inst = cy.current;
-        if (!inst) return;
-        inst.resize();
-        if (!moved.current && inst.nodes().length) {
-          inst.stop();
-          inst.fit(undefined, 48);
-          if (inst.zoom() > 1.3) {
-            inst.zoom(1.3);
-            inst.center();
-          }
-        } else {
-          keepInView(inst, classes.current.selected);
-        }
+        if (!moved.current && flow.getNodes().length) void flow.fitView(FIT);
       });
     });
     ro.observe(el);
-    // A wheel or a drag is the reader taking over the viewport; a tap (selecting) is not.
-    let down: { x: number; y: number } | null = null;
-    const touched = () => {
-      moved.current = true;
-    };
-    const press = (e: PointerEvent) => {
-      down = { x: e.clientX, y: e.clientY };
-    };
-    const drag = (e: PointerEvent) => {
-      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) moved.current = true;
-    };
-    const release = () => {
-      down = null;
-    };
-    el.addEventListener("wheel", touched, { passive: true });
-    el.addEventListener("pointerdown", press);
-    el.addEventListener("pointermove", drag);
-    window.addEventListener("pointerup", release);
     return () => {
       cancelAnimationFrame(frame);
       ro.disconnect();
-      el.removeEventListener("wheel", touched);
-      el.removeEventListener("pointerdown", press);
-      el.removeEventListener("pointermove", drag);
-      window.removeEventListener("pointerup", release);
     };
-  }, []);
+  }, [flow]);
 
-  // Selection, chain and diff outlines change without a new layout; a selected node off screen is
-  // brought into view.
+  // A selected node off screen is brought into view.
   useEffect(() => {
-    const inst = cy.current;
-    if (!inst) return;
-    applyClasses(inst, selected, lineage, highlight);
-    keyLabels(inst, classes.current);
-    keepInView(inst, selected);
-  }, [selected, lineage, highlight]);
+    if (!selected || !laid) return;
+    const frame = requestAnimationFrame(() => {
+      const n = flow.getInternalNode(selected);
+      const el = box.current;
+      if (!n || !el) return;
+      const { x, y, zoom } = flow.getViewport();
+      const w = n.measured.width ?? CARD.w;
+      const h = n.measured.height ?? CARD.h;
+      const cx = n.internals.positionAbsolute.x + w / 2;
+      const cy = n.internals.positionAbsolute.y + h / 2;
+      const sx = cx * zoom + x;
+      const sy = cy * zoom + y;
+      const m = 40;
+      if (sx >= m && sy >= m && sx <= el.clientWidth - m && sy <= el.clientHeight - m) return;
+      void flow.setCenter(cx, cy, { zoom, duration: motion() });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selected, laid, flow]);
 
-  const zoomBy = (f: number) => {
-    const inst = cy.current;
-    if (!inst) return;
-    const level = Math.min(inst.maxZoom(), Math.max(inst.minZoom(), inst.zoom() * f));
-    const at = { x: inst.width() / 2, y: inst.height() / 2 };
-    const ms = motion();
-    if (ms) inst.animate({ zoom: { level, renderedPosition: at } } as never, { duration: 180 });
-    else inst.zoom({ level, renderedPosition: at });
-  };
-  const fitAll = () => {
-    const inst = cy.current;
-    if (!inst) return;
-    const ms = motion();
-    if (ms) inst.animate({ fit: { eles: inst.elements(), padding: 48 } }, { duration: ms, easing: "ease-out-cubic" });
-    else inst.fit(undefined, 48);
-  };
+  const edges = useMemo(
+    () =>
+      (laid?.edges ?? []).map((e) =>
+        e.data?.indirect
+          ? e
+          : {
+              ...e,
+              markerEnd: { type: MarkerType.ArrowClosed, color: relColor(e.data?.type ?? "", e.data?.status), width: 14, height: 14 },
+            },
+      ),
+    [laid],
+  );
+  const nodes = useMemo(
+    () => (laid?.nodes ?? []).map((n) => (n.id === selected ? { ...n, selected: true } : n)),
+    [laid, selected],
+  );
+
+  // What the hovered (else the selected) node lights: its neighbours, or the selected node's
+  // lineage chain when it has one. A container is lit with anything inside it.
+  const state = useMemo<CanvasState>(() => {
+    const hl = {
+      added: highlight ? new Set(highlight.added) : EMPTY,
+      changed: highlight ? new Set(highlight.changed) : EMPTY,
+      removed: highlight ? new Set(highlight.removed) : EMPTY,
+    };
+    const centre = hovered ?? selected ?? null;
+    if (!centre || !model.byId.has(centre)) return { lit: null, litEdges: null, selected, hovered, ...hl };
+    const lit = new Set<string>([centre]);
+    const litEdges = new Set<string>();
+    const chain = !hovered && lineage && lineage.nodes.length > 1 ? lineage : null;
+    if (chain) {
+      const chainEdges = new Set(chain.edges.map((e) => e.uid));
+      for (const n of chain.nodes) if (model.byId.has(n.uid)) lit.add(n.uid);
+      for (const e of model.edges)
+        if (chainEdges.has(e.id) || (lit.has(e.source) && lit.has(e.target) && LINEAGE_TYPES.has(e.type))) litEdges.add(e.id);
+    } else {
+      for (const e of model.edges) {
+        if (e.source !== centre && e.target !== centre) continue;
+        // A container's own steps are shown by containment, not by a line to each.
+        if (e.internal && e.type === "CONTAINS" && model.containers.has(centre)) continue;
+        litEdges.add(e.id);
+        lit.add(e.source);
+        lit.add(e.target);
+      }
+    }
+    for (const uid of [...lit]) {
+      const p = model.parentOf.get(uid) ?? model.knowledgeOf.get(uid);
+      if (p) lit.add(p);
+    }
+    return { lit, litEdges, selected, hovered, ...hl };
+  }, [hovered, selected, lineage, highlight, model]);
+
+  const onNodeEnter = useCallback((_: unknown, n: Node) => setHovered(n.id), []);
+  const onNodeLeave = useCallback(() => setHovered(null), []);
+  const onNodeClick = useCallback((_: unknown, n: Node) => onSelect(n.id), [onSelect]);
+  const onNodeDoubleClick = useCallback((_: unknown, n: Node) => onExpand(n.id), [onExpand]);
+  const onMoveStart = useCallback((e: MouseEvent | TouchEvent | null) => {
+    // Programmatic fits and centres carry no event; a wheel or a drag is the reader taking over.
+    if (e) moved.current = true;
+  }, []);
+  const miniColor = useCallback((n: Node) => {
+    const d = n.data as MemNodeData;
+    const k = kindOf(d.node.label);
+    return n.type === "container" ? tok(k.token, 0.28) : tok(k.token);
+  }, []);
   const centreSelected = () => {
-    const inst = cy.current;
-    if (!inst || !selected) return;
-    const n = inst.getElementById(selected);
-    if (n.empty()) return;
-    const ms = motion();
-    if (ms) inst.animate({ center: { eles: n }, zoom: Math.max(inst.zoom(), 1) }, { duration: ms, easing: "ease-out-cubic" });
-    else inst.center(n);
+    if (!selected) return;
+    const n = flow.getInternalNode(selected);
+    if (!n) return;
+    const w = n.measured.width ?? CARD.w;
+    const h = n.measured.height ?? CARD.h;
+    void flow.setCenter(n.internals.positionAbsolute.x + w / 2, n.internals.positionAbsolute.y + h / 2, {
+      zoom: Math.max(flow.getViewport().zoom, 1),
+      duration: motion(),
+    });
   };
 
-  const sides = useMemo(() => [...new Set(graph.nodes.map((n) => n.side))], [graph]);
-  // Why some links are dashed or missing: the filters hid nodes, or the 400-node limit cut them.
+  const kinds = useMemo(() => {
+    const present = [...new Set(graph.nodes.map((n) => n.label))];
+    const at = (l: string) => (LABEL_ORDER.indexOf(l) < 0 ? 99 : LABEL_ORDER.indexOf(l));
+    return present.sort((a, b) => at(a) - at(b));
+  }, [graph]);
   const hidden = filtered ? "the filters hide" : "not shown";
   const hint =
-    built.indirect > 0
-      ? `${fmt(built.indirect)} linked via nodes ${hidden}`
-      : built.dropped > 0
-        ? `${fmt(built.dropped)} links to nodes ${hidden}`
+    model.indirect > 0
+      ? `${fmt(model.indirect)} linked via nodes ${hidden}`
+      : model.dropped > 0
+        ? `${fmt(model.dropped)} links to nodes ${hidden}`
         : null;
   const hintTitle = filtered
     ? "Label or side filters hide the nodes these paths run through."
     : "These paths run through nodes beyond the ones shown here.";
-  const focusName = graph.nodes.find((n) => n.uid === (mode === "lineage" ? graph.nodes[0]?.uid : focus));
+  const focusNode = graph.nodes.find((n) => n.uid === (mode === "lineage" ? graph.nodes[0]?.uid : focus));
+  const migrated = graph.edges.some((e) => e.type === "MIGRATED_TO");
 
   return (
-    <div className="relative h-full w-full">
-      <div
-        ref={box}
-        className="absolute inset-0"
-        role="img"
-        aria-label={`Memory graph, ${mode} view${focusName ? ` of ${displayName(focusName)}` : ""}: ${fmt(built.nodeCount)} nodes`}
-        data-testid="memory-canvas"
-        data-node-count={built.nodeCount}
-        data-mode={mode}
-      />
+    <div
+      ref={box}
+      className="mem-flow absolute inset-0"
+      role="group"
+      aria-label={`Memory graph, ${mode} view${focusNode ? ` of ${displayName(focusNode)}` : ""}: ${fmt(model.nodeCount)} nodes`}
+      data-testid="memory-canvas"
+      data-node-count={model.nodeCount}
+      data-mode={mode}
+      data-laid-out={model.nodeCount === 0 ? mode : laidOut}
+    >
+      <CanvasStateContext.Provider value={state}>
+        <ReactFlow<MemFlowNode, MemFlowEdge>
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={memoryNodeTypes}
+          edgeTypes={memoryEdgeTypes}
+          onNodeClick={onNodeClick}
+          onNodeDoubleClick={onNodeDoubleClick}
+          onNodeMouseEnter={onNodeEnter}
+          onNodeMouseLeave={onNodeLeave}
+          onMoveStart={onMoveStart}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable
+          zoomOnDoubleClick={false}
+          onlyRenderVisibleElements={model.nodeCount > 150}
+          minZoom={0.08}
+          maxZoom={2}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} color="rgb(var(--c-line-strong))" gap={22} size={1.4} />
+          <Controls showInteractive={false} position="bottom-left" fitViewOptions={FIT}>
+            {selected ? (
+              <ControlButton onClick={centreSelected} title="Centre on the selected node" aria-label="Centre on the selected node">
+                <Focus size={14} aria-hidden />
+              </ControlButton>
+            ) : null}
+          </Controls>
+          {model.nodeCount > 0 ? (
+            <MiniMap
+              position="bottom-right"
+              pannable
+              zoomable
+              nodeColor={miniColor}
+              nodeStrokeWidth={0}
+              nodeBorderRadius={6}
+              maskColor="rgb(var(--c-page)/0.72)"
+              bgColor="rgb(var(--c-surface))"
+              style={{ width: 168, height: 112 }}
+              ariaLabel="Memory graph overview"
+            />
+          ) : null}
+          {model.nodeCount > 0 ? (
+            <Panel position="top-left" className="pointer-events-none !m-3">
+              <div className="flex max-w-[min(560px,60vw)] flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card bg-surface/90 px-3 py-2 text-2xs text-slate shadow-e1 ring-1 ring-line backdrop-blur-sm">
+                {kinds.map((l) => {
+                  const k = kindOf(l);
+                  const Icon = k.icon;
+                  return (
+                    <span key={l} className="inline-flex items-center gap-1">
+                      <span
+                        aria-hidden
+                        className="flex h-4 w-4 items-center justify-center rounded"
+                        style={{ background: tok(k.token, 0.14), color: tok(k.token) }}
+                      >
+                        <Icon size={10} strokeWidth={2.4} />
+                      </span>
+                      {k.label}
+                    </span>
+                  );
+                })}
+                {migrated ? (
+                  <>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-[3px] w-5 rounded bg-accent" />
+                      migrated to
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-0 w-5 border-t-2 border-dashed border-error" />
+                      rejected
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-[2px] w-5 rounded bg-gate" />
+                      corrected
+                    </span>
+                  </>
+                ) : null}
+                {hint ? (
+                  <span className="inline-flex items-center gap-1.5" data-testid="memory-filtered-hint" title={hintTitle}>
+                    <span className="h-0 w-5 border-t border-dashed border-line-strong" />
+                    {hint}
+                  </span>
+                ) : null}
+              </div>
+            </Panel>
+          ) : null}
+        </ReactFlow>
+      </CanvasStateContext.Provider>
 
       {graph.truncated ? (
         <div
           data-testid="memory-truncated"
-          className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-decision-bg px-4 py-1.5 text-sm font-medium text-decision shadow-card ring-1 ring-inset ring-decision/20"
+          className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-decision-bg px-4 py-1.5 text-sm font-medium text-decision shadow-card ring-1 ring-inset ring-decision/20"
         >
           Showing {fmt(graph.nodes.length)} of {fmt(graph.total)}: narrow the filters
         </div>
       ) : null}
 
-      {built.nodeCount === 0 ? (
-        <div className="absolute inset-0 flex items-center justify-center">
+      {model.nodeCount === 0 ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <p className="max-w-sm text-center text-base text-slate">
             Nothing to show here{filtered ? " with these filters" : ""}.{" "}
             {filtered ? "Clear a filter or search for a node." : "Search for a node to explore around it."}
           </p>
         </div>
       ) : null}
-
-      {/* Legend: the groups present, then what the edge styles mean. */}
-      {built.nodeCount > 0 ? (
-        <div className="pointer-events-none absolute bottom-4 left-4 flex max-w-[70%] flex-wrap items-center gap-x-4 gap-y-1.5 rounded-card bg-surface/90 px-3.5 py-2 text-xs text-slate shadow-card ring-1 ring-line">
-          {sides.map((s) => (
-            <span key={s} className="inline-flex items-center gap-1.5">
-              <span
-                className="h-2.5 w-2.5 rounded-full ring-1"
-                style={{ background: groupCss(s, "fill"), boxShadow: `inset 0 0 0 1.5px ${groupCss(s, "border")}` }}
-              />
-              {GROUP_LABEL[s]}
-            </span>
-          ))}
-          {graph.edges.some((e) => e.type === "MIGRATED_TO") ? (
-            <>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-[3px] w-5 rounded bg-accent" />
-                migrated to
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-0 w-5 border-t-2 border-dashed border-error" />
-                rejected
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-[2px] w-5 rounded bg-gate" />
-                corrected
-              </span>
-            </>
-          ) : null}
-          {hint ? (
-            <span className="inline-flex items-center gap-1.5" data-testid="memory-filtered-hint" title={hintTitle}>
-              <span className="h-0 w-5 border-t border-dashed border-line-strong" />
-              {hint}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="absolute bottom-4 right-4 flex flex-col divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card ring-1 ring-line">
-        <ToolButton label="Zoom in" onClick={() => zoomBy(1.25)}>
-          <Plus size={16} aria-hidden />
-        </ToolButton>
-        <ToolButton label="Zoom out" onClick={() => zoomBy(0.8)}>
-          <Minus size={16} aria-hidden />
-        </ToolButton>
-        <ToolButton label="Fit to view" onClick={fitAll}>
-          <Maximize size={15} aria-hidden />
-        </ToolButton>
-        {selected ? (
-          <ToolButton label="Centre on the selected node" onClick={centreSelected}>
-            <Focus size={15} aria-hidden />
-          </ToolButton>
-        ) : null}
-      </div>
     </div>
   );
 }
 
-const fmt = (n: number) => n.toLocaleString("en-US");
-
-/** Hops from `focus` over the drawn edges (dashed "filtered path" links count as one). */
-function hopsFrom(inst: Core, focus: string): Map<string, number> {
-  const hops = new Map<string, number>([[focus, 0]]);
-  let frontier = [focus];
-  while (frontier.length) {
-    const next: string[] = [];
-    for (const id of frontier) {
-      inst.getElementById(id).neighborhood("node").forEach((n) => {
-        if (!hops.has(n.id())) {
-          hops.set(n.id(), (hops.get(id) ?? 0) + 1);
-          next.push(n.id());
-        }
-      });
-    }
-    frontier = next;
-  }
-  return hops;
-}
-
-/** Turn a layout that came out taller than wide on its side, so it fills a landscape canvas. */
-function landscape(inst: Core) {
-  const bb = inst.nodes().boundingBox({});
-  if (bb.h <= bb.w * 1.15) return;
-  inst.nodes().positions((n) => {
-    const p = n.position();
-    return { x: p.y, y: p.x };
-  });
-}
-
-/** Pan (briefly animated) so the selected node is on screen, when it is not. */
-function keepInView(inst: Core, selected: string | undefined) {
-  if (!selected) return;
-  const n = inst.getElementById(selected);
-  if (n.empty()) return;
-  const p = n.renderedPosition();
-  const margin = 40;
-  if (p.x >= margin && p.y >= margin && p.x <= inst.width() - margin && p.y <= inst.height() - margin) return;
-  const ms = motion();
-  if (ms) inst.animate({ center: { eles: n } }, { duration: ms, easing: "ease-out-cubic" });
-  else inst.center(n);
-}
-
-/** Below this zoom the 11.5 px labels fall under the 6 px minimum and hide. */
-const LABEL_ZOOM = 0.55;
-/** The rendered size key labels keep when zoomed out. */
-const KEY_LABEL_PX = 9.5;
-
-/**
- * Zoomed out below LABEL_ZOOM (a fitted ring of 20 nodes), the focus, its direct neighbours, the
- * selected node and its lineage chain keep a readable label; the rest appear on zoom-in. The
- * label is sized in model units so it renders at KEY_LABEL_PX at the current zoom.
- */
-function keyLabels(
-  inst: Core,
-  c: { focus?: string | null; selected?: string; lineage?: Subgraph },
-) {
-  const zoom = inst.zoom();
-  inst.batch(() => {
-    const was = inst.nodes(".key-label");
-    if (zoom >= LABEL_ZOOM) {
-      was.removeClass("key-label").removeStyle("font-size text-max-width");
-      return;
-    }
-    const keep = new Set<string>();
-    const add = (id: string | null | undefined) => {
-      if (id && inst.getElementById(id).nonempty()) keep.add(id);
-    };
-    add(c.focus);
-    if (c.focus) inst.getElementById(c.focus).neighborhood("node").forEach((n) => void keep.add(n.id()));
-    add(c.selected);
-    c.lineage?.nodes.forEach((n) => add(n.uid));
-    was.forEach((n) => {
-      if (!keep.has(n.id())) n.removeClass("key-label").removeStyle("font-size text-max-width");
-    });
-    for (const id of keep) {
-      inst
-        .getElementById(id)
-        .addClass("key-label")
-        .style({ "font-size": KEY_LABEL_PX / zoom, "text-max-width": `${Math.round(110 / zoom)}px` });
-    }
-  });
-}
-
-function applyClasses(
-  inst: Core,
-  selected: string | undefined,
-  lineage: Subgraph | undefined,
-  highlight: CanvasHighlight | undefined,
-) {
-  inst.batch(() => {
-    inst.elements().removeClass("dim chain picked added changed removed");
-    if (highlight) {
-      for (const k of ["added", "changed", "removed"] as const) {
-        for (const uid of highlight[k]) inst.getElementById(uid).addClass(k);
-      }
-    }
-    if (!selected) return;
-    const node = inst.getElementById(selected);
-    node.addClass("picked");
-    // Dim only when there is a chain to show; a node with no lineage just reads as selected.
-    const chainNodes = new Set(lineage?.nodes.map((n) => n.uid) ?? []);
-    chainNodes.add(selected);
-    if (chainNodes.size <= 1) {
-      node.connectedEdges().addClass("chain");
-      return;
-    }
-    const chainEdges = new Set(lineage?.edges.map((e) => e.uid) ?? []);
-    inst.nodes().forEach((n) => {
-      if (!chainNodes.has(n.id())) n.addClass("dim");
-    });
-    inst.edges().forEach((e) => {
-      const inChain =
-        chainEdges.has(e.id()) ||
-        (chainNodes.has(e.source().id()) &&
-          chainNodes.has(e.target().id()) &&
-          LINEAGE_TYPES.has(e.data("type")));
-      e.addClass(inChain ? "chain" : "dim");
-    });
-  });
+export function MemoryCanvas(props: MemoryCanvasProps) {
+  return (
+    <div className="relative h-full w-full">
+      <ReactFlowProvider>
+        <Inner {...props} />
+      </ReactFlowProvider>
+    </div>
+  );
 }
