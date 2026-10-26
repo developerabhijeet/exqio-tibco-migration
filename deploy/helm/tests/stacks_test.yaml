@@ -1,0 +1,109 @@
+# The target-stack switch and the package mirrors (stacks.enabled, mirrors.maven/goproxy/pypi/caBundle).
+suite: target stacks
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/configmap.yaml
+  - templates/worker-deployment.yaml
+tests:
+  - it: dotnet only by default, Go proxy off, no mirrors written
+    template: templates/configmap.yaml
+    documentIndex: 0
+    asserts:
+      - equal: {path: data.ENABLED_STACKS, value: dotnet}
+      - equal: {path: data.GOPROXY, value: "off"}
+      - equal: {path: data.MAVEN_MIRROR_URL, value: ""}
+      - notExists: {path: data.UV_INDEX_URL}
+      - notExists: {path: data.PIP_INDEX_URL}
+  - it: refuses java without a Maven mirror
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, java]}
+    asserts:
+      - failedTemplate: {errorPattern: "mirrors.maven"}
+  - it: refuses java with a Maven mirror that is not https
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, java], mirrors.maven: "http://artifactory.gmf.internal/maven"}
+    asserts:
+      - failedTemplate: {errorPattern: "mirrors.maven"}
+  - it: refuses go without a Go proxy
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, go]}
+    asserts:
+      - failedTemplate: {errorPattern: "mirrors.goproxy"}
+  - it: refuses python without a PyPI index
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, python]}
+    asserts:
+      - failedTemplate: {errorPattern: "mirrors.pypi"}
+  - it: refuses an unknown stack
+    template: templates/configmap.yaml
+    set: {stacks.enabled: [dotnet, cobol]}
+    asserts:
+      - failedTemplate: {errorPattern: "stacks"}
+  - it: writes the stack environment
+    template: templates/configmap.yaml
+    documentIndex: 0
+    set:
+      stacks.enabled: [dotnet, java, go, python]
+      mirrors.maven: "https://artifactory.gmf.internal/maven"
+      mirrors.goproxy: "https://artifactory.gmf.internal:8443/go"
+      mirrors.pypi: "https://artifactory.gmf.internal/pypi/simple"
+    asserts:
+      - equal: {path: data.ENABLED_STACKS, value: "dotnet,java,go,python"}
+      - equal: {path: data.MAVEN_MIRROR_URL, value: "https://artifactory.gmf.internal/maven"}
+      - equal: {path: data.GOPROXY, value: "https://artifactory.gmf.internal:8443/go"}
+      - equal: {path: data.UV_INDEX_URL, value: "https://artifactory.gmf.internal/pypi/simple"}
+      - equal: {path: data.PIP_INDEX_URL, value: "https://artifactory.gmf.internal/pypi/simple"}
+      - matchRegex: {path: data.EGRESS_ALLOWLIST, pattern: '"artifactory.gmf.internal"'}
+  - it: a mirror for a stack that is not enabled is not an egress entry
+    template: templates/configmap.yaml
+    documentIndex: 0
+    set: {mirrors.maven: "https://unused.gmf.internal/maven"}
+    asserts:
+      - notMatchRegex: {path: data.EGRESS_ALLOWLIST, pattern: unused.gmf.internal}
+  - it: the worker gets a per-pod stacks cache of stackCacheSize at /cache/stacks
+    template: templates/worker-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: stacks-cache, mountPath: /cache/stacks}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: stacks-cache, emptyDir: {sizeLimit: 10Gi}}
+  - it: stackCacheSize is configurable
+    template: templates/worker-deployment.yaml
+    set: {worker.stackCacheSize: 20Gi}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: stacks-cache, emptyDir: {sizeLimit: 20Gi}}
+  - it: no CA bundle, no mount and no MIRROR_CA_BUNDLE
+    template: templates/worker-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MIRROR_CA_BUNDLE, value: /etc/exiqo-ca/ca.pem}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: mirror-ca, configMap: {name: exiqo-mirror-ca, defaultMode: 292}}
+  - it: a CA bundle is a ConfigMap mounted read-only on the worker with MIRROR_CA_BUNDLE set
+    set:
+      mirrors.caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    asserts:
+      - isKind: {of: ConfigMap}
+        template: templates/configmap.yaml
+        documentIndex: 2
+      - equal: {path: metadata.name, value: exiqo-mirror-ca}
+        template: templates/configmap.yaml
+        documentIndex: 2
+      - matchRegex: {path: 'data["ca.pem"]', pattern: BEGIN CERTIFICATE}
+        template: templates/configmap.yaml
+        documentIndex: 2
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MIRROR_CA_BUNDLE, value: /etc/exiqo-ca/ca.pem}
+        template: templates/worker-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: mirror-ca, mountPath: /etc/exiqo-ca, readOnly: true}
+        template: templates/worker-deployment.yaml

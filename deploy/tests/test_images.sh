@@ -146,6 +146,27 @@ expect_ok "terraform is $TERRAFORM_VERSION" \
 expect_ok "terragrunt is $TERRAGRUNT_VERSION" \
   docker run --rm --network none "${HARDENED[@]}" --entrypoint sh "$PLATFORM" -c \
   "terragrunt --version | grep -q 'v$TERRAGRUNT_VERSION'"
+# Java stack toolchain (JDK 21, Maven 3.9): runs as 10001 on the read-only root, with the Maven
+# repository on the writable /cache/stacks volume (an emptyDir in the cluster).
+STACKS=(--tmpfs /cache/stacks:mode=1777,exec)
+expect_ok "java is 21 (JAVA_HOME=/opt/java)" \
+  docker run --rm --network none "${HARDENED[@]}" --entrypoint sh "$PLATFORM" -c \
+  'test "$JAVA_HOME" = /opt/java && java -version 2>&1 | grep -q "version \"21\."'
+expect_ok "mvn is Apache Maven 3.9" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'mvn -B -v 2>&1 | grep -q "Apache Maven 3.9"'
+expect_ok "MAVEN_OPTS puts the local repository on /cache/stacks/m2, writable by 10001" \
+  docker run --rm --network none "${HARDENED[@]}" "${STACKS[@]}" --entrypoint sh "$PLATFORM" -c \
+  'case "$MAVEN_OPTS" in *-Dmaven.repo.local=/cache/stacks/m2*) ;; *) exit 1 ;; esac; mkdir -p /cache/stacks/m2 && touch /cache/stacks/m2/probe'
+# A mirror CA (MIRROR_CA_BUNDLE) is imported into a copy of the JDK trust store under /tmp.
+ca_dir="$(mktemp -d)"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$ca_dir/key.pem" -out "$ca_dir/ca.pem" \
+  -subj "/CN=exiqo-test-mirror-ca" -days 2 >/dev/null 2>&1
+expect_ok "entrypoint imports MIRROR_CA_BUNDLE into the Maven trust store" \
+  docker run --rm --network none "${HARDENED[@]}" -v "$ca_dir:/etc/exiqo-ca:ro" -e MIRROR_CA_BUNDLE=/etc/exiqo-ca/ca.pem \
+  -e EXIQO_ROLE=bogus --entrypoint sh "$PLATFORM" -c \
+  '/entrypoint.sh >/dev/null 2>&1; test $? -eq 64 && keytool -list -keystore /tmp/exiqo-cacerts -storepass changeit | grep -q exiqo-mirror-1'
+rm -rf "$ca_dir"
 
 echo "== $WEB"
 expect_output "web image config sets USER 10001" "10001:10001" docker image inspect -f '{{.Config.User}}' "$WEB"

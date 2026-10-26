@@ -411,3 +411,11 @@ def test_test_database_names_are_java_string_literals():
     text = render("TestDatabase.java.j2", pkg="com.gmf.x", schemas=['we"ird'], sql_files=["a\\b.sql"],
                   connections=["connection-strings.db"])
     assert 'List.of("we\\"ird")' in text and 'List.of("a\\\\b.sql")' in text
+
+
+def test_runner_environment_keeps_the_mirror_trust_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAVEN_OPTS", "-Dmaven.repo.local=/cache/stacks/m2 -Djavax.net.ssl.trustStore=/tmp/exiqo-cacerts "
+                       "-Djavax.net.ssl.trustStorePassword=changeit -Dhttps.proxyPassword=secret")
+    env = MavenRunner(tmp_path, java="/opt/java/bin/java", mvn="/opt/maven/bin/mvn").env()
+    assert env["MAVEN_OPTS"] == ("-Dmaven.repo.local=/cache/stacks/m2 -Djavax.net.ssl.trustStore=/tmp/exiqo-cacerts "
+                                 "-Djavax.net.ssl.trustStorePassword=changeit")

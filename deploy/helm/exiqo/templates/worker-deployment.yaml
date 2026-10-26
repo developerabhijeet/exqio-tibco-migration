@@ -60,6 +60,10 @@ spec:
             # workers collides, and SMB is slow for many small files.
             - name: NUGET_PACKAGES
               value: /cache/nuget/packages
+            {{- if .Values.mirrors.caBundle }}
+            - name: MIRROR_CA_BUNDLE
+              value: /etc/exiqo-ca/ca.pem
+            {{- end }}
             {{- include "exiqo.secretFileEnv" (dict "ctx" . "role" "worker") | nindent 12 }}
             {{- include "exiqo.ciEnv" . | nindent 12 }}
           ports:
@@ -86,8 +90,25 @@ spec:
             {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
             - name: cache
               mountPath: /cache
+            - name: stacks-cache
+              mountPath: /cache/stacks
+            {{- if .Values.mirrors.caBundle }}
+            - name: mirror-ca
+              mountPath: /etc/exiqo-ca
+              readOnly: true
+            {{- end }}
       volumes:
         {{- include "exiqo.platformVolumes" (dict "ctx" . "role" "worker" "tmpSize" .Values.worker.tmpSize) | nindent 8 }}
         - name: cache
           emptyDir:
             sizeLimit: {{ .Values.worker.nugetCacheSize }}
+        # The Maven, Go and uv caches (MAVEN_OPTS, GOMODCACHE, UV_CACHE_DIR in the image point here).
+        - name: stacks-cache
+          emptyDir:
+            sizeLimit: {{ .Values.worker.stackCacheSize }}
+        {{- if .Values.mirrors.caBundle }}
+        - name: mirror-ca
+          configMap:
+            name: exiqo-mirror-ca
+            defaultMode: 0444
+        {{- end }}

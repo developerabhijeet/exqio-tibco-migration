@@ -160,12 +160,23 @@ worker:
   slots: 2          # JOB_WORKERS: concurrent jobs per worker pod
   targetCPUUtilization: 70
   resources:
-    requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 26Gi}
-    limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 32Gi}
+    # A Maven build needs about 2 GiB of heap and metaspace per slot (Java stack): raise the memory
+    # request and limit with slots when stacks.enabled has java.
+    requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 36Gi}
+    limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 42Gi}
   tmpSize: 16Gi     # dotnet, MSBuild and Terraform work under /tmp
   # NUGET_PACKAGES, per pod: NuGet's lock is per machine, so restores from several workers into one
   # shared folder collide, and SMB is slow for many small files. Refilled from the mirror.
   nugetCacheSize: 10Gi
+  # /cache/stacks, per pod (an emptyDir): the Maven repository (m2), the Go module and build caches
+  # and uv's cache of the other target stacks. Refilled from the mirrors after a restart.
+  stackCacheSize: 10Gi
+
+# The target stacks this install may build (ENABLED_STACKS). dotnet needs nothing extra. Every other
+# stack needs its mirror below (the schema and the template refuse an install without it), because
+# the pods have no route to the public package repositories.
+stacks:
+  enabled: [dotnet]  # any of dotnet, java, go, python
 
 # DATA_DIR, shared by api and worker pods: the api writes and unpacks uploads under
 # /data/uploads (api/app/routers/projects.py); the worker writes each generated solution under
@@ -231,6 +242,13 @@ mirrors:
   nuget: ""            # NUGET_SOURCE, written into generated nuget.config
   npm: ""              # NPM_CONFIG_REGISTRY
   terraformConfig: ""  # a Terraform CLI config (provider_installation network_mirror), as text
+  maven: ""            # MAVEN_MIRROR_URL (https): required with stacks.enabled java; written into the generated Maven settings as the only repository
+  goproxy: ""          # GOPROXY (https): required with go; "off" is used when go is not enabled
+  pypi: ""             # UV_INDEX_URL and PIP_INDEX_URL (https): required with python
+  # PEM text of the CA that signed the mirrors' certificates, when it is a private one. Mounted on
+  # the worker at /etc/exiqo-ca/ca.pem; the entrypoint imports it (keytool) into a copy of the JDK
+  # trust store that Maven uses. Public CAs need nothing. Go and Python builds do not use it yet.
+  caBundle: ""
 
 # Connectors (GitHub Enterprise, Confluence/Jira, Figma): all off. The install layer is the ceiling
 # for Settings -> Connectors. Hosts and addresses are GMF's own; the chart names no public host.

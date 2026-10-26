@@ -45,6 +45,9 @@ from engine.stacks.testindex import join, read_index
 
 SETTINGS = ".exiqo/maven-settings.xml"
 HEALTH = "/health"  # the runtime contract's health endpoint
+# The platform MAVEN_OPTS tokens a build keeps: the local repository and the mirror CA trust store
+# the entrypoint builds (never anything else, so a proxy password cannot leak into generated code).
+_MAVEN_OPTS_KEPT = ("-Dmaven.repo.local=", "-Djavax.net.ssl.trustStore=", "-Djavax.net.ssl.trustStorePassword=")
 _BASE = ["-B", "-ntp", "-s", SETTINGS]
 # go-offline resolves the plugins but not their own dependencies (the formatter, Surefire's JUnit
 # Platform provider) and not always the versions the build resolves, so restore also resolves the
@@ -157,7 +160,7 @@ class MavenRunner:
             java_home = str(Path(os.path.realpath(java)).parent.parent)
         if java_home:
             env["JAVA_HOME"] = java_home
-        repo = [t for t in os.environ.get("MAVEN_OPTS", "").split() if t.startswith("-Dmaven.repo.local=")]
+        repo = [t for t in os.environ.get("MAVEN_OPTS", "").split() if t.startswith(_MAVEN_OPTS_KEPT)]
         env["MAVEN_OPTS"] = " ".join(repo)
         dirs = [str(Path(t).parent) for t in (self.java, self.mvn) if Path(t).is_absolute()]
         if java_home:

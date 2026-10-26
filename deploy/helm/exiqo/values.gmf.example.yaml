@@ -94,7 +94,16 @@ providers:
     auth: managed_identity
     deployments: {strong: gpt-4o, standard: gpt-4o, efficient: gpt-4o-mini}
 
+# Target stacks beyond .NET: each needs its mirror below (https, GMF's Artifactory or similar).
+# stacks:
+#   enabled: [dotnet, java]
 mirrors:
+  # maven: https://artifactory.gmfinancial.example/artifactory/maven-remote/
+  # goproxy: https://artifactory.gmfinancial.example/artifactory/api/go/go-remote
+  # pypi: https://artifactory.gmfinancial.example/artifactory/api/pypi/pypi-remote/simple
+  # caBundle: |            # only when the mirrors' certificates come from a private CA
+  #   -----BEGIN CERTIFICATE-----
+  #   ...
   nuget: https://artifactory.gmfinancial.example/api/nuget/v3/nuget-remote/index.json
   npm: https://artifactory.gmfinancial.example/api/npm/npm-remote/
   terraformConfig: |

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.10
 # exiqo-platform: the engine, the API and the job worker (EXIQO_ROLE=api|worker|migrate), with the
-# toolchains the migration steps run: the .NET 10 SDK, Python, Terraform and Terragrunt.
+# toolchains the migration steps run: the .NET 10 SDK, Python, Terraform, Terragrunt, a JDK and Maven.
 #
 # Build (context: the repo root; .dockerignore is an allowlist):
 #   docker build -f deploy/docker/platform.Dockerfile -t exiqo-platform:<tag> .
@@ -13,8 +13,9 @@
 # so one value serves linux/amd64 and linux/arm64.
 #
 # Stages:
-#   toolchain  the SDK base plus Python 3.12 (Ubuntu 24.04's), tini, Terraform and Terragrunt,
-#              each download checked against a SHA256 build argument for the target architecture
+#   toolchain  the SDK base plus Python 3.12 (Ubuntu 24.04's), tini, Terraform, Terragrunt,
+#              Temurin JDK 21 and Maven 3.9, each download checked against a SHA256 (Maven: SHA512)
+#              build argument; the JDK is per target architecture
 #   uv         only the uv binary, used to export uv.lock as a hash-pinned requirements file
 #   deps       the locked Python dependencies in /opt/venv and the fastembed model in /opt/models
 #   final      the application, no apt, UID 10001, read-only by design (writes: /tmp and /data)
@@ -48,6 +49,17 @@ ARG TERRAGRUNT_SHA256_ARM64=01c0768aab01e0c183209ba7edce9d2ebc8f8a7690763bb52f1b
 # GMF mirrors of the two release sites (Artifactory generic remotes, for example); same paths.
 ARG TERRAFORM_BASE_URL=https://releases.hashicorp.com/terraform
 ARG TERRAGRUNT_BASE_URL=https://github.com/gruntwork-io/terragrunt/releases/download
+# Temurin JDK 21 (LTS) for the Java target stack, and Maven. GMF mirrors of the two release sites
+# keep the same paths. Temurin: https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.13%2B9
+# (the .sha256.txt next to each archive); Maven: the .sha512 next to the archive on
+# archive.apache.org/dist/maven/maven-3/3.9.16/binaries/.
+ARG TEMURIN_BASE_URL=https://github.com/adoptium/temurin21-binaries/releases/download
+ARG TEMURIN_VERSION=21.0.13_9
+ARG TEMURIN_SHA256_AMD64=d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c
+ARG TEMURIN_SHA256_ARM64=e3522e707fc7dbe2a72c30746b1e7068301a0213ecd213d4491f35a14eb55578
+ARG MAVEN_BASE_URL=https://archive.apache.org/dist/maven/maven-3
+ARG MAVEN_VERSION=3.9.16
+ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -78,6 +90,29 @@ RUN case "${TARGETARCH}" in \
  && install -m 0755 "$work/terragrunt" /usr/local/bin/terragrunt \
  && rm -rf "$work" \
  && terraform version && terragrunt --version
+
+# JDK and Maven: fetched, checksum-verified (a mismatch fails the build), unpacked under /opt, and
+# smoke-tested. The JDK's tag in the URL is "jdk-<version with + for _>", URL-encoded as %2B. Maven's
+# local repository is not here: MAVEN_OPTS points it at /cache/stacks/m2 (a writable pod volume).
+RUN case "${TARGETARCH}" in \
+      amd64) jdk_sha="${TEMURIN_SHA256_AMD64}"; jdk_arch=x64 ;; \
+      arm64) jdk_sha="${TEMURIN_SHA256_ARM64}"; jdk_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && work="$(mktemp -d)" \
+ && jdk_tag="jdk-${TEMURIN_VERSION/_/%2B}" \
+ && curl -fsSL --proto '=https' --tlsv1.2 -o "$work/jdk.tar.gz" \
+      "${TEMURIN_BASE_URL}/${jdk_tag}/OpenJDK21U-jdk_${jdk_arch}_linux_hotspot_${TEMURIN_VERSION}.tar.gz" \
+ && echo "${jdk_sha}  $work/jdk.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/java /opt/maven \
+ && tar -xzf "$work/jdk.tar.gz" -C /opt/java --strip-components=1 \
+ && curl -fsSL --proto '=https' --tlsv1.2 -o "$work/maven.tar.gz" \
+      "${MAVEN_BASE_URL}/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
+ && echo "${MAVEN_SHA512}  $work/maven.tar.gz" | sha512sum -c - \
+ && tar -xzf "$work/maven.tar.gz" -C /opt/maven --strip-components=1 \
+ && rm -rf "$work" /opt/java/lib/src.zip \
+ && JAVA_HOME=/opt/java /opt/java/bin/java -version \
+ && JAVA_HOME=/opt/java /opt/maven/bin/mvn -v
 
 # ------------------------------------------------------------------------------------------ deps
 FROM toolchain AS deps
@@ -162,7 +197,11 @@ RUN /opt/venv/bin/python -m compileall -q /app/engine /app/api /app/scripts
 # CHECKPOINT_DISABLE stops Terraform's update check (no egress to HashiCorp); the dotnet settings
 # switch off telemetry, the first-run experience, the workload update check and the long-lived
 # build servers.
-ENV PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/share/dotnet \
+# JAVA_HOME and the Maven repository: the repository is under /cache/stacks (the worker's emptyDir),
+# never under the read-only root or $HOME. Maven's user settings come from the generated project.
+ENV PATH=/opt/venv/bin:/opt/java/bin:/opt/maven/bin:/usr/local/bin:/usr/bin:/bin:/usr/share/dotnet \
+    JAVA_HOME=/opt/java \
+    MAVEN_OPTS=-Dmaven.repo.local=/cache/stacks/m2 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \

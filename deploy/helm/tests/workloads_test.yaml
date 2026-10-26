@@ -44,11 +44,11 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content: {name: tmp, emptyDir: {sizeLimit: 16Gi}}
-  - it: the worker's ephemeral storage covers /tmp (16Gi) and the NuGet cache (10Gi)
+  - it: the worker's ephemeral storage covers /tmp (16Gi) the NuGet cache (10Gi) and the stacks cache (10Gi)
     template: templates/worker-deployment.yaml
     asserts:
-      - equal: {path: 'spec.template.spec.containers[0].resources.requests["ephemeral-storage"]', value: 26Gi}
-      - equal: {path: 'spec.template.spec.containers[0].resources.limits["ephemeral-storage"]', value: 32Gi}
+      - equal: {path: 'spec.template.spec.containers[0].resources.requests["ephemeral-storage"]', value: 36Gi}
+      - equal: {path: 'spec.template.spec.containers[0].resources.limits["ephemeral-storage"]', value: 42Gi}
   - it: the api's /tmp holds 2 GiB uploads while they unpack, and its ephemeral storage covers it
     template: templates/api-deployment.yaml
     asserts:

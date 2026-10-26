@@ -91,7 +91,8 @@
     "langfuse",
     "migration",
     "neo4jBackup",
-    "neo4j"
+    "neo4j",
+    "stacks"
   ],
   "additionalProperties": false,
   "properties": {
@@ -569,6 +570,9 @@
         },
         "nugetCacheSize": {
           "$ref": "#/definitions/quantity"
+        },
+        "stackCacheSize": {
+          "$ref": "#/definitions/quantity"
         }
       }
     },
@@ -776,6 +780,21 @@
           "pattern": "^(https://.+)?$"
         },
         "terraformConfig": {
+          "type": "string"
+        },
+        "maven": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "goproxy": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "pypi": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "caBundle": {
           "type": "string"
         }
       }
@@ -1062,6 +1081,28 @@
                 "minItems": 1
               }
             }
+          }
+        }
+      }
+    },
+    "stacks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "dotnet",
+              "java",
+              "go",
+              "python"
+            ]
           }
         }
       }
@@ -1437,6 +1478,126 @@
                     "minLength": 1
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "java"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "maven"
+            ],
+            "properties": {
+              "maven": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "go"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "goproxy"
+            ],
+            "properties": {
+              "goproxy": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "python"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "pypi"
+            ],
+            "properties": {
+              "pypi": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
               }
             }
           }

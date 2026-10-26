@@ -304,11 +304,12 @@ chart-check:
 	$(HELM) lint --strict $(CHART) -f $(CHART_GMF) -f $(CHART_CI)
 	$(HELM_UNITTEST) --strict -f '../tests/*_test.yaml' $(HELM_UNITTEST_CHART)
 	@for bad in auth.mode=dev deploy.credentialMode=local image.platform.tag=1.0 api.replicas=1 \
-		auth.tenantId=gmfinancial.onmicrosoft.com keyVault.mode=kubernetesSecret ciEnv.PROVIDER=fake; do \
+		auth.tenantId=gmfinancial.onmicrosoft.com keyVault.mode=kubernetesSecret ciEnv.PROVIDER=fake \
+		'stacks.enabled={dotnet,java}' 'stacks.enabled={cobol}' mirrors.maven=http://m; do \
 		if $(HELM) template exiqo $(CHART) -f $(CHART_GMF) --set $$bad >/dev/null 2>&1; then \
 			echo "chart-check: the schema accepted $$bad"; exit 1; \
 		fi; \
-	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source, CI env overrides"
+	done; echo "chart-check: the schema refuses dev auth, local credentials, tags, 1 api replica, a non-GUID tenant, a CI secret source, CI env overrides, a stack without its https mirror"
 	@if $(HELM) template exiqo $(CHART) -f $(CHART_GMF) -f $(CHART_CI) --skip-schema-validation \
 		--set ciEnv.AUTH_MODE=oidc >/dev/null 2>&1; then \
 		echo "chart-check: the template accepted ciEnv.AUTH_MODE without the schema"; exit 1; \

@@ -39,6 +39,17 @@ ConfigMap: hooks run before release resources exist.
 {{- $_ := set $connectorSecrets $kind $names -}}
 {{- end -}}
 {{- end -}}
+{{- /* The stack mirrors are GMF hosts: a stack's mirror is required (the schema says so too), and its host joins the egress list the About panel shows. */ -}}
+{{- $stacks := $v.stacks.enabled | default (list "dotnet") -}}
+{{- range $stack, $key := dict "java" "maven" "go" "goproxy" "python" "pypi" -}}
+{{- if has $stack $stacks -}}
+{{- $url := index $v.mirrors $key | default "" -}}
+{{- if not (hasPrefix "https://" $url) -}}
+{{- fail (printf "stacks.enabled has %s: set mirrors.%s to the https URL of GMF's mirror" $stack $key) -}}
+{{- end -}}
+{{- $egress = append $egress (regexReplaceAll ":[0-9]+$" (urlParse $url).host "") -}}
+{{- end -}}
+{{- end -}}
 {{- $aoai := $v.providers.azureOpenAI -}}
 apiVersion: v1
 kind: ConfigMap
@@ -88,6 +99,13 @@ data:
   {{- with $v.mirrors.npm }}
   NPM_CONFIG_REGISTRY: {{ . | quote }}
   {{- end }}
+  ENABLED_STACKS: {{ $stacks | join "," | quote }}
+  MAVEN_MIRROR_URL: {{ $v.mirrors.maven | default "" | quote }}
+  GOPROXY: {{ if has "go" $stacks }}{{ $v.mirrors.goproxy | quote }}{{ else }}"off"{{ end }}
+  {{- with $v.mirrors.pypi }}
+  UV_INDEX_URL: {{ . | quote }}
+  PIP_INDEX_URL: {{ . | quote }}
+  {{- end }}
   {{- if $v.mirrors.terraformConfig }}
   TF_CLI_CONFIG_FILE: /etc/exiqo/terraform.rc
   {{- end }}
@@ -123,4 +141,16 @@ metadata:
 data:
   terraform.rc: |
     {{- $v.mirrors.terraformConfig | nindent 4 }}
+{{- end }}
+{{- if $v.mirrors.caBundle }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exiqo-mirror-ca
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+data:
+  ca.pem: |
+    {{- $v.mirrors.caBundle | nindent 4 }}
 {{- end }}
