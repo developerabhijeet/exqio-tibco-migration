@@ -219,6 +219,14 @@ def ask_reply(user: str) -> dict:
     return {"answer": answer, "citation_ids": [hid for hid, _, _ in top]}
 
 
+def exiqoian_reply(user: str) -> dict:
+    sources = re.findall(r'<source id="(S\d+)"[^>]*>(.*?)</source>', user, flags=re.DOTALL)
+    if not sources:
+        return {"verdict": "not_covered", "answer": ""}
+    parts = [f"{' '.join(text.split())[:160]} [{sid}]." for sid, text in sources[:2]]
+    return {"verdict": "answer", "answer": "From the project memory: " + " ".join(parts)}
+
+
 def designer_reply(process: Process | None, user: str = "") -> dict:
     """The narrative names the process's first named step and the decision its first approved rule, as a
     real designer's prose does, so the design's inline citations have something to link."""
@@ -277,6 +285,8 @@ def reply_for(req: LLMRequest, process: Process | None) -> str:
     stage = req.tags.get("stage")
     if req.tags.get("feature") == "ask":
         data = ask_reply(user)
+    elif req.tags.get("feature") == "exiqoian":
+        data = exiqoian_reply(user)
     elif stage == "analyse" and process is not None:
         data = analyst_reply(process)
     elif stage == "risk":
