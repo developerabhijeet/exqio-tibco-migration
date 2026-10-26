@@ -213,7 +213,7 @@ const PROGRAM_CS = [
 const SOURCES: Record<string, string> = {
   [PROGRAM]: PROGRAM_CS,
   [MASKING]: "namespace GmfCredit.Core;\n\npublic static class Masking\n{\n}\n",
-  [SERVICE]: Array.from({ length: 30 }, (_, i) => `// FundingStatusLookupService line ${i + 1}`).join("\n"),
+  [SERVICE]: Array.from({ length: 300 }, (_, i) => `// FundingStatusLookupService line ${i + 1}`).join("\n"),
 };
 const fixture = (name: string) => readFileSync(join(__dirname, "fixtures", name), "utf8");
 
@@ -348,6 +348,26 @@ test("a review finding's chip opens the file at its line", async ({ page }) => {
     "data-hl-focus-text",
     "// FundingStatusLookupService line 12",
   );
+  // The chip brings the code pane into view, at the line.
+  const line12 = viewer.locator(".view-line", { hasText: /line\s12$/ });
+  await expect(line12).toBeInViewport();
+
+  // Scrolled away, a second click on the same chip reveals the line again.
+  await line12.click();
+  // Monaco reads the platform from the user agent, which the Desktop Chrome device sets to Windows.
+  await page.keyboard.press("Control+End");
+  await expect(line12).toHaveCount(0);
+  await chip.click();
+  await expect(line12).toBeVisible();
+  await expect(line12).toBeInViewport();
+
+  // Choosing the file by hand drops the citation's highlight.
+  const tree = page.getByTestId("target-tree");
+  await tree.getByRole("button", { name: "Program.cs" }).click();
+  await expect(viewer.getByTestId("code-path")).toHaveText(PROGRAM);
+  await tree.getByRole("button", { name: "FundingStatusLookupService.cs" }).click();
+  await expect(viewer.getByTestId("code-path")).toHaveText(SERVICE);
+  await expect(viewer.getByTestId("code-viewer-editor")).not.toHaveAttribute("data-hl-focus", /.*/);
 });
 
 test("a parity difference's chip opens its finding", async ({ page }) => {

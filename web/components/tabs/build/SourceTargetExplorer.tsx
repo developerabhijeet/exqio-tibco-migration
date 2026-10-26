@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Crosshair, Folder, Network, FolderTree } from "lucide-react";
 import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
 import { FileTree } from "@/components/tabs/upload/FileTree";
@@ -226,8 +226,11 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
   const [selected, setSelected] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [note, setNote] = useState<string | null>(null);
-  // The line a citation asked for in a generated file; it holds while that file stays selected.
-  const [cited, setCited] = useState<{ path: string; line: number } | null>(null);
+  // The line a citation asked for in a generated file, and when (each click reveals it again); it
+  // holds while that file stays selected and is cleared by a manual selection.
+  const [cited, setCited] = useState<{ path: string; line: number; at: number } | null>(null);
+  // The code pane, brought into view when a citation asks for a file: the chip may sit far above.
+  const panes = useRef<HTMLDivElement | null>(null);
   // The step to highlight in the TIBCO source, and a TIBCO file opened on its own (no generated file of it).
   const [activity, setActivity] = useState<string | null>(null);
   const [manualSource, setManualSource] = useState<string | null>(null);
@@ -244,6 +247,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
 
   const openGenerated = (path: string) => {
     setSelected(path);
+    setCited(null);
     setActivity(null);
     setManualSource(null);
     setNote(null);
@@ -264,6 +268,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     const hit = fileForActivity(list, process.ir_id, nodeId, row ? `src/${row.project}/${row.file}` : null);
     if (hit) {
       setSelected(hit.path);
+      setCited(null);
       setActivity(nodeId);
       setManualSource(null);
       setNote(null);
@@ -279,7 +284,10 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     if (buildFile.processId && buildFile.processId !== process.id) return;
     if (list.some((f) => f.path === buildFile.path)) {
       setSelected(buildFile.path);
-      setCited(buildFile.line && buildFile.line > 0 ? { path: buildFile.path, line: buildFile.line } : null);
+      setCited(buildFile.line && buildFile.line > 0 ? { path: buildFile.path, line: buildFile.line, at: buildFile.at } : null);
+      window.requestAnimationFrame(() =>
+        (panes.current?.querySelector('[data-testid="code-viewer"]') ?? panes.current)?.scrollIntoView({ block: "center" }),
+      );
       setActivity(null);
       setManualSource(null);
       setNote(null);
@@ -296,6 +304,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
     if (gen) openGenerated(gen.path);
     else {
       setSelected(null);
+      setCited(null);
       setActivity(null);
       setManualSource(p.id);
       setNote(null);
@@ -332,7 +341,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
   const counts = files.data?.counts ?? {};
 
   return (
-    <section className="card p-5" data-testid="source-target-explorer">
+    <section className="card" data-testid="source-target-explorer">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="label">Source and target</p>
@@ -437,7 +446,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
         />
       </div>
 
-      <div className="mt-3 grid items-start gap-4 xl:grid-cols-2" data-testid="side-by-side">
+      <div ref={panes} className="mt-3 grid items-start gap-4 xl:grid-cols-2" data-testid="side-by-side">
         <TibcoSourcePane proc={sourceProc} line={line} activityName={activeName} sql={activeSql} height={PANE_HEIGHT} />
         <CodeViewer
           buildId={buildId}
@@ -445,6 +454,7 @@ export function SourceTargetExplorer({ buildId, process }: { buildId: string; pr
           showRef={false}
           height={PANE_HEIGHT}
           line={cited && cited.path === selected ? cited.line : null}
+          lineRequest={cited?.at ?? 0}
           testId="code-viewer"
           empty={
             manualSource

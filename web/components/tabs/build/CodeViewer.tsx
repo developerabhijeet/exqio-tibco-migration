@@ -48,6 +48,7 @@ export function CodeViewer({
   showRef = true,
   height = 520,
   line = null,
+  lineRequest = 0,
 }: {
   buildId: string;
   entry: BuildFileEntry | null;
@@ -58,11 +59,16 @@ export function CodeViewer({
   height?: number;
   /** A 1-based line to highlight and scroll to (a citation chip's file and line). */
   line?: number | null;
+  /** Which request asked for `line` (a click's time): a new request reveals the line again even
+   * when it is the same line. */
+  lineRequest?: number;
 }) {
   const { jumpToStep, processId } = useAppState();
   const file = useBuildFile(buildId, entry?.path ?? null);
-  // Memoised: a new object each render would scroll the editor back to the line every time.
-  const highlight = useMemo(() => (line && line > 0 ? { start: line, end: line, focus: line } : null), [line]);
+  // Memoised per request: a new object each render would scroll the editor back to the line every
+  // time, while a new click on the same chip must scroll to it again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const highlight = useMemo(() => (line && line > 0 ? { start: line, end: line, focus: line } : null), [line, lineRequest]);
   if (!entry) {
     return (
       <div

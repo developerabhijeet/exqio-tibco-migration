@@ -62,12 +62,13 @@ function lineNo(text: string | undefined, needle: string): number | null {
   return i >= 0 ? i + 1 : null;
 }
 
-/** The check's sentence with its evidence as one chip at the end; plain without evidence. */
-function citedCheck(check: Check) {
-  const refs: CiteRef[] =
-    check.evidence && check.at
-      ? [{ id: "c1", phase: "deploy", kind: "evidence", label: check.at.label, preview: check.evidence, target: check.at.target }]
-      : [];
+/** The check's sentence with its evidence as one chip at the end; plain without evidence. Evidence
+ * with no place of its own (no Program.cs in the file list, say) still gets its chip, on Build. */
+function citedCheck(check: Check, processId: string | null) {
+  const at = check.at ?? { label: "Build", target: { kind: "step" as const, step: "build", process_id: processId } };
+  const refs: CiteRef[] = check.evidence
+    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: check.evidence, target: at.target }]
+    : [];
   return tail(check.title, refs);
 }
 
@@ -115,7 +116,7 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
   );
 }
 
-function Row({ check }: { check: Check }) {
+function Row({ check, processId }: { check: Check; processId: string | null }) {
   return (
     <details className="group/chk border-b border-line last:border-0" data-testid="security-check" data-key={check.key}>
       <summary className="flex cursor-pointer list-none items-center gap-2 py-2.5">
@@ -128,7 +129,7 @@ function Row({ check }: { check: Check }) {
             if ((e.target as HTMLElement).closest('[data-testid="cite-chip"]')) e.preventDefault();
           }}
         >
-          <CitedText value={citedCheck(check)} />
+          <CitedText value={citedCheck(check, processId)} />
         </span>
         <Pill tone={TONE[check.state]}>{LABEL[check.state]}</Pill>
       </summary>
@@ -430,7 +431,7 @@ export function SecurityPanel({ buildId, processId = null }: { buildId: string |
                 <p className="label">{g}</p>
                 <div className="mt-1 rounded-btn border border-line px-3">
                   {shown.filter((c) => c.group === g).map((c) => (
-                    <Row key={c.key} check={c} />
+                    <Row key={c.key} check={c} processId={processId} />
                   ))}
                 </div>
               </div>

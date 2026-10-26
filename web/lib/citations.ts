@@ -12,17 +12,27 @@ export * from "./citations-model";
 /** How long a hash target waits for its panel to render before giving up. */
 const REVEAL_TIMEOUT_MS = 10_000;
 
+/** The latest reveal: a newer one (or a navigation away) stops the older poller. */
+let revealToken = 0;
+
 /**
- * Scroll to the element `hash` names ("#tests") once it has rendered, and focus it so keyboard
- * and screen reader users land there too (a panel that takes no focus gets tabIndex -1). The
- * element may not exist yet: the step it lives on mounts after the navigation.
+ * Scroll to the element `hash` names ("#tests") once it has rendered on `path`, and focus it so
+ * keyboard and screen reader users land there too (a panel that takes no focus gets tabIndex -1).
+ * The element may not exist yet: the step it lives on mounts after the navigation. A later reveal
+ * cancels this one, and so does leaving `path` once it has been reached.
  */
-export function revealHash(hash: string): void {
+export function revealHash(hash: string, path = "/"): void {
   const id = hash.replace(/^#/, "");
   if (!id || typeof window === "undefined") return;
+  const token = ++revealToken;
   const started = Date.now();
+  let arrived = false;
   const tick = () => {
-    const el = document.getElementById(id);
+    if (token !== revealToken) return;
+    const here = window.location.pathname === path;
+    if (arrived && !here) return;
+    arrived ||= here;
+    const el = here ? document.getElementById(id) : null;
     if (!el) {
       if (Date.now() - started < REVEAL_TIMEOUT_MS) window.setTimeout(tick, 100);
       return;
@@ -53,8 +63,9 @@ export function useCiteNavigate(): (target: CiteTarget) => void {
       }
       const hash = target.hash ? `#${target.hash.replace(/^#/, "")}` : "";
       if (target.kind === "page") {
-        router.push(`${target.path || "/"}${hash}`);
-        if (hash) revealHash(hash);
+        const path = target.path || "/";
+        router.push(`${path}${hash}`);
+        if (hash) revealHash(hash, path.split(/[?#]/)[0] || "/");
         return;
       }
       let step: StepKey;
