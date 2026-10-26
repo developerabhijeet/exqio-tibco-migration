@@ -4,7 +4,7 @@ Conversations are private to their owner; messages hold the masked text, the cit
 and the verdict. Both cascade from the project.
 
 Revision ID: 0013
-Revises: 0010 (temporary: becomes '0012_iterations' when SP6 lands (X25))
+Revises: 0011_target_stack (temporary: becomes '0012_iterations' when SP6 lands (X25))
 Create Date: 2026-10-26 12:00:00.000000
 """
 from collections.abc import Sequence
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 revision: str = '0013'
 # Temporary parent for the integration rehearsal: becomes '0012_iterations' when SP6 lands (X25).
-down_revision: str | None = '0010'
+down_revision: str | None = '0011_target_stack'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
