@@ -33,7 +33,7 @@ import {
   type Side,
   type Subgraph,
 } from "@/lib/memory";
-import { useSystemStatus } from "@/components/help/HelpNav";
+import { useCan } from "@/lib/personas";
 import { DiffPanel } from "./DiffPanel";
 import { MemoryCanvas, type CanvasHighlight } from "./MemoryCanvas";
 import { MemoryStatusPill } from "./MemoryStatusPill";
@@ -176,32 +176,72 @@ function withGhosts(shown: Subgraph, ghosts: MemNodeOut[], d: RevisionDiff): Sub
   return { ...shown, nodes, edges };
 }
 
-/** Admin only: re-ingest the whole project, behind a small confirmation. */
+/** Admin only: re-ingest the whole project, behind a small modal confirmation. */
 function ReingestButton({ projectId }: { projectId: string }) {
-  const admin = useSystemStatus();
+  const { admin } = useCan();
   const reingest = useReingest(projectId);
   const [open, setOpen] = useState(false);
+  const [announce, setAnnounce] = useState("");
   const [done, setDone] = useState<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const { reset } = reingest;
+
+  const close = useCallback(() => {
+    setOpen(false);
+    trigger.current?.focus();
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     box.current?.querySelector<HTMLElement>("button")?.focus();
-    const away = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) setOpen(false);
+    // Escape closes this before anything underneath (the node drawer listens on the document in
+    // the bubble phase); a pointer outside dismisses it; Tab stays inside it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        return;
+      }
+      if (e.key !== "Tab" || !box.current) return;
+      const items = [...box.current.querySelectorAll<HTMLElement>("button:not([disabled])")];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      if (e.shiftKey && (at === first || !box.current.contains(at))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (at === last || !box.current.contains(at))) {
+        e.preventDefault();
+        first.focus();
+      }
     };
+    const away = (e: PointerEvent) => {
+      if (box.current?.contains(e.target as Node) || trigger.current?.contains(e.target as Node)) return;
+      close();
+    };
+    document.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", away);
-    return () => document.removeEventListener("pointerdown", away);
-  }, [open]);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", away);
+    };
+  }, [open, close]);
+
   useEffect(() => {
     if (done === null) return;
     const t = window.setTimeout(() => setDone(null), 4000);
     return () => window.clearTimeout(t);
   }, [done]);
-  if (!admin.data) return null;
-  const close = () => {
-    setOpen(false);
-    trigger.current?.focus();
+
+  if (!admin) return null;
+  const toggle = () => {
+    if (open) return close();
+    reset(); // a fresh confirmation, not the last attempt's error
+    setAnnounce("");
+    setOpen(true);
   };
   return (
     <div className="relative">
@@ -209,7 +249,7 @@ function ReingestButton({ projectId }: { projectId: string }) {
         ref={trigger}
         type="button"
         className="btn-secondary py-1.5 text-[13.5px]"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-expanded={open}
         aria-haspopup="dialog"
         disabled={reingest.isPending}
@@ -217,26 +257,26 @@ function ReingestButton({ projectId }: { projectId: string }) {
         {reingest.isPending ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <DatabaseBackup size={15} aria-hidden />}
         {done !== null ? `Queued ${done} ${done === 1 ? "ingest" : "ingests"}` : "Re-ingest project"}
       </button>
+      <span className="sr-only" aria-live="polite">
+        {announce}
+      </span>
       {open ? (
         <div
           ref={box}
           role="dialog"
-          aria-label="Re-ingest project"
-          onKeyDown={(e) => {
-            // Escape closes this, not the node drawer underneath.
-            if (e.key !== "Escape") return;
-            e.preventDefault();
-            e.stopPropagation();
-            close();
-          }}
+          aria-modal="true"
+          aria-labelledby="reingest-title"
+          aria-describedby="reingest-body"
           className="mem-slide-in absolute right-0 top-full z-30 mt-2 w-[320px] rounded-card bg-white p-4 shadow-pop ring-1 ring-line"
         >
-          <p className="text-[14px] font-semibold text-plum">Re-ingest this project?</p>
-          <p className="mt-1 text-[13px] leading-relaxed text-slate">
+          <p id="reingest-title" className="text-[14px] font-semibold text-plum">
+            Re-ingest this project?
+          </p>
+          <p id="reingest-body" className="mt-1 text-[13px] leading-relaxed text-slate">
             Every phase it has run is projected into memory again, as new revisions. Nothing already recorded is lost.
           </p>
           {reingest.error ? (
-            <div className="mt-3">
+            <div className="mt-3" aria-live="assertive">
               <ErrorNote error={reingest.error} />
             </div>
           ) : null}
@@ -251,7 +291,9 @@ function ReingestButton({ projectId }: { projectId: string }) {
               onClick={() =>
                 reingest.mutate(undefined, {
                   onSuccess: (r) => {
-                    setDone(r.job_ids.length);
+                    const n = r.job_ids.length;
+                    setDone(n);
+                    setAnnounce(`Re-ingest queued: ${n} ${n === 1 ? "ingest" : "ingests"}.`);
                     close();
                   },
                 })
@@ -306,6 +348,13 @@ export function MemoryExplorer() {
   }, [revision, view.rev, projectId, qc]);
 
   const revisions = useRevisions(ready ? projectId : null);
+  // A link to an older revision than the loaded pages reach: read back until it is there.
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = revisions;
+  const oldestLoaded = revisions.revisions?.at(-1)?.n ?? null;
+  useEffect(() => {
+    if (view.rev === null || oldestLoaded === null || oldestLoaded <= view.rev) return;
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [view.rev, oldestLoaded, hasNextPage, isFetchingNextPage, fetchNextPage]);
   const diff = useRevisionDiff(ready ? projectId : null, view.changes);
 
   const filtered = view.labels.length > 0 || view.side !== null;
@@ -598,7 +647,10 @@ export function MemoryExplorer() {
           </div>
 
           <Timeline
-            revisions={revisions.data ?? []}
+            revisions={revisions.revisions ?? []}
+            hasEarlier={!!hasNextPage}
+            loadingEarlier={isFetchingNextPage}
+            onLoadEarlier={() => void fetchNextPage()}
             value={view.rev}
             showing={view.changes}
             onChange={(n) => set({ rev: n === null ? null : String(n) })}

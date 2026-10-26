@@ -576,8 +576,9 @@ export function MemoryCanvas({ graph, mode, selected, highlight, lineage, focus,
           inst.center();
         }
       };
+      // A lineage scene elk could not place falls back to breadthfirst: marked apart.
       const laidOut = () => {
-        if (box.current) box.current.dataset.laidOut = mode;
+        if (box.current) box.current.dataset.laidOut = mode === "lineage" && built.nodeCount > 0 && !positions ? "lineage-fallback" : mode;
       };
       if (positions) {
         inst.layout({ name: "preset", positions: (n: { id: () => string }) => positions[n.id()] ?? { x: 0, y: 0 }, fit: false } as never).run();

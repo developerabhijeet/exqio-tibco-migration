@@ -3,7 +3,7 @@
 // The migration memory (the /memory API): types mirroring engine/memory/model.py and the API's
 // schemas, the label groups the explorer filters and colours by, and the read hooks. Every read
 // takes the project from the path; `asOf` reads the graph as of a revision (current when null).
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { json } from "./api";
 
 export type Side = "old" | "new" | "knowledge";
@@ -298,12 +298,43 @@ export const useMemoryNode = (projectId: string | null, uid: string | null, asOf
     enabled: !!projectId && !!uid,
   });
 
-export const useRevisions = (projectId: string | null) =>
-  useQuery({
+/** Revisions per page (the API's maximum). */
+export const REVISIONS_PAGE = 200;
+
+/** The revisions, newest first, a page at a time: `fetchNextPage` reads the page before the
+ * oldest one loaded (`before`). `revisions` is every loaded page, newest first. */
+export function useRevisions(projectId: string | null) {
+  const q = useInfiniteQuery({
     queryKey: ["memory-revisions", projectId],
-    queryFn: () => memoryApi.revisions(projectId!),
+    queryFn: ({ pageParam }) => memoryApi.revisions(projectId!, pageParam ?? undefined, REVISIONS_PAGE),
+    initialPageParam: null as number | null,
+    getNextPageParam: (last) => (last.length === REVISIONS_PAGE && last[last.length - 1].n > 1 ? last[last.length - 1].n : undefined),
     enabled: !!projectId,
   });
+  return { ...q, revisions: q.data?.pages.flat() };
+}
+
+/**
+ * The revision that applied an ingest scope (a curation's `curation:<id>`), searching every
+ * revision after `base` a page at a time, so it is found however far back the loaded timeline
+ * reaches. null until it lands. Re-read whenever `latest` (the status revision) moves on.
+ */
+export function useRevisionOfScope(projectId: string, scope: string | null, base: number | null, latest: number | null) {
+  return useQuery({
+    queryKey: ["memory-scope-revision", projectId, scope, base, latest],
+    enabled: !!scope && latest !== null && latest > (base ?? 0),
+    staleTime: Infinity,
+    queryFn: async () => {
+      for (let from = (base ?? 0) + 1; from <= latest!; from += REVISIONS_PAGE) {
+        const before = Math.min(from + REVISIONS_PAGE, latest! + 1);
+        const page = await memoryApi.revisions(projectId, before, REVISIONS_PAGE);
+        const hit = page.find((r) => r.scopes.includes(scope!));
+        if (hit) return hit.n;
+      }
+      return null;
+    },
+  });
+}
 
 export const useRevisionDiff = (projectId: string | null, n: number | null) =>
   useQuery({

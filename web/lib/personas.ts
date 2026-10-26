@@ -139,14 +139,18 @@ const WRITE_ROLE_KEYS = ["admin", "sme", "architect", "engineer", "qa", "ops"] a
  * Whether this user may curate the migration memory (pin a note, correct or reject a mapping, mark
  * memory obsolete): any write role; a viewer never. The API refuses the rest (403 read-only).
  */
-export function useCan(): { curate: boolean } {
-  const { auth } = useAppState();
+/** AUTH_MODE=dev: the personas that also hold `admin` (api/app/auth/roles.py: ops.sam). */
+const DEV_ADMINS: readonly string[] = ["ops.sam"];
+
+export function useCan(): { curate: boolean; admin: boolean } {
+  const { auth, user } = useAppState();
   const persona = useActingPersona();
-  const curate =
-    auth.mode === "oidc"
-      ? (auth.me?.roles ?? []).some((r) => (WRITE_ROLE_KEYS as readonly string[]).includes(r))
-      : persona.entry !== null;
-  return { curate };
+  const roles = auth.mode === "oidc" ? (auth.me?.roles ?? []) : null;
+  const curate = roles ? roles.some((r) => (WRITE_ROLE_KEYS as readonly string[]).includes(r)) : persona.entry !== null;
+  // Admin-only controls (re-ingest) show from the role, without probing an admin route that
+  // answers 403 to everyone else. The API still decides.
+  const admin = roles ? roles.includes("admin") : DEV_ADMINS.includes(user);
+  return { curate, admin };
 }
 
 /** The steps this persona may act in: the entry step and everything after it. */

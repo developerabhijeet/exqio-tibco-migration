@@ -5,7 +5,7 @@
 // explorer as of that revision (the latest tick, or "Back to current", returns to the live view);
 // "Show changes" opens what the active revision added, changed and removed.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { GitCompareArrows, History, RotateCcw } from "lucide-react";
+import { ChevronsLeft, GitCompareArrows, History, Loader2, RotateCcw } from "lucide-react";
 import { phaseHex, relativeTime, type RevisionOut } from "@/lib/memory";
 
 export interface TimelineProps {
@@ -17,6 +17,10 @@ export interface TimelineProps {
   onShowChanges(n: number): void;
   /** The revision whose changes are open, if any (its tick is marked). */
   showing?: number | null;
+  /** Older revisions exist beyond the loaded pages. */
+  hasEarlier?: boolean;
+  loadingEarlier?: boolean;
+  onLoadEarlier?(): void;
 }
 
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -28,7 +32,7 @@ function tickHeight(r: RevisionOut, max: number): number {
   return Math.round(8 + 28 * (Math.log1p(size) / Math.log1p(max)));
 }
 
-export function Timeline({ revisions, value, onChange, onShowChanges, showing }: TimelineProps) {
+export function Timeline({ revisions, value, onChange, onShowChanges, showing, hasEarlier, loadingEarlier, onLoadEarlier }: TimelineProps) {
   const ordered = useMemo(() => [...revisions].sort((a, b) => a.n - b.n), [revisions]);
   const latest = ordered.at(-1)?.n ?? null;
   const active = value ?? latest;
@@ -73,7 +77,7 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing }:
       <div className="flex min-h-[30px] items-center gap-3">
         <History size={15} className="shrink-0 text-slate" aria-hidden />
         {asOf ? (
-          <div className="flex items-center gap-2.5 rounded-full bg-decision-bg py-0.5 pl-3 pr-1 text-[13px] font-medium text-decision ring-1 ring-inset ring-decision/20" role="status">
+          <div className="flex items-center gap-2.5 rounded-full bg-decision-bg py-0.5 pl-3 pr-1 text-[13px] font-medium text-decision ring-1 ring-inset ring-decision/20" >
             <span>
               Viewing revision {value} of {latest}
             </span>
@@ -89,12 +93,12 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing }:
         ) : (
           <p className="text-[13px] font-medium text-slate">
             <span className="text-plum">Current</span>
-            {latest !== null ? ` · ${fmt(ordered.length)} ${ordered.length === 1 ? "revision" : "revisions"}` : ""}
+            {latest !== null ? ` · ${fmt(latest)} ${latest === 1 ? "revision" : "revisions"}` : ""}
           </p>
         )}
 
         {/* What the hovered (else the active) revision did. */}
-        <div className="ml-auto flex min-w-0 items-center gap-3 text-[12.5px] text-slate" aria-live="polite">
+        <div className="ml-auto flex min-w-0 items-center gap-3 text-[12.5px] text-slate">
           {shown ? (
             <>
               <span className="inline-flex items-center gap-1.5 font-semibold text-plum">
@@ -125,7 +129,22 @@ export function Timeline({ revisions, value, onChange, onShowChanges, showing }:
         </div>
       </div>
 
+      {/* Announces the revision being viewed, not every tick the pointer passes. */}
+      <span className="sr-only" aria-live="polite">
+        {asOf ? `Memory as of revision ${value}; the latest is ${latest}` : latest !== null ? `Current memory, revision ${latest}` : ""}
+      </span>
       <div className="mt-1.5 flex min-h-0 flex-1 items-end gap-4">
+        {hasEarlier ? (
+          <button
+            type="button"
+            onClick={onLoadEarlier}
+            disabled={loadingEarlier}
+            className="mb-4 inline-flex shrink-0 items-center gap-1 self-end rounded-btn border border-line px-2 py-1 text-[12px] font-medium text-slate transition-colors hover:border-line-dk hover:text-plum disabled:opacity-60"
+          >
+            {loadingEarlier ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <ChevronsLeft size={13} aria-hidden />}
+            Earlier revisions
+          </button>
+        ) : null}
         <div
           ref={track}
           role="group"

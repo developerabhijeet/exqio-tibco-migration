@@ -6,9 +6,10 @@
 // the memory with the next ingest revision, so a submission shows "Pending" until the revision
 // whose scopes hold it lands, then "Applied in revision <n>".
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Ban, CheckCircle2, Loader2, PenLine, Pin, Search, Archive } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight, Ban, CheckCircle2, Clock, Loader2, PenLine, Pin, RotateCw, Search } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { ErrorNote } from "@/components/ui/Empty";
-import { ApiError } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { LabelChip } from "./SearchRail";
 import {
   curationScope,
@@ -17,7 +18,7 @@ import {
   useCurate,
   useMemorySearch,
   useMemoryStatus,
-  useRevisions,
+  useRevisionOfScope,
   type CurationAction,
   type LineageOut,
   type NodeDetail,
@@ -30,6 +31,10 @@ export interface Submission {
   action: CurationAction;
   /** The memory's revision when it was sent. */
   base: number | null;
+  /** The memory.ingest job that applies it. */
+  jobId: string;
+  /** Date.now() when it was sent. */
+  sentAt: number;
 }
 
 export interface CurateFormProps {
@@ -53,64 +58,118 @@ const ACTIONS: Record<CurationAction, { title: string; blurb: string; submit: st
 const REASON_MAX = 2000;
 const NOTE_MAX = 4000;
 
-/** The revision that applied a curation: the one whose ingest scopes hold it. Re-read whenever the
- * memory's revision moves on. */
-function useAppliedIn(projectId: string, eventId: string | null): number | null {
-  const status = useMemoryStatus(projectId);
-  const revisions = useRevisions(projectId);
-  const revision = status.data?.revision ?? null;
-  const { refetch } = revisions;
-  const seen = useRef(revision);
-  useEffect(() => {
-    if (!eventId || seen.current === revision) return;
-    seen.current = revision;
-    void refetch();
-  }, [eventId, revision, refetch]);
-  if (!eventId) return null;
-  const scope = curationScope(eventId);
-  return revisions.data?.find((r) => r.scopes.includes(scope))?.n ?? null;
-}
+/** After this long without a revision, a submission says it is still waiting and why. */
+const WAIT_MS = 45_000;
+
+const APPLIED_TEXT: Record<CurationAction, string> = {
+  note: "Your note is part of the memory.",
+  reject_mapping: "The mapping is marked rejected.",
+  correct_mapping: "The mapping now points at the replacement.",
+  obsolete: "Agents no longer retrieve this memory.",
+};
 
 function SubmissionState({ projectId, s, onShowKnowledge }: { projectId: string; s: Submission; onShowKnowledge(): void }) {
-  const applied = useAppliedIn(projectId, s.eventId);
-  const what = ACTIONS[s.action].title.toLowerCase();
+  const status = useMemoryStatus(projectId);
+  const latest = status.data?.revision ?? null;
+  const lookup = useRevisionOfScope(projectId, curationScope(s.eventId), s.base, latest);
+  const applied = lookup.data ?? null;
+  // The ingest job: a final failure carries its reason.
+  const job = useQuery({
+    queryKey: ["job", s.jobId],
+    queryFn: () => api.job(s.jobId),
+    enabled: applied === null,
+    refetchInterval: (q) => (q.state.data && ["done", "failed"].includes(q.state.data.status) ? false : 4000),
+  });
+  const failed = applied === null && job.data?.status === "failed";
+  // Waiting long, or memory reported down: say so rather than spin forever.
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    if (applied !== null) return;
+    const t = window.setTimeout(() => setLate(true), Math.max(0, s.sentAt + WAIT_MS - Date.now()));
+    return () => window.clearTimeout(t);
+  }, [applied, s.sentAt]);
+  const unavailable = status.data?.available === false;
+  const waiting = applied === null && !failed && (late || unavailable);
+
   // The submit button sits at the foot of a scrolled panel: bring the new state into view.
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const smooth = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     box.current?.scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
   }, [s.eventId]);
+
+  const refresh = () => {
+    void status.refetch();
+    void job.refetch();
+    void lookup.refetch();
+  };
+  const checking = status.isFetching || job.isFetching || lookup.isFetching;
+  const tone = applied ? "bg-gate-bg ring-gate/20" : failed ? "bg-error-bg ring-error/20" : waiting ? "bg-decision-bg ring-decision/20" : "bg-warm/80 ring-line";
+  const title = applied
+    ? `Applied in revision ${applied}`
+    : failed
+      ? "Not applied: the memory ingest failed"
+      : waiting
+        ? "Still waiting — memory may be unavailable"
+        : "Pending";
+  const pending = status.data?.pending_ingests ?? 0;
+
   return (
-    <div
-      ref={box}
-      className={`flex scroll-mt-4 items-start gap-3 rounded-btn px-4 py-3 ring-1 ring-inset transition-colors ${
-        applied ? "bg-gate-bg ring-gate/20" : "bg-warm/80 ring-line"
-      }`}
-      role="status"
-    >
+    <div ref={box} className={`flex scroll-mt-4 items-start gap-3 rounded-btn px-4 py-3 ring-1 ring-inset transition-colors ${tone}`} role="status">
       {applied ? (
         <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-gate" aria-hidden />
+      ) : failed ? (
+        <AlertTriangle size={17} className="mt-0.5 shrink-0 text-error" aria-hidden />
+      ) : waiting ? (
+        <Clock size={17} className="mt-0.5 shrink-0 text-decision" aria-hidden />
       ) : (
         <Loader2 size={17} className="mt-0.5 shrink-0 animate-spin text-slate" aria-hidden />
       )}
       <div className="min-w-0 flex-1">
-        <p data-testid="curate-state" className={`text-[14px] font-semibold ${applied ? "text-gate" : "text-plum"}`}>
-          {applied ? `Applied in revision ${applied}` : "Pending"}
+        <p
+          data-testid="curate-state"
+          className={`text-[14px] font-semibold ${applied ? "text-gate" : failed ? "text-error" : waiting ? "text-decision" : "text-plum"}`}
+        >
+          {title}
         </p>
-        <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate">
+        <div className="mt-0.5 text-[12.5px] leading-relaxed text-slate">
           {applied ? (
             <>
-              Your {what.replace(/^pin a /, "")} is part of the memory.{" "}
+              {APPLIED_TEXT[s.action]}{" "}
               {s.action === "note" ? (
                 <button type="button" className="font-medium text-purple hover:underline" onClick={onShowKnowledge}>
                   See it under Knowledge
                 </button>
               ) : null}
             </>
+          ) : failed ? (
+            <>
+              <p className="break-words font-mono text-[12px] text-error">{job.data?.error || "No reason recorded."}</p>
+              <p className="mt-1">The curation is stored: an admin re-ingest of the project applies it.</p>
+            </>
+          ) : waiting ? (
+            <p>
+              {unavailable
+                ? "Neo4j is not reachable from the platform. The curation is stored and lands when memory returns."
+                : `No revision has applied it yet${pending ? ` (${pending} ${pending === 1 ? "ingest" : "ingests"} queued)` : ""}${
+                    job.data?.error ? `. Last attempt: ${job.data.error}` : ""
+                  }.`}
+            </p>
           ) : (
             "Recorded. It joins the memory with the next ingest revision, usually within seconds."
           )}
-        </p>
+          {!applied && (failed || waiting) ? (
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1.5 font-medium text-purple hover:underline disabled:opacity-60"
+              onClick={refresh}
+              disabled={checking}
+            >
+              <RotateCw size={13} className={checking ? "animate-spin" : ""} aria-hidden />
+              Check again
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -269,7 +328,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
       },
       {
         onSuccess: (out) => {
-          onSubmitted({ eventId: out.event_id, uid: node.uid, action, base: status.data?.revision ?? null });
+          onSubmitted({ eventId: out.event_id, jobId: out.job_id, uid: node.uid, action, base: status.data?.revision ?? null, sentAt: Date.now() });
           setText("");
           setReason("");
           setReplacement(null);
@@ -293,7 +352,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
 
       <form onSubmit={submit} className="space-y-5" noValidate aria-label="Curate this node">
         {available.length > 1 ? (
-          <div role="radiogroup" aria-label="Action" className="grid grid-cols-2 gap-2">
+          <div role="group" aria-label="Action" className="grid grid-cols-2 gap-2">
             {available.map((a) => {
               const A = ACTIONS[a];
               const on = action === a;
@@ -301,8 +360,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
                 <button
                   key={a}
                   type="button"
-                  role="radio"
-                  aria-checked={on}
+                  aria-pressed={on}
                   onClick={() => setAction(a)}
                   className={`rounded-btn border px-3 py-2.5 text-left transition-all ${
                     on ? "border-purple bg-purple-lt/50 shadow-card" : "border-line/80 hover:border-line-dk hover:bg-warm/50"
@@ -331,8 +389,7 @@ export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, 
                 <li key={m.edge.uid}>
                   <button
                     type="button"
-                    role="radio"
-                    aria-checked={chosenMapping === m.edge.uid}
+                    aria-pressed={chosenMapping === m.edge.uid}
                     onClick={() => setMapping(m.edge.uid)}
                     disabled={mappings.length === 1}
                     className={`flex w-full items-center gap-2 rounded-btn border px-3 py-2 text-left text-[13px] disabled:cursor-default ${

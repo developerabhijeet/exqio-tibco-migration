@@ -192,13 +192,12 @@ export function DiffPanel({ n, diff, loading, error, onSelect, onClose, selected
           </button>
         </div>
         {diff ? (
-          <div className="mt-3 inline-flex w-full rounded-btn bg-warm p-1" role="radiogroup" aria-label="Show">
+          <div className="mt-3 inline-flex w-full rounded-btn bg-warm p-1" role="group" aria-label="Show">
             {(["nodes", "relationships"] as const).map((w) => (
               <button
                 key={w}
                 type="button"
-                role="radio"
-                aria-checked={what === w}
+                aria-pressed={what === w}
                 onClick={() => setWhat(w)}
                 className={`flex-1 rounded-[5px] px-3 py-1 text-[12.5px] font-medium capitalize transition-all ${
                   what === w ? "bg-white text-plum shadow-card" : "text-slate hover:text-plum"
