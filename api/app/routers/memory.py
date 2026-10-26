@@ -8,18 +8,25 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 from sqlalchemy import func, select
 
-from api.app.deps import SessionDep
-from api.app.models import Job, Project
+from api.app.deps import AdminDep, CuratorDep, SessionDep
+from api.app.memory_admin import reingest as reingest_project
+from api.app.models import Job, MemoryEvent, Project
 from api.app.schemas.memory import (
+    CurationIn,
+    CurationOut,
     MemoryHit,
     NodeDetail,
+    ReingestOut,
     RevisionDiff,
     RevisionsOut,
     SearchOut,
     StatusOut,
     Subgraph,
 )
+from api.app.services import gates as gate_svc
 from api.app.services.knowledge import KnowledgeUnavailable
+from api.app.services.memory_ingest import enqueue_ingest
+from engine.agents.provider import mask_sensitive
 from engine.memory.model import NODE_LABELS, NodeLabel, Phase
 
 router = APIRouter(prefix="/memory/{project_id}", tags=["memory"])
@@ -102,7 +109,9 @@ async def graph(project_id: str, request: Request, session: SessionDep,
         result = await _read(request, lambda m: m.subgraph(
             project_id, uid=uid or None, depth=depth, labels=labels or None, side=side,
             as_of=as_of, limit=limit))
-    if uid and not result.nodes:
+    # filters can exclude the root: 404 only for a node that does not exist
+    if (uid and not result.nodes
+            and await _read(request, lambda m: m.node_detail(project_id, uid, as_of)) is None):
         raise _not_found()
     return result
 
@@ -134,3 +143,84 @@ async def revision_diff(project_id: str, n: Annotated[int, Path(ge=1)], request:
     if found is None:
         raise _not_found()
     return found
+
+
+# ------------------------------------------------------------------ curation (writes)
+MAPPING_ACTIONS = ("reject_mapping", "correct_mapping")
+
+
+async def _mapping_target(request: Request, project_id: str, target_uid: str) -> tuple[str, str]:
+    """``(source node uid, MIGRATED_TO rel uid)`` to curate. ``target_uid`` names the old side's
+    node (its one current, not yet rejected mapping) or the ``MIGRATED_TO:<src>-><dst>`` uid."""
+    rel_uid = target_uid if target_uid.startswith("MIGRATED_TO:") else None
+    source = target_uid.removeprefix("MIGRATED_TO:").partition("->")[0] if rel_uid else target_uid
+    detail = await _read(request, lambda m: m.node_detail(project_id, source, None))
+    if detail is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    edges = [x.edge for x in detail.lineage
+             if x.direction == "out" and x.edge.type == "MIGRATED_TO"]
+    if rel_uid is not None:
+        edges = [e for e in edges if e.uid == rel_uid]
+    else:
+        edges = [e for e in edges if e.status != "rejected"]
+    if not edges:
+        raise HTTPException(status_code=409, detail="target has no mapping to curate")
+    return source, edges[0].uid
+
+
+@router.post("/curations", status_code=202, response_model=CurationOut)
+async def curate(project_id: str, body: CurationIn, request: Request, session: SessionDep,
+                 principal: CuratorDep) -> CurationOut:
+    await _project(session, project_id)
+    if body.action == "note" and not (body.text or "").strip():
+        raise HTTPException(status_code=422, detail="note needs text")
+    if body.action == "correct_mapping" and not body.replacement_uid:
+        raise HTTPException(status_code=422, detail="correct_mapping needs replacement_uid")
+    target = body.target_uid
+    if body.action in MAPPING_ACTIONS:
+        _, target = await _mapping_target(request, project_id, body.target_uid)
+    else:
+        node = await _read(request, lambda m: m.current_node(project_id, body.target_uid))
+        if node is None:
+            raise HTTPException(status_code=404, detail="target not found")
+        if body.action == "obsolete" and node.label != "Memory":
+            raise HTTPException(status_code=409, detail="obsolete applies to Memory items only")
+    if body.action == "correct_mapping":
+        repl = await _read(request, lambda m: m.current_node(project_id, body.replacement_uid or ""))
+        if repl is None or repl.label not in ("Method", "Class"):
+            raise HTTPException(status_code=409, detail="replacement must be a Method or Class")
+
+    actor = principal.actor
+    row = MemoryEvent(project_id=project_id, kind="curation", action=body.action,
+                      text=mask_sensitive(body.text or ""),
+                      context={"reason": mask_sensitive(body.reason)}, target_uid=target,
+                      replacement_uid=body.replacement_uid, actor=actor)
+    session.add(row)
+    await session.flush()
+    gate_svc.audit(session, None, actor, "memory curated", project_id=project_id,
+                   detail={"event_id": row.id, "action": body.action, "target_uid": target})
+    event_id = row.id
+    await session.commit()
+    try:
+        job_id = await enqueue_ingest(
+            request.app.state.sessionmaker, request.app.state.settings, project_id=project_id,
+            phase="curation", scope=f"curation:{event_id}", source={"event_id": event_id},
+            actor=actor, ingest_key=f"curation:{event_id}")
+    except Exception as exc:  # the row is stored: a re-ingest of the project brings it
+        raise HTTPException(status_code=503, detail=f"curation {event_id} stored; memory ingest "
+                            f"not queued: {type(exc).__name__}") from exc
+    if job_id is None:
+        raise HTTPException(status_code=503, detail=f"curation {event_id} stored; memory ingest "
+                            "not queued: memory is not configured")
+    return CurationOut(event_id=event_id, job_id=job_id)
+
+
+@router.post("/reingest", status_code=202, response_model=ReingestOut)
+async def reingest(project_id: str, request: Request, session: SessionDep,
+                   _admin: AdminDep) -> ReingestOut:
+    await _project(session, project_id)
+    if not request.app.state.knowledge.enabled:
+        raise HTTPException(status_code=503, detail="memory is not configured")
+    ids = await reingest_project(request.app.state.sessionmaker, request.app.state.settings,
+                                 project_id)
+    return ReingestOut(job_ids=ids)

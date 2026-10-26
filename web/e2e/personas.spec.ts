@@ -36,6 +36,17 @@ test.describe("personas", () => {
     });
   }
 
+  test("viewer.val reads every step and may act in none", async ({ page }) => {
+    await page.goto("/");
+    await actAs(page, "viewer.val");
+    for (const key of STEPS) {
+      await expect(page.getByTestId(`step-${key}`), `${key} should be view only`).toHaveAttribute("data-view-only", "true");
+    }
+    await page.getByTestId("user-menu").click();
+    await expect(page.getByTestId("persona-viewer.val")).toContainText("read only");
+    await expect(page.getByRole("menuitemradio")).toHaveCount(6);
+  });
+
   test("the menu says what each persona owns, and switching changes what is view only", async ({ page }) => {
     await page.goto("/");
 

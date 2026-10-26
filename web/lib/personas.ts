@@ -76,6 +76,14 @@ export const PERSONAS: readonly Persona[] = [
     gates: ["G6"],
     roleKey: "ops",
   },
+  {
+    id: "viewer.val",
+    role: "Viewer",
+    responsibility: "Reads every step and the migration memory; acts in none and curates nothing.",
+    entry: null,
+    gates: [],
+    roleKey: "viewer",
+  },
 ] as const;
 
 const BY_ID = new Map(PERSONAS.map((p) => [p.id as string, p]));
@@ -91,7 +99,7 @@ export function personaOf(user: string): Persona {
  * persona role (viewer, admin only) reads everything and acts nowhere.
  */
 export function personaForRoles(roles: readonly string[]): Persona {
-  const held = PERSONAS.filter((p) => roles.includes(p.roleKey));
+  const held = PERSONAS.filter((p) => p.entry !== null && roles.includes(p.roleKey));
   if (held.length === 1) return held[0];
   if (held.length === 0) {
     return {
@@ -122,6 +130,23 @@ function stepIndex(step: StepKey | null): number {
 export function useActingPersona(): Persona {
   const { user, auth } = useAppState();
   return auth.mode === "oidc" ? personaForRoles(auth.me?.roles ?? []) : personaOf(user);
+}
+
+/** The API's WRITE_ROLES (api/app/deps.py): what `require_curator` lets through. */
+const WRITE_ROLE_KEYS = ["admin", "sme", "architect", "engineer", "qa", "ops"] as const;
+
+/**
+ * Whether this user may curate the migration memory (pin a note, correct or reject a mapping, mark
+ * memory obsolete): any write role; a viewer never. The API refuses the rest (403 read-only).
+ */
+export function useCan(): { curate: boolean } {
+  const { auth } = useAppState();
+  const persona = useActingPersona();
+  const curate =
+    auth.mode === "oidc"
+      ? (auth.me?.roles ?? []).some((r) => (WRITE_ROLE_KEYS as readonly string[]).includes(r))
+      : persona.entry !== null;
+  return { curate };
 }
 
 /** The steps this persona may act in: the entry step and everything after it. */

@@ -40,6 +40,7 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 WRITE_ROLES = frozenset({"admin", "sme", "architect", "engineer", "qa", "ops"})
 READ_ONLY = "viewer is read only"
 ADMIN_ONLY = "this needs the admin role"
+CURATE_ONLY = "read-only: curating memory needs a gate-owner or admin role"
 
 
 def unauthorized(detail: str = UNAUTHENTICATED) -> HTTPException:
@@ -142,6 +143,13 @@ async def require_admin(principal: Annotated[Principal, Depends(require_user)]) 
     return principal
 
 
+async def require_curator(principal: Annotated[Principal, Depends(require_user)]) -> Principal:
+    """Curating the memory needs a role in ``WRITE_ROLES``, in both auth modes (a viewer reads)."""
+    if not principal.roles & WRITE_ROLES:
+        raise HTTPException(status_code=403, detail=CURATE_ONLY)
+    return principal
+
+
 async def require_browser_user(request: Request, x_user: Annotated[str | None, Header()] = None,
                                x_agent: Annotated[str | None, Header()] = None) -> str:
     """The principal behind a call the browser makes without the web app's fetch helper: the
@@ -163,4 +171,5 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 UserDep = Annotated[str, Depends(require_actor)]
 PrincipalDep = Annotated[Principal, Depends(require_user)]
 AdminDep = Annotated[Principal, Depends(require_admin)]
+CuratorDep = Annotated[Principal, Depends(require_curator)]
 BrowserUserDep = Annotated[str, Depends(require_browser_user)]

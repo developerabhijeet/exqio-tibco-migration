@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from engine.memory.model import (
     MemoryHit,
@@ -15,8 +16,19 @@ from engine.memory.model import (
     Subgraph,
 )
 
-__all__ = ["MemoryHit", "NodeDetail", "RevisionDiff", "RevisionOut", "RevisionsOut", "SearchOut",
-           "StatusOut", "Subgraph"]
+__all__ = [
+    "CurationIn",
+    "CurationOut",
+    "MemoryHit",
+    "NodeDetail",
+    "ReingestOut",
+    "RevisionDiff",
+    "RevisionOut",
+    "RevisionsOut",
+    "SearchOut",
+    "StatusOut",
+    "Subgraph",
+]
 
 
 class StatusOut(BaseModel):
@@ -36,3 +48,20 @@ class SearchOut(BaseModel):
 
 class RevisionsOut(BaseModel):
     revisions: list[RevisionOut]
+
+
+class CurationIn(BaseModel):
+    action: Literal["note", "reject_mapping", "correct_mapping", "obsolete"]
+    target_uid: str = Field(max_length=512)
+    reason: str = Field(min_length=1, max_length=2000)
+    text: str | None = Field(None, max_length=4000)  # required for ``note``
+    replacement_uid: str | None = Field(None, max_length=512)  # required for ``correct_mapping``
+
+
+class CurationOut(BaseModel):
+    event_id: str
+    job_id: str
+
+
+class ReingestOut(BaseModel):
+    job_ids: list[str]

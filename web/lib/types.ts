@@ -464,5 +464,5 @@ export interface ScenarioSet {
   scenarios: ScenarioView[];
 }
 
-export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam"] as const;
+export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam", "viewer.val"] as const;
 export type UserName = (typeof USERS)[number];

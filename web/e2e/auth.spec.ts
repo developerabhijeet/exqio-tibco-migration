@@ -114,7 +114,7 @@ test.describe("sign-in (dev)", () => {
   test("without /auth/me the persona switcher stays", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("user-menu").click();
-    await expect(page.getByRole("menuitemradio")).toHaveCount(5);
+    await expect(page.getByRole("menuitemradio")).toHaveCount(6);
     await expect(page.getByTestId("user-menu-identity")).toHaveCount(0);
   });
 });

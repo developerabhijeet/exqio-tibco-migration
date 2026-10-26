@@ -205,7 +205,8 @@ def test_gate_owners_mirror_the_web():
 
 @pytest.mark.parametrize("user,expected", [
     ("sme.vicky", {"sme"}), ("architect.lee", {"architect"}), ("engineer.ravi", {"engineer"}),
-    ("qa.priya", {"qa"}), ("ops.sam", {"ops", "admin"}), ("someone", set())])
+    ("qa.priya", {"qa"}), ("ops.sam", {"ops", "admin"}), ("viewer.val", {"viewer"}),
+    ("someone", set())])
 def test_dev_persona_roles(user, expected):
     assert roles_mod.dev_principal(user).roles == expected
 
@@ -524,3 +525,19 @@ async def test_proxy_strips_set_cookie_from_the_service():
         resp = await hosting.forward(http, "GET", "http://svc/x", [], b"")
         names = [k.decode().lower() for k, _ in resp.raw_headers]
     assert "set-cookie" not in names and "content-type" in names
+
+
+async def test_oidc_memory_viewer_reads_and_cannot_curate(oidc_client):
+    owner = as_roles("sme")
+    pid = (await oidc_client.post("/projects", json={"name": "m"}, headers=owner)).json()["id"]
+    viewer = as_roles("viewer")
+    read_routes = ["status", "search?q=x", "graph", "node?uid=a", "revisions", "revisions/1/diff"]
+    for route in read_routes:  # neo4j is not configured here: 503/200, never an auth refusal
+        assert (await oidc_client.get(f"/memory/{pid}/{route}", headers=viewer)).status_code not in (401, 403)
+        assert (await oidc_client.get(f"/memory/{pid}/{route}")).status_code == 401
+    body = {"action": "note", "target_uid": "a", "reason": "r", "text": "t"}
+    r = await oidc_client.post(f"/memory/{pid}/curations", json=body, headers=viewer)
+    assert r.status_code == 403  # the router's write guard answers before require_curator
+    assert (await oidc_client.post(f"/memory/{pid}/curations", json=body)).status_code == 401
+    assert (await oidc_client.post(f"/memory/{pid}/reingest", headers=viewer)).status_code == 403
+    assert (await oidc_client.post(f"/memory/{pid}/reingest", headers=owner)).status_code == 403

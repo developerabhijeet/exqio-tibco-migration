@@ -92,8 +92,13 @@ async def test_graph_neighbourhood_lineage_and_node_detail(memory_client, scanne
     d = (await memory_client.get(f"/memory/{scanned}/node", params={"uid": uid})).json()
     assert d["node"]["uid"] == uid and d["node"]["valid_to"] is None and d["versions"]
     assert set(d) == {"node", "versions", "about", "lineage", "curations"}
-    as_of = await memory_client.get(f"/memory/{scanned}/node", params={"uid": uid, "as_of": 1})
-    assert as_of.status_code in (200, 404)
+    first = d["versions"][-1]["valid_from"]  # newest first: the last is the first version
+    at = await memory_client.get(f"/memory/{scanned}/node", params={"uid": uid, "as_of": first})
+    assert at.status_code == 200
+    if first > 1:  # as_of >= 1 is the API's floor: a node born in revision 1 has no "before"
+        before = await memory_client.get(f"/memory/{scanned}/node",
+                                         params={"uid": uid, "as_of": first - 1})
+        assert before.status_code == 404
 
 
 async def test_lineage_mode_needs_a_uid_and_unknown_uid_is_404(memory_client, scanned):
@@ -170,3 +175,13 @@ async def test_not_configured_status_is_200_and_reads_are_503(client, project_id
                  "phase": None, "counts": {}, "pending_ingests": 0, "embedding_backend": None}
     r = await client.get(f"/memory/{project_id}/search", params={"q": "ab cd"})
     assert r.status_code == 503 and r.json()["detail"] == "memory not configured"
+
+
+async def test_graph_404_only_for_a_missing_node(memory_client, scanned):
+    uid = (await memory_client.get(f"/memory/{scanned}/search", params={
+        "q": DFR, "labels": ["Process"]})).json()["hits"][0]["uid"]
+    r = await memory_client.get(f"/memory/{scanned}/graph", params={
+        "uid": uid, "labels": ["Test"], "side": "new", "depth": 1})  # filtered: still 200
+    assert r.status_code == 200
+    r = await memory_client.get(f"/memory/{scanned}/graph", params={"uid": "process:nope"})
+    assert r.status_code == 404

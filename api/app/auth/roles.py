@@ -30,7 +30,7 @@ GATE_OWNERS: dict[str, str] = {"G1": "sme", "G2": "sme", "G3": "architect", "G4"
 DEV_PERSONAS: dict[str, frozenset[str]] = {
     "sme.vicky": frozenset({"sme"}), "architect.lee": frozenset({"architect"}),
     "engineer.ravi": frozenset({"engineer"}), "qa.priya": frozenset({"qa"}),
-    "ops.sam": frozenset({"ops", "admin"}),
+    "ops.sam": frozenset({"ops", "admin"}), "viewer.val": frozenset({"viewer"}),
 }
 
 
