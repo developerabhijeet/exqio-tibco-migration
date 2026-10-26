@@ -1,0 +1,791 @@
+{
+  "config": [
+    {
+      "key": "Gmf:DealerFunding:EmsProviderUrl",
+      "secret": false,
+      "substvar": "EMS.PROVIDER.URL"
+    },
+    {
+      "key": "Gmf:DealerFunding:EmsUser",
+      "secret": false,
+      "substvar": "EMS.USER"
+    },
+    {
+      "key": "Gmf:DealerFunding:FundingHttpPort",
+      "secret": false,
+      "substvar": "FUNDING.HTTP.PORT"
+    },
+    {
+      "key": "Gmf:DealerFunding:GmfDbUrl",
+      "secret": true,
+      "substvar": "GMF.DB.URL"
+    },
+    {
+      "key": "Gmf:DealerFunding:GmfDbUser",
+      "secret": false,
+      "substvar": "GMF.DB.USER"
+    },
+    {
+      "key": "Gmf:DealerFunding:GMFEMSConnection:Password",
+      "secret": true,
+      "substvar": "resource:GMFEMSConnection.password"
+    },
+    {
+      "key": "Gmf:DealerFunding:GMFFundingDB:Password",
+      "secret": true,
+      "substvar": "resource:GMFFundingDB.password"
+    },
+    {
+      "key": "ConnectionStrings:GMFFundingDB",
+      "secret": true,
+      "substvar": "resource:GMFFundingDB.jdbc_url"
+    }
+  ],
+  "config_ignored": [
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.APPNODE.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.APPSPACE.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.CLOUD.PORT"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.DEPLOYMENTUNIT.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.DEPLOYMENTUNIT.TYPE"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.DEPLOYMENTUNIT.VERSION"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.DOMAIN.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.HOST.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.MODULE.NAME"
+    },
+    {
+      "reason": "BW engine runtime variable (set by the BW AppNode or TEA at deploy time); no .NET equivalent, so it is not written to appsettings.json.",
+      "substvar": "BW.MODULE.VERSION"
+    }
+  ],
+  "contracts": [
+    {
+      "contract_id": "DealerFunding/Schemas/Faults.xsd",
+      "file": "Contracts/DealerFunding/Faults.cs",
+      "namespace": "GmfCredit.Core.Contracts.DealerFunding",
+      "record_names": [
+        "DealerInactiveFault"
+      ]
+    },
+    {
+      "contract_id": "DealerFunding/Schemas/FundingEvent.xsd",
+      "file": "Contracts/DealerFunding/FundingEvent.cs",
+      "namespace": "GmfCredit.Core.Contracts.DealerFunding",
+      "record_names": [
+        "FundingEvent"
+      ]
+    },
+    {
+      "contract_id": "DealerFunding/Schemas/FundingRequest.xsd",
+      "file": "Contracts/DealerFunding/FundingRequest.cs",
+      "namespace": "GmfCredit.Core.Contracts.DealerFunding",
+      "record_names": [
+        "FundingRequest"
+      ]
+    }
+  ],
+  "decisions": [],
+  "design_hash": "58eef3cf77467c1e230a49a4528615fbfeb32f6926e1aeec3ab416e1748bddbf",
+  "expected_differences": [],
+  "mapping": [
+    {
+      "activity_id": "ReceiveFundingRequest",
+      "activity_name": "ReceiveFundingRequest",
+      "canonical_type": "jms.receive",
+      "class_name": "DealerFundingRequestConsumer",
+      "file": "Messaging/DealerFundingRequestConsumer.cs",
+      "finding_ids": [],
+      "method": "HandleAsync",
+      "origin": "code",
+      "pattern": "jms.receive",
+      "project": "GmfCredit.Infrastructure",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "LookupDealer",
+      "activity_name": "LookupDealer",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestRepository",
+      "file": "Repositories/DealerFundingRequestRepository.cs",
+      "finding_ids": [
+        "S2-DealerFundingRequest-1"
+      ],
+      "method": "LookupDealerAsync",
+      "origin": "code",
+      "pattern": "jdbc.query",
+      "project": "GmfCredit.Infrastructure",
+      "rule_ids": [
+        "R1"
+      ]
+    },
+    {
+      "activity_id": "LookupDealer",
+      "activity_name": "LookupDealer",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [
+        "S2-DealerFundingRequest-1"
+      ],
+      "method": "LookupDealerMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "ThrowDealerInactive",
+      "activity_name": "ThrowDealerInactive",
+      "canonical_type": "throw",
+      "class_name": "DealerInactiveFaultException",
+      "file": "Exceptions/DealerInactiveFaultException.cs",
+      "finding_ids": [],
+      "method": ".ctor",
+      "origin": "code",
+      "pattern": "throw",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "ThrowDealerInactive",
+      "activity_name": "ThrowDealerInactive",
+      "canonical_type": "throw",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "ThrowDealerInactiveMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "LookupDeal",
+      "activity_name": "LookupDeal",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestRepository",
+      "file": "Repositories/DealerFundingRequestRepository.cs",
+      "finding_ids": [],
+      "method": "LookupDealAsync",
+      "origin": "code",
+      "pattern": "jdbc.query",
+      "project": "GmfCredit.Infrastructure",
+      "rule_ids": [
+        "R2",
+        "R4"
+      ]
+    },
+    {
+      "activity_id": "LookupDeal",
+      "activity_name": "LookupDeal",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "LookupDealMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "PublishFundingRejected",
+      "activity_name": "PublishFundingRejected",
+      "canonical_type": "jms.publish",
+      "class_name": "IMessageBus",
+      "file": "Messaging/IMessageBus.cs",
+      "finding_ids": [],
+      "method": "PublishAsync(\"gmf.funding.events\")",
+      "origin": "code",
+      "pattern": "jms.publish",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "PublishFundingRejected",
+      "activity_name": "PublishFundingRejected",
+      "canonical_type": "jms.publish",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "PublishFundingRejectedMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "CheckExistingFunding",
+      "activity_name": "CheckExistingFunding",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestRepository",
+      "file": "Repositories/DealerFundingRequestRepository.cs",
+      "finding_ids": [
+        "S1-DealerFundingRequest-1"
+      ],
+      "method": "CheckExistingFundingAsync",
+      "origin": "code",
+      "pattern": "jdbc.query",
+      "project": "GmfCredit.Infrastructure",
+      "rule_ids": [
+        "R3"
+      ]
+    },
+    {
+      "activity_id": "CheckExistingFunding",
+      "activity_name": "CheckExistingFunding",
+      "canonical_type": "jdbc.query",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "CheckExistingFundingMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "LogDuplicateFunding",
+      "activity_name": "LogDuplicateFunding",
+      "canonical_type": "log",
+      "class_name": "DealerFundingRequestService",
+      "file": "Services/DealerFundingRequestService.cs",
+      "finding_ids": [],
+      "method": "ExecuteAsync",
+      "origin": "code",
+      "pattern": "log",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "LogDuplicateFunding",
+      "activity_name": "LogDuplicateFunding",
+      "canonical_type": "log",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "LogDuplicateFundingMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "InsertFunding",
+      "activity_name": "InsertFunding",
+      "canonical_type": "jdbc.update",
+      "class_name": "DealerFundingRequestRepository",
+      "file": "Repositories/DealerFundingRequestRepository.cs",
+      "finding_ids": [
+        "S1-DealerFundingRequest-1"
+      ],
+      "method": "InsertFundingAsync",
+      "origin": "code",
+      "pattern": "jdbc.update",
+      "project": "GmfCredit.Infrastructure",
+      "rule_ids": [
+        "R3"
+      ]
+    },
+    {
+      "activity_id": "InsertFunding",
+      "activity_name": "InsertFunding",
+      "canonical_type": "jdbc.update",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "InsertFundingMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "PublishFundingEvent",
+      "activity_name": "PublishFundingEvent",
+      "canonical_type": "jms.publish",
+      "class_name": "IMessageBus",
+      "file": "Messaging/IMessageBus.cs",
+      "finding_ids": [],
+      "method": "PublishAsync(\"gmf.funding.events\")",
+      "origin": "code",
+      "pattern": "jms.publish",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    },
+    {
+      "activity_id": "PublishFundingEvent",
+      "activity_name": "PublishFundingEvent",
+      "canonical_type": "jms.publish",
+      "class_name": "DealerFundingRequestMappings",
+      "file": "Mappings/DealerFundingRequestMappings.cs",
+      "finding_ids": [],
+      "method": "PublishFundingEventMapping",
+      "origin": "code",
+      "pattern": "input.mapping",
+      "project": "GmfCredit.Core",
+      "rule_ids": []
+    }
+  ],
+  "messaging": [
+    {
+      "direction": "in",
+      "kind": "queue",
+      "name": "gmf.dealer.funding.request"
+    },
+    {
+      "direction": "out",
+      "kind": "topic",
+      "name": "gmf.funding.events"
+    }
+  ],
+  "narrative": null,
+  "open_questions": [
+    {
+      "answer": "",
+      "decided_at": "",
+      "decided_by": "",
+      "decision": null,
+      "question": "Record FundingStatusResponse is defined by both DealerFunding/Schemas/FundingStatus.xsd and DealerFunding/Service Descriptors/dealerfunding.FundingStatusLookup-funding.json in namespace GmfCredit.Core.Contracts.DealerFunding; the second is generated as FundingStatusResponseJson.",
+      "recommendation": "Confirm whether both shapes are needed; if they are the same message, map both to one record. A recommendation, not a decision: the architect decides at G3."
+    }
+  ],
+  "process_id": "dealerfunding.DealerFundingRequest",
+  "resilience": [],
+  "sequence": [
+    {
+      "from": "ServiceBus",
+      "label": "gmf.dealer.funding.request (ReceiveFundingRequest)",
+      "to": "DealerFundingRequestConsumer"
+    },
+    {
+      "from": "DealerFundingRequestConsumer",
+      "label": "ExecuteAsync",
+      "to": "DealerFundingRequestService"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "LookupDealerAsync (LookupDealer)",
+      "to": "DealerFundingRequestRepository"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[$LookupDealer/Record[1]/status = 'ACTIVE'] LookupDealAsync (LookupDeal)",
+      "to": "DealerFundingRequestRepository"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[otherwise] .ctor (ThrowDealerInactive)",
+      "to": "DealerInactiveFaultException"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[abs(number($ReceiveFundingRequest/Body/tns:FundingRequest/tns:fundingAmount) ...] CheckExistingFundingAsync (CheckExistingFunding)",
+      "to": "DealerFundingRequestRepository"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[otherwise] PublishAsync(\"gmf.funding.events\") (PublishFundingRejected)",
+      "to": "IMessageBus"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[count($CheckExistingFunding/Record) = 0] InsertFundingAsync (InsertFunding)",
+      "to": "DealerFundingRequestRepository"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "[otherwise] ExecuteAsync (LogDuplicateFunding)",
+      "to": "DealerFundingRequestService"
+    },
+    {
+      "from": "DealerFundingRequestService",
+      "label": "PublishAsync(\"gmf.funding.events\") (PublishFundingEvent)",
+      "to": "IMessageBus"
+    }
+  ],
+  "solution": {
+    "name": "GmfCredit",
+    "projects": [
+      {
+        "files": [
+          "Errors/FaultExceptionHandler.cs",
+          "GmfCredit.Api.csproj",
+          "Program.cs",
+          "appsettings.json"
+        ],
+        "kind": "api",
+        "name": "GmfCredit.Api"
+      },
+      {
+        "files": [
+          "Contracts/DealerFunding/Faults.cs",
+          "Contracts/DealerFunding/FundingEvent.cs",
+          "Contracts/DealerFunding/FundingRequest.cs",
+          "Contracts/TibcoPathAttribute.cs",
+          "Exceptions/DealerInactiveFaultException.cs",
+          "GmfCredit.Core.csproj",
+          "Mappings/DealerFundingRequestMappings.cs",
+          "Messaging/IMessageBus.cs",
+          "Services/DealerFundingRequestService.cs"
+        ],
+        "kind": "core",
+        "name": "GmfCredit.Core"
+      },
+      {
+        "files": [
+          "GmfCredit.Infrastructure.csproj",
+          "Messaging/DealerFundingRequestConsumer.cs",
+          "Messaging/InMemoryMessageBus.cs",
+          "Messaging/ServiceBusMessageBus.cs",
+          "Repositories/DealerFundingRequestRepository.cs"
+        ],
+        "kind": "infrastructure",
+        "name": "GmfCredit.Infrastructure"
+      },
+      {
+        "files": [
+          "DealerFundingRequestBranchTests.cs",
+          "DealerFundingRequestRulesTests.cs",
+          "DealerFundingRequestScenarioTests.cs",
+          "GmfCredit.Tests.csproj",
+          "TestDatabase.cs"
+        ],
+        "kind": "tests",
+        "name": "GmfCredit.Tests"
+      }
+    ]
+  },
+  "spec_hash": "47500ee3da939fb1f73d7281a15240a15a7c74315e5b925c303148dbfb1f3d98",
+  "views": {
+    "classes": [
+      {
+        "activity_ids": [
+          "ReceiveFundingRequest"
+        ],
+        "file": "Messaging/DealerFundingRequestConsumer.cs",
+        "methods": [
+          "HandleAsync"
+        ],
+        "name": "DealerFundingRequestConsumer",
+        "project": "GmfCredit.Infrastructure",
+        "rule_ids": [],
+        "stereotype": "repository"
+      },
+      {
+        "activity_ids": [
+          "LookupDealer",
+          "ThrowDealerInactive",
+          "LookupDeal",
+          "PublishFundingRejected",
+          "CheckExistingFunding",
+          "LogDuplicateFunding",
+          "InsertFunding",
+          "PublishFundingEvent"
+        ],
+        "file": "Mappings/DealerFundingRequestMappings.cs",
+        "methods": [
+          "LookupDealerMapping",
+          "ThrowDealerInactiveMapping",
+          "LookupDealMapping",
+          "PublishFundingRejectedMapping",
+          "CheckExistingFundingMapping",
+          "LogDuplicateFundingMapping",
+          "InsertFundingMapping",
+          "PublishFundingEventMapping"
+        ],
+        "name": "DealerFundingRequestMappings",
+        "project": "GmfCredit.Core",
+        "rule_ids": [],
+        "stereotype": "service"
+      },
+      {
+        "activity_ids": [
+          "LookupDealer",
+          "LookupDeal",
+          "CheckExistingFunding",
+          "InsertFunding"
+        ],
+        "file": "Repositories/DealerFundingRequestRepository.cs",
+        "methods": [
+          "LookupDealerAsync",
+          "LookupDealAsync",
+          "CheckExistingFundingAsync",
+          "InsertFundingAsync"
+        ],
+        "name": "DealerFundingRequestRepository",
+        "project": "GmfCredit.Infrastructure",
+        "rule_ids": [
+          "R1",
+          "R2",
+          "R4",
+          "R3"
+        ],
+        "stereotype": "repository"
+      },
+      {
+        "activity_ids": [
+          "LogDuplicateFunding"
+        ],
+        "file": "Services/DealerFundingRequestService.cs",
+        "methods": [
+          "ExecuteAsync"
+        ],
+        "name": "DealerFundingRequestService",
+        "project": "GmfCredit.Core",
+        "rule_ids": [],
+        "stereotype": "service"
+      },
+      {
+        "activity_ids": [
+          "ThrowDealerInactive"
+        ],
+        "file": "Exceptions/DealerInactiveFaultException.cs",
+        "methods": [
+          ".ctor"
+        ],
+        "name": "DealerInactiveFaultException",
+        "project": "GmfCredit.Core",
+        "rule_ids": [],
+        "stereotype": "service"
+      },
+      {
+        "activity_ids": [
+          "PublishFundingRejected",
+          "PublishFundingEvent"
+        ],
+        "file": "Messaging/IMessageBus.cs",
+        "methods": [
+          "PublishAsync(\"gmf.funding.events\")"
+        ],
+        "name": "IMessageBus",
+        "project": "GmfCredit.Core",
+        "rule_ids": [],
+        "stereotype": "service"
+      }
+    ],
+    "components": [
+      {
+        "kind": "project",
+        "label": "uses",
+        "source": "GmfCredit.Api",
+        "target": "GmfCredit.Core"
+      },
+      {
+        "kind": "project",
+        "label": "uses",
+        "source": "GmfCredit.Core",
+        "target": "GmfCredit.Infrastructure"
+      },
+      {
+        "kind": "database",
+        "label": "reads and writes",
+        "source": "GmfCredit.Infrastructure",
+        "target": "deal"
+      },
+      {
+        "kind": "database",
+        "label": "reads and writes",
+        "source": "GmfCredit.Infrastructure",
+        "target": "dealer"
+      },
+      {
+        "kind": "database",
+        "label": "reads and writes",
+        "source": "GmfCredit.Infrastructure",
+        "target": "funding"
+      },
+      {
+        "kind": "queue",
+        "label": "consumed by",
+        "source": "gmf.dealer.funding.request",
+        "target": "GmfCredit.Infrastructure"
+      },
+      {
+        "kind": "topic",
+        "label": "publishes",
+        "source": "GmfCredit.Infrastructure",
+        "target": "gmf.funding.events"
+      }
+    ],
+    "sql": [
+      {
+        "activity_id": "LookupDealer",
+        "activity_name": "LookupDealer",
+        "parameters": [
+          "dealerId"
+        ],
+        "statement": "select dealer_id, dealer_name, status\n  from gmf.dealer\n where dealer_id like ?",
+        "tables": [
+          "dealer"
+        ],
+        "verb": "select"
+      },
+      {
+        "activity_id": "LookupDeal",
+        "activity_name": "LookupDeal",
+        "parameters": [
+          "dealId"
+        ],
+        "statement": "select deal_id, dealer_id, approved_amount, status\n  from gmf.deal\n where deal_id = ?",
+        "tables": [
+          "deal"
+        ],
+        "verb": "select"
+      },
+      {
+        "activity_id": "CheckExistingFunding",
+        "activity_name": "CheckExistingFunding",
+        "parameters": [
+          "dealId"
+        ],
+        "statement": "select funding_id, status\n  from gmf.funding\n where deal_id = ?",
+        "tables": [
+          "funding"
+        ],
+        "verb": "select"
+      },
+      {
+        "activity_id": "InsertFunding",
+        "activity_name": "InsertFunding",
+        "parameters": [
+          "dealId",
+          "dealerId",
+          "amount"
+        ],
+        "statement": "insert into gmf.funding (deal_id, dealer_id, amount, status, funded_at)\nvalues (?, ?, ?, 'FUNDED', current_timestamp)",
+        "tables": [
+          "funding"
+        ],
+        "verb": "insert"
+      }
+    ],
+    "tables": [
+      {
+        "activity_ids": [
+          "LookupDeal"
+        ],
+        "columns": [
+          {
+            "name": "approved_amount",
+            "role": "read",
+            "type": "numeric"
+          },
+          {
+            "name": "deal_id",
+            "role": "read",
+            "type": "varchar"
+          },
+          {
+            "name": "dealer_id",
+            "role": "read",
+            "type": "varchar"
+          },
+          {
+            "name": "status",
+            "role": "read",
+            "type": "varchar"
+          }
+        ],
+        "name": "deal",
+        "verbs": [
+          "select"
+        ]
+      },
+      {
+        "activity_ids": [
+          "LookupDealer"
+        ],
+        "columns": [
+          {
+            "name": "dealer_id",
+            "role": "read",
+            "type": "varchar"
+          },
+          {
+            "name": "dealer_name",
+            "role": "read",
+            "type": "varchar"
+          },
+          {
+            "name": "status",
+            "role": "read",
+            "type": "varchar"
+          }
+        ],
+        "name": "dealer",
+        "verbs": [
+          "select"
+        ]
+      },
+      {
+        "activity_ids": [
+          "CheckExistingFunding",
+          "InsertFunding"
+        ],
+        "columns": [
+          {
+            "name": "amount",
+            "role": "written",
+            "type": ""
+          },
+          {
+            "name": "deal_id",
+            "role": "filter",
+            "type": ""
+          },
+          {
+            "name": "dealer_id",
+            "role": "written",
+            "type": ""
+          },
+          {
+            "name": "funded_at",
+            "role": "written",
+            "type": ""
+          },
+          {
+            "name": "funding_id",
+            "role": "read",
+            "type": "int4"
+          },
+          {
+            "name": "status",
+            "role": "read",
+            "type": "varchar"
+          }
+        ],
+        "name": "funding",
+        "verbs": [
+          "select",
+          "insert"
+        ]
+      }
+    ]
+  }
+}

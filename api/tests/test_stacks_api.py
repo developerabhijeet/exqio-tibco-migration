@@ -145,3 +145,32 @@ async def test_existing_projects_and_builds_default_to_dotnet():
         async with engine.begin() as conn:
             await conn.execute(text("DROP SCHEMA IF EXISTS api CASCADE"))
         await engine.dispose()
+
+
+async def test_design_job_builds_for_the_project_stack(client, app, monkeypatch):
+    from api.app.models import Project
+    from api.app.services import design as design_svc
+    from api.tests.test_build_verify import _validated, _wait_job
+
+    pid, proc_id = await _validated(client)
+    r = await client.post(f"/processes/{proc_id}/design")
+    assert (await _wait_job(client, r.json()["job_id"]))["status"] == "done"
+    stored = (await client.get(f"/processes/{proc_id}/design")).json()
+    assert stored["stack"] == "dotnet"
+
+    # the project's stack reaches the skeleton (java is not implemented, so the real call gets dotnet)
+    async with app.state.sessionmaker() as s:
+        (await s.get(Project, pid)).target_stack = "java"
+        await s.commit()
+    seen: list[str] = []
+    real = design_svc.build_design_skeleton
+
+    def spy(*args):
+        *rest, stack = args
+        seen.append(stack)
+        return real(*rest, "dotnet")
+
+    monkeypatch.setattr(design_svc, "build_design_skeleton", spy)
+    r = await client.post(f"/processes/{proc_id}/design")
+    job = await _wait_job(client, r.json()["job_id"])
+    assert job["status"] == "done" and seen == ["java"]

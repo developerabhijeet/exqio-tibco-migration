@@ -1,19 +1,19 @@
 """Design record skeleton (design spec 2.4), built by code from the IR before any model runs.
 
-``build_design_skeleton`` maps every TIBCO step to a C# project, file, class and method through
-``patterns.PATTERNS``, and fills the solution layout, contracts, configuration, messaging,
-resilience, sequence, flagged decisions, open questions and expected differences. The designer
+``build_design_skeleton`` maps every TIBCO step to a project, file, class and method of the target
+stack (``patterns.PATTERNS`` through ``get_stack(stack).naming``, .NET by default), and fills the
+solution layout, contracts, configuration, messaging, resilience, sequence, flagged decisions, open questions and expected differences. The designer
 agent (Task 15) adds ``narrative`` and may refine ``decisions`` and ``open_questions``;
 ``design_hash`` excludes those three fields (``models.HASH_EXCLUDED``), so it binds what code decided.
 
-Naming (solution per application):
+Naming for .NET (``engine.stacks.dotnet.naming``; solution per application):
   * solution ``<App>.sln``, ``<App>`` = PascalCase application id (``gmf.credit`` -> ``GmfCredit``);
     projects ``<App>.Api``, ``<App>.Core``, ``<App>.Infrastructure``, ``<App>.Tests``;
   * methods keep the activity name, PascalCase, so traceability is obvious
     (``LookupDealer`` -> ``LookupDealerAsync``); input mappings ``<Activity>Mapping``;
   * throws become ``Exceptions/<Fault>Exception.cs`` so they never clash with the fault record;
   * contracts ``Contracts/<Module>/<Stem>.cs`` in namespace ``<App>.Core.Contracts.<Module>``,
-    planned for the whole application (``csharp_contracts.plan_contracts``) so record names never
+    planned for the whole application (``engine.stacks.contracts.plan_contracts``) so record names never
     collide within a module; a rename is reported as an open question;
   * configuration keys ``Gmf:<Module>:<Name>``; secrets go to Key Vault; ``BW.*`` engine
     variables are listed in ``config_ignored``, not mapped.
@@ -31,6 +31,7 @@ from engine.domains.models import IOCard
 from engine.dotnet_gen import csharp_contracts, xpath
 from engine.dotnet_gen.datamodel import design_views
 from engine.dotnet_gen.models import (
+    DEFAULT_STACK,
     ConfigMap,
     ContractMap,
     Decision,
@@ -50,12 +51,13 @@ from engine.dotnet_gen.patterns import PATTERNS, PatternSpec
 from engine.ir.catalogue import GROUP_KIND_TO_CANONICAL
 from engine.ir.models import Activity, Application, Contract, Group, Process, Resource, Transition
 from engine.ir.spec_hash import spec_hash as compute_spec_hash
+from engine.stacks import get_stack
+from engine.stacks.base import StackNaming
+from engine.stacks.contracts import plan_contracts
 
-CONFIG_ROOT = "Gmf"
 pascal = csharp_contracts.pascal
 
-_PROJECT_KINDS = (("Api", "api"), ("Core", "core"), ("Infrastructure", "infrastructure"), ("Tests", "tests"))
-_PROJECT_SUFFIX = {kind: suffix for suffix, kind in _PROJECT_KINDS}
+_PROJECT_KINDS = ("api", "core", "infrastructure", "tests")
 _API_STARTERS = ("rest", "http", "soap")
 _JMS_TYPES = ("jms.receive", "jms.send", "jms.publish", "jms.reply", "jms.request_reply")
 _INVOKE_TYPES = ("http.invoke", "rest.invoke", "soap.invoke")
@@ -133,8 +135,10 @@ def looks_secret(name: str, value: str = "") -> bool:
 
 # ---------------------------------------------------------------------- rows
 class _Ctx:
-    def __init__(self, process: Process, app: Application, rules: list[Rule], findings: list[Finding]):
+    def __init__(self, process: Process, app: Application, rules: list[Rule], findings: list[Finding],
+                 naming: StackNaming):
         self.p = process
+        self.naming = naming
         self.app = app
         self.app_name = _ident(app.id, "App")
         self.proc_name = _ident(process.name, "Process")
@@ -172,7 +176,7 @@ class _Ctx:
         return out
 
     def project(self, kind: str) -> str:
-        return f"{self.app_name}.{_PROJECT_SUFFIX[kind]}"
+        return self.naming.layer_folder(kind, self.app_name)
 
     def values(self, act: Activity | None, name: str) -> dict[str, str]:
         resource = name
@@ -198,14 +202,14 @@ class _Ctx:
     def row(self, node_id: str, name: str, ctype: str, pattern: str, spec: PatternSpec,
             act: Activity | None, origin: str | None = None) -> MappingRow:
         v = self.values(act, name)
-        project, file_t = spec.project, spec.file_template
-        class_t, method_t = spec.class_template, spec.method_template
-        if pattern == "reply":
+        project = spec.project
+        file_t, class_t, method_t = self.naming.pattern_paths(pattern)
+        if pattern == "reply":  # the reply belongs to whatever receives the request
             if self.starter_kind == "soap":
-                file_t, class_t = "Soap/{process}SoapService.cs", "{process}SoapService"
+                file_t, class_t, _ = self.naming.pattern_paths("soap.receive")
             elif self.starter_kind not in _API_STARTERS:
-                project, file_t, class_t, method_t = ("core", "Services/{process}Service.cs",
-                                                      "{process}Service", "ExecuteAsync")
+                project = PATTERNS["end"].project
+                file_t, class_t, method_t = self.naming.pattern_paths("end")
         if pattern == "call.process" and not v["target"]:
             v["target"] = v["activity"]
         return MappingRow(
@@ -300,13 +304,13 @@ def _config(ctx: _Ctx, resources: list[Resource]) -> tuple[list[ConfigMap], list
             chosen[name] = (precedence, sv.value)
     ignored = [IgnoredConfig(substvar=name, reason=_ENGINE_REASON)
                for name in sorted(chosen) if _ENGINE_VAR.match(name)]
-    rows = [ConfigMap(substvar=name, key=f"{CONFIG_ROOT}:{ctx.module}:{_ident(name, 'Var')}",
+    rows = [ConfigMap(substvar=name, key=ctx.naming.config_key(ctx.module, _ident(name, "Var")),
                       secret=looks_secret(name, value))
             for name, (_, value) in sorted(chosen.items()) if not _ENGINE_VAR.match(name)]
     for res in resources:
         rname = _ident(res.name, "Resource")
         for fld in res.masked_fields:
-            key = f"{CONFIG_ROOT}:{ctx.module}:{rname}:{_ident(fld, 'Setting')}"
+            key = ctx.naming.config_key(ctx.module, f"{rname}:{_ident(fld, 'Setting')}")
             rows.append(ConfigMap(substvar=f"resource:{res.name}.{fld}", key=key, secret=True))
         if res.kind == "jdbc":
             rows.append(ConfigMap(substvar=f"resource:{res.name}.jdbc_url", key=f"ConnectionStrings:{rname}",
@@ -450,7 +454,9 @@ def _short(text: str, n: int = 80) -> str:
 
 def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
     p = ctx.p
-    service = f"{ctx.proc_name}Service"
+    v = ctx.values(None, ctx.proc_name)
+    _, service_t, run_t = ctx.naming.pattern_paths("end")  # the process service and its entry method
+    service, run = service_t.format(**v), run_t.format(**v)
     steps: list[SequenceStep] = []
     st = p.starter
     starter_row = primary.get(st.activity_id) if st else None
@@ -465,9 +471,9 @@ def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
             "timer": ("Scheduler", str(c.get("interval") or c.get("start") or "schedule")),
         }[kind]
         steps.append(SequenceStep(from_=actor, to=starter_row.class_name, label=f"{label} ({st.activity_id})"))
-        steps.append(SequenceStep(from_=starter_row.class_name, to=service, label="ExecuteAsync"))
+        steps.append(SequenceStep(from_=starter_row.class_name, to=service, label=run))
     else:
-        steps.append(SequenceStep(from_="Caller", to=service, label="ExecuteAsync"))
+        steps.append(SequenceStep(from_="Caller", to=service, label=run))
     handlers = {aid: h.fault_name or "all" for h in p.fault_handlers for aid in h.activity_ids}
     for node, via in _walk_order(p):
         if st and node == st.activity_id:
@@ -487,19 +493,14 @@ def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
 
 
 # ----------------------------------------------------------------- layout
-def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap]) -> SolutionLayout:
-    a, pn = ctx.app_name, ctx.proc_name
-    files: dict[str, set[str]] = {k: set() for _, k in _PROJECT_KINDS}
-    for _, kind in _PROJECT_KINDS:
+def _dotnet_scaffold(ctx: _Ctx, files: dict[str, set[str]], patterns_used: set[str]) -> None:
+    """The files the .NET generator writes next to the mapped ones (project files, host, tests)."""
+    pn = ctx.proc_name
+    for kind in _PROJECT_KINDS:
         files[kind].add(f"{ctx.project(kind)}.csproj")
     files["api"] |= {"Program.cs", "appsettings.json"}
     files["core"] |= {"Contracts/TibcoPathAttribute.cs", f"Services/{pn}Service.cs"}
-    files["core"] |= {cm.file for cm in contract_maps}
     files["tests"] |= {f"{pn}RulesTests.cs", f"{pn}BranchTests.cs", f"{pn}ScenarioTests.cs"}
-    by_project = {ctx.project(k): k for _, k in _PROJECT_KINDS}
-    for r in rows:
-        files[by_project[r.project]].add(r.file)
-    patterns_used = {r.pattern for r in rows}
     if patterns_used & set(_JMS_TYPES):
         files["core"].add("Messaging/IMessageBus.cs")
         files["infrastructure"] |= {"Messaging/ServiceBusMessageBus.cs", "Messaging/InMemoryMessageBus.cs"}
@@ -507,8 +508,20 @@ def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap])
         files["api"].add("Errors/FaultExceptionHandler.cs")
     if patterns_used & {"jdbc.query", "jdbc.update", "jdbc.call"}:
         files["tests"].add("TestDatabase.cs")
-    return SolutionLayout(name=a, projects=[ProjectLayout(name=ctx.project(k), kind=k, files=sorted(files[k]))
-                                            for _, k in _PROJECT_KINDS])
+
+
+def _layout(ctx: _Ctx, rows: list[MappingRow], contract_maps: list[ContractMap], stack: str) -> SolutionLayout:
+    """Projects and files: the mapped rows and contracts for every stack, plus the .NET scaffold for
+    .NET (another stack's generator owns its own scaffold)."""
+    files: dict[str, set[str]] = {k: set() for k in _PROJECT_KINDS}
+    files["core"] |= {cm.file for cm in contract_maps}
+    by_project = {ctx.project(k): k for k in _PROJECT_KINDS}
+    for r in rows:
+        files[by_project[r.project]].add(r.file)
+    if stack == DEFAULT_STACK:
+        _dotnet_scaffold(ctx, files, {r.pattern for r in rows})
+    return SolutionLayout(name=ctx.app_name, projects=[
+        ProjectLayout(name=ctx.project(k), kind=k, files=sorted(files[k])) for k in _PROJECT_KINDS])
 
 
 # --------------------------------------------------------------------- build
@@ -519,13 +532,17 @@ def _spec_hash(process: Process, rules: list[Rule], findings: list[Finding]) -> 
 
 
 def build_design_skeleton(process: Process, app: Application, rules: list[Rule], findings: list[Finding],
-                          io_card: IOCard, spec_hash: str | None = None) -> DesignRecord:
+                          io_card: IOCard, spec_hash: str | None = None,
+                          stack: str = DEFAULT_STACK) -> DesignRecord:
     """Deterministic design record for one process; ``narrative`` is left ``None``.
 
     ``spec_hash`` defaults to ``engine.ir.spec_hash.spec_hash`` over the IR, the approved rules and
-    the finding decisions; pass the stored value to bind to a gate record instead.
+    the finding decisions; pass the stored value to bind to a gate record instead. ``stack`` is the
+    project's target stack: its ``naming`` names the mapping rows, projects and contracts
+    (``KeyError`` for a stack that is not implemented).
     """
-    ctx = _Ctx(process, app, rules, findings)
+    naming = get_stack(stack).naming
+    ctx = _Ctx(process, app, rules, findings, naming)
     rows: list[MappingRow] = []
     primary: dict[str, MappingRow] = {}
     for act in process.activities:
@@ -539,7 +556,7 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
             rows.append(grow)
 
     contracts = _process_contracts(process, app, io_card)
-    plans = csharp_contracts.plan_contracts(ctx.app_name, app.contracts)
+    plans = plan_contracts(ctx.app_name, app.contracts, naming)
     contract_maps = [ContractMap(contract_id=c.id, record_names=plans[c.id].record_names,
                                  namespace=plans[c.id].namespace, file=plans[c.id].file)
                      for c in contracts]
@@ -593,7 +610,8 @@ def build_design_skeleton(process: Process, app: Application, rules: list[Rule],
     record = DesignRecord(
         process_id=process.id,
         spec_hash=spec_hash or _spec_hash(process, rules, findings),
-        solution=_layout(ctx, rows, contract_maps),
+        stack=stack,
+        solution=_layout(ctx, rows, contract_maps, stack),
         mapping=rows,
         contracts=contract_maps,
         config=config,

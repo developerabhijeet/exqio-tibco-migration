@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from engine.stacks.base import Mirrors, ProjectFolder, StackKey, StackLayout
 from engine.stacks.dotnet.language import DotnetLanguage
+from engine.stacks.dotnet.naming import DotnetNaming
 
 if TYPE_CHECKING:
     from engine.dotnet_gen.generator import GeneratedSolution
@@ -27,10 +28,15 @@ class DotnetStack:
 
     def __init__(self) -> None:
         self._language = DotnetLanguage()
+        self._naming = DotnetNaming()
 
     @property
     def language(self) -> DotnetLanguage:
         return self._language
+
+    @property
+    def naming(self) -> DotnetNaming:
+        return self._naming
 
     def layout(self, app_name: str) -> StackLayout:
         from engine.dotnet_gen.generator import solution_layout

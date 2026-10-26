@@ -103,7 +103,7 @@ class SourceLanguage(Protocol):
 
 @runtime_checkable
 class StackNaming(Protocol):
-    """Identifiers and paths of the stack (spec section 2; implemented per stack from Task 3)."""
+    """Identifiers and paths of the stack (spec section 2): what the design record's names are."""
 
     def type_name(self, text: str) -> str: ...
 
@@ -120,7 +120,7 @@ class StackNaming(Protocol):
 
 @runtime_checkable
 class StackGenerator(Protocol):
-    """One object per stack (spec section 1). ``naming`` arrives with Task 3."""
+    """One object per stack (spec section 1)."""
 
     key: StackKey
     label: str
@@ -132,6 +132,9 @@ class StackGenerator(Protocol):
 
     @property
     def language(self) -> SourceLanguage: ...
+
+    @property
+    def naming(self) -> StackNaming: ...
 
     def layout(self, app_name: str) -> StackLayout: ...
 

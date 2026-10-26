@@ -18,6 +18,11 @@ target          PascalCase name of a called subprocess (``AuditLog``)
 destination     JMS queue or topic name, verbatim (``gmf.funding.events``)
 ==============  ===========================================================================
 
+The ``.cs`` templates (``file_template``, ``class_template``, ``method_template``) are the .NET row of
+``StackNaming.pattern_paths``: only ``engine.stacks.dotnet.naming.DotnetNaming`` reads them, and the
+design asks the target stack's naming for a pattern's paths. Name, project kind, description,
+origin and decision hint are stack neutral.
+
 A pattern with a ``decision`` is flagged: the design record carries a Decision for every step
 that uses it (a recommendation, not a decision, until the architect approves G3).
 """
@@ -43,9 +48,9 @@ class DecisionHint:
 class PatternSpec:
     name: str
     project: Literal["api", "core", "infrastructure", "tests"]
-    file_template: str  # relative to the project folder
-    class_template: str
-    method_template: str
+    file_template: str  # .NET, relative to the project folder; read by DotnetNaming only
+    class_template: str  # .NET; read by DotnetNaming only
+    method_template: str  # .NET; read by DotnetNaming only
     nuget: list[str] = field(default_factory=list)
     description: str = ""
     origin: Literal["code", "agent"] = "code"
