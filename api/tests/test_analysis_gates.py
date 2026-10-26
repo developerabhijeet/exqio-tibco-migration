@@ -174,7 +174,7 @@ async def test_analyse_without_provider_uses_static_only_and_says_so(client, app
     keys = [f["finding_key"] for f in view["findings"]]
     assert "S1-DealerFundingRequest-1" in keys and "S2-DealerFundingRequest-1" in keys
     assert all(f["source"] == "static" and f["business_impact"] is None for f in view["findings"])
-    assert view["verification"] == {"verified": 0, "total": 0, "failures": [], "passed": True}
+    assert view["verification"] == {"verified": 0, "total": 0, "requirement_backed": 0, "failures": [], "passed": True}
     cov = view["coverage"]
     assert cov["total"] > 0 and cov["covered"] == 0 and cov["complete"] is False
     assert view["summary"]  # a code-generated summary, never empty

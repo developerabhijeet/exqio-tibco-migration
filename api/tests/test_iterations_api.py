@@ -295,3 +295,22 @@ async def test_design_without_iteration_proposes_nothing(client, built_and_faile
     await asyncio.wait_for(wait_design(client, proc), 240)
     rules = (await client.get(f"/processes/{proc}/analysis")).json()["rules"]
     assert not any(r["source"] for r in rules)
+
+
+async def test_approved_iteration_rule_passes_g1_reapproval(client, built_and_failed, architect, sme,
+                                                            provider_proposing_one_rule):  # ruling X21
+    _, proc = built_and_failed
+    await client.post(f"/processes/{proc}/iterations", json={"requirements": "Reject dealers on watch list."},
+                      headers=architect)
+    await wait_design(client, proc)
+    rule = next(r for r in (await client.get(f"/processes/{proc}/analysis")).json()["rules"]
+                if r["source"] == "iteration 2")
+    r = await client.patch(f"/rules/{rule['id']}", json={"status": "approved"}, headers=sme)
+    assert r.status_code == 200, r.text
+    view = (await client.get(f"/processes/{proc}/analysis")).json()
+    assert next(x for x in view["rules"] if x["id"] == rule["id"])["status"] == "approved"
+    assert view["verification"]["passed"] and view["verification"]["requirement_backed"] == 1
+    assert await gate_state(client, proc, "G1") == "pending"  # the approval moved the spec hash
+    for gate in ("G1", "G2"):
+        r = await client.post(f"/gates/{proc}/{gate}", json={"state": "approved", "note": ""}, headers=sme)
+        assert r.status_code == 200, (gate, r.text)

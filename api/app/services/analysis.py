@@ -201,7 +201,7 @@ def _carried_rules(rows: list[Rule]) -> list[EngineRule]:
         out.append(EngineRule(
             id=r.rule_key, text=r.text, confidence=r.confidence,
             status="draft" if r.status == "unverified" else r.status, owner=r.owner,
-            memory_refs=list(r.memory_refs or []),
+            memory_refs=list(r.memory_refs or []), source=r.source,
             citations=[Citation.model_validate(_cit(c)) for c in r.citations or []],
             challenge=EngineChallenge.model_validate(ch) if ch else None))
     return out
@@ -560,7 +560,7 @@ async def refresh_checks(session: AsyncSession, process: Process, analysis: Anal
         return None, None
     proc = IRProcess.model_validate(process.ir)
     engine_rules = [EngineRule(id=r.rule_key, text=r.text, confidence=r.confidence, status=r.status,
-                               citations=[Citation.model_validate(_cit(c)) for c in r.citations or []])
+                               source=r.source, citations=[Citation.model_validate(_cit(c)) for c in r.citations or []])
                     for r in rules]
     verification = verify_citations(proc, engine_rules)
     for row, er in zip(rules, engine_rules, strict=True):
@@ -734,6 +734,7 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
         "rules": [_rule_out(r, failures, process, names) for r in rules],
         "findings": [_finding_out(f, process, names) for f in findings],
         "verification": {"verified": ver.get("verified", 0), "total": ver.get("total", 0),
+                         "requirement_backed": ver.get("requirement_backed", 0),
                          "failures": failures, "passed": not live},
         "coverage": {"covered": covered, "total": len(items), "complete": covered == len(items),
                      "items": [{"kind": i.kind, "ref": i.ref, "covered_by": i.covered_by or [],

@@ -256,6 +256,21 @@ def test_verifier_rejects_paraphrase(procs):
     assert "not found" in result.failures[0].reason
 
 
+def test_iteration_rules_are_requirement_backed(procs):  # ruling X21
+    proc = procs["DealerFundingRequest"]
+    backed = Rule(id="R7", text="Reject dealers on the watch list", confidence=0.0, citations=[],
+                  status="approved", source="iteration 2")
+    bad = Rule(id="R8", text="Second approver over 50k", confidence=0.0, source="iteration 2",
+               citations=[Citation(activity_id="InsertFunding", kind="sql", text="not in the sql at all")])
+    plain = Rule(id="R9", text="Uncited analyst rule", confidence=0.5, citations=[])
+    result = verify_citations(proc, [backed, bad, plain])
+    assert backed.status == "approved" and result.requirement_backed == 1
+    assert bad.status == "unverified" and plain.status == "unverified"
+    assert [f.rule_id for f in result.failures] == ["R8", "R9"]
+    assert result.failures[1].reason == "rule has no citations"
+    assert result.total == 2 and result.verified == 0
+
+
 def test_verifier_kind_and_activity_restrictions(procs):
     proc = procs["DealerFundingRequest"]
     wrong_kind = Rule(id="K1", text="t", confidence=1, citations=[

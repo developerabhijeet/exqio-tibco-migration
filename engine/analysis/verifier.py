@@ -7,6 +7,10 @@ ones: an analyst edit that breaks a quote is downgraded, so callers (the
 API's rule-edit endpoint) must re-run verification after an edit. A rule an analyst already ``rejected`` keeps
 that decision (its failures are still reported). A citation under three characters must equal a whole stored value
 rather than appear inside one.
+
+A rule an iteration proposed (``source`` ``"iteration <n>"``) is grounded in the iteration's
+requirements, not in the IR (ruling X21): without citations it counts as requirement-backed, is
+neither verified nor failed and keeps its status; any citation it does carry is verified as usual.
 """
 from __future__ import annotations
 
@@ -14,13 +18,22 @@ from engine.analysis.evidence import MIN_CITATION_LEN, EvidenceIndex, normalize
 from engine.analysis.models import Citation, CitationFailure, Rule, VerificationResult
 from engine.ir.models import Process
 
+ITERATION_SOURCE = "iteration "
+
+
+def is_requirement_backed(rule: Rule) -> bool:
+    return (rule.source or "").startswith(ITERATION_SOURCE)
+
 
 def verify_citations(process: Process, rules: list[Rule]) -> VerificationResult:
     index = EvidenceIndex(process)
-    verified = total = 0
+    verified = total = backed = 0
     failures: list[CitationFailure] = []
     for rule in rules:
         rule_failures: list[CitationFailure] = []
+        if not rule.citations and is_requirement_backed(rule):
+            backed += 1
+            continue
         if not rule.citations:
             total += 1
             rule_failures.append(CitationFailure(
@@ -48,4 +61,4 @@ def verify_citations(process: Process, rules: list[Rule]) -> VerificationResult:
         if rule_failures and rule.status != "rejected":
             rule.status = "unverified"
         failures.extend(rule_failures)
-    return VerificationResult(verified=verified, total=total, failures=failures)
+    return VerificationResult(verified=verified, total=total, failures=failures, requirement_backed=backed)

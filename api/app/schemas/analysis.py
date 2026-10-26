@@ -116,6 +116,7 @@ class VerificationOut(BaseModel):
     total: int
     failures: list[dict[str, Any]]  # {rule_id: rule key, citation: {activity_id, kind, text}, reason}
     passed: bool  # no failing citation on a rule that is not rejected
+    requirement_backed: int = 0  # uncited rules an iteration proposed (ruling X21)
 
 
 class CoverageItemOut(BaseModel):

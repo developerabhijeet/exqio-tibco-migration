@@ -31,6 +31,7 @@ class Rule(BaseModel):
     challenge: Challenge | None = None
     memory_refs: list[str] = Field(default_factory=list)
     owner: str | None = None
+    source: str | None = None  # "iteration <n>": proposed from an iteration's requirements (X21)
 
 
 class Finding(BaseModel):
@@ -51,11 +52,13 @@ class CitationFailure(BaseModel):
 
 
 class VerificationResult(BaseModel):
-    """Citation-level tally: ``verified + len(failures) == total``."""
+    """Citation-level tally: ``verified + len(failures) == total``. ``requirement_backed`` counts
+    the uncited rules an iteration proposed: neither verified nor failed (ruling X21)."""
 
     verified: int
     total: int
     failures: list[CitationFailure] = Field(default_factory=list)
+    requirement_backed: int = 0
 
 
 class CoverageItem(BaseModel):
