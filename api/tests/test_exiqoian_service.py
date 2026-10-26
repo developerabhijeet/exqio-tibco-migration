@@ -28,7 +28,7 @@ from api.app.services.exiqoian import (
     resolve_persona,
 )
 from api.app.services.knowledge import KnowledgeUnavailable
-from api.tests.test_analysis_gates import _scanned
+from api.tests.test_analysis_gates import SYNTHETIC, _scanned, _wait_job
 from engine.exiqoian.replies import NOT_CONFIGURED_REPLY, OFF_TOPIC_REPLY, UNAVAILABLE_REPLY
 from engine.memory.graph import MemoryUnavailable
 from engine.tests.fakes_memory import FakeRetriever, hit
@@ -225,3 +225,16 @@ async def test_an_unexpected_failure_is_stored_audited_and_counted(session, proj
     _, bot = await go(session, project_id, c, "sme.vicky", QUESTION, retriever=RaisingRetriever(RuntimeError("boom")))
     assert (bot.verdict, bot.text, bot.rule) == ("unavailable", UNAVAILABLE_REPLY, "error")
     assert len((await session.execute(select(AuditLog).where(AuditLog.action == "exiqoian asked"))).scalars().all()) == 1
+
+
+async def test_lexicon_refreshes_when_the_project_changes_under_the_cache(client, app):
+    pid = (await client.post("/projects", json={"name": "late"})).json()["id"]
+    async with app.state.sessionmaker() as session:
+        before, _, names = await project_lexicon(session, pid)
+    assert "dealerfundingrequest" not in before and names.process is None
+    await client.post(f"/projects/{pid}/upload", json={"path": str(SYNTHETIC)})
+    job = (await client.post(f"/projects/{pid}/scan", json={})).json()["job_id"]
+    await _wait_job(client, job)
+    async with app.state.sessionmaker() as session:
+        after, _, names = await project_lexicon(session, pid)
+    assert "dealerfundingrequest" in after and names.process

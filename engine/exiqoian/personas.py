@@ -55,7 +55,7 @@ def suggestions(persona: PersonaKey, names: SuggestionNames) -> list[str]:
     rule = names.rule_key or "the business rules"
     cls = names.class_name or "the generated services"
     if persona == "sme":
-        return [f"What does {proc} do, step by step?" if names.process else "What does this estate contain?",
+        return [f"What does {proc} do and which rules apply to it?" if names.process else "What does this estate contain?",
                 f"Which findings and rules were found for {proc}?" if names.process else "Which findings are open?",
                 f"Where does rule {rule} apply?" if names.rule_key else "Which business rules were found?"]
     if persona == "architect":

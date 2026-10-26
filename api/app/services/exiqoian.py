@@ -47,18 +47,37 @@ CONVERSATION_LIST = 50
 NOT_CONFIGURED = "memory not configured"
 LOCK_NAMESPACE = 0x45584951  # "EXIQ": the first key of the two-int advisory lock, so owners cannot collide with other users of hashtext
 
-_lexicon_cache: dict[str, tuple[float, tuple[frozenset[str], dict[str, str], SuggestionNames]]] = {}
+Lexicon = tuple[frozenset[str], dict[str, str], SuggestionNames]
+# project id -> (expires, fingerprint of what the lexicon was built from, lexicon)
+_lexicon_cache: dict[str, tuple[float, tuple, Lexicon]] = {}
 
 
 def clear_lexicon_cache() -> None:
     _lexicon_cache.clear()
 
 
-async def project_lexicon(session: AsyncSession, project_id: str) -> tuple[frozenset[str], dict[str, str], SuggestionNames]:
-    """(casefolded lexicon, ``ir_id`` -> API process id, suggestion names), cached 300 s per project."""
+async def _fingerprint(session: AsyncSession, project_id: str) -> tuple:
+    """What the lexicon is built from, in one cheap query: a scan, an analysis or a design changes it."""
+    mine = select(Process.id).where(Process.project_id == project_id)
+    row = (await session.execute(select(
+        select(func.count()).select_from(Process).where(Process.project_id == project_id).scalar_subquery(),
+        select(func.max(Process.updated_at)).where(Process.project_id == project_id).scalar_subquery(),
+        select(func.count()).select_from(Rule).where(Rule.process_id.in_(mine)).scalar_subquery(),
+        select(func.count()).select_from(Finding).where(Finding.process_id.in_(mine)).scalar_subquery(),
+        select(func.count()).select_from(DesignRecord).where(DesignRecord.process_id.in_(mine)).scalar_subquery(),
+        select(func.count()).select_from(Domain).where(Domain.project_id == project_id).scalar_subquery(),
+    ))).one()
+    return tuple(row)
+
+
+async def project_lexicon(session: AsyncSession, project_id: str) -> Lexicon:
+    """(casefolded lexicon, ``ir_id`` -> API process id, suggestion names), cached for at most 300 s
+    per project and rebuilt as soon as the project's processes, rules, findings, designs or
+    domains change."""
+    fingerprint = await _fingerprint(session, project_id)
     hit = _lexicon_cache.get(project_id)
-    if hit and hit[0] > time.monotonic():
-        return hit[1]
+    if hit and hit[0] > time.monotonic() and hit[1] == fingerprint:
+        return hit[2]
     words: set[str] = set(MIGRATION_VOCABULARY)
 
     def add(name: str | None) -> None:
@@ -104,7 +123,7 @@ async def project_lexicon(session: AsyncSession, project_id: str) -> tuple[froze
         rule_key=(rules.get(first.id) or [None])[0] if first else None,
         class_name=(classes.get(first.id) or None) if first else None)
     value = (frozenset(words), ids, names)
-    _lexicon_cache[project_id] = (time.monotonic() + LEXICON_TTL_S, value)
+    _lexicon_cache[project_id] = (time.monotonic() + LEXICON_TTL_S, fingerprint, value)
     return value
 
 
@@ -212,6 +231,7 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
     if on_event is not None:
         await on_event("meta", {"user_message_id": user.id, "persona": persona})
     lexicon, process_ids, _ = await project_lexicon(session, project_id)
+    await session.commit()  # end the read transaction: no connection idles through the model call
     try:
         reply = await respond(
             retriever=retriever, project_id=project_id, question=masked, persona=persona, lexicon=lexicon,

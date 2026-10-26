@@ -89,7 +89,7 @@ def compose_without_model(sources: list[Source]) -> str:
     return COMPOSER_INTRO + "\n" + "\n".join(lines) if lines else ""
 
 
-_PREV_ENDS_WITH_MARKER = re.compile(r"\]\s*[.!?]+\s*$")
+_PREV_ENDS_WITH_MARKER = re.compile(r"\[S\d+(?:\s*,\s*S\d+)*\]\s*[.!?]+\s*$")
 
 
 def _leads(answer: str, start: int) -> bool:

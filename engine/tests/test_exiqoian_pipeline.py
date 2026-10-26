@@ -280,3 +280,8 @@ def test_an_answer_describing_commands_is_not_an_injection():
 ])
 def test_output_check_still_refuses_hijack_families(echo):
     assert validate_answer(f"Dealer is active [S1]. {echo}", two_sources(), "c4n4ry", "You are ExiQoian.")[::2] == ("injection", "output_leak")
+
+
+def test_only_a_real_marker_before_the_period_counts_as_the_previous_sentence_marker():
+    verdict, ct, _ = validate_answer("See [config]. [S1] More detail.", two_sources(), "c4n4ry", "You are ExiQoian.")
+    assert verdict == "answer" and [ct.text[s.start:s.end] for s in ct.spans] == ["See [config]."]
