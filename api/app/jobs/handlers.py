@@ -107,7 +107,8 @@ async def _plan_inputs(ctx: JobContext, w: WorkerServices) -> tuple[dict[str, st
                                   secret_reader=deploy_creds.keyvault_secret, fernet=w.fernet)
     if w.settings.tf_cli_config_file:  # every credential mode; a setting from .env is not in os.environ
         env = {**env, "TF_CLI_CONFIG_FILE": w.settings.tf_cli_config_file}
-    return env, build_svc.toolchain()["terragrunt"]["path"]
+    tools = await asyncio.to_thread(build_svc.toolchain)
+    return env, tools["terragrunt"]["path"]
 
 
 @job("eval")

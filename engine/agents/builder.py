@@ -5,6 +5,10 @@ The generator writes every file, class and signature; a body it cannot derive th
 expression kept as a ``// TIBCO`` comment, and the file is marked ``origin="agent"``. The model
 returns the whole file with those bodies written; plain code then checks the result
 (:func:`check_filled_file`) and rejects it with a reason, retrying once.
+
+The checks named above are the C# ones; every agent entry point takes ``stack`` and reads the
+placeholder, comments, declarations and test paths through ``get_stack(stack).language`` (the
+.NET language delegates to the functions in this module, so the .NET behaviour is unchanged).
 """
 from __future__ import annotations
 
@@ -19,6 +23,8 @@ from engine.analysis.models import Rule
 from engine.dotnet_gen.generator import GeneratedSolution, GenFile, ident
 from engine.dotnet_gen.models import DesignRecord
 from engine.ir.models import Process
+from engine.stacks import get_stack
+from engine.stacks.base import SourceLanguage
 
 from .designer import rules_block
 from .jsonout import JsonOutputError
@@ -214,13 +220,18 @@ def is_test_path(path: str) -> bool:
 _CATCH = re.compile(r"\bcatch\s*[({]")
 
 
+def language(stack: str) -> SourceLanguage:
+    """The text checks of ``stack`` (``KeyError`` for a stack that is not implemented)."""
+    return get_stack(stack).language
+
+
 def _introduced(pattern: re.Pattern[str], original: str, new: str) -> bool:
     return len(pattern.findall(new)) > len(pattern.findall(original))
 
 
 def check_filled_file(
     path: str, original: str, new: str, require_filled: bool = True, allow_tests: bool = False,
-    scaffold: str | None = None,
+    scaffold: str | None = None, stack: str = "dotnet",
 ) -> str | None:
     """Why ``new`` may not replace ``original`` at ``path``, or ``None`` when it may.
 
@@ -239,19 +250,23 @@ def check_filled_file(
     model added on an earlier pass is not. Without this, one bad fill is permanent: every later
     repair that removes it is rejected for changing a signature, and the loop oscillates until it
     runs out of attempts. ``None`` falls back to ``original``, which is right for the first fill
-    (they are the same file) and for callers that have no scaffold to hand."""
-    if is_test_path(path) and not allow_tests:
+    (they are the same file) and for callers that have no scaffold to hand.
+
+    ``stack`` picks the language whose placeholder, comments, declarations and test paths are read
+    (``get_stack(stack).language``)."""
+    lang = language(stack)
+    if lang.is_test_path(path) and not allow_tests:
         return f"{path} is a test file; the builder never edits tests"
     protected = original if scaffold is None else scaffold
-    wanted = declarations(protected)
-    if PLACEHOLDER.search(strip_comments(original)) and not wanted:
+    wanted = lang.declarations(protected)
+    if lang.placeholder.search(lang.strip_comments(original)) and not wanted:
         return "no method signature found around the placeholder; the file cannot be checked"
-    present = set(declarations(new))
+    present = set(lang.declarations(new))
     missing = [d for d in wanted if d not in present]
     if missing:
         return f"the method signature changed or is missing: {missing[0]}"
-    kept = set(tibco_comments(new))
-    lost = [c for c in tibco_comments(protected) if c not in kept]
+    kept = set(lang.tibco_comments(new))
+    lost = [c for c in lang.tibco_comments(protected) if c not in kept]
     if lost:
         return f"the TIBCO expression comment is missing: {lost[0]}"
     if _introduced(_ASSERT, original, new):
@@ -260,7 +275,7 @@ def check_filled_file(
         return "the code contains a [Fact] or [Theory] test attribute"
     if _introduced(_PRAGMA, original, new):
         return "the code introduces #pragma warning disable"
-    if _introduced(_CATCH, strip_comments(original), strip_comments(new)):
+    if _introduced(_CATCH, lang.strip_comments(original), lang.strip_comments(new)):
         # The catch clauses are the TIBCO fault handlers: code writes one per handler, already
         # filtered on the fault name, and the generated typed exceptions derive from
         # ProcessFaultException so those filters match them. A fill that adds another catch puts it
@@ -271,7 +286,7 @@ def check_filled_file(
                 "process, so fill the body of the one that is there")
     if _introduced(_OUTSIDE, original, new):
         return "the code references a file outside the solution"
-    if require_filled and PLACEHOLDER.search(new):
+    if require_filled and lang.placeholder.search(new):
         return "an agent fills placeholder is still in the file"
     return None
 
@@ -296,14 +311,14 @@ class _Target:
     placeholders: list[tuple[str, str]]  # (enclosing signature, placeholder line)
 
 
-def _placeholders(text: str) -> list[tuple[str, str]]:
+def _placeholders(text: str, lang: SourceLanguage) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     signature = ""
     for line in text.splitlines():
         s = _norm(line)
-        if s in declarations(line):
+        if s in lang.declarations(line):
             signature = s
-        if PLACEHOLDER.search(line):
+        if lang.placeholder.search(line):
             out.append((signature, s))
     return out
 
@@ -321,21 +336,22 @@ def _process_paths(design: DesignRecord) -> set[str]:
 PER_PROCESS_SUFFIXES = ("State", "Service", "Mappings", "Conditions", "Data", "Repository")
 
 
-def _claims(f: GenFile, design: DesignRecord, process: Process) -> bool:
+def _claims(f: GenFile, design: DesignRecord, process: Process, stack: str = "dotnet") -> bool:
     """Whether ``process`` owns ``f``. ``GenFile.process_id`` decides when set; a shared file
     (``process_id`` None) is owned through an exact path on one of the process's mapping rows or
-    an exact ``<Process><Suffix>.cs`` name."""
+    an exact ``<Process><Suffix>`` name with one of the stack's source suffixes (``.cs``)."""
     if f.process_id is not None:
         return f.process_id == process.id
     if f.path in _process_paths(design):
         return True
     stem = re.escape(ident(process.name, "Process"))
     suffixes = "|".join(PER_PROCESS_SUFFIXES)
-    return re.fullmatch(rf"{stem}(?:{suffixes})\.cs", PurePosixPath(f.path).name) is not None
+    exts = "|".join(re.escape(x) for x in get_stack(stack).source_suffixes)
+    return re.fullmatch(rf"{stem}(?:{suffixes})(?:{exts})", PurePosixPath(f.path).name) is not None
 
 
-def _fillable(f: GenFile) -> bool:
-    return f.origin == "agent" and not is_test_path(f.path) and bool(PLACEHOLDER.search(f.content))
+def _fillable(f: GenFile, lang: SourceLanguage) -> bool:
+    return f.origin == "agent" and not lang.is_test_path(f.path) and bool(lang.placeholder.search(f.content))
 
 
 def claimed_files(
@@ -343,15 +359,17 @@ def claimed_files(
     design: DesignRecord,
     process: Process,
     others: list[tuple[DesignRecord, Process]] | None = None,
+    stack: str = "dotnet",
 ) -> tuple[list[GenFile], list[BuildRejection]]:
     """The agent-written, non-test files with a placeholder that ``process`` owns, and a
     rejection for each such file another process in ``others`` also claims (neither fills it)."""
+    lang = language(stack)
     owned: list[GenFile] = []
     rejected: list[BuildRejection] = []
     for f in solution.files:
-        if not _fillable(f) or not _claims(f, design, process):
+        if not _fillable(f, lang) or not _claims(f, design, process, stack):
             continue
-        rivals = sorted(p.id for d, p in others or [] if p.id != process.id and _claims(f, d, p))
+        rivals = sorted(p.id for d, p in others or [] if p.id != process.id and _claims(f, d, p, stack))
         if rivals:
             rejected.append(BuildRejection(
                 path=f.path, attempt=0,
@@ -362,7 +380,8 @@ def claimed_files(
     return owned, rejected
 
 
-def _targets(files: list[GenFile], design: DesignRecord, process: Process) -> list[_Target]:
+def _targets(files: list[GenFile], design: DesignRecord, process: Process,
+             lang: SourceLanguage) -> list[_Target]:
     """Prompt context for each owned file: the activities its rows and placeholders name."""
     by_name = {a.name: a.id for a in process.activities}
     ids = {a.id for a in process.activities}
@@ -382,7 +401,7 @@ def _targets(files: list[GenFile], design: DesignRecord, process: Process) -> li
             elif head in by_name:
                 acts.append(by_name[head])
         acts = [a for a in dict.fromkeys(acts) if a in ids]
-        out.append(_Target(file=f, activities=acts, placeholders=_placeholders(f.content)))
+        out.append(_Target(file=f, activities=acts, placeholders=_placeholders(f.content, lang)))
     return out
 
 
@@ -471,9 +490,10 @@ async def _fill_one(
     memory_items: list[MemoryItem],
     provider: Any,
     rejections: list[BuildRejection] | None,
+    stack: str = "dotnet",
 ) -> GenFile | None:
     system, user = render_prompt(
-        "builder",
+        "builder", stack,
         process_name=process.name,
         source=render_process(focused_process(process, t.activities), []),
         targets=_targets_block(t, process),
@@ -502,7 +522,7 @@ async def _fill_one(
                 reason = f"the reply did not contain {t.file.path}"
             else:
                 reason = check_filled_file(t.file.path, t.file.content, new,
-                                           scaffold=t.file.scaffold) or ""
+                                           scaffold=t.file.scaffold, stack=stack) or ""
                 if not reason:
                     if not new.endswith("\n"):
                         new += "\n"
@@ -523,6 +543,7 @@ async def fill_method_bodies(
     provider: Any,
     rejections: list[BuildRejection] | None = None,
     others: list[tuple[DesignRecord, Process]] | None = None,
+    stack: str = "dotnet",
 ) -> list[GenFile]:
     """Fill the placeholder bodies of this process's agent-written files, one model call per file.
 
@@ -531,8 +552,9 @@ async def fill_method_bodies(
     (ownership: :func:`claimed_files`; pass the solution's other processes as ``others`` so a file
     two processes claim is rejected instead of filled). A rejected reply is retried once with the
     reason; a file rejected twice is left out. Every rejection is appended to ``rejections``
-    (``attempt`` 0 for an ownership conflict). ``solution`` is not modified."""
-    files, conflicts = claimed_files(solution, design, process, others)
+    (``attempt`` 0 for an ownership conflict). ``solution`` is not modified. ``stack`` picks the
+    language checks and the prompt pack."""
+    files, conflicts = claimed_files(solution, design, process, others, stack)
     for c in conflicts:
         log.warning("builder skipped %s: %s", c.path, c.reason)
     if rejections is not None:
@@ -543,13 +565,14 @@ async def fill_method_bodies(
     # enough to cut the wall clock, not so many that the provider starts refusing. Each task keeps
     # its own rejection list and they are merged in target order, so the result and the reported
     # rejections read the same as when this ran sequentially.
-    targets = list(_targets(files, design, process))
+    targets = list(_targets(files, design, process, language(stack)))
     limit = asyncio.Semaphore(FILL_CONCURRENCY)
 
     async def fill(t: Any) -> tuple[GenFile | None, list[BuildRejection]]:
         mine: list[BuildRejection] = []
         async with limit:
-            filled = await _fill_one(t, solution, design, process, rules, memory_items, provider, mine)
+            filled = await _fill_one(t, solution, design, process, rules, memory_items, provider, mine,
+                                     stack)
         return filled, mine
 
     results = await asyncio.gather(*(fill(t) for t in targets))

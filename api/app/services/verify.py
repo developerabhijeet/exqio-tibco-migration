@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import socket
 import threading
 import time
@@ -56,12 +57,13 @@ from api.app.jobs.runner import JobContext
 from api.app.models import Build, FieldDiff, Process, Scenario, ScenarioRun
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from api.app.services import settings as settings_svc
 from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.stub_server import StubServer, client_names
 from engine.analysis.models import Finding
 from engine.domains.discover import activity_sql, sql_tables
 from engine.dotnet_gen.generator import is_sensitive_name, solution_layout
-from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle, find_dotnet
+from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle
 from engine.dotnet_gen.tests_gen import TestContext, _request
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
@@ -462,13 +464,19 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
 START_TIMEOUT_S = 240.0  # dotnet run until /health answers
 
 
+def find_dotnet() -> str | None:
+    """The ``dotnet`` binary (the cached ``detect_toolchains``, else ``PATH``); blocking, so
+    ``start_service`` calls it off the loop; tests monkeypatch it."""
+    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")
+
+
 async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
                         lock: ScenarioLock, timeout_s: float = START_TIMEOUT_S) -> RunInfo:
     """``dotnet run`` of the build's Api project on a free port against the seeded scenario
     database (raises ``RuntimeError`` with the log tail)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise RuntimeError("the build has no solution on disk")
-    dotnet = find_dotnet()
+    dotnet = await asyncio.to_thread(find_dotnet)
     if dotnet is None:
         raise RuntimeError("dotnet not found: install the .NET 10 SDK (see Settings, toolchains)")
     root = Path(build.output_dir)

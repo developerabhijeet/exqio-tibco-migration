@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from api.app.models import Build, Process
+from engine.stacks import get_stack
 
 DOWNLOAD_EXCLUDED = frozenset({"bin", "obj", "TestResults", ".exiqo"})
 #: Never shipped, whatever the stack says: a repository's metadata is not part of a build.
@@ -45,6 +46,22 @@ def build_tree_files(root: Path, excluded: Iterable[str] = DOWNLOAD_EXCLUDED) ->
     return sorted(out)
 
 
+def download_excluded(stack_key: str | None) -> frozenset[str]:
+    """The build-output folders a download leaves out for ``stack_key`` (the stack's own list)."""
+    try:
+        return get_stack(stack_key or "dotnet").download_excluded
+    except KeyError:
+        return DOWNLOAD_EXCLUDED
+
+
+def stack_label(stack_key: str | None) -> str:
+    key = stack_key or "dotnet"
+    try:
+        return f"{key} ({get_stack(key).label})"
+    except KeyError:
+        return key
+
+
 def export_note(build: Build, process: Process | None) -> str:
     """Which build this bundle is, written into it, so a folder on someone's laptop (or a branch)
     can still be traced back to the TIBCO process and the gate record it came from."""
@@ -56,6 +73,7 @@ def export_note(build: Build, process: Process | None) -> str:
         ("TIBCO spec hash", build.spec_hash or "not recorded"),
         ("TIBCO process", f"{process.name} ({process.id})" if process else build.process_id),
         ("Source file", process.source_path if process else "not recorded"),
+        ("Target stack", stack_label(build.stack)),
         ("Target runtime", "AKS" if build.runtime == "aks" else "Azure Container Apps"),
         ("Finished", build.finished_at.isoformat() if build.finished_at else "did not finish"),
     ]

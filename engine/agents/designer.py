@@ -167,18 +167,20 @@ async def design_narrative(
     provider: Any,
     contracts: list[Contract] | None = None,
     references: list[dict[str, Any]] | None = None,
+    stack: str = "dotnet",
 ) -> DesignRecord:
     """Return a copy of ``design`` with ``narrative``, ``decisions`` and ``open_questions`` filled.
 
     The mapping and every other field code decided are carried over unchanged; the design hash is
-    recomputed and compared, and :class:`DesignHashChanged` is raised if it moved."""
+    recomputed and compared, and :class:`DesignHashChanged` is raised if it moved. ``stack`` picks
+    the prompt pack (the design's own ``stack``)."""
     before = compute_design_hash(design)
     if design.design_hash and design.design_hash != before:
         raise DesignHashChanged(
             f"design record {design.process_id} does not match its stored hash before narration"
         )
     system, user = render_prompt(
-        "designer",
+        "designer", stack,
         process_name=process.name,
         source=render_process(process, contracts or []),
         design=skeleton_text(design),

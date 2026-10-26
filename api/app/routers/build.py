@@ -21,7 +21,12 @@ from api.app.routers.run_proxy import public_urls
 from api.app.services import build as svc
 from api.app.services import hosting
 from api.app.services import verify as verify_svc
-from api.app.services.build_tree import DOWNLOAD_EXCLUDED, build_tree_files, export_note
+from api.app.services.build_tree import (
+    DOWNLOAD_EXCLUDED,
+    build_tree_files,
+    download_excluded,
+    export_note,
+)
 from api.app.services.citations import cite_review, mask_lines
 from api.app.services.context import active_job
 
@@ -78,7 +83,8 @@ async def start_build(process_id: str, request: Request, session: SessionDep, ru
 async def list_builds(process_id: str, session: SessionDep) -> list[dict[str, Any]]:
     rows = (await session.execute(select(Build).where(Build.process_id == process_id)
                                   .order_by(Build.created_at.desc()))).scalars().all()
-    return [{"id": b.id, "status": b.status, "runtime": b.runtime, "build_hash": b.build_hash, "job_id": b.job_id,
+    return [{"id": b.id, "status": b.status, "runtime": b.runtime, "stack": b.stack or "dotnet",
+             "build_hash": b.build_hash, "job_id": b.job_id,
              "created_at": b.created_at.isoformat() if b.created_at else None,
              "finished_at": b.finished_at.isoformat() if b.finished_at else None} for b in rows]
 
@@ -138,10 +144,11 @@ _EXECUTABLE = (".sh",)
 _export_note = export_note  # the name earlier callers and tests import
 
 
-def _zip_solution(root: Path, note: str | None = None) -> bytes:
+def _zip_solution(root: Path, note: str | None = None,
+                  excluded: frozenset[str] = DOWNLOAD_EXCLUDED) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in build_tree_files(root, DOWNLOAD_EXCLUDED):
+        for name in build_tree_files(root, excluded):
             path = root / name
             if path.suffix in _EXECUTABLE:
                 info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
@@ -158,13 +165,13 @@ def _zip_solution(root: Path, note: str | None = None) -> bytes:
 @router.get("/builds/{build_id}/download")
 async def download(build_id: str, session: SessionDep) -> Response:
     """The solution, its infrastructure and its local-run scripts as a zip, ready to run on another
-    machine (without bin, obj, TestResults and .exiqo)."""
+    machine (without the stack's build output: bin, obj, TestResults and .exiqo for .NET)."""
     build = await _build(session, build_id)
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise HTTPException(status_code=404, detail="the build has no solution on disk")
     proc = await session.get(Process, build.process_id)
     note = export_note(build, proc)
-    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note)
+    data = await asyncio.to_thread(_zip_solution, Path(build.output_dir), note, download_excluded(build.stack))
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", proc.name) if proc and proc.name else "build"
     return Response(content=data, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{stem}-{build_id[:12]}.zip"'})

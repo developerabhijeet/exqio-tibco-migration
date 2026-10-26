@@ -114,7 +114,7 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
     else:
         try:
             design = await design_narrative(design, proc, rules, findings, memory_items, provider,
-                                            app.contracts, references=references)
+                                            app.contracts, references=references, stack=design.stack)
             if references:
                 await ctx.log(f"{len(references)} Figma design reference(s) passed to the designer")
             await ctx.log(f"Solution Designer wrote the narrative, {len(design.decisions)} decision(s) and "

@@ -6,6 +6,7 @@ server copies its ids and Key Vault reference, and no secret can be posted.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -128,7 +129,7 @@ async def plan(build_id: str, request: Request, session: SessionDep, runner: Run
     build = await _build(session, build_id)
     proc = await session.get(Process, build.process_id)
     conn = await session.scalar(select(AzureConnection).where(AzureConnection.project_id == proc.project_id))
-    tools = build_svc.toolchain()
+    tools = await asyncio.to_thread(build_svc.toolchain)
     ready, reason = svc.plan_ready(conn, tools)
     if not ready:
         latest = await evidence.latest_plan(session, build_id)

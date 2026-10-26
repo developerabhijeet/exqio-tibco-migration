@@ -302,7 +302,7 @@ async def load_build(s: AsyncSession, process: Process, build_id: str) -> BuildI
     app = await s.get(Application, process.application_id)
     starter = _starter(process)
     return BuildInput(
-        build_id=build.id, build_hash=build.build_hash or "", design=design,
+        build_id=build.id, build_hash=build.build_hash or "", design=design, stack=build.stack or "dotnet",
         files=[BuildFileInput(path=f.path, origin=f.origin, sha256=f.sha256 or "", size=f.size or 0)
                for f in files],
         tests=[TestInput(name=t.name, kind=t.kind or "other", rule_key=t.rule_key, outcome=t.outcome,

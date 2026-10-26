@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     deploy_credential_mode: Literal["workload_identity", "local"] = "local"
     api_base_path: str = ""
     nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
+    # GMF package mirrors of the other stacks (MAVEN_MIRROR_URL, GOPROXY, UV_INDEX_URL); empty = the tool's default
+    maven_mirror_url: str = ""
+    goproxy: str = ""
+    uv_index_url: str = ""
     # Target stacks this install may build (comma separated; the chart's stacks.enabled, default dotnet)
     enabled_stacks: str = "dotnet,java,go,python"
     default_stack: str = "dotnet"  # new projects' target stack; Settings can override it

@@ -20,14 +20,21 @@ Order, each stage logged ``code`` or ``ai``:
    or the Test Engineer wrote a test (then only the test reviewer runs: no production reviewer
    is asked about placeholder code). Test findings are stored with the others (reviewer
    ``test``);
-6. restore, build, format, test: ``dotnet``; restore always runs, bounded to
-   ``RESTORE_TIMEOUT_S``; a failure is annotated with the NuGet probe; a step that cannot run is
-   recorded as failed with the reason (``dotnet`` absent, restore failed), never hidden;
+6. restore, build, format, test: the stack's runner (``dotnet`` for .NET); restore always runs,
+   bounded to ``RESTORE_TIMEOUT_S`` on .NET; a .NET failure is annotated with the NuGet probe; a
+   step that cannot run is recorded as failed with the reason (the stack's tool absent, restore
+   failed), never hidden;
 7. repair (ai): only when restore and build succeeded and tests fail;
 8. infra: Terraform and Terragrunt assets, Dockerfile and pipelines, then their validation;
 9. metrics: the fixed formulas of spec 2.5;
 10. persist: build files with origin and TIBCO lineage, test results, reviews, metrics, infra
     assets and the build hash; G4 to G6 reset when decided (a new build).
+
+The target stack is the approved design's (``DesignRecord.stack``), which must still be the
+project's (``approved_design`` refuses otherwise, so the endpoint answers 409 before a build row
+exists); it is stored on ``Build.stack`` and every stage goes through ``get_stack(stack)``: the
+generator, the runner, the agents' language checks and prompt pack, the test inventory and the
+source files the metrics count. The .NET path calls what it always called.
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,9 +56,19 @@ from api.app.config import Settings
 from api.app.db import utcnow
 from api.app.jobs.locks import ScenarioLock
 from api.app.jobs.runner import JobContext
-from api.app.models import Build, BuildFile, DesignRecord, InfraAsset, Metric, Process, TestResult
+from api.app.models import (
+    Build,
+    BuildFile,
+    DesignRecord,
+    InfraAsset,
+    Metric,
+    Process,
+    Project,
+    TestResult,
+)
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from api.app.services import settings as settings_svc
 from api.app.services.context import engine_app, engine_findings, engine_process, engine_rules
 from api.app.services.design import ai_logger
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
@@ -61,12 +79,7 @@ from engine.agents.provider import ProviderError
 from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
 from engine.agents.test_engineer import fill_test_bodies
 from engine.dotnet_gen import runner as dotnet_runner
-from engine.dotnet_gen.generator import (
-    GeneratedSolution,
-    GenFile,
-    generate_solution,
-    solution_layout,
-)
+from engine.dotnet_gen.generator import GeneratedSolution, GenFile
 from engine.dotnet_gen.metrics import compute_metrics
 from engine.dotnet_gen.models import DesignRecord as EngineDesign
 from engine.dotnet_gen.repair import (
@@ -81,6 +94,8 @@ from engine.dotnet_gen.trx import BRANCH_SUFFIX, RULES_SUFFIX, SCENARIO_SUFFIX, 
 from engine.infra_gen.generator import generate_infra
 from engine.infra_gen.validators import validate_infra
 from engine.parity.models import Scenario as EngineScenario
+from engine.stacks import get_stack, stack_status
+from engine.stacks.base import Mirrors, StackGenerator, StackRunner
 from engine.stacks.testindex import INDEX_PATH, IndexEntry
 
 STAGES = ["design check", "generate", "tests", "test engineer", "builder", "review", "restore", "build", "format", "test",
@@ -108,12 +123,19 @@ _METHOD = re.compile(r"public (?:async )?Task (?P<name>\w+)\(\)")
 
 
 class BuildRefused(Exception):
-    """The build cannot start (HTTP 409): G3 not approved or no design record."""
+    """The build cannot start (HTTP 409): G3 not approved, no design record, or the design is for
+    another stack than the project's (or for one this install cannot build)."""
+
+
+def stack_mismatch(design_stack: str, project_stack: str) -> str:
+    return (f"the approved design is for {design_stack}, the project now targets {project_stack}: "
+            "re-run Design")
 
 
 def find_dotnet() -> str | None:
-    """The ``dotnet`` binary the build uses (``scripts/toolchain.detect()``); tests monkeypatch it."""
-    return dotnet_runner.find_dotnet()
+    """The ``dotnet`` binary the build uses (the cached ``detect_toolchains``, else ``PATH``);
+    blocking, so the job calls it through ``asyncio.to_thread``; tests monkeypatch it."""
+    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")
 
 
 def run_restore(root: Path, dotnet: str) -> StepResult:
@@ -154,7 +176,27 @@ def nuget_probe(timeout_s: float = 5.0, source: str | None = None) -> tuple[bool
 
 
 def toolchain() -> dict[str, Any]:
-    return dotnet_runner._toolchain_detect()
+    """Every detected tool (the cached ``detect_toolchains``); blocking, call it off the loop."""
+    return settings_svc.detect_toolchains()
+
+
+def mirrors(settings: Settings) -> Mirrors:
+    """The package mirrors a generated project restores from (GMF's; empty = the tool's default)."""
+    return Mirrors(nuget=settings.nuget_source, maven=settings.maven_mirror_url,
+                   goproxy=settings.goproxy, pypi=settings.uv_index_url)
+
+
+def stack_tool_missing(stack: StackGenerator, settings: Settings) -> str | None:
+    """Why the worker cannot run ``stack``'s restore, build, format and test (a missing tool), or
+    ``None``. .NET keeps its own message and its ``find_dotnet`` lookup. Blocking (detection)."""
+    if stack.key == "dotnet":
+        return None if find_dotnet() else NO_DOTNET
+    status = stack_status(stack.key, toolchain(), settings.enabled_stack_list)
+    if status.available:
+        return None
+    if (status.reason or "").startswith("toolchain missing"):
+        return f"{status.reason}: install it on the worker (Settings shows the toolchains)"
+    return status.reason
 
 
 def _tail(text: str, limit: int = LOG_LIMIT) -> str:
@@ -187,6 +229,15 @@ async def approved_design(session: AsyncSession, process: Process) -> DesignReco
         raise BuildRefused("the design record G3 approved is not stored")
     if design.spec_hash != process.spec_hash:
         raise BuildRefused("the approved design record is stale: the spec hash changed since G3")
+    design_stack = (design.record or {}).get("stack") or "dotnet"
+    project = await session.get(Project, process.project_id)
+    project_stack = project.target_stack if project is not None and project.target_stack else "dotnet"
+    if design_stack != project_stack:
+        raise BuildRefused(stack_mismatch(design_stack, project_stack))
+    try:
+        get_stack(design_stack)
+    except KeyError as exc:
+        raise BuildRefused(f"the {design_stack} stack cannot be built on this install: {exc.args[0]}") from exc
     return design
 
 
@@ -390,8 +441,10 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.stage(STAGES[0])
         design_row = await approved_design(s, row)
         design = EngineDesign.model_validate(design_row.record)
+        stack = get_stack(design.stack)  # approved_design refused a stack this install cannot build
         await ctx.log(f"G3 approved; design record v{design_row.version} (design hash "
-                      f"{design_row.design_hash[:12]}, spec hash {design_row.spec_hash[:12]})")
+                      f"{design_row.design_hash[:12]}, spec hash {design_row.spec_hash[:12]}); "
+                      f"target stack {stack.key} ({stack.label})")
         app = await engine_app(s, row)
         proc = engine_process(app, row)
         rules = await engine_rules(s, process_id)
@@ -403,6 +456,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         build.design_id = design_row.id
         build.spec_hash = row.spec_hash
         build.design_hash = design_row.design_hash
+        build.stack = stack.key
         await s.commit()
         try:
             srows, notes, fresh = await verify_svc.ensure_scenarios(s, settings, row, scenario_lock)
@@ -414,6 +468,13 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             scenario_note = f"no parity scenarios (scenario database unavailable: {exc}); scenario tests are empty"
     out_dir = settings.builds_dir / build_id
     approved_rules = [r for r in rules if r.status in ("approved", "edited")]
+    lang = stack.language
+    # The worker checks its own toolchain when the build starts (the API pods of a split install
+    # have none); a missing tool is said here, by name, and again on each step it stops.
+    tool_missing = await asyncio.to_thread(stack_tool_missing, stack, settings) \
+        if settings.build_toolchain else None
+    if tool_missing:
+        await ctx.log(f"restore, build, format and test will not run: {tool_missing}")
 
     # 2. generate (code)
     await ctx.stage(STAGES[1])
@@ -429,9 +490,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"generating {len(closure)} called sub-process(es) from their TIBCO source: "
                       f"{', '.join(sorted(i.rsplit('.', 1)[-1] for i in closure))}")
     solution: GeneratedSolution = await asyncio.to_thread(
-        generate_solution, app, [proc.id, *closure], {proc.id: design}, {proc.id: rules},
-        {proc.id: findings}, scenarios, out_dir, settings.nuget_source)
-    agent_files = [f for f in solution.files if f.origin == "agent" and not f.path.startswith("tests/")]
+        stack.generate, app, [proc.id, *closure], {proc.id: design}, {proc.id: rules},
+        {proc.id: findings}, scenarios, out_dir, mirrors(settings))
+    agent_files = [f for f in solution.files if f.origin == "agent" and not lang.is_test_path(f.path)]
     await ctx.log(f"solution {solution.name}: {len(solution.files)} file(s) in {out_dir}; "
                   f"{len(agent_files)} production file(s) with bodies left to the Code Builder")
     # A build generates the one process it is given. A sub-process it calls that has no design
@@ -446,7 +507,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
 
     # 3. tests first (code)
     await ctx.stage(STAGES[2])
-    inventory = test_inventory(solution.files, solution.name)
+    inventory = test_inventory(solution.files, solution.name, stack.key)
     counts = {k: sum(1 for t in inventory if t["kind"] == k) for k in ("rule", "branch", "scenario")}
     no_body = [t for t in inventory if not t["has_body"]]
     await ctx.log(f"tests written before any body: {counts['rule']} rule, {counts['branch']} branch, "
@@ -491,12 +552,12 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             try:
                 written += await fill_test_bodies(solution, target_proc, rules_for, scenarios_for,
                                                   target_design, te_memory, provider, te_rejections,
-                                                  warnings=te_warnings)
+                                                  warnings=te_warnings, stack=stack.key)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Test Engineer failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, written)
         te_filled = sorted(f.path for f in written)
-        inventory = test_inventory(solution.files, solution.name)
+        inventory = test_inventory(solution.files, solution.name, stack.key)
         still = [t for t in inventory if not t["has_body"] and t["kind"] in ("rule", "branch")]
         await ctx.log(f"Test Engineer wrote {len(placeholders) - len(still)} of {len(placeholders)} rule and branch "
                       f"test bodies in {len(te_filled)} file(s); {len(te_rejections)} body(ies) rejected by the "
@@ -537,7 +598,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             rules_for = approved_rules if target_proc.id == proc.id else []
             try:
                 filled += await fill_method_bodies(solution, target_design, target_proc, rules_for,
-                                                   memory_items, provider, rejections)
+                                                   memory_items, provider, rejections, stack=stack.key)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Code Builder failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, filled)
@@ -563,9 +624,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           "branch tests", tag="ai")
         try:
             found = await review_panel(solution, design, approved_rules, findings, provider, process=proc,
-                                       reviewers=panel)
+                                       reviewers=panel, stack=stack.key)
             reviewers_run = ([*REVIEWERS] if filled_paths else []) + (
-                [TEST_REVIEWER] if reviewed_test_files(solution, proc) else [])
+                [TEST_REVIEWER] if reviewed_test_files(solution, proc, stack.key) else [])
             reviews = [r.model_dump() for r in found]
             triage = {t: sum(1 for r in found if r.triage == t) for t in ("patch", "defer", "decision")}
             tested = sum(1 for r in found if r.reviewer == TEST_REVIEWER)
@@ -578,7 +639,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 6. restore, build, format, test (code)
     steps: list[dict[str, Any]] = []
     dotnet_steps = settings.build_toolchain
-    dotnet = find_dotnet() if dotnet_steps else None
+    is_dotnet = stack.key == "dotnet"
+    dotnet = (await asyncio.to_thread(find_dotnet) if dotnet_steps else None) if is_dotnet else None
     # the generated tests read TEST_DATABASE_URL; the runner's child environment is an allowlist, so
     # it is passed explicitly (the repair loop's re-runs use the same runner and get it too)
     test_db = settings.test_database_url.strip()
@@ -586,10 +648,20 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # the shared runtime (the Service Bus adapter the test host swaps for an in-memory bus, the
     # TIBCO value helpers, masking), which a test of this workflow cannot reach; counting it
     # answers a question nobody asked at G4.
-    scope = {f.path for f in solution.files if f.process_id == proc.id and f.path.startswith("src/")}
-    runner = (DotnetRunner(solution.root, dotnet=dotnet, coverage_scope=scope,
-                           env={"TEST_DATABASE_URL": test_db} if test_db else None)
-              if dotnet else None)
+    if is_dotnet:
+        scope = {f.path for f in solution.files if f.process_id == proc.id and f.path.startswith("src/")}
+    else:
+        scope = {f.path for f in solution.files if f.process_id == proc.id
+                 and f.path.endswith(stack.source_suffixes) and not lang.is_test_path(f.path)}
+    test_env = {"TEST_DATABASE_URL": test_db} if test_db else None
+    runner: StackRunner | DotnetRunner | None
+    if is_dotnet:
+        runner = DotnetRunner(solution.root, dotnet=dotnet, coverage_scope=scope, env=test_env) if dotnet else None
+    else:
+        runner = (stack.runner(solution.root, env=test_env, coverage_scope=scope)
+                  if dotnet_steps and not tool_missing else None)
+    # the reason a step that needs the toolchain did not run: .NET's own message, else the stack's
+    no_tool = NO_DOTNET if is_dotnet else (tool_missing or NO_DOTNET)
     if not dotnet_steps:
         await ctx.log(TOOLCHAIN_OFF)
     elif runner is not None and not test_db:
@@ -603,7 +675,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     if not dotnet_steps:
         restore = StepResult(ok=False, log=TOOLCHAIN_OFF)
     elif runner is None:
-        restore = StepResult(ok=False, log=NO_DOTNET)
+        restore = StepResult(ok=False, log=no_tool)
+    elif not is_dotnet:
+        restore = await asyncio.to_thread(runner.restore)
     else:
         restore = await asyncio.to_thread(run_restore, solution.root, dotnet)
         if not restore.ok:
@@ -631,7 +705,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                               + (f"; failing: {', '.join(a.failing[:5])}" if a.failing else ""), tag="ai")
 
             cr = await compile_repair_loop(runner, solution, proc, approved_rules, provider,
-                                           recorder=on_compile_attempt)
+                                           recorder=on_compile_attempt, stack=stack.key)
             before_errors = len(build_result.errors)
             build_result = cr.final
             compile_notes = [(f"compile repair: {len(cr.attempts)} attempt(s), "
@@ -646,19 +720,22 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"build {'passed' if build_result.ok else 'failed'}: {build_result.warnings} warning(s), "
                       f"{len(build_result.errors)} error(s)")
     else:
-        why = TOOLCHAIN_OFF if not dotnet_steps else (NO_DOTNET if runner is None else "not run: restore failed")
+        why = TOOLCHAIN_OFF if not dotnet_steps else (no_tool if runner is None else "not run: restore failed")
         steps.append(_step("build", False, why, t0, skipped=True))
         await ctx.log(f"build {why}")
 
     await ctx.stage(STAGES[8])
     t0 = time.monotonic()
     if runner is None:
-        why = TOOLCHAIN_OFF if not dotnet_steps else NO_DOTNET
+        why = TOOLCHAIN_OFF if not dotnet_steps else no_tool
         steps.append(_step("format", False, why, t0, skipped=True))
         await ctx.log(f"format {why}")
     else:
         whitespace = not restore.ok
-        mode = "dotnet format whitespace --folder (no restore needed)" if whitespace else "dotnet format"
+        if is_dotnet:
+            mode = "dotnet format whitespace --folder (no restore needed)" if whitespace else "dotnet format"
+        else:
+            mode = f"{stack.key} formatter" + (" (whitespace only: restore failed)" if whitespace else "")
         # Format the generated code before judging it. Templates and model-written bodies are not
         # laid out the way dotnet format would lay them out, so checking without formatting first
         # only ever reported that fact as a failure.
@@ -686,7 +763,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"tests: {passed} of {len(test_run.cases)} passed"
                       + (f", line coverage {test_run.coverage_line:.1%}" if test_run.coverage_line is not None else ""))
     else:
-        why = TOOLCHAIN_OFF if not dotnet_steps else (NO_DOTNET if runner is None else "not run: the solution did not compile")
+        why = TOOLCHAIN_OFF if not dotnet_steps else (no_tool if runner is None else "not run: the solution did not compile")
         steps.append(_step("test", False, why, t0, skipped=True))
         await ctx.log(f"tests {why}")
 
@@ -706,7 +783,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           + (f": {a.reason}" if a.reason else "") + f"; failing: {', '.join(a.failing[:5])}",
                           tag="ai")
 
-        result = await repair_loop(runner, solution, proc, approved_rules, provider, recorder=on_attempt)
+        result = await repair_loop(runner, solution, proc, approved_rules, provider, recorder=on_attempt,
+                                   stack=stack.key)
         repair = result.model_dump(mode="json")
         test_run = result.final
         if not result.attempts and not result.final.cases:
@@ -726,7 +804,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           + (f": {a.reason}" if a.reason else ""), tag="ai")
 
         applied = await apply_review_findings(runner, solution, proc, approved_rules, carried_reviews,
-                                              provider, recorder=on_review_attempt)
+                                              provider, recorder=on_review_attempt, stack=stack.key)
         review_applied = applied.applied > 0
         test_run = applied.final
         await ctx.log(f"review findings: {applied.applied} of {len(applied.attempts)} attempt(s) applied; "
@@ -735,7 +813,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"{len(carried_reviews)} kept review finding(s) not applied: they need a model and a "
                       f"compiling solution", tag="ai")
 
-    inventory = test_inventory(solution.files, solution.name)  # has_body from the final files
+    inventory = test_inventory(solution.files, solution.name, stack.key)  # has_body from the final files
 
     # 8. infrastructure (code)
     await ctx.stage(STAGES[11])
@@ -759,12 +837,13 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
 
     # 9. metrics (code)
     await ctx.stage(STAGES[13])
-    br = build_result or BuildResult(ok=False, files=sum(1 for f in solution.files if f.path.endswith(".cs")),
-                                     log="not built")
+    source_files = sum(1 for f in solution.files if f.path.endswith(stack.source_suffixes))
+    br = build_result or BuildResult(ok=False, files=source_files, log="not built")
     tr = test_run or TestRun(ok=False, log="not run")
     infra_ok = validation.ok if validation.tools_present and any(validation.tools_present.values()) else None
-    metrics = compute_metrics(rules, len(branch_transitions(proc)), tr, br, format_ok, infra_ok, process=proc.id)
-    if runner is not None and not restore.ok:
+    metrics = compute_metrics(rules, len(branch_transitions(proc)), tr, br, format_ok, infra_ok, process=proc.id,
+                              source_files=None if is_dotnet else source_files)
+    if is_dotnet and runner is not None and not restore.ok:
         metrics.details["standards_adherence"] += (" (reduced check: dotnet format whitespace --folder only, "
                                                    "because restore failed; analyzers and style rules were not run)")
     await ctx.log("metrics: " + "; ".join(f"{k} {v}" for k, v in metrics.details.items()))
@@ -772,7 +851,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 10. persist (code)
     await ctx.stage(STAGES[14])
     tests = merge_results(inventory, test_run)
-    layout = solution_layout(solution.name)
+    layout = {"projects": {kind: {"name": p.name, "folder": p.folder}
+                           for kind, p in stack.layout(solution.name).projects.items()}}
     all_files: list[tuple[GenFile, str]] = []
     for f in solution.files:
         origin = "ai" if f.path in filled_paths or f.path in te_filled else f.origin
@@ -971,7 +1051,8 @@ async def build_view(session: AsyncSession, build: Build) -> dict[str, Any]:
     process = await session.get(Process, build.process_id)
     gates = await gate_svc.gates_view(session, process) if process else []
     return {"id": build.id, "process_id": build.process_id, "job_id": build.job_id, "status": build.status,
-            "runtime": build.runtime, "build_hash": build.build_hash, "spec_hash": build.spec_hash,
+            "runtime": build.runtime, "stack": build.stack or "dotnet", "build_hash": build.build_hash,
+            "spec_hash": build.spec_hash,
             "design_hash": build.design_hash, "design_id": build.design_id,
             "created_at": build.created_at.isoformat() if build.created_at else None,
             "finished_at": build.finished_at.isoformat() if build.finished_at else None,

@@ -16,7 +16,9 @@ replicas and separate worker pods, and the PATCH lands on one API pod only.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import threading
 import time
 from typing import Any
 
@@ -52,10 +54,28 @@ FALLBACK_NOTE = ("Auto mode: Claude first; on an error or a rate limit the call 
                  "it is configured, and the switch is recorded on the model call (fallback_from).")
 
 
-def detect_toolchains() -> dict[str, Any]:
+TOOLCHAIN_TTL_SECONDS = 30.0  # how long one detection (a subprocess per tool) is reused
+_toolchain_lock = threading.Lock()
+_toolchain_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def detect_toolchains(max_age_s: float = TOOLCHAIN_TTL_SECONDS) -> dict[str, Any]:
+    """``scripts/toolchain.detect()``, reused for ``max_age_s``: the one detection path of the API
+    and the worker (Settings, ``/stacks``, the build, Verify, the plan). It runs a subprocess per
+    tool, so callers on the event loop go through ``asyncio.to_thread``. A copy is returned."""
+    global _toolchain_cache
     from engine.dotnet_gen.runner import _toolchain_detect
 
-    return _toolchain_detect()
+    with _toolchain_lock:
+        now = time.monotonic()
+        if _toolchain_cache is None or now - _toolchain_cache[0] > max_age_s:
+            _toolchain_cache = (now, _toolchain_detect())
+        return copy.deepcopy(_toolchain_cache[1])
+
+
+def tool_path(name: str) -> str | None:
+    """Where ``name`` was detected (``detect_toolchains``), or ``None``. Blocking."""
+    return (detect_toolchains().get(name) or {}).get("path")
 
 
 async def load_stored(session: AsyncSession) -> dict[str, Any]:
