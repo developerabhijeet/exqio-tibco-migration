@@ -16,6 +16,7 @@ like its design row; a ``Try`` catches ``RuntimeException`` and dispatches on th
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -42,6 +43,7 @@ FUNCTIONS: dict[str, str] = {
     "round": "TibText.round", "floor": "TibText.floor", "ceiling": "TibText.ceiling",
     "current-dateTime": "TibText.currentDateTime", "current-date": "TibText.currentDate",
 }
+log = logging.getLogger(__name__)
 _INT_MAX = 2**31 - 1
 _PATH_IN_TEXT = re.compile(r"\$[\w.\-]+(?:/@?(?:[\w.\-]+:)?[\w.\-]+(?:\[\d+\])?)*")
 _HREF_ROOT = re.compile(r"#//([^;\"']+)")
@@ -218,6 +220,7 @@ class JavaProcess:
         self.condition_names = self._condition_names()
         self.uses = set()  # imports the service needs beyond the always-there ones
         self.flows = 0
+        self.try_depth = 0  # nesting of TIBCO catch handlers being printed (catch variable names)
         self.exceptions: dict[str, tuple[str, str]] = {}  # activity id -> (exception class, fault name)
         for a in process.activities:
             if a.type == "throw":
@@ -225,6 +228,30 @@ class JavaProcess:
                 fault = str(a.config.get("fault_name") or a.name)
                 cls = row.class_name if row and row.pattern == "throw" else self.naming.exception_name(fault)
                 self.exceptions[a.id] = (cls, fault)
+
+    def repository_methods(self) -> dict[str, str]:
+        """Activity id -> repository method of every JDBC step, unique within the repository: a
+        second step whose name gives a method already taken gets a numbered one, with a warning."""
+        if hasattr(self, "_repository_methods"):
+            return self._repository_methods
+        out: dict[str, str] = {}
+        used: set[str] = set()
+        for a in self.p.activities:
+            if not a.type.startswith("jdbc."):
+                continue
+            row = self.primary.get(a.id)
+            method = row.method if row and row.pattern.startswith("jdbc.") else self.naming.method_name("", a.name)
+            if method in used:
+                base, n = method, 2
+                while f"{base}{n}" in used:
+                    n += 1
+                log.warning("%s: repository method %s is taken; step %s is written as %s%d", self.p.id, method,
+                            a.name, base, n)
+                method = f"{base}{n}"
+            used.add(method)
+            out[a.id] = method
+        self._repository_methods = out
+        return out
 
     # ---------------------------------------------------------------- variables
     def starter_name(self) -> str | None:
@@ -491,13 +518,13 @@ class JavaProcess:
             return _Printed(self.agent_step(act, "left to the Code Builder (no code template)"))
         if t.startswith("jdbc."):
             field_ = self.dep(f"{self.name}Repository", f"{self.ctx.pkg}.infrastructure.{self.name}Repository")
-            method = row.method if row and row.pattern.startswith("jdbc.") else self.naming.method_name("", act.name)
+            method = self.repository_methods()[act.id]
             return _Printed([f"state.set({var}, {field_}.{method}({arg}));"])
         if t in ("jms.send", "jms.publish"):
             body = self._publish_body(act, m)
             dest = st.call_target if st else None
             if body is None or not dest:
-                return _Printed(self.agent_step(act, "the message body element is not found in the bindings"))
+                return _Printed(self.agent_step(act, self._publish_problem(act, m, dest)))
             bus = self.dep("MessageBus", f"{self.ctx.pkg}.core.messaging.MessageBus")
             return _Printed([f"{bus}.publish({java_string(dest)}, {body});"])
         if t == "log":
@@ -553,6 +580,22 @@ class JavaProcess:
             return None
         element = next(iter(roots))[2]
         return f"TibValue.path({m}, \"Body\", {java_string(element)})"
+
+    def _publish_problem(self, act: Activity, m: str | None, dest: str | None) -> str:
+        """Why code cannot write a JMS send or publish (the agent step's reason)."""
+        if not dest:
+            return "the destination of the message is not known"
+        if m is None:
+            return "the step has no input bindings"
+        segs = [[local(x) for x in b.target.split("/") if x] for b in act.input_bindings]
+        others = sorted({s[1] for s in segs if len(s) >= 2 and s[0] == "ActivityInput" and s[1] != "Body"})
+        if others:
+            return (f"the bindings set {', '.join(others)}, which the bus publish does not carry "
+                    "(only the body element is sent)")
+        roots = {tuple(s[:3]) for s in segs if len(s) >= 4 and s[0] == "ActivityInput" and s[1] == "Body"}
+        if len(roots) > 1:
+            return f"the bindings write more than one body element ({', '.join(sorted(r[2] for r in roots))})"
+        return "the bindings do not write one element under ActivityInput/Body"
 
     def starter_vars(self) -> str:
         sn = self.starter_name()
@@ -618,21 +661,28 @@ class JavaProcess:
         return _Printed(out, then.abrupt and other.abrupt)
 
     def _try(self, node: Try, mode: str) -> _Printed:
-        body = self.print_flow(node.body, mode)
-        lines = ["try {", *_indent(body.lines), "} catch (RuntimeException fault) {", "    state.lastError(fault);"]
-        abrupt = body.abrupt
-        branches = 0
-        all_abrupt = True
-        for i, (fault, flow) in enumerate(node.catch):
-            printed = self.print_flow(flow, mode)
-            self.uses.add(f"{self.ctx.pkg}.core.exceptions.ProcessFault")
-            kw = "if" if i == 0 else "} else if"
-            lines.append(f"    {kw} (ProcessFault.named(fault, {java_string(fault)})) {{")
-            lines += _indent([f"// TIBCO catch {comment(fault)}", *printed.lines], 8)
-            all_abrupt = all_abrupt and printed.abrupt
-            branches += 1
-        rest = self.print_flow(node.catch_all, mode) if node.catch_all is not None else None
-        tail = ["// TIBCO catchAll", *rest.lines] if rest is not None else ["throw fault;"]
+        # A Try inside a handler of another one needs its own catch variable: Java does not let a
+        # catch parameter shadow the one of the enclosing handler.
+        self.try_depth += 1
+        var = "fault" if self.try_depth == 1 else f"fault{self.try_depth}"
+        try:
+            body = self.print_flow(node.body, mode)
+            lines = ["try {", *_indent(body.lines), f"}} catch (RuntimeException {var}) {{", f"    state.lastError({var});"]
+            abrupt = body.abrupt
+            branches = 0
+            all_abrupt = True
+            for i, (fault, flow) in enumerate(node.catch):
+                printed = self.print_flow(flow, mode)
+                self.uses.add(f"{self.ctx.pkg}.core.exceptions.ProcessFault")
+                kw = "if" if i == 0 else "} else if"
+                lines.append(f"    {kw} (ProcessFault.named({var}, {java_string(fault)})) {{")
+                lines += _indent([f"// TIBCO catch {comment(fault)}", *printed.lines], 8)
+                all_abrupt = all_abrupt and printed.abrupt
+                branches += 1
+            rest = self.print_flow(node.catch_all, mode) if node.catch_all is not None else None
+        finally:
+            self.try_depth -= 1
+        tail = ["// TIBCO catchAll", *rest.lines] if rest is not None else [f"throw {var};"]
         tail_abrupt = rest.abrupt if rest is not None else True
         if branches:
             lines.append("    } else {")
@@ -651,7 +701,7 @@ class JavaProcess:
             lines = [f"// TIBCO links {comment(ids)} cross a group boundary; the Code Builder writes this flow."]
             for item in node.nodes:  # the steps and groups it runs, each kept for the Code Builder to call
                 if isinstance(item, Loop):
-                    lines += [f"// {ln}" for ln in self._loop_call(item)]
+                    lines += [_commented(ln) for ln in self._loop_call(item)]
                 elif isinstance(item, Run) and item.step_id in self.acts:
                     lines.append(f"// {self.header(self.acts[item.step_id])[3:]}")
             return _Printed([*lines, placeholder(f"links of {self.p.name} that cross a group", "")], True)
@@ -756,7 +806,7 @@ class JavaProcess:
         members = ", ".join(self.groups[node.group_id].member_ids) if node.group_id in self.groups else ""
         what = f"group {node.group_id} ({node.kind or 'group'}) over {members}"
         return out + [f"{pad}// The members as code would run them in order:",
-                      *[f"{pad}// {ln}" if ln else f"{pad}//" for ln in body.lines],
+                      *[f"{pad}{_commented(ln)}" if ln else f"{pad}//" for ln in body.lines],
                       placeholder(what, pad), "    }"]
 
     # ------------------------------------------------------------- service
@@ -817,6 +867,14 @@ def row_layer(row: MappingRow) -> str:
 
 def _field(type_name: str) -> str:
     return type_name[:1].lower() + type_name[1:]
+
+
+def _commented(line: str) -> str:
+    """``line`` commented out; a line that is already a comment keeps a single ``//``."""
+    text = line.lstrip()
+    if text.startswith("//"):
+        return f"// {line[:len(line) - len(text)]}{text[2:].lstrip()}"
+    return f"// {line}"
 
 
 def _indent(lines: list[str], n: int = 4) -> list[str]:

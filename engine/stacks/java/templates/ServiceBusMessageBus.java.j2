@@ -41,7 +41,7 @@ public class ServiceBusMessageBus implements MessageBus, DisposableBean {
     private static final Logger LOG = LoggerFactory.getLogger(ServiceBusMessageBus.class);
 
     /** The entities the design names as topics; every other entity is a queue. */
-    private static final Set<String> TOPICS = Set.of({% for t in topics %}"{{ t }}"{{ ", " if not loop.last else "" }}{% endfor %});
+    private static final Set<String> TOPICS = Set.of({% for t in topics %}{{ t | java_string }}{{ ", " if not loop.last else "" }}{% endfor %});
 
     private final ServiceBusClientBuilder builder;
     private final Map<String, ServiceBusSenderClient> senders = new ConcurrentHashMap<>();
@@ -118,6 +118,12 @@ public class ServiceBusMessageBus implements MessageBus, DisposableBean {
         }
         if (message.getReplyTo() != null) {
             properties.putIfAbsent(REPLY_TO, message.getReplyTo());
+        }
+        if (message.getMessageId() != null) {
+            properties.putIfAbsent(MESSAGE_ID, message.getMessageId());
+        }
+        if (message.getEnqueuedTime() != null) {
+            properties.putIfAbsent(ENQUEUED_TIME, message.getEnqueuedTime().toString());
         }
         return new Message(entity, message.getBody().toString(), Map.copyOf(properties));
     }

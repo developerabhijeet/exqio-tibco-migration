@@ -1,8 +1,10 @@
 package {{ pkg }}.core.tibco;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.MissingNode;
@@ -37,7 +39,38 @@ public final class TibValue {
 
     private static final JsonNodeFactory NODES = JsonNodeFactory.withExactBigDecimals(true);
 
+    /** Reads a request into its contract record; fields the contract does not name are ignored. */
+    private static final ObjectReader CONTRACT_READER = JSON.reader().without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
     private TibValue() {}
+
+    /**
+     * Why {@code body} is not a {@code record} (a field of the wrong type, a malformed date), or null
+     * when it reads as one; an absent body is not checked. The process still runs on the JSON tree.
+     */
+    public static String invalid(JsonNode body, Class<?> record) {
+        if (body == null || body.isNull() || body.isMissingNode()) {
+            return null;
+        }
+        try {
+            CONTRACT_READER.forType(record).readValue(body);
+            return null;
+        } catch (JsonProcessingException ex) {
+            return ex.getOriginalMessage();
+        } catch (java.io.IOException | IllegalArgumentException ex) {
+            return ex.getMessage();
+        }
+    }
+
+    /** An application/problem+json body. */
+    public static ObjectNode problem(int status, String title, String detail) {
+        ObjectNode problem = object();
+        problem.put("type", "about:blank");
+        problem.put("title", title);
+        problem.put("status", status);
+        problem.put("detail", detail);
+        return problem;
+    }
 
     public static ObjectNode object() {
         return NODES.objectNode();

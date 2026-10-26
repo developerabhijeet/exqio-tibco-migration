@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
@@ -61,12 +62,15 @@ from engine.stacks.plan import ServicePlan, build_plan
 from engine.stacks.sql import convert_placeholders
 from engine.stacks.testindex import write_index
 
+log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 CONTRACT_FILE = ".exiqo/service-contract.json"
 SETTINGS_FILE = ".exiqo/maven-settings.xml"
 _JINJA = jinja2.Environment(
     loader=jinja2.FileSystemLoader(str(TEMPLATES)), keep_trailing_newline=True, trim_blocks=True,
     lstrip_blocks=True, undefined=jinja2.StrictUndefined, autoescape=False)
+_JINJA.filters["java_string"] = java_string
+_JINJA.filters["xml"] = lambda v: str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 _SQL_TYPE = {"VARCHAR": "string", "CHAR": "string", "LONGVARCHAR": "string", "NVARCHAR": "string",
              "NCHAR": "string", "CLOB": "string", "NUMERIC": "decimal", "DECIMAL": "decimal", "INTEGER": "int",
              "SMALLINT": "int", "TINYINT": "int", "BIGINT": "long", "DOUBLE": "double", "FLOAT": "double",
@@ -150,6 +154,9 @@ class _Files:
             content = prune_imports(content)
         if path in self.files:  # a file two processes need: the first writer wins
             f = self.files[path]
+            if f.content != content and f.process_id != process_id:
+                log.warning("%s is written by %s and %s with different content (two processes of the same "
+                            "name in different modules?); the first one is kept", path, f.process_id, process_id)
             update: dict[str, Any] = {}
             if origin == "agent" and f.origin == "code":
                 update["origin"] = "agent"
@@ -222,6 +229,10 @@ class _JavaSolution:
         self.clients: dict[str, str] = {}  # client class -> base address default
         self.topics: set[str] = set()
         self.timers: dict[str, int] = {}  # process type name -> interval ms
+        self.timer_starts: dict[str, str] = {}  # process type name -> TIBCO start time of day
+        # global element -> the contract record it reads as (package.Holder.Record); None when two
+        # contracts declare it, so no record is guessed
+        self.roots: dict[str, str | None] = {}
 
     # -------------------------------------------------------------- helpers
     def path(self, layer_file: str) -> str:
@@ -293,6 +304,10 @@ class _JavaSolution:
                 continue  # an unparsable contract has no records (``contracts.record_names`` gives [])
             holder = PurePosixPath(plan.file).stem
             self.out.add(self.path(f"core/{plan.file}"), render_contract(model, plan.namespace, holder, cid, self.pkg))
+            for record, path in model.root_paths:
+                element = path.strip("/").split("/")[0]
+                qualified = f"{plan.namespace}.{holder}.{record}"
+                self.roots[element] = qualified if self.roots.get(element, qualified) == qualified else None
 
     # -------------------------------------------------------------- processes
     def process_files(self) -> list[JavaProcess]:
@@ -361,11 +376,11 @@ class _JavaSolution:
     def repository(self, jp: JavaProcess) -> tuple[str, Origin]:
         origin: Origin = "code"
         members: list[list[str]] = []
+        methods = jp.repository_methods()
         for a in jp.p.activities:
             if not a.type.startswith("jdbc."):
                 continue
-            row = jp.primary.get(a.id)
-            method = row.method if row and row.pattern.startswith("jdbc.") else self.naming.method_name("", a.name)
+            method = methods[a.id]
             name, prop = self.connection(a)
             sql = str(a.config.get("sql") or "")
             const = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", method.rstrip("_")).upper() + "_SQL"
@@ -493,6 +508,7 @@ class _JavaSolution:
             puts.append(f"        parameters.put({java_string(wire)}, {name});")
         has_body = verb not in ("GET", "DELETE", "HEAD")
         http = jp.kind == "http"
+        record = self.request_record(jp) if has_body and not http else None
         if has_body:
             args.append(f"@RequestBody(required = false) {'String' if http else 'JsonNode'} body")
         if http:
@@ -500,6 +516,16 @@ class _JavaSolution:
         annotation = f"@{_MAPPINGS[verb]}({java_string(route)})" if verb in _MAPPINGS else \
             f"@RequestMapping(path = {java_string(route)}, method = RequestMethod.{verb})"
         body: list[str] = []
+        if record:
+            # X19: the request is checked against its contract record at the boundary; the process
+            # itself runs on the JSON tree, as the TIBCO process did.
+            short = record.rsplit(".", 2)
+            body += [f"        String invalid = TibValue.invalid(body, {short[-2]}.{short[-1]}.class);",
+                     "        if (invalid != null) {",
+                     "            return ResponseEntity.badRequest()",
+                     "                    .contentType(MediaType.APPLICATION_PROBLEM_JSON)",
+                     "                    .body(TibValue.problem(400, \"Bad Request\", Masking.maskText(invalid)));",
+                     "        }"]
         if http:
             body += ["        ObjectNode starter = TibValue.object();",
                      f"        starter.put(\"Method\", {java_string(verb)});",
@@ -525,7 +551,9 @@ class _JavaSolution:
                  f"import {self.pkg}.core.tibco.ProcessState;", f"import {self.pkg}.core.tibco.TibValue;",
                  "import com.fasterxml.jackson.databind.JsonNode;", "import com.fasterxml.jackson.databind.node.ObjectNode;",
                  "import jakarta.servlet.http.HttpServletRequest;", "import java.math.BigDecimal;",
-                 "import org.springframework.http.ResponseEntity;",
+                 "import org.springframework.http.MediaType;", "import org.springframework.http.ResponseEntity;",
+                 f"import {self.pkg}.core.contracts.Masking;",
+                 *([f"import {record.rsplit('.', 1)[0]};"] if record else []),
                  *[f"import org.springframework.web.bind.annotation.{a};" for a in
                    ("DeleteMapping", "GetMapping", "PatchMapping", "PathVariable", "PostMapping", "PutMapping",
                     "RequestBody", "RequestHeader", "RequestMapping", "RequestMethod", "RequestParam", "RestController")],
@@ -537,6 +565,16 @@ class _JavaSolution:
                  f"    {annotation}",
                  f"    public ResponseEntity<JsonNode> {method}({', '.join(args)}) {{", *body, "    }", "}"]
         return "\n".join(lines) + "\n"
+
+    def request_record(self, jp: JavaProcess) -> str | None:
+        """The contract record a REST starter's body reads as (``package.Holder.Record``): the
+        request element of its I/O card, as .NET types its ``[FromBody]``."""
+        card = self.cards.get(jp.p.id) or {}
+        req = card.get("request_contract") if isinstance(card, dict) else None
+        name = req.get("name") if isinstance(req, dict) else None
+        if not name or name == "parameters":
+            return None
+        return self.roots.get(str(name).split(":")[-1])
 
     def soap_stub(self, jp: JavaProcess, plan: ServicePlan, method: str) -> str:
         cls = f"{jp.name}SoapService"
@@ -557,6 +595,10 @@ class _JavaSolution:
     def consumer(self, jp: JavaProcess, plan: ServicePlan) -> tuple[str, Origin]:
         st = plan.starter
         dest = st.destination or ""
+        # A topic starter receives on its own subscription, named after the process (as in .NET
+        # and the design's messaging entities): <topic>/<process>.
+        style = str((jp.p.starter.config if jp.p.starter else {}).get("messaging_style") or "").lower()
+        entity = f"{dest}/{jp.p.name}" if style == "topic" else dest
         selector = st.selector or ""
         sn = jp.starter_name() or "Start"
         root = jp.message_root()
@@ -592,13 +634,16 @@ class _JavaSolution:
             "@Component", f"public class {cls} {{",
             f"    private static final Logger LOG = LoggerFactory.getLogger({cls}.class);", "",
             "    /** The TIBCO destination, verbatim. */", f"    public static final String DESTINATION = {java_string(dest)};", "",
+            ("    /** The bus entity this consumer receives on: the queue, or the topic subscription "
+             "&lt;topic&gt;/&lt;process&gt;. */"),
+            f"    public static final String ENTITY = {java_string(entity)};", "",
             "    /** The TIBCO message selector, verbatim (empty: every message). */",
             f"    public static final String SELECTOR = {java_string(selector)};", "",
             "    private final MessageBus bus;", f"    private final {svc} service;", "    private AutoCloseable subscription;", "",
             f"    public {cls}(MessageBus bus, {svc} service) {{", "        this.bus = bus;", "        this.service = service;",
             "    }", "",
             "    @EventListener(ApplicationReadyEvent.class)", "    public void start() {",
-            "        subscription = bus.subscribe(DESTINATION, this::handle);", "    }", "",
+            "        subscription = bus.subscribe(ENTITY, this::handle);", "    }", "",
             "    @PreDestroy", "    public void stop() throws Exception {", "        if (subscription != null) {",
             "            subscription.close();", "        }", "    }", "",
             f"    /** Settles one message. {doc(jp.remarks(jp.starter_act.id))} */",
@@ -609,7 +654,8 @@ class _JavaSolution:
             "        } catch (IllegalArgumentException ex) {",
             "            return MessageBus.Outcome.deadLetter(\"InvalidBody\", Masking.maskText(ex.getMessage()));", "        }",
             "        ObjectNode input = TibValue.object();", wrap,
-            "        input.set(\"JMSProperties\", TibValue.of(message.properties()));", "        try {",
+            "        input.set(\"JMSProperties\", TibValue.of(MessageBus.applicationProperties(message)));",
+            "        input.set(\"JMSHeaders\", MessageBus.jmsHeaders(message));", "        try {",
             f"            service.execute(ProcessState.of({java_string(sn)}, input).message(message));",
             "            return MessageBus.Outcome.COMPLETED;", "        } catch (ProcessFault fault) {",
             f"            LOG.warn(\"{{}} ended in fault {{}}\", {java_string(jp.p.name)}, fault.faultName());",
@@ -623,24 +669,39 @@ class _JavaSolution:
         interval = plan.starter.interval_ms or 86_400_000
         key = kebab(jp.name)
         self.timers[jp.name] = interval
+        start = str((jp.p.starter.config if jp.p.starter else {}).get("start") or "").strip()
+        if start:
+            self.timer_starts[jp.name] = start
         cls = f"{jp.name}Job"
         sn = jp.starter_name() or "Timer"
+        delay = f"#{{T({self.pkg}.infrastructure.jobs.{cls}).initialDelayMs('${{jobs.{key}.start:}}')}}"
         return "\n".join([
             f"package {self.pkg}.infrastructure.jobs;", "",
             f"import {self.pkg}.core.{jp.service_class};", f"import {self.pkg}.core.tibco.ProcessState;",
             f"import {self.pkg}.core.tibco.TibValue;", "import com.fasterxml.jackson.databind.node.ObjectNode;",
-            "import java.time.OffsetDateTime;", "import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;",
+            "import java.time.Duration;", "import java.time.LocalDateTime;", "import java.time.LocalTime;",
+            "import java.time.OffsetDateTime;", "import java.time.format.DateTimeParseException;",
+            "import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;",
             "import org.springframework.scheduling.annotation.Scheduled;", "import org.springframework.stereotype.Component;", "",
-            (f"/** Timer starter of {doc(jp.p.name)}: every jobs.{key}.interval-ms (Jobs__{jp.name}__IntervalMs), "
-             "when jobs.enabled is true. */"),
+            (f"/** Timer starter of {doc(jp.p.name)}: every jobs.{key}.interval-ms (Jobs__{jp.name}__IntervalMs), first at "
+             f"jobs.{key}.start (Jobs__{jp.name}__Start, local time) when set, when jobs.enabled is true. */"),
             "@Component", "@ConditionalOnProperty(name = \"jobs.enabled\", havingValue = \"true\")",
             f"public class {cls} {{", f"    private final {jp.service_class} service;", "",
             f"    public {cls}({jp.service_class} service) {{", "        this.service = service;", "    }", "",
             f"    /** One TIBCO timer tick. {doc(jp.remarks(jp.starter_act.id))} */",
-            f"    @Scheduled(fixedRateString = \"${{jobs.{key}.interval-ms:{interval}}}\")",
+            f"    @Scheduled(fixedRateString = \"${{jobs.{key}.interval-ms:{interval}}}\", initialDelayString = {java_string(delay)})",
             "    public void execute() {", "        ObjectNode timer = TibValue.object();",
             "        timer.put(\"Time\", TibValue.dateTime(OffsetDateTime.now()));",
-            f"        service.execute(ProcessState.of({java_string(sn)}, timer));", "    }", "}"]) + "\n"
+            f"        service.execute(ProcessState.of({java_string(sn)}, timer));", "    }", "",
+            "    /** Milliseconds until the next local {@code start} (HH:mm or HH:mm:ss); 0 when none is set. */",
+            "    public static long initialDelayMs(String start) {",
+            "        if (start == null || start.isBlank()) {", "            return 0;", "        }",
+            "        try {", "            LocalTime at = LocalTime.parse(start.strip());",
+            "            LocalDateTime now = LocalDateTime.now();",
+            "            LocalDateTime first = now.toLocalDate().atTime(at);",
+            "            if (!first.isAfter(now)) {", "                first = first.plusDays(1);", "            }",
+            "            return Duration.between(now, first).toMillis();",
+            "        } catch (DateTimeParseException ex) {", "            return 0;", "        }", "    }", "}"]) + "\n"
 
     # -------------------------------------------------------------- agent classes
     def agent_classes(self, printers: list[JavaProcess]) -> None:
@@ -822,6 +883,9 @@ class _JavaSolution:
         for name, interval in sorted(self.timers.items()):
             _put(main, f"jobs.{kebab(name)}.interval-ms", interval)
             plain.add(f"Jobs__{name}__IntervalMs")
+            if name in self.timer_starts:
+                _put(main, f"jobs.{kebab(name)}.start", self.timer_starts[name])
+                plain.add(f"Jobs__{name}__Start")
         for cls in sorted(self.clients):
             _put(main, f"clients.{kebab(cls)}.base-address", "http://localhost/")
             plain.add(f"Clients__{cls}__BaseAddress")

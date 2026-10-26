@@ -1,8 +1,14 @@
 package {{ pkg }}.core.messaging;
 
+import {{ pkg }}.core.tibco.TibValue;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -15,6 +21,53 @@ public interface MessageBus {
     String REPLY_TO = "ReplyTo";
 
     String CORRELATION_ID = "CorrelationId";
+
+    /** Property names a bus stamps on a received message: its id and when it was enqueued (ISO-8601). */
+    String MESSAGE_ID = "MessageId";
+
+    String ENQUEUED_TIME = "EnqueuedTime";
+
+    /** The bus's own properties; every other property is an application (JMS) property. */
+    Set<String> SYSTEM_PROPERTIES = Set.of(REPLY_TO, CORRELATION_ID, MESSAGE_ID, ENQUEUED_TIME);
+
+    /** The application properties of a message ($Start/JMSProperties). */
+    static Map<String, String> applicationProperties(Message message) {
+        Map<String, String> out = new LinkedHashMap<>();
+        message.properties().forEach((k, v) -> {
+            if (!SYSTEM_PROPERTIES.contains(k)) {
+                out.put(k, v);
+            }
+        });
+        return out;
+    }
+
+    /**
+     * The JMS headers of a received message as TIBCO reads them ($Start/JMSHeaders): JMSDestination,
+     * JMSMessageID, JMSCorrelationID, JMSReplyTo and JMSTimestamp (milliseconds since the epoch);
+     * a header the bus did not carry is absent.
+     */
+    static ObjectNode jmsHeaders(Message message) {
+        ObjectNode headers = TibValue.object();
+        headers.put("JMSDestination", message.entity().split("/", 2)[0]); // a topic, not its subscription
+        Map<String, String> p = message.properties();
+        if (p.get(MESSAGE_ID) != null) {
+            headers.put("JMSMessageID", p.get(MESSAGE_ID));
+        }
+        if (p.get(CORRELATION_ID) != null) {
+            headers.put("JMSCorrelationID", p.get(CORRELATION_ID));
+        }
+        if (p.get(REPLY_TO) != null) {
+            headers.put("JMSReplyTo", p.get(REPLY_TO));
+        }
+        if (p.get(ENQUEUED_TIME) != null) {
+            try {
+                headers.put("JMSTimestamp", OffsetDateTime.parse(p.get(ENQUEUED_TIME)).toInstant().toEpochMilli());
+            } catch (DateTimeParseException ex) {
+                // a timestamp the bus wrote in another form is left out
+            }
+        }
+        return headers;
+    }
 
     /** JMS Send or Publish: sends {@code message} to a queue or topic. */
     void publish(String entity, JsonNode message, Map<String, String> properties);

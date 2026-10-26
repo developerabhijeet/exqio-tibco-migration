@@ -151,7 +151,7 @@ def _driver(ctx: JavaTestContext, plan: ServicePlan) -> _Driver:
         return _Driver(True, [f"{ctx.pkg}.infrastructure.messaging.{consumer}",
                               "org.springframework.beans.factory.annotation.Autowired"],
                        ["    @Autowired", f"    private {consumer} consumer;", ""],
-                       [(f"{pad}runMessage({process}, scenario, {consumer}.DESTINATION, "
+                       [(f"{pad}runMessage({process}, scenario, {consumer}.ENTITY, "
                         f"{_selector_properties(plan.starter.selector)}, consumer::handle);")],
                        f"Hands the fixture input to {consumer}.handle as a message")
     if kind == "timer":

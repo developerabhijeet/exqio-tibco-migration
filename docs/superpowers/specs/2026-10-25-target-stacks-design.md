@@ -293,6 +293,15 @@ mirror (Maven has no lock format) — no build may reach `sum.golang.org` or res
 range, and an integrity failure is a build error, not a silent upgrade — cost if wrong: refreshing
 the locks is a `make stack-locks` run on a machine with mirror access.
 
+Ruling (X19): the Java, Go and Python services run on a JSON process state (Jackson `JsonNode`,
+a map, a dict) read with TibValue-style path helpers, mirroring TIBCO's untyped flow for parity,
+not on typed records as the .NET services do; the generated contract records validate request
+bodies at the controller boundary where that is cheap (the body is read into its record first and
+a mismatch answers 400 problem+json, then the process runs on the JSON tree) — the paths are those
+of the TIBCO mappings, so a JSON state translates them without a typed-shape resolver, and Verify
+compares JSON anyway — cost if wrong: a wrong field name inside a process surfaces at test or run
+time instead of at compile time, which the generated scenario tests and Verify catch.
+
 Ruling: non-.NET generated tests use the database at `TEST_DATABASE_URL` only (no
 Testcontainers) — worker pods have no Docker, and locally compose already provides Postgres — cost
 if wrong: a developer without `TEST_DATABASE_URL` gets a clear skip message in the generated

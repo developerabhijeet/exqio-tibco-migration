@@ -156,7 +156,7 @@ def test_scenario_drivers_follow_the_starter(java_solution_with_tests):
     fsl = _file(java_solution_with_tests, "FundingStatusLookupScenarioTests.java").content
     assert 'runRequest("FundingStatusLookup", scenario);' in fsl
     dfr = _file(java_solution_with_tests, "DealerFundingRequestScenarioTests.java").content
-    assert ('runMessage("DealerFundingRequest", scenario, DealerFundingRequestConsumer.DESTINATION, '
+    assert ('runMessage("DealerFundingRequest", scenario, DealerFundingRequestConsumer.ENTITY, '
             'Map.of("MsgType", "FUNDING_REQUEST"), consumer::handle);') in dfr
     branch = _file(java_solution_with_tests, "DealerFundingRequestBranchTests.java").content
     assert 'fail("no test body for branch LookupDealerToThrowDealerInactive: no scenario takes this link");' in branch

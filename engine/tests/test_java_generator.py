@@ -387,3 +387,113 @@ def test_the_whole_sample_application_generates(tmp_path, gmf_app):
 def test_a_design_for_another_stack_is_refused(tmp_path, gmf_app, gmf_designs, gmf_rules, gmf_findings):
     with pytest.raises(ValueError, match="is for dotnet, not java"):
         generate_java(gmf_app, [DFR], gmf_designs, gmf_rules, gmf_findings, [], tmp_path / "x", Mirrors())
+
+
+# ------------------------------------------------------------------ Task 7 review fixes
+def _with(gmf_app, pid, update):
+    """A copy of the application whose process ``pid`` is changed by ``update(process)``."""
+    app = gmf_app.model_copy(deep=True)
+    update(next(p for p in app.processes if p.id == pid))
+    return app
+
+
+def test_a_topic_starter_receives_on_its_own_subscription(tmp_path, gmf_app):
+    def topic(p):
+        p.starter.config["messaging_style"] = "topic"
+
+    sol = generate_java(_with(gmf_app, DFR, topic), [DFR], {}, {}, {}, [], tmp_path / "t", Mirrors())
+    consumer = _file(sol, "DealerFundingRequestConsumer.java").content
+    assert 'DESTINATION = "gmf.dealer.funding.request";' in consumer
+    assert 'ENTITY = "gmf.dealer.funding.request/DealerFundingRequest";' in consumer  # as .NET and the design
+    assert "bus.subscribe(ENTITY, this::handle)" in consumer
+    tests = _file(sol, "DealerFundingRequestScenarioTests.java").content
+    assert "DealerFundingRequestConsumer.ENTITY" in tests
+
+
+def test_a_queue_starter_receives_on_the_queue(java_solution):
+    consumer = _file(java_solution, "DealerFundingRequestConsumer.java").content
+    assert 'ENTITY = "gmf.dealer.funding.request";' in consumer
+
+
+def test_the_consumer_carries_jms_headers_and_application_properties(java_solution):
+    consumer = _file(java_solution, "DealerFundingRequestConsumer.java").content
+    assert 'input.set("JMSHeaders", MessageBus.jmsHeaders(message));' in consumer
+    assert 'input.set("JMSProperties", TibValue.of(MessageBus.applicationProperties(message)));' in consumer
+    bus = _file(java_solution, "core/messaging/MessageBus.java").content
+    for header in ("JMSDestination", "JMSMessageID", "JMSCorrelationID", "JMSReplyTo", "JMSTimestamp"):
+        assert f'"{header}"' in bus
+    assert "SYSTEM_PROPERTIES = Set.of(REPLY_TO, CORRELATION_ID, MESSAGE_ID, ENQUEUED_TIME)" in bus
+    memory = _file(java_solution, "InMemoryMessageBus.java").content
+    assert "stamped.putIfAbsent(MESSAGE_ID" in memory and "stamped.putIfAbsent(ENQUEUED_TIME" in memory
+    service_bus = _file(java_solution, "ServiceBusMessageBus.java").content
+    assert "properties.putIfAbsent(MESSAGE_ID, message.getMessageId())" in service_bus
+
+
+def test_mirror_url_is_xml_escaped_and_topic_names_are_java_strings(tmp_path, java_inputs):
+    from engine.stacks.java.generator import render
+
+    sol = generate_java(*java_inputs, tmp_path / "m", Mirrors(maven="https://mirror.gmf.example/m2?a=1&b=<2>"))
+    settings = _file(sol, SETTINGS_FILE).content
+    assert "<url>https://mirror.gmf.example/m2?a=1&amp;b=&lt;2&gt;</url>" in settings
+    text = render("ServiceBusMessageBus.java.j2", pkg="p", app="A", app_id="a", topics=['gmf."x"', "t"])
+    assert 'Set.of("gmf.\\"x\\"", "t")' in text
+
+
+def test_key_vault_wins_over_the_environment():
+    text = (TEMPLATES / "EnvBinding.java.j2").read_text()
+    assert "sources.addBefore(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,\n" \
+           "                    new MapPropertySource(KEY_VAULT_SOURCE" in text
+
+
+def test_nested_try_handlers_get_their_own_catch_variable(gmf_app, java_designs):
+    from engine.stacks.java.printer import Ctx, JavaProcess
+    from engine.stacks.plan import Seq, Try, build_plan
+
+    proc = next(p for p in gmf_app.processes if p.id == DFR)
+    plan = build_plan(proc, gmf_app, java_designs[DFR])
+    jp = JavaProcess(Ctx(pkg="com.gmf.gmfcredit", naming=JavaNaming(), in_build={DFR: "DealerFundingRequestService"}),
+                     proc, java_designs[DFR], plan, {})
+    inner = Try(body=Seq(()), catch=(("Inner", Seq(())),), catch_all=None)
+    outer = Try(body=Seq(()), catch=(("Outer", inner),), catch_all=None)
+    text = "\n".join(jp.print_flow(outer, "direct").lines)
+    assert "} catch (RuntimeException fault) {" in text and "} catch (RuntimeException fault2) {" in text
+    assert 'ProcessFault.named(fault2, "Inner")' in text and "throw fault2;" in text and "throw fault;" in text
+    assert jp.try_depth == 0
+
+
+def test_commented_sketches_keep_one_comment_marker():
+    from engine.stacks.java.printer import _commented
+
+    assert _commented("    // TIBCO: x") == "//     TIBCO: x"
+    assert _commented("state.set(a, b);") == "// state.set(a, b);"
+
+
+def test_repository_methods_are_unique_with_a_warning(tmp_path, gmf_app, caplog):
+    def clash(p):
+        deal = next(a for a in p.activities if a.name == "LookupDeal")
+        deal.name = "Lookup Dealer"  # gives lookupDealer, as LookupDealer does
+
+    with caplog.at_level("WARNING"):
+        sol = generate_java(_with(gmf_app, DFR, clash), [DFR], {}, {}, {}, [], tmp_path / "d", Mirrors())
+    repo = _file(sol, "DealerFundingRequestRepository.java").content
+    assert "public JsonNode lookupDealer(JsonNode input)" in repo and "public JsonNode lookupDealer2(JsonNode input)" in repo
+    service = _file(sol, "DealerFundingRequestService.java").content
+    assert ".lookupDealer(" in service and ".lookupDealer2(" in service
+    assert any("repository method lookupDealer is taken" in r.message for r in caplog.records)
+
+
+def test_review_fixes_on_the_whole_sample_application(tmp_path, gmf_app):
+    pids = [p.id for p in gmf_app.processes]
+    sol = generate_java(gmf_app, pids, {}, {}, {}, [], tmp_path / "all", Mirrors())
+    assert not any("// //" in f.content for f in sol.files if f.path.endswith(".java"))
+    job = _file(sol, "NightlyDelinquencyScanJob.java").content
+    assert ('initialDelayString = "#{T(com.gmf.gmfcredit.infrastructure.jobs.NightlyDelinquencyScanJob)'
+            ".initialDelayMs('${jobs.nightly-delinquency-scan.start:}')}\"") in job
+    yml = _file(sol, "application.yml").content
+    assert 'start: "02:00"' in yml
+    assert "Jobs__NightlyDelinquencyScan__Start" in json.loads(_file(sol, CONTRACT_FILE).content)["plain_keys"]
+    controller = _file(sol, "CreditApplicationIntakeController.java").content  # X19: the body is checked at the boundary
+    assert "String invalid = TibValue.invalid(body, CreditApplicationIntakeApplicationsContract." in controller
+    assert "ResponseEntity.badRequest()" in controller
+    lookup = _file(sol, "FundingStatusLookupController.java").content
+    assert "TibValue.invalid" not in lookup  # a GET has no body

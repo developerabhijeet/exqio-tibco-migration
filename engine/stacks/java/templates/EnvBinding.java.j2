@@ -28,7 +28,8 @@ import org.springframework.core.env.StandardEnvironment;
  * <p>ASPNETCORE_ENVIRONMENT=Development (what ExiQO's Verify sets) activates the development
  * profile unless SPRING_PROFILES_ACTIVE says otherwise. When KeyVault__Uri is set, every Key Vault
  * secret named with {@code --} (Gmf--Dealerfunding--DbPassword) lands on the same property as the
- * environment name would, read with DefaultAzureCredential (the workload's managed identity).
+ * environment name would, read with DefaultAzureCredential (the workload's managed identity), and
+ * wins over the environment, as Key Vault does in the .NET services.
  *
  * <p>Runs before application.yml is read, so the profile it activates selects that file's
  * development document.
@@ -58,7 +59,9 @@ public class EnvBinding implements EnvironmentPostProcessor, Ordered {
                 new MapPropertySource(ENVIRONMENT_SOURCE, bound));
         Object vault = bound.get("key-vault.uri");
         if (vault != null && !vault.toString().isBlank()) {
-            sources.addAfter(ENVIRONMENT_SOURCE, new MapPropertySource(KEY_VAULT_SOURCE, secrets(vault.toString().strip())));
+            // Key Vault wins over the environment, as in the .NET services (it is added last there).
+            sources.addBefore(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                    new MapPropertySource(KEY_VAULT_SOURCE, secrets(vault.toString().strip())));
         }
     }
 
