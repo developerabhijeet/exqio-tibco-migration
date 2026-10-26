@@ -173,6 +173,12 @@ Operations:
   shows only the build's changes; copy the build tree (the stack's `download_excluded` removed,
   `EXIQO_BASELINE.json` and `EXPORTED_FROM.md` added as in the download), commit with
   `user.name = "<BRAND_NAME> Migrate"` and `user.email = "exiqo-migrate@invalid"`, push `--force-with-lease` to `exiqo/...` branches only.
+  Git authenticates with `Authorization: Basic base64(x-access-token:<token>)` (the form GitHub
+  accepts for a PAT and an App installation token alike; REST stays `Bearer`), sent as an
+  `http.<baseUrl>/.extraHeader` scoped to the configured host. A re-push of the same build
+  replaces its `exiqo/...` branch (the lease is only against the head read just before the push):
+  commits a reviewer adds to that branch are overwritten, so review feedback goes in PR comments
+  or on another branch. An empty repository gets the build as its first commit and no pull request.
 - `open_pull_request(repo, head, base, title, body) -> {number, url}`: `POST /repos/{o}/{r}/pulls`;
   an existing open PR for the same head is returned (`GET /pulls?head=o:b&state=open`) and its body
   updated.

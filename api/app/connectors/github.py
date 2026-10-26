@@ -21,12 +21,13 @@ import tempfile
 import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
 
 from api.app.connectors.base import ConnectionTest, ConnectorError
+from api.app.connectors.config import GithubInstall
 from api.app.connectors.gitcli import git_env, run_git
 from api.app.connectors.http import ConnectorClient, header_secrets, redact
 from api.app.connectors.registry import BaseConnector, register
@@ -37,6 +38,7 @@ PUSH_REFUSED = "pushes go to exiqo/ branches only"
 MAX_BRANCHES = 1000
 PER_PAGE = 100
 GIT_TIMEOUT_S = 300
+RATE_LIMIT_OFF = "rate limiting disabled on this server"
 DEFAULT_COMMIT_EMAIL = "exiqo-migrate@invalid"  # RFC 2606: no vendor address in GMF's history
 API_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
@@ -165,7 +167,7 @@ class GitHubConnector(BaseConnector):
         return url
 
     def commit_identity(self) -> tuple[str, str]:
-        email = getattr(self.config.install, "commit_email", "") or DEFAULT_COMMIT_EMAIL
+        email = cast(GithubInstall, self.config.install).commit_email or DEFAULT_COMMIT_EMAIL
         return f"{self.settings.brand_name} Migrate", email
 
     def _git_env(self) -> dict[str, str]:
@@ -194,8 +196,13 @@ class GitHubConnector(BaseConnector):
         notes = []
         if accepted := user.headers.get("x-accepted-github-permissions", "").strip():
             notes.append(f"accepted permissions: {accepted}")
-        core = ((await self._call("GET", "/rate_limit")).json() or {}).get("resources", {}).get("core", {})
-        if "remaining" in core:
+        try:  # best effort: GitHub Enterprise Server answers 404 when rate limiting is off
+            core = ((await self._call("GET", "/rate_limit")).json() or {}).get("resources", {}).get("core", {})
+        except ConnectorError:
+            core = None
+        if not core or "remaining" not in core:
+            notes.append(RATE_LIMIT_OFF)
+        else:
             notes.append(f"rate limit: {core['remaining']} of {core.get('limit', '?')} requests left")
         return ConnectionTest(ok=True, account=login, site=self.base_url or self.api_url, scopes=scopes,
                               message="; ".join(notes))
@@ -206,6 +213,22 @@ class GitHubConnector(BaseConnector):
 
     async def default_branch(self, repo: str) -> str:
         return str((await self.repository(repo)).get("default_branch") or "main")
+
+    async def base_of(self, repo: str, base: str | None) -> tuple[str, bool]:
+        """The base branch (``base``, else the default branch) and whether it exists. A new,
+        empty repository has none (GitHub answers 409 "Git Repository is empty", or 404 for its
+        default branch): the push is then its first commit. ``size`` is not used: GitHub computes
+        it lazily and a small repository with commits can still report 0."""
+        info = await self.repository(repo)
+        default = str(info.get("default_branch") or "main")
+        branch = base or default
+        try:
+            await self.head(repo, branch)
+        except ConnectorError as exc:
+            if exc.status == 409 or (exc.status == 404 and branch == default):
+                return branch, False
+            raise
+        return branch, True
 
     async def head(self, repo: str, branch: str) -> str:
         _check_repo(repo)
@@ -250,7 +273,10 @@ class GitHubConnector(BaseConnector):
                 pull = await self._open_pull_for(repo, head)
                 if pull is None:
                     raise
-        pull = (await self._call("PATCH", f"/repos/{repo}/pulls/{pull['number']}", json={"body": body})).json()
+        patch: dict[str, Any] = {"body": body}
+        if (pull.get("base") or {}).get("ref") != base:  # opened against another base: retarget it
+            patch["base"] = base
+        pull = (await self._call("PATCH", f"/repos/{repo}/pulls/{pull['number']}", json=patch)).json()
         return {"number": pull["number"], "url": pull["html_url"]}
 
     # ---------------------------------------------------------------- git

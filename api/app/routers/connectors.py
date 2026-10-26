@@ -202,4 +202,6 @@ async def push_build_to_github(build_id: str, body: GithubPushIn, session: Sessi
     job_id = await runner.submit(PUSH_KIND, {"build_id": build.id, "repo": body.repo, "branch": branch,
                                              "open_pr": body.open_pr, "base": base, "actor": principal.actor},
                                  project_id=proc.project_id, process_id=proc.id)
-    return JobAccepted(job_id=job_id or "")
+    if job_id is None:  # submit answers None only for a payload with a dedupe_key, which this has not
+        raise RuntimeError("the push job was not queued")
+    return JobAccepted(job_id=job_id)

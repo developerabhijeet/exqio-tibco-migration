@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -19,9 +20,11 @@ from api.app.connectors.gitcli import auth_header_value, git_env, run_git
 from api.app.connectors.github import GitHubConnector, default_push_branch, valid_push_branch
 from api.app.connectors.registry import get_connector
 from api.app.db import make_engine, reset_schema
+from api.app.jobs.runner import JobWorker
 from api.app.main import create_app
 from api.app.models import Application, AuditLog, Build, JobEvent, Process, Project, Setting, Upload
 from api.app.services.build_tree import build_tree_files
+from api.tests.fakes.server import FakeServer, responder
 
 ENGINEER = {"X-User": "engineer.ravi"}
 VIEWER = {"X-User": "viewer.val"}
@@ -387,3 +390,85 @@ def test_build_tree_files_is_the_one_answer(tmp_path):
 
 def test_default_branch_name():
     assert default_push_branch("Account Lookup v2", "0123456789ab") == "exiqo/account-lookup-v2/build-01234567"
+
+
+# ------------------------------------------------------------------ fix round 1
+
+
+@pytest.fixture
+def ghes_without_rate_limit():
+    """A GitHub Enterprise Server with rate limiting off: ``/rate_limit`` answers 404."""
+
+    def handle(method, path, headers):
+        if path == "/api/v3/user":
+            return 200, {"x-oauth-scopes": "repo, read:org"}, {"login": "exiqo-bot"}
+        return 404, {}, {"message": "Not Found"}
+
+    with FakeServer(responder(handle)) as srv:
+        yield srv
+
+
+async def test_test_is_ok_when_rate_limiting_is_off(gh_settings, ghes_without_rate_limit):
+    srv = ghes_without_rate_limit
+    s = gh_settings.model_copy(update={"connectors": json.dumps({"github": {
+        "enabled": True, "baseUrl": srv.url, "allowedHosts": [srv.host]}})})
+    result = await get_connector("github", settings=s, stored=ON).test()
+    assert result.ok and result.account == "exiqo-bot" and result.scopes == ["repo", "read:org"]
+    assert "rate limiting disabled on this server" in result.message
+    assert any(r.path == "/api/v3/rate_limit" for r in srv.requests)
+
+
+async def test_connector_off_after_the_202_fails_the_job_with_an_audit_row(app_no_worker, client, fake_github,
+                                                                          finished_build, engineer):
+    fake_github.add_repo("gmf/credit")
+    r = await client.post(f"/builds/{finished_build}/github/push", json={"repo": "gmf/credit"}, headers=engineer)
+    assert r.status_code == 202
+    async with app_no_worker.state.sessionmaker() as s:
+        (await s.get(Setting, STORED_KEY)).value = {"github": {"enabled": False}}
+        await s.commit()
+    seen = len(fake_github.requests)
+    worker = JobWorker(app_no_worker.state.sessionmaker, app_no_worker.state.worker_services, name="w1",
+                       slots=1, heartbeat_s=1, stale_s=90, max_attempts=1, reap_s=0.5, poll_s=0.1)
+    await worker.start()
+    try:
+        job = await _wait(client, r.json()["job_id"])
+    finally:
+        await worker.stop()
+    assert job["status"] == "failed" and "not enabled" in job["error"]
+    assert len(fake_github.requests) == seen  # nothing sent once off
+    rows = [(a.action, a.detail["outcome"], a.detail["build_id"]) for a in await _audit_rows(app_no_worker)]
+    assert rows == [("connector github push", "refused", finished_build)]
+
+
+@pytest.fixture
+def empty_repo(fake_github) -> str:
+    """``gmf/empty``: a new repository with no commit (the fake's ``add_repo`` always commits)."""
+    bare = fake_github.root / "gmf" / "empty.git"
+    bare.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--quiet", "--bare", "-b", "main", str(bare)], check=True,
+                   env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
+    return "gmf/empty"
+
+
+async def test_empty_repository_gets_the_first_commit_and_no_pr(client, app, fake_github, empty_repo,
+                                                               finished_build, engineer, wait_terminal):
+    out = await wait_terminal(client, (await client.post(f"/builds/{finished_build}/github/push",
+                                                         json={"repo": "gmf/empty"}, headers=engineer)).json()["job_id"])
+    assert out["pull_request"] is None and "no pull request" in out["message"]
+    assert "EXPORTED_FROM.md" in fake_github.branch_files("gmf/empty", out["branch"])
+    assert not fake_github.pulls.get("gmf/empty")
+    rows = {(a.action, a.detail["outcome"]) for a in await _audit_rows(app)}
+    assert rows == {("connector github push", "ok"), ("connector github pull-request", "refused")}
+
+
+async def test_reused_pr_is_retargeted_to_the_asked_base(gh, fake_github):
+    fake_github.add_repo("gmf/rt")
+    fake_github.commit("exiqo/r", {"a": "1"}, repo="gmf/rt")
+    fake_github.commit("release", {"b": "1"}, repo="gmf/rt")
+    first = await gh.open_pull_request("gmf/rt", "exiqo/r", "main", "t", "one")
+    again = await gh.open_pull_request("gmf/rt", "exiqo/r", "release", "t", "two")
+    assert again["number"] == first["number"]
+    patch = [r for r in fake_github.requests if r.method == "PATCH"][-1]
+    assert patch.json == {"body": "two", "base": "release"}
+    await gh.open_pull_request("gmf/rt", "exiqo/r", "main", "t", "three")  # the fake keeps base main
+    assert [r for r in fake_github.requests if r.method == "PATCH"][-1].json == {"body": "three"}
