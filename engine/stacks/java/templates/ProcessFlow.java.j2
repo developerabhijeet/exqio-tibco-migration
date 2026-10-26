@@ -1,0 +1,78 @@
+package {{ pkg }}.core.tibco;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * TIBCO link semantics for processes that are not straight-line (parallel links, several conditional
+ * links on one step, error links, joins): a step runs once, when every incoming link is decided and
+ * at least one was taken; a step whose incoming links were all not taken is skipped and its outgoing
+ * links are not taken either (dead path elimination), so a join waits for every live predecessor.
+ */
+public final class ProcessFlow {
+    /** A TIBCO link: its id and the steps it connects. */
+    public record Link(String id, String from, String to) {}
+
+    private final Map<String, List<Link>> incoming = new HashMap<>();
+    private final Map<String, List<Link>> outgoing = new HashMap<>();
+    private final Map<String, Boolean> taken = new HashMap<>();
+    private final Set<String> finished = new HashSet<>();
+    private final Set<String> queued = new HashSet<>();
+    private final ArrayDeque<String> ready = new ArrayDeque<>();
+
+    public ProcessFlow(List<Link> links) {
+        for (Link link : links) {
+            outgoing.computeIfAbsent(link.from(), k -> new ArrayList<>()).add(link);
+            incoming.computeIfAbsent(link.to(), k -> new ArrayList<>()).add(link);
+        }
+    }
+
+    /** Queues a step that has no incoming link (the starter). */
+    public void start(String step) {
+        if (queued.add(step)) {
+            ready.add(step);
+        }
+    }
+
+    /** The next step whose incoming links are all decided, or null when the run is done. */
+    public String next() {
+        return ready.poll();
+    }
+
+    /** Records that {@code step} ran and which of its outgoing links it took. */
+    public void complete(String step, Collection<String> takenLinks) {
+        finish(step, Set.copyOf(takenLinks));
+    }
+
+    private void finish(String step, Set<String> takenLinks) {
+        if (!finished.add(step)) {
+            return;
+        }
+        for (Link link : outgoing.getOrDefault(step, List.of())) {
+            taken.put(link.id(), takenLinks.contains(link.id()));
+            evaluate(link.to());
+        }
+    }
+
+    private void evaluate(String step) {
+        if (queued.contains(step) || finished.contains(step)) {
+            return;
+        }
+        List<Link> links = incoming.getOrDefault(step, List.of());
+        if (links.stream().anyMatch(l -> !taken.containsKey(l.id()))) {
+            return; // a predecessor has not run yet
+        }
+        if (links.stream().anyMatch(l -> taken.get(l.id()))) {
+            queued.add(step);
+            ready.add(step);
+        } else {
+            finish(step, Set.of()); // dead path: no incoming link was taken
+        }
+    }
+}

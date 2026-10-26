@@ -1,0 +1,78 @@
+package {{ pkg }}.api;
+
+import {{ pkg }}.core.contracts.Masking;
+import {{ pkg }}.core.messaging.MessageBus;
+import {{ pkg }}.core.tibco.TibValue;
+import {{ pkg }}.infrastructure.messaging.InMemoryMessageBus;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Development only, with the in-memory bus: drive JMS-started processes and read what they
+ * published (POST /_bus/publish, GET /_bus/messages, GET /_bus/dead-letters).
+ */
+@RestController
+@Profile("development")
+@ConditionalOnProperty(name = "messaging.mode", havingValue = "InMemory", matchIfMissing = true)
+public class BusDevController {
+    /** Body of POST /_bus/publish: an entity, a JSON payload and optional JMS properties. */
+    public record PublishRequest(String entity, JsonNode payload, Map<String, String> properties) {}
+
+    /**
+     * Answer of POST /_bus/publish: disposition is completed, dead_lettered or abandoned;
+     * messages_published counts the messages the run published.
+     */
+    public record PublishResult(
+            String disposition,
+            String reason,
+            String description,
+            @JsonProperty("messages_published") int messagesPublished) {}
+
+    private final InMemoryMessageBus bus;
+
+    public BusDevController(InMemoryMessageBus bus) {
+        this.bus = bus;
+    }
+
+    @PostMapping("/_bus/publish")
+    public PublishResult publish(@RequestBody PublishRequest request) {
+        int before = bus.published().size() + 1; // the delivered message is recorded too
+        Map<String, String> properties = request.properties() == null ? Map.of() : request.properties();
+        try {
+            List<MessageBus.Outcome> outcomes = bus.deliver(
+                    new MessageBus.Message(request.entity(), TibValue.json(request.payload()), new LinkedHashMap<>(properties)));
+            int count = bus.published().size() - before;
+            for (MessageBus.Outcome outcome : outcomes) {
+                if (outcome.disposition() == MessageBus.Disposition.DEAD_LETTER) {
+                    return new PublishResult("dead_lettered", outcome.reason(), outcome.description(), count);
+                }
+            }
+            String reason = outcomes.isEmpty() ? "no consumer subscribed to " + request.entity() : null;
+            return new PublishResult("completed", reason, null, count);
+        } catch (RuntimeException ex) {
+            // A transient failure: Service Bus would abandon the message and redeliver it.
+            return new PublishResult("abandoned", ex.getClass().getSimpleName(), Masking.maskText(ex.getMessage()),
+                    bus.published().size() - before);
+        }
+    }
+
+    @GetMapping("/_bus/messages")
+    public List<MessageBus.Message> messages(@RequestParam(name = "entity", required = false) String entity) {
+        return entity == null ? bus.published() : bus.publishedTo(entity);
+    }
+
+    @GetMapping("/_bus/dead-letters")
+    public List<InMemoryMessageBus.DeadLetter> deadLetters() {
+        return bus.deadLettered();
+    }
+}

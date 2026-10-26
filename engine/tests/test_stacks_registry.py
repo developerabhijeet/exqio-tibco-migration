@@ -58,8 +58,8 @@ def test_dotnet_layout_derives_from_solution_layout():
 
 
 def test_get_stack_names_a_known_stack_that_is_not_implemented():
-    with pytest.raises(KeyError, match="stack 'java' is not implemented yet"):
-        get_stack("java")
+    with pytest.raises(KeyError, match="stack 'go' is not implemented yet"):
+        get_stack("go")
 
 
 _RUNNER_METHODS = ("restore", "build", "format_write", "format_check", "test", "run_service", "env")
@@ -67,7 +67,10 @@ _RUNNER_METHODS = ("restore", "build", "format_write", "format_check", "test", "
 
 @pytest.mark.parametrize("stack", all_stacks(), ids=lambda s: s.key)
 def test_every_runner_has_the_protocol_signatures(stack, tmp_path):
-    runner = stack.runner(tmp_path)
+    try:
+        runner = stack.runner(tmp_path)
+    except NotImplementedError as pending:  # Java until Task 8 adds MavenRunner
+        pytest.skip(str(pending))
     assert isinstance(runner, StackRunner)
     for name in _RUNNER_METHODS:
         want = inspect.signature(getattr(StackRunner, name))

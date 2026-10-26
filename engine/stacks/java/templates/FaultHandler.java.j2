@@ -1,0 +1,29 @@
+package {{ pkg }}.api;
+
+import {{ pkg }}.core.contracts.Masking;
+import {{ pkg }}.core.exceptions.ProcessFault;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/**
+ * Maps an uncaught TIBCO fault to application/problem+json (status 500, as an uncaught BW fault
+ * fails the job): the fault name is the title and the fault data, with its sensitive fields masked,
+ * is the "fault" member.
+ */
+@RestControllerAdvice
+public class FaultHandler {
+    @ExceptionHandler(ProcessFault.class)
+    public ResponseEntity<ProblemDetail> fault(ProcessFault fault) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
+        problem.setTitle(fault.faultName());
+        problem.setDetail(Masking.maskText(fault.getMessage()));
+        problem.setProperty("fault", Masking.maskJson(fault.faultData()));
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
+    }
+}

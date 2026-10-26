@@ -1,0 +1,60 @@
+package {{ pkg }}.core.messaging;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
+import java.util.Map;
+import java.util.function.Function;
+
+/**
+ * Messaging port for the JMS steps: Azure Service Bus in production, an in-memory bus for tests and
+ * local runs (messaging.mode, Messaging__Mode). Entities are the TIBCO queue and topic names,
+ * verbatim; message bodies are JSON.
+ */
+public interface MessageBus {
+    /** Property names the bus uses for request and reply. */
+    String REPLY_TO = "ReplyTo";
+
+    String CORRELATION_ID = "CorrelationId";
+
+    /** JMS Send or Publish: sends {@code message} to a queue or topic. */
+    void publish(String entity, JsonNode message, Map<String, String> properties);
+
+    /** JMS Send or Publish without properties. */
+    default void publish(String entity, JsonNode message) {
+        publish(entity, message, Map.of());
+    }
+
+    /**
+     * JMS receive on a queue, or on a topic as {@code topic/subscription}. The handler settles each
+     * message: it returns {@link Outcome#COMPLETED} or a dead-letter outcome; an exception means a
+     * transient failure, and the message is abandoned so the bus redelivers it. Close the returned
+     * subscription to stop receiving.
+     */
+    AutoCloseable subscribe(String entity, Function<Message, Outcome> handler);
+
+    /** JMS Request Reply: sends with a reply-to entity and waits for the correlated reply. */
+    Message request(String entity, JsonNode message, Duration timeout);
+
+    /** JMS Reply: answers {@code request} on its reply-to entity with the same correlation id. */
+    void reply(Message request, JsonNode message);
+
+    /** A message as received from the bus: entity, JSON body and application properties. */
+    record Message(String entity, String body, Map<String, String> properties) {}
+
+    /** How a consumer settles a message. */
+    enum Disposition {
+        /** Processed: remove the message. */
+        COMPLETE,
+        /** Not processable as is (business fault, selector mismatch, invalid body): keep it on the dead-letter queue. */
+        DEAD_LETTER
+    }
+
+    /** The settlement a consumer returns for one message. */
+    record Outcome(Disposition disposition, String reason, String description) {
+        public static final Outcome COMPLETED = new Outcome(Disposition.COMPLETE, null, null);
+
+        public static Outcome deadLetter(String reason, String description) {
+            return new Outcome(Disposition.DEAD_LETTER, reason, description);
+        }
+    }
+}

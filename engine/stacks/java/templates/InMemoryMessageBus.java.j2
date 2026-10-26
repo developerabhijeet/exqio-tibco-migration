@@ -1,0 +1,124 @@
+package {{ pkg }}.infrastructure.messaging;
+
+import {{ pkg }}.core.messaging.MessageBus;
+import {{ pkg }}.core.tibco.TibValue;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+/**
+ * In-memory bus for tests and local runs (messaging.mode=InMemory): delivery is synchronous, every
+ * message is recorded, and dead-lettered messages are kept with their reason, so tests and the
+ * verifier can read what a process published and how each message was settled.
+ */
+@Component
+@ConditionalOnProperty(name = "messaging.mode", havingValue = "InMemory", matchIfMissing = true)
+public class InMemoryMessageBus implements MessageBus {
+    /** A message a consumer dead-lettered, with the reason and description it gave. */
+    public record DeadLetter(Message message, String reason, String description) {}
+
+    private final Map<String, List<Function<Message, Outcome>>> handlers = new ConcurrentHashMap<>();
+    private final List<Message> published = new CopyOnWriteArrayList<>();
+    private final List<DeadLetter> deadLettered = new CopyOnWriteArrayList<>();
+    private final Map<String, CompletableFuture<Message>> replies = new ConcurrentHashMap<>();
+
+    /** Every message published or delivered, in order. */
+    public List<Message> published() {
+        return List.copyOf(published);
+    }
+
+    /** Messages published to one entity (a queue or a topic name). */
+    public List<Message> publishedTo(String entity) {
+        return published.stream().filter(m -> m.entity().equals(entity)).toList();
+    }
+
+    /** Messages a consumer dead-lettered, with the reason (fault name, SelectorMismatch, ...). */
+    public List<DeadLetter> deadLettered() {
+        return List.copyOf(deadLettered);
+    }
+
+    @Override
+    public void publish(String entity, JsonNode message, Map<String, String> properties) {
+        deliver(new Message(entity, TibValue.json(message), properties == null ? Map.of() : Map.copyOf(properties)));
+    }
+
+    /** Records {@code message}, hands it to the subscribers of its entity and returns how each settled it. */
+    public List<Outcome> deliver(Message message) {
+        published.add(message);
+        String correlationId = message.properties().get(CORRELATION_ID);
+        if (correlationId != null) {
+            CompletableFuture<Message> waiter = replies.remove(message.entity() + "|" + correlationId);
+            if (waiter != null) {
+                waiter.complete(message);
+                return List.of();
+            }
+        }
+        List<Function<Message, Outcome>> subscribers = handlers.get(message.entity());
+        if (subscribers == null) {
+            return List.of();
+        }
+        List<Outcome> outcomes = new ArrayList<>();
+        for (Function<Message, Outcome> handler : List.copyOf(subscribers)) {
+            Outcome outcome = handler.apply(message);
+            if (outcome.disposition() == Disposition.DEAD_LETTER) {
+                String reason = outcome.reason() == null ? "DeadLettered" : outcome.reason();
+                deadLettered.add(new DeadLetter(message, reason, outcome.description()));
+            }
+            outcomes.add(outcome);
+        }
+        return outcomes;
+    }
+
+    @Override
+    public AutoCloseable subscribe(String entity, Function<Message, Outcome> handler) {
+        String key = entity.split("/", 2)[0]; // topic/subscription: every subscription sees every topic message
+        List<Function<Message, Outcome>> list = handlers.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>());
+        list.add(handler);
+        return () -> list.remove(handler);
+    }
+
+    @Override
+    public Message request(String entity, JsonNode message, Duration timeout) {
+        String correlationId = UUID.randomUUID().toString().replace("-", "");
+        String replyTo = entity + ".reply";
+        CompletableFuture<Message> waiter = new CompletableFuture<>();
+        replies.put(replyTo + "|" + correlationId, waiter);
+        Map<String, String> properties = new HashMap<>();
+        properties.put(REPLY_TO, replyTo);
+        properties.put(CORRELATION_ID, correlationId);
+        publish(entity, message, properties);
+        try {
+            return waiter.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted waiting for a reply on " + replyTo, ex);
+        } catch (ExecutionException | TimeoutException ex) {
+            throw new IllegalStateException("no reply on " + replyTo + " within " + timeout, ex);
+        } finally {
+            replies.remove(replyTo + "|" + correlationId);
+        }
+    }
+
+    @Override
+    public void reply(Message request, JsonNode message) {
+        String replyTo = request.properties().get(REPLY_TO);
+        if (replyTo == null) {
+            throw new IllegalStateException("message on " + request.entity() + " has no " + REPLY_TO + " property");
+        }
+        String correlationId = request.properties().get(CORRELATION_ID);
+        publish(replyTo, message, correlationId == null ? Map.of() : Map.of(CORRELATION_ID, correlationId));
+    }
+}

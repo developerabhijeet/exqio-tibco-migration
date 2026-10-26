@@ -1,0 +1,21 @@
+package {{ pkg }}.core.tibco;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import java.math.BigDecimal;
+
+/** What a process run returns to its starter: the HTTP status and the reply body, if any. */
+public record ProcessResult(int statusCode, JsonNode body) {
+    /** A run that ended without a reply activity. */
+    public static final ProcessResult COMPLETED = new ProcessResult(204, null);
+
+    /** A reply (or the end mapping of a sub-process) with status 200. */
+    public static ProcessResult ok(JsonNode body) {
+        return new ProcessResult(200, body);
+    }
+
+    /** A REST client or server error reply (TIBCO client4XXError or server5XXError): its statusCode is the status. */
+    public static ProcessResult error(JsonNode reply) {
+        BigDecimal status = TibValue.number(TibValue.path(reply, "statusCode"));
+        return new ProcessResult(status == null ? 500 : status.intValue(), reply);
+    }
+}

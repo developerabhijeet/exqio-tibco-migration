@@ -1,0 +1,115 @@
+package {{ pkg }}.core.contracts;
+
+import {{ pkg }}.core.tibco.TibValue;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.lang.reflect.RecordComponent;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Masking for sensitive fields (SSN, account and card numbers): every letter and digit except the
+ * last four becomes {@code *} and separators stay, so {@code 909-32-1184} prints as {@code ***-**-1184}.
+ */
+public final class Masking {
+    private static final Set<String> SENSITIVE_NAMES = Set.of(
+{% for n in names %}
+            "{{ n }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+            );
+
+    private static final Pattern SENSITIVE_TEXT = Pattern.compile("\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b(?:\\d[ -]?){8,18}\\d\\b");
+
+    private Masking() {}
+
+    /** True for a field name that holds a sensitive value (ssn, accountNumber, card_number, ...). */
+    public static boolean isSensitiveName(String name) {
+        return name != null && SENSITIVE_NAMES.contains(name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""));
+    }
+
+    /** Masks one value, keeping its last four letters or digits and its separators. */
+    public static String mask(String value) {
+        if (value == null || value.isEmpty()) {
+            return value == null ? "" : value;
+        }
+        char[] chars = value.toCharArray();
+        int keep = 4;
+        for (int i = chars.length - 1; i >= 0; i--) {
+            if (!Character.isLetterOrDigit(chars[i])) {
+                continue;
+            }
+            if (keep > 0) {
+                keep--;
+            } else {
+                chars[i] = '*';
+            }
+        }
+        return new String(chars);
+    }
+
+    /** Masks SSN-shaped values and long digit runs (account and card numbers) inside free text. */
+    public static String maskText(String text) {
+        if (text == null || text.isEmpty()) {
+            return text == null ? "" : text;
+        }
+        Matcher m = SENSITIVE_TEXT.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            m.appendReplacement(out, Matcher.quoteReplacement(mask(m.group())));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    /** A copy of the value with every sensitive field masked (for error responses and logs). */
+    public static JsonNode maskJson(JsonNode value) {
+        if (value == null) {
+            return null;
+        }
+        JsonNode copy = value.deepCopy();
+        maskNode(copy);
+        return copy;
+    }
+
+    private static void maskNode(JsonNode node) {
+        if (node instanceof ObjectNode object) {
+            for (Map.Entry<String, JsonNode> field : Set.copyOf(object.properties())) {
+                JsonNode child = field.getValue();
+                if (isSensitiveName(field.getKey()) && child.isValueNode() && !child.isNull()) {
+                    object.put(field.getKey(), mask(child.asText()));
+                } else {
+                    maskNode(child);
+                }
+            }
+        } else if (node instanceof ArrayNode array) {
+            array.forEach(Masking::maskNode);
+        }
+    }
+
+    /** A record printed like the compiler's toString(), with sensitive components masked. */
+    public static String toMaskedString(Record value) {
+        StringBuilder out = new StringBuilder(value.getClass().getSimpleName()).append('[');
+        RecordComponent[] components = value.getClass().getRecordComponents();
+        for (int i = 0; i < components.length; i++) {
+            Object raw;
+            try {
+                raw = components[i].getAccessor().invoke(value);
+            } catch (ReflectiveOperationException ex) {
+                raw = "?";
+            }
+            String name = components[i].getName();
+            out.append(i == 0 ? "" : ", ").append(name).append('=');
+            out.append(isSensitiveName(name) && raw != null ? mask(String.valueOf(raw)) : raw);
+        }
+        return out.append(']').toString();
+    }
+
+    /** The record as JSON with every sensitive field masked. */
+    public static JsonNode maskRecord(Record value) {
+        return maskJson(TibValue.JSON.valueToTree(value));
+    }
+}

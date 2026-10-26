@@ -1,0 +1,91 @@
+package {{ pkg }}.infrastructure;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import javax.sql.DataSource;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
+/**
+ * One connection pool per TIBCO JDBC resource, from its connection string
+ * (connection-strings.&lt;resource&gt;, ConnectionStrings__&lt;Resource&gt; in the environment). The
+ * string is the runtime contract's Npgsql form (Host=..;Port=..;Database=..;Username=..;Password=..),
+ * a jdbc:postgresql: URL, or a postgresql:// URL.
+ */
+@Component
+public class DataSources implements DisposableBean {
+    private final Environment environment;
+    private final Map<String, HikariDataSource> pools = new ConcurrentHashMap<>();
+
+    public DataSources(Environment environment) {
+        this.environment = environment;
+    }
+
+    /** The pool of a resource: {@code property} is its connection-strings key, {@code name} its contract name. */
+    public DataSource dataSource(String name, String property) {
+        return pools.computeIfAbsent(name, n -> open(n, property));
+    }
+
+    /** A JdbcTemplate with the TIBCO activity's timeout (seconds) and maxRows; 0 means none. */
+    public JdbcTemplate jdbc(String name, String property, int timeoutSeconds, int maxRows) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource(name, property));
+        if (timeoutSeconds > 0) {
+            jdbc.setQueryTimeout(timeoutSeconds);
+        }
+        if (maxRows > 0) {
+            jdbc.setMaxRows(maxRows);
+        }
+        return jdbc;
+    }
+
+    private HikariDataSource open(String name, String property) {
+        String value = environment.getProperty(property, "").strip();
+        if (value.isEmpty()) {
+            throw new IllegalStateException("connection string ConnectionStrings__" + name + " (" + property + ") is not set");
+        }
+        HikariConfig config = new HikariConfig();
+        config.setPoolName(name);
+        config.setMaximumPoolSize(10);
+        if (value.startsWith("jdbc:")) {
+            config.setJdbcUrl(value);
+        } else if (value.startsWith("postgresql://") || value.startsWith("postgres://")) {
+            URI uri = URI.create(value);
+            String[] user = uri.getUserInfo() == null ? new String[0] : uri.getUserInfo().split(":", 2);
+            int port = uri.getPort() > 0 ? uri.getPort() : 5432;
+            config.setJdbcUrl("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath());
+            if (user.length > 0) {
+                config.setUsername(user[0]);
+            }
+            if (user.length > 1) {
+                config.setPassword(user[1]);
+            }
+        } else {
+            Map<String, String> parts = new LinkedHashMap<>();
+            for (String pair : value.split(";")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    parts.put(pair.substring(0, eq).strip().toLowerCase(Locale.ROOT), pair.substring(eq + 1).strip());
+                }
+            }
+            String host = parts.getOrDefault("host", parts.getOrDefault("server", "localhost"));
+            String port = parts.getOrDefault("port", "5432");
+            String database = parts.getOrDefault("database", "");
+            config.setJdbcUrl("jdbc:postgresql://" + host + ":" + port + "/" + database);
+            config.setUsername(parts.getOrDefault("username", parts.get("user id")));
+            config.setPassword(parts.get("password"));
+        }
+        return new HikariDataSource(config);
+    }
+
+    @Override
+    public void destroy() {
+        pools.values().forEach(HikariDataSource::close);
+    }
+}

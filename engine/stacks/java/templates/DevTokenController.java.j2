@@ -1,0 +1,85 @@
+package {{ pkg }}.api;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Development JWTs (auth.mode=Development, development profile only): HMAC-SHA256 signed with
+ * auth.dev-token.signing-key. Production validates Microsoft Entra ID tokens (SecurityConfig).
+ */
+@RestController
+@Profile("development")
+@ConditionalOnProperty(name = "auth.mode", havingValue = "Development")
+public class DevTokenController {
+    /** Body of POST /auth/dev-token. */
+    public record DevTokenRequest(String subject) {}
+
+    /** Answer of POST /auth/dev-token. */
+    public record DevTokenResponse(
+            @JsonProperty("access_token") String accessToken,
+            @JsonProperty("token_type") String tokenType,
+            @JsonProperty("expires_at") Instant expiresAt) {}
+
+    /** The development token settings: issuer, audience and the HS256 key. */
+    public record Settings(String issuer, String audience, SecretKey key) {}
+
+    private final Settings settings;
+    private final JwtEncoder encoder;
+
+    public DevTokenController(Environment environment) {
+        this.settings = settings(environment);
+        this.encoder = new NimbusJwtEncoder(new ImmutableSecret<>(settings.key()));
+    }
+
+    /** Development only: a signed JWT for the API docs and the verifier. */
+    @PostMapping("/auth/dev-token")
+    public DevTokenResponse issue(@RequestBody(required = false) DevTokenRequest request) {
+        String subject = request == null || request.subject() == null || request.subject().isBlank()
+                ? "exiqo-verifier"
+                : request.subject();
+        Instant now = Instant.now();
+        Instant expires = now.plus(8, ChronoUnit.HOURS);
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(settings.issuer())
+                .audience(List.of(settings.audience()))
+                .subject(subject)
+                .claim("name", subject)
+                .issuedAt(now)
+                .expiresAt(expires)
+                .build();
+        JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
+        String token = encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+        return new DevTokenResponse(token, "Bearer", expires);
+    }
+
+    /** The settings from auth.dev-token.*; the key must be at least 32 bytes. */
+    public static Settings settings(Environment environment) {
+        String key = environment.getProperty("auth.dev-token.signing-key", "");
+        byte[] bytes = key.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length < 32) {
+            throw new IllegalStateException("auth.dev-token.signing-key (Auth__DevToken__SigningKey) must be at least 32 bytes.");
+        }
+        return new Settings(
+                environment.getProperty("auth.dev-token.issuer", "exiqo-dev"),
+                environment.getProperty("auth.dev-token.audience", "exiqo-api"),
+                new SecretKeySpec(bytes, "HmacSHA256"));
+    }
+}

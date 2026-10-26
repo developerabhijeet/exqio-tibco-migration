@@ -1,0 +1,144 @@
+package {{ pkg }}.core.tibco;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.Locale;
+
+/**
+ * The XPath functions the generator translates, over {@link TibValue} nodes and with XPath 1.0
+ * semantics (1-based positions with rounding, code points rather than UTF-16 units, empty string
+ * for nothing). Each returns a node so calls nest like the TIBCO expression they come from.
+ */
+public final class TibText {
+    private static final JsonNodeFactory NODES = JsonNodeFactory.withExactBigDecimals(true);
+
+    private TibText() {}
+
+    private static JsonNode text(String value) {
+        return NODES.textNode(value);
+    }
+
+    public static JsonNode concat(JsonNode... parts) {
+        StringBuilder out = new StringBuilder();
+        for (JsonNode part : parts) {
+            out.append(TibValue.text(part));
+        }
+        return text(out.toString());
+    }
+
+    public static JsonNode string(JsonNode value) {
+        return text(TibValue.text(value));
+    }
+
+    public static JsonNode number(JsonNode value) {
+        return TibValue.of(TibValue.number(value));
+    }
+
+    public static JsonNode upperCase(JsonNode value) {
+        return text(TibValue.text(value).toUpperCase(Locale.ROOT));
+    }
+
+    public static JsonNode lowerCase(JsonNode value) {
+        return text(TibValue.text(value).toLowerCase(Locale.ROOT));
+    }
+
+    public static JsonNode normalizeSpace(JsonNode value) {
+        return text(TibValue.text(value).strip().replaceAll("\\s+", " "));
+    }
+
+    public static JsonNode stringLength(JsonNode value) {
+        String s = TibValue.text(value);
+        return NODES.numberNode(s.codePointCount(0, s.length()));
+    }
+
+    public static JsonNode substring(JsonNode value, JsonNode start) {
+        return substring(value, start, null);
+    }
+
+    /** XPath substring: the characters at positions p with round(start) <= p < round(start) + round(length). */
+    public static JsonNode substring(JsonNode value, JsonNode start, JsonNode length) {
+        int[] chars = TibValue.text(value).codePoints().toArray();
+        BigDecimal first = TibValue.number(start);
+        BigDecimal size = length == null ? null : TibValue.number(length);
+        if (first == null || (length != null && size == null)) {
+            return text("");
+        }
+        BigDecimal from = round(first);
+        BigDecimal to = size == null ? null : from.add(round(size));
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < chars.length; i++) {
+            BigDecimal position = BigDecimal.valueOf(i + 1L);
+            if (position.compareTo(from) >= 0 && (to == null || position.compareTo(to) < 0)) {
+                out.appendCodePoint(chars[i]);
+            }
+        }
+        return text(out.toString());
+    }
+
+    public static JsonNode substringBefore(JsonNode value, JsonNode separator) {
+        String s = TibValue.text(value);
+        String sep = TibValue.text(separator);
+        int at = s.indexOf(sep);
+        return text(sep.isEmpty() || at < 0 ? "" : s.substring(0, at));
+    }
+
+    public static JsonNode substringAfter(JsonNode value, JsonNode separator) {
+        String s = TibValue.text(value);
+        String sep = TibValue.text(separator);
+        int at = s.indexOf(sep);
+        return text(at < 0 ? "" : s.substring(at + sep.length()));
+    }
+
+    public static JsonNode translate(JsonNode value, JsonNode from, JsonNode to) {
+        int[] source = TibValue.text(from).codePoints().toArray();
+        int[] target = TibValue.text(to).codePoints().toArray();
+        StringBuilder out = new StringBuilder();
+        TibValue.text(value).codePoints().forEach(c -> {
+            int at = -1;
+            for (int i = 0; i < source.length; i++) {
+                if (source[i] == c) {
+                    at = i;
+                    break;
+                }
+            }
+            if (at < 0) {
+                out.appendCodePoint(c);
+            } else if (at < target.length) {
+                out.appendCodePoint(target[at]);
+            }
+        });
+        return text(out.toString());
+    }
+
+    public static JsonNode round(JsonNode value) {
+        BigDecimal n = TibValue.number(value);
+        return TibValue.of(n == null ? null : round(n));
+    }
+
+    public static JsonNode floor(JsonNode value) {
+        BigDecimal n = TibValue.number(value);
+        return TibValue.of(n == null ? null : n.setScale(0, RoundingMode.FLOOR));
+    }
+
+    public static JsonNode ceiling(JsonNode value) {
+        BigDecimal n = TibValue.number(value);
+        return TibValue.of(n == null ? null : n.setScale(0, RoundingMode.CEILING));
+    }
+
+    public static JsonNode currentDateTime() {
+        return text(TibValue.dateTime(OffsetDateTime.now()));
+    }
+
+    public static JsonNode currentDate() {
+        return text(LocalDate.now().toString());
+    }
+
+    /** XPath round: half way rounds towards positive infinity. */
+    private static BigDecimal round(BigDecimal n) {
+        return n.add(new BigDecimal("0.5")).setScale(0, RoundingMode.FLOOR);
+    }
+}

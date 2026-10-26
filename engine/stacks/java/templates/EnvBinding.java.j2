@@ -1,0 +1,125 @@
+package {{ pkg }}.config;
+
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.security.keyvault.secrets.SecretClient;
+import com.azure.security.keyvault.secrets.SecretClientBuilder;
+import com.azure.security.keyvault.secrets.models.SecretProperties;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.StringJoiner;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.core.Ordered;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
+
+/**
+ * Binds the runtime contract's environment names (the ASP.NET convention, {@code __} separated) to
+ * Spring properties in their canonical form, keeping the original names too:
+ * Gmf__Dealerfunding__DbUrl is gmf.dealerfunding.db-url, ConnectionStrings__GMFFundingDB is
+ * connection-strings.gmf-funding-db and Cors__Origins__0 is cors.origins[0]. The bound names rank
+ * just below the environment itself, so they win over application.yml and Spring's own names
+ * (SERVER_PORT, --server.port) keep working.
+ *
+ * <p>ASPNETCORE_ENVIRONMENT=Development (what ExiQO's Verify sets) activates the development
+ * profile unless SPRING_PROFILES_ACTIVE says otherwise. When KeyVault__Uri is set, every Key Vault
+ * secret named with {@code --} (Gmf--Dealerfunding--DbPassword) lands on the same property as the
+ * environment name would, read with DefaultAzureCredential (the workload's managed identity).
+ *
+ * <p>Runs before application.yml is read, so the profile it activates selects that file's
+ * development document.
+ */
+public class EnvBinding implements EnvironmentPostProcessor, Ordered {
+    public static final String ENVIRONMENT_SOURCE = "exiqoEnvironment";
+    public static final String KEY_VAULT_SOURCE = "exiqoKeyVault";
+
+    private static final Pattern WORD = Pattern.compile("[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+");
+    private static final Pattern INDEX = Pattern.compile("[0-9]+");
+
+    @Override
+    public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE + 5; // before ConfigDataEnvironmentPostProcessor (+10)
+    }
+
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        Map<String, Object> bound = bind(environment.getSystemEnvironment(), "__");
+        Object aspnet = environment.getSystemEnvironment().get("ASPNETCORE_ENVIRONMENT");
+        if (aspnet != null && "Development".equalsIgnoreCase(aspnet.toString().strip())
+                && !environment.getSystemEnvironment().containsKey("SPRING_PROFILES_ACTIVE")) {
+            bound.put("spring.profiles.active", "development");
+        }
+        var sources = environment.getPropertySources();
+        sources.addAfter(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                new MapPropertySource(ENVIRONMENT_SOURCE, bound));
+        Object vault = bound.get("key-vault.uri");
+        if (vault != null && !vault.toString().isBlank()) {
+            sources.addAfter(ENVIRONMENT_SOURCE, new MapPropertySource(KEY_VAULT_SOURCE, secrets(vault.toString().strip())));
+        }
+    }
+
+    /** Every {@code separator}-named variable as its canonical property; others are left out. */
+    static Map<String, Object> bind(Map<String, Object> variables, String separator) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        variables.keySet().stream().sorted().forEach(name -> {
+            String property = property(name, separator);
+            if (property != null) {
+                out.put(property, variables.get(name));
+            }
+        });
+        return out;
+    }
+
+    /** {@code Cors__Origins__0} as {@code cors.origins[0]}; null for a name without the separator. */
+    public static String property(String name, String separator) {
+        String[] parts = name.split(Pattern.quote(separator), -1);
+        if (parts.length < 2) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                return null;
+            }
+            if (INDEX.matcher(part).matches() && out.length() > 0) {
+                out.append('[').append(part).append(']');
+            } else {
+                out.append(out.length() > 0 ? "." : "").append(kebab(part));
+            }
+        }
+        return out.toString();
+    }
+
+    /** Spring's canonical form of one name segment: GMFFundingDB is gmf-funding-db, DbUrl is db-url. */
+    public static String kebab(String segment) {
+        Matcher m = WORD.matcher(segment);
+        StringJoiner out = new StringJoiner("-");
+        while (m.find()) {
+            out.add(m.group().toLowerCase(Locale.ROOT));
+        }
+        String joined = out.toString();
+        return joined.isEmpty() ? segment.toLowerCase(Locale.ROOT) : joined;
+    }
+
+    private static Map<String, Object> secrets(String vaultUri) {
+        SecretClient client = new SecretClientBuilder()
+                .vaultUrl(vaultUri)
+                .credential(new DefaultAzureCredentialBuilder().build())
+                .buildClient();
+        Map<String, Object> named = new LinkedHashMap<>();
+        for (SecretProperties secret : client.listPropertiesOfSecrets()) {
+            if (Boolean.FALSE.equals(secret.isEnabled())) {
+                continue;
+            }
+            String property = property(secret.getName(), "--");
+            if (property != null) {
+                named.put(property, client.getSecret(secret.getName()).getValue());
+            }
+        }
+        return named;
+    }
+}

@@ -47,14 +47,14 @@ async def test_build_refused_for_a_stack_this_install_cannot_build(client, app, 
     pid, proc = await approved_g3_dotnet()
     async with app.state.sessionmaker() as s:
         project = await s.get(Project, pid)
-        project.target_stack = "java"
+        project.target_stack = "go"
         for row in (await s.execute(select(DesignRecord).where(DesignRecord.process_id == proc))).scalars():
-            row.record = {**row.record, "stack": "java"}
+            row.record = {**row.record, "stack": "go"}
         await s.commit()
     r = await client.post(f"/processes/{proc}/build", json={})
     assert r.status_code == 409
-    assert r.json()["detail"] == ("the java stack cannot be built on this install: "
-                                  "stack 'java' is not implemented yet")
+    assert r.json()["detail"] == ("the go stack cannot be built on this install: "
+                                  "stack 'go' is not implemented yet")
     assert (await client.get(f"/processes/{proc}/builds")).json() == []
 
 
@@ -196,4 +196,5 @@ def test_export_note_names_the_target_stack():
 def test_download_exclusions_follow_the_stack():
     assert download_excluded("dotnet") == DOWNLOAD_EXCLUDED == stacks.get_stack("dotnet").download_excluded
     assert download_excluded(None) == DOWNLOAD_EXCLUDED
-    assert download_excluded("java") == DOWNLOAD_EXCLUDED  # not implemented yet: the default list
+    assert download_excluded("java") == frozenset({"target", ".exiqo"})
+    assert download_excluded("go") == DOWNLOAD_EXCLUDED  # not implemented yet: the default list
