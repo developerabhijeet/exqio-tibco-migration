@@ -78,5 +78,5 @@ async def require_user(request: Request) -> dict[str, Any]:
     try:
         return await validator.validate(token.strip())
     except (jwt.PyJWTError, jwt.PyJWKClientError) as ex:
-        raise HTTPException(status_code=401, detail=f"invalid token: {ex}",
+        raise HTTPException(status_code=401, detail="the bearer token is not valid",
                             headers={"WWW-Authenticate": "Bearer"}) from ex

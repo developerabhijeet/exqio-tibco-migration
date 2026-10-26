@@ -436,3 +436,8 @@ def test_verify_modes_read_the_system_roots_unless_a_root_is_given(python_soluti
     assert conninfo("postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=/ca.pem").count("sslrootcert") == 1
     monkeypatch.setenv("PGSSLROOTCERT", "/etc/db-ca.pem")  # libpq reads it itself
     assert "sslrootcert" not in parse(base + "SSL Mode=Require")
+
+
+def test_401_never_echoes_the_jwt_library_error(python_solution):
+    src = _file(python_solution, "auth.py").content
+    assert 'detail="the bearer token is not valid"' in src and "invalid token: {ex}" not in src

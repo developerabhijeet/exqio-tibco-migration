@@ -515,3 +515,10 @@ def test_verify_modes_use_the_jdk_trust_store(java_solution):
     assert "static String trustStoreFor(String jdbcUrl)" in src
     # all three forms go through it
     assert src.count("trustStoreFor(") >= 4
+
+
+def test_401_is_problem_json_like_go_and_python(java_solution):
+    src = _file(java_solution, "SecurityConfig.java").content
+    assert "application/problem+json" in src and "Unauthorized" in src and "WWW-Authenticate" in src
+    assert "a bearer token is required" in src and "the bearer token is not valid" in src
+    assert src.count("SecurityConfig::unauthorized") == 2  # the filter chain and the resource server

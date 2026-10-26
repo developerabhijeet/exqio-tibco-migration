@@ -1,5 +1,8 @@
 package {{ pkg }}.api;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import java.util.List;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
@@ -8,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -49,8 +53,26 @@ public class SecurityConfig {
                         .permitAll()
                         .anyRequest()
                         .authenticated())
-                .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()));
+                .exceptionHandling(e -> e.authenticationEntryPoint(SecurityConfig::unauthorized))
+                .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults())
+                        .authenticationEntryPoint(SecurityConfig::unauthorized));
         return http.build();
+    }
+
+    /**
+     * 401 as application/problem+json with a fixed detail (the same body as the Go and Python
+     * services; the decoder's error text is never echoed).
+     */
+    static void unauthorized(HttpServletRequest request, HttpServletResponse response, AuthenticationException ex)
+            throws IOException {
+        String detail = request.getHeader("Authorization") == null
+                ? "a bearer token is required"
+                : "the bearer token is not valid";
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setHeader("WWW-Authenticate", "Bearer");
+        response.setContentType("application/problem+json");
+        response.getWriter().write("{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,\"detail\":\""
+                + detail + "\"}");
     }
 
     @Bean
