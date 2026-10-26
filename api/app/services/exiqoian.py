@@ -103,7 +103,8 @@ async def project_lexicon(session: AsyncSession, project_id: str) -> ProjectLexi
     rules: dict[str, list[str]] = {}
     if pids:
         for pid, key in (await session.execute(
-                select(Rule.process_id, Rule.rule_key).where(Rule.process_id.in_(pids)).order_by(Rule.created_at))).all():
+                select(Rule.process_id, Rule.rule_key).where(Rule.process_id.in_(pids))
+                .order_by(Rule.created_at, Rule.rule_key))).all():
             rules.setdefault(pid, []).append(key)
             add(key)
         for key in (await session.execute(select(Finding.finding_key).where(Finding.process_id.in_(pids)))).scalars():
