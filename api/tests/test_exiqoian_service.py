@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from api.app.auth.roles import dev_principal
-from api.app.models import AuditLog, ChatMessage
+from api.app.models import AuditLog, ChatMessage, Project
 from api.app.services.exiqoian import (
     HISTORY_CHARS,
     HISTORY_MESSAGES,
@@ -145,7 +145,7 @@ async def test_lexicon_holds_project_names_and_parts(client, app):
     pid, procs = await _scanned(client)
     async with app.state.sessionmaker() as session:
         lex, ids, names = await project_lexicon(session, pid)
-    assert {"dealerfundingrequest", "dealer", "funding", "tibco", "dotnet"} <= lex and names.process
+    assert {"dealerfundingrequest", "tibco", "dotnet"} <= lex and {"dealer", "funding"} <= lex.weak and names.process
     assert set(ids.values()) == {p["id"] for p in procs.values()}
 
 
@@ -247,7 +247,7 @@ async def test_lexicon_parts_skip_stopwords_and_short_words(client, app):
     async with app.state.sessionmaker() as session:
         lex, _, _ = await project_lexicon(session, pid)
     from engine.knowledge.embeddings import STOPWORDS
-    extra = {w for w in lex if (w in STOPWORDS or len(w) < 3) and w not in {"bw", "sql", "jms"}}
+    extra = {w for w in lex | lex.weak if (w in STOPWORDS or len(w) < 3) and w not in {"bw", "sql", "jms", "go"}}
     assert extra == set(), extra
     assert query_terms("how to cook dosa") and "to" not in lex
 
@@ -263,3 +263,12 @@ async def test_deleting_the_project_removes_its_conversations_and_messages(sessi
     await session.commit()
     for model in (ChatConversation, ChatMessage):
         assert (await session.execute(select(func.count()).select_from(model))).scalar_one() == 0
+
+
+async def test_the_prompt_names_the_projects_target_stack(session, project_id):
+    """The seam for SP5: the label follows Project.target_stack (.NET until that column exists)."""
+    from api.app.services.exiqoian import _stack_label
+    assert await _stack_label(session, project_id) == ".NET (C#)"
+    project = await session.get(Project, project_id)
+    project.target_stack = "java"  # not a column yet: a plain attribute is what getattr reads
+    assert await _stack_label(session, project_id) == "Java (Spring Boot)"

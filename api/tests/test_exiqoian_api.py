@@ -25,7 +25,7 @@ QUESTION = "What does DealerFundingRequest do with the funding request queue?"
 
 class Raising:
     async def retrieve(self, *a, **kw):
-        raise MemoryUnavailable("ServiceUnavailable")
+        raise MemoryUnavailable("bolt://neo4j.internal.example:7687 refused the connection")
 
 
 @pytest.fixture
@@ -174,7 +174,8 @@ async def test_agents_are_refused(client, project_id):
 async def test_memory_down_streams_error_and_stores_reply(client, project_id, raising_retriever):
     cid = await new_conversation(client, project_id)
     events = await sse(client, f"/exiqoian/{project_id}/conversations/{cid}/messages", {"text": QUESTION}, SME)
-    assert ("error", {"detail": "memory unavailable: ServiceUnavailable"}) in events
+    assert ("error", {"detail": "memory unavailable"}) in events
+    assert "neo4j.internal.example" not in json.dumps(events)  # the exception text stays server-side
     assert events[-1][0] == "done" and events[-1][1]["message"]["text"] == UNAVAILABLE_REPLY
 
 

@@ -1,11 +1,18 @@
 """Deterministic layers 1-4 of the ExiQoian pipeline: normalise, injection check, greeting and
 off-topic pre-filter. No model, no I/O."""
+import itertools
 import re
 import unicodedata
 
 from pydantic import BaseModel
 
-from engine.exiqoian.lexicon import OFF_DOMAIN_PHRASES, OFF_DOMAIN_SINGLE, split_identifier, tokens
+from engine.exiqoian.lexicon import (
+    AMBIGUOUS_VOCABULARY,
+    OFF_DOMAIN_PHRASES,
+    OFF_DOMAIN_SINGLE,
+    split_identifier,
+    tokens,
+)
 from engine.exiqoian.patterns import INJECTION_RULES, LEET, OUTPUT_RULES, OVERRIDE_COMPACT
 from engine.exiqoian.replies import Verdict
 from engine.memory.search import query_terms
@@ -124,23 +131,34 @@ def _is_arithmetic(n: str) -> bool:
     return bool(_ARITH.match(t)) and any(c.isdigit() for c in t) and any(c in "+-*/^×÷%x" for c in t)
 
 
-def _project_word(tok: str, lexicon: frozenset[str]) -> bool:
+def _known(tok: str, lexicon: frozenset[str]) -> bool:
+    if tok in AMBIGUOUS_VOCABULARY:
+        return False
     return tok in lexicon or any(p in lexicon for p in split_identifier(tok))
 
 
+def _strong_words(toks: list[str], lexicon: frozenset[str]) -> bool:
+    """A word or two adjacent words of the lexicon (a plain set counts its parts as words too)."""
+    pairs = (f"{a} {b}" for a, b in itertools.pairwise(toks))
+    return (any(_known(t, lexicon) for t in toks) or any(p in lexicon for p in pairs))
+
+
 def prefilter(normalised: str, lexicon: frozenset[str], *, has_context: bool = False) -> str | None:
-    """``"arithmetic"``, ``"off_domain"``, ``"too_vague"`` or None. A project word (or an
-    identifier part of one) overrides off_domain and too_vague; too_vague is skipped with context."""
+    """``"arithmetic"``, ``"off_domain"``, ``"too_vague"`` or None. A strong project word (a full
+    identifier, two adjacent parts of one, the migration vocabulary) overrides off_domain and
+    too_vague; a weak one (a single name part, ``Lexicon.weak``) overrides only too_vague, which is
+    also skipped with context."""
     if _is_arithmetic(normalised):
         return "arithmetic"
     toks = tokens(normalised)
-    has_project_word = any(_project_word(t, lexicon) for t in toks)
-    if not has_project_word:
-        joined = " " + " ".join(toks) + " "
-        if any(t in OFF_DOMAIN_SINGLE for t in toks) or any(f" {p} " in joined for p in OFF_DOMAIN_PHRASES):
-            return "off_domain"
-        if not has_context and len(query_terms(normalised)) < 2:
-            return "too_vague"
+    if _strong_words(toks, lexicon):
+        return None
+    joined = " " + " ".join(toks) + " "
+    if any(t in OFF_DOMAIN_SINGLE for t in toks) or any(f" {p} " in joined for p in OFF_DOMAIN_PHRASES):
+        return "off_domain"
+    weak: frozenset[str] = getattr(lexicon, "weak", frozenset())
+    if not has_context and len(query_terms(normalised)) < 2 and not any(t in weak or t in AMBIGUOUS_VOCABULARY for t in toks):
+        return "too_vague"
     return None
 
 

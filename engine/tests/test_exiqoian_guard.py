@@ -156,3 +156,39 @@ def test_dotnet_is_a_project_word():
 def test_only_pure_base64_lines_are_joined():
     prose = "\n".join(["which build had hash " + "a" * 70, "b" * 70 + " is the other"])  # edges look like base64
     assert detect_injection(prose) is None
+
+
+# ---- final review: a realistic lexicon
+from engine.exiqoian.lexicon import Lexicon
+
+REAL = Lexicon.from_names(
+    ["Start", "End", "Log", "Sleep", "Timer", "WriteFile", "SendMail", "CallProcess", "GetWeather", "GetCitiesByCountry",
+     "DealerFundingRequest"], base=MIGRATION_VOCABULARY)
+
+
+def test_lexicon_from_names_splits_strong_and_weak():
+    assert {"getweather", "get weather", "writefile", "write file", "dealerfundingrequest", "dealer funding",
+            "funding request"} <= REAL
+    assert not ({"start", "end", "log", "sleep", "weather", "get", "write", "file", "dealer"} & REAL)
+    assert {"start", "end", "log", "sleep", "weather", "get", "write", "file", "dealer", "funding"} <= REAL.weak
+
+
+@pytest.mark.parametrize("text", CORPUS["realistic_off_topic"])
+def test_a_realistic_lexicon_does_not_switch_the_off_topic_filter_off(text):
+    assert check(text, REAL).verdict == "off_topic"
+
+
+@pytest.mark.parametrize("text", CORPUS["realistic_on_topic"])
+def test_a_realistic_lexicon_still_passes_project_questions(text):
+    assert check(text, REAL).verdict is None
+
+
+def test_weak_name_parts_still_save_a_short_question_from_too_vague():
+    assert check("and its sleep?", REAL).verdict is None and check("and its tests?", REAL).rule == "too_vague"
+
+
+def test_stack_and_connector_vocabulary_is_project_vocabulary():
+    for word in ("java", "go", "golang", "python", "spring", "fastapi", "stack", "iteration", "jira", "confluence",
+                 "github", "figma", "connector"):
+        assert word in MIGRATION_VOCABULARY
+    assert check("Is it Java?", REAL).verdict is None and check("What is in Confluence?", REAL).verdict is None

@@ -20,6 +20,7 @@ from engine.exiqoian.guard import check, detect_output_injection, normalise
 from engine.exiqoian.personas import PersonaKey
 from engine.exiqoian.replies import REPLY_FOR, Verdict
 from engine.exiqoian.sources import (
+    DEFAULT_STACK,
     Source,
     gather_sources,
     render_prompt,
@@ -129,13 +130,36 @@ def _trailing_markers(answer: str) -> str:
     return answer
 
 
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_PROMPT_SENTENCES = re.compile(r"(?<=[.!?:])\s+|\n+")
+LEAK_MIN_CHARS = 30
+
+
+def _fold(text: str) -> str:
+    """Whitespace-folded, casefolded text without source markers: what a leak check compares."""
+    return " ".join(normalise(strip_markers(text)).split())
+
+
+def _leaks_prompt(answer: str, canary: str, system_text: str) -> bool:
+    """The canary (ignoring any punctuation or spacing inside it), a delimiter tag, or any sentence
+    of the system prompt of 30 characters or more (its first sentence whatever its length) appearing
+    in the answer."""
+    folded = _fold(answer)
+    if canary.lower() in folded or canary.lower() in _NON_ALNUM.sub("", folded) or _LEAK_TAG.search(folded):
+        return True
+    sentences = [s for s in _PROMPT_SENTENCES.split(system_text) if s.strip()]
+    for i, sentence in enumerate(sentences):
+        piece = _fold(re.sub(r"^\s*[-*]\s+", "", sentence)).rstrip(".!?: ")
+        if piece and (i == 0 or len(piece) >= LEAK_MIN_CHARS) and piece in folded:
+            return True
+    return False
+
+
 def validate_answer(answer: str, sources: list[Source], canary: str,
-                    system_first_sentence: str) -> tuple[Verdict, CitedText, str | None]:
+                    system_prompt: str) -> tuple[Verdict, CitedText, str | None]:
     """Layer 7 steps 2-5 on an answer the model gave with verdict ``answer``, plus X22: the text
     that would be shown must itself pass the injection check."""
-    low, folded = answer.lower(), normalise(answer)
-    if (canary.lower() in low or canary.lower() in folded.replace(" ", "") or _LEAK_TAG.search(folded)
-            or system_first_sentence.lower() in low):
+    if _leaks_prompt(answer, canary, system_prompt):
         return "injection", CitedText.plain(REPLY_FOR["injection"]), "output_leak"
     cited, _dropped = from_markers(_trailing_markers(mask_sensitive(answer)), {s.marker: s.ref for s in sources})
     if not cited.refs:
@@ -147,7 +171,7 @@ def validate_answer(answer: str, sources: list[Source], canary: str,
 
 async def respond(*, retriever: MemoryRetriever, project_id: str, question: str, persona: PersonaKey,
                   lexicon: frozenset[str], process_ids: dict[str, str], history: list[Turn],
-                  provider: RoutedProvider | None,
+                  provider: RoutedProvider | None, target_stack: str = DEFAULT_STACK,
                   on_stage: Callable[[str], Awaitable[None]] | None = None) -> Reply:
     """One question through the layers; the first that decides ends it. ``MemoryUnavailable``
     from the retriever propagates."""
@@ -172,7 +196,7 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
     await stage("writing")
     if provider is not None:
         canary = secrets.token_hex(8)
-        system, user = render_prompt(question, sources, [(t.role, t.text) for t in history], persona, canary)
+        system, user = render_prompt(question, sources, [(t.role, t.text) for t in history], persona, canary, target_stack)
         try:
             data, _ = await ask_json(
                 provider, "analyse", None, system, user, EXIQOIAN_SCHEMA,
@@ -185,9 +209,7 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
             if verdict != "answer":
                 verdict = verdict if verdict in _ALLOWED_DECLINES else "not_covered"
                 return _fixed(verdict, used_model=True, sources=refs, dropped=dropped)
-            first = _FIRST_SENTENCE.match(system)
-            v, cited, rule = validate_answer(str(data.get("answer", "")), sources, canary,
-                                             first.group() if first else system)
+            v, cited, rule = validate_answer(str(data.get("answer", "")), sources, canary, system)
             return Reply(verdict=v, cited=cited, rule=rule, used_model=True, sources=refs,
                          dropped_sources=dropped)
 

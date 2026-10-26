@@ -20,6 +20,7 @@ from api.app.models import (
     Domain,
     Finding,
     Process,
+    Project,
     Rule,
 )
 from api.app.services.gates import audit
@@ -27,12 +28,11 @@ from api.app.services.knowledge import KnowledgeUnavailable
 from engine.agents.provider import mask_sensitive
 from engine.agents.routing import RoutedProvider
 from engine.citations.model import CitedText
-from engine.exiqoian.lexicon import MIGRATION_VOCABULARY, split_identifier
+from engine.exiqoian.lexicon import Lexicon
 from engine.exiqoian.personas import PERSONA_ORDER, PersonaKey, SuggestionNames, default_persona
 from engine.exiqoian.pipeline import Reply, Turn, respond
 from engine.exiqoian.replies import NOT_CONFIGURED_REPLY, UNAVAILABLE_REPLY
-from engine.exiqoian.sources import HISTORY_CHARS, HISTORY_MESSAGES, strip_markers
-from engine.knowledge.embeddings import STOPWORDS
+from engine.exiqoian.sources import DEFAULT_STACK, HISTORY_CHARS, HISTORY_MESSAGES, strip_markers
 from engine.memory.graph import MemoryUnavailable
 from engine.memory.search import MemoryRetriever
 
@@ -46,11 +46,13 @@ TITLE_CHARS = 80
 AUDIT_QUESTION_CHARS = 500
 CONVERSATION_LIST = 50
 NOT_CONFIGURED = "memory not configured"
+# SP5 adds Project.target_stack; until then every project targets .NET. The seam is `_stack_label`.
+STACK_LABELS = {"dotnet": DEFAULT_STACK, "java": "Java (Spring Boot)", "go": "Go", "python": "Python (FastAPI)"}
 LOCK_NAMESPACE = 0x45584951  # "EXIQ": the first key of the two-int advisory lock, so owners cannot collide with other users of hashtext
 
-Lexicon = tuple[frozenset[str], dict[str, str], SuggestionNames]
+ProjectLexicon = tuple[Lexicon, dict[str, str], SuggestionNames]
 # project id -> (expires, fingerprint of what the lexicon was built from, lexicon)
-_lexicon_cache: dict[str, tuple[float, tuple, Lexicon]] = {}
+_lexicon_cache: dict[str, tuple[float, tuple, ProjectLexicon]] = {}
 
 
 def clear_lexicon_cache() -> None:
@@ -67,11 +69,14 @@ async def _fingerprint(session: AsyncSession, project_id: str) -> tuple:
         select(func.count()).select_from(Finding).where(Finding.process_id.in_(mine)).scalar_subquery(),
         select(func.count()).select_from(DesignRecord).where(DesignRecord.process_id.in_(mine)).scalar_subquery(),
         select(func.count()).select_from(Domain).where(Domain.project_id == project_id).scalar_subquery(),
+        select(func.count()).select_from(Application).where(Application.project_id == project_id).scalar_subquery(),
+        select(func.max(Rule.created_at)).where(Rule.process_id.in_(mine)).scalar_subquery(),
+        select(func.max(Finding.created_at)).where(Finding.process_id.in_(mine)).scalar_subquery(),
     ))).one()
     return tuple(row)
 
 
-async def project_lexicon(session: AsyncSession, project_id: str) -> Lexicon:
+async def project_lexicon(session: AsyncSession, project_id: str) -> ProjectLexicon:
     """(casefolded lexicon, ``ir_id`` -> API process id, suggestion names), cached for at most 300 s
     per project and rebuilt as soon as the project's processes, rules, findings, designs or
     domains change."""
@@ -79,14 +84,8 @@ async def project_lexicon(session: AsyncSession, project_id: str) -> Lexicon:
     hit = _lexicon_cache.get(project_id)
     if hit and hit[0] > time.monotonic() and hit[1] == fingerprint:
         return hit[2]
-    words: set[str] = set(MIGRATION_VOCABULARY)
-
-    def add(name: str | None) -> None:
-        # Not stopwords or one- and two-letter parts: `MapToResponse` must not make "to" a project
-        # word, which would switch the off-topic filter off for any question containing "to".
-        if name:
-            words.update(w for w in split_identifier(name) if len(w) >= 3 and w not in STOPWORDS)
-
+    collected: list[str | None] = []
+    add = collected.append  # the Lexicon decides which parts are strong words and which weak
     processes = (await session.execute(
         select(Process).where(Process.project_id == project_id).order_by(Process.created_at, Process.name))).scalars().all()
     ids: dict[str, str] = {}
@@ -125,7 +124,7 @@ async def project_lexicon(session: AsyncSession, project_id: str) -> Lexicon:
         process=first.name if first else None,
         rule_key=(rules.get(first.id) or [None])[0] if first else None,
         class_name=(classes.get(first.id) or None) if first else None)
-    value = (frozenset(words), ids, names)
+    value = (Lexicon.from_names(collected), ids, names)
     _lexicon_cache[project_id] = (time.monotonic() + LEXICON_TTL_S, fingerprint, value)
     return value
 
@@ -208,6 +207,13 @@ def history_turns(messages: list[ChatMessage]) -> list[Turn]:
             for m in kept[-HISTORY_MESSAGES:]]
 
 
+async def _stack_label(session: AsyncSession, project_id: str) -> str:
+    """The project's target stack for the prompt: `Project.target_stack` when the model has it (SP5)."""
+    project = await session.get(Project, project_id)
+    key = getattr(project, "target_stack", None) or "dotnet"
+    return STACK_LABELS.get(key, str(key))
+
+
 def _unavailable(exc: Exception) -> Reply:
     not_configured = isinstance(exc, KnowledgeUnavailable) and str(exc) == NOT_CONFIGURED
     text = NOT_CONFIGURED_REPLY if not_configured else UNAVAILABLE_REPLY
@@ -234,15 +240,19 @@ async def ask(session: AsyncSession, *, retriever: MemoryRetriever, provider: Ro
     if on_event is not None:
         await on_event("meta", {"user_message_id": user.id, "persona": persona})
     lexicon, process_ids, _ = await project_lexicon(session, project_id)
+    stack = await _stack_label(session, project_id)
     await session.commit()  # end the read transaction: no connection idles through the model call
     try:
         reply = await respond(
             retriever=retriever, project_id=project_id, question=masked, persona=persona, lexicon=lexicon,
-            process_ids=process_ids, history=history_turns(prior), provider=provider, on_stage=on_stage)
+            process_ids=process_ids, history=history_turns(prior), provider=provider, target_stack=stack,
+            on_stage=on_stage)
     except (MemoryUnavailable, KnowledgeUnavailable) as exc:
         reply = _unavailable(exc)
         if on_event is not None:
-            detail = str(exc) if isinstance(exc, KnowledgeUnavailable) else f"memory unavailable: {exc}"
+            # Fixed text: the exception can carry the Neo4j address or driver internals.
+            detail = NOT_CONFIGURED if reply.rule == "not_configured" else "memory unavailable"
+            log.warning("exiqoian memory unavailable: project=%s: %s: %s", project_id, type(exc).__name__, exc)
             await on_event("error", {"detail": detail})
     except Exception:
         log.exception("exiqoian answer failed: project=%s", project_id)

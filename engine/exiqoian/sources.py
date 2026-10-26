@@ -16,6 +16,8 @@ from engine.memory.model import KNOWLEDGE_LABELS, MemoryHit
 from engine.memory.search import MemoryRetriever, query_terms
 
 MAX_SOURCES = 10
+# The target stack the system prompt names; the project's own (Project.target_stack, SP5) replaces it.
+DEFAULT_STACK = ".NET (C#)"
 HISTORY_MESSAGES = 6
 HISTORY_CHARS = 600
 GROUPS: tuple[tuple[str, tuple[str, ...], int], ...] = (
@@ -32,7 +34,7 @@ log = logging.getLogger("engine.exiqoian")
 _FORGED = re.compile("[<" + chr(0xff1c) + r"](?=\s*/?\s*(?:source|history|question|system))", re.IGNORECASE)
 # [S1], [s 1], [S1, S2], [S1;S2], [S1,2], [ S1 ]
 _MARKER = re.compile(r"\[\s*S\s*\d+(?:\s*[,;]\s*S?\s*\d+)*\s*\]", re.IGNORECASE)
-_PLACEHOLDER = re.compile(r"\{(persona_line|canary|history|question|sources)\}")
+_PLACEHOLDER = re.compile(r"\{(persona_line|canary|history|question|sources|target_stack)\}")
 
 
 class Source(BaseModel):
@@ -81,10 +83,11 @@ async def gather_sources(retriever: MemoryRetriever, project_id: str, query: str
     kept: list[tuple[MemoryHit, CiteRef]] = []
     dropped = 0
     for h in sorted(best.values(), key=lambda h: -h.score):
-        if detect_injection(h.text) is not None:
+        ref = cite_ref(h, "tmp", process_ids)
+        if detect_injection(f"{h.text} {ref.label}") is not None:  # the label reaches the model too
             dropped += 1
             continue
-        kept.append((h, cite_ref(h, "tmp", process_ids)))
+        kept.append((h, ref))
     by_phase: dict[str, list[tuple[MemoryHit, CiteRef]]] = {}
     for h, ref in kept:
         by_phase.setdefault(ref.phase, []).append((h, ref))
@@ -112,15 +115,15 @@ def _source_block(s: Source) -> str:
 
 
 def render_prompt(question: str, sources: list[Source], history: list[tuple[str, str]],
-                  persona: PersonaKey, canary: str) -> tuple[str, str]:
+                  persona: PersonaKey, canary: str, target_stack: str = DEFAULT_STACK) -> tuple[str, str]:
     """(system, user) prompt. History keeps the last 6 messages cut to 600 characters."""
     def turn(role: str, text: str) -> str:  # mask, then flatten lines, then cut
         flat = " ".join(mask_sensitive(strip_markers(text)).split())[:HISTORY_CHARS]
         return f"{'assistant' if role == 'assistant' else 'user'}: {escape_tags(flat)}"
     hist = "\n".join(turn(role, text) for role, text in history[-HISTORY_MESSAGES:])
     system = _fill(_SYSTEM, {"persona_line": PERSONAS[persona].prompt_line, "canary": canary,
-                             "history": "", "question": "", "sources": ""})
-    user = _fill(_USER, {"persona_line": "", "canary": "", "history": hist or "(none)",
+                             "target_stack": target_stack, "history": "", "question": "", "sources": ""})
+    user = _fill(_USER, {"persona_line": "", "canary": "", "target_stack": "", "history": hist or "(none)",
                          "question": escape_tags(mask_sensitive(strip_markers(question))),
                          "sources": "\n".join(_source_block(s) for s in sources) or "(none)"})
     return system, user
