@@ -13,10 +13,19 @@ Built by code from the IR and the stack-aware design record, with no target lang
   ``Queue`` of the nodes and links, which a printer runs like ``ProcessFlow``: a node runs once
   every live incoming link is decided. A group is a ``Loop`` around its members' own flow; fault
   handlers wrap the whole flow in a ``Try``;
-* ``agent``: true on a step whose body the .NET generator leaves to the Code Builder (its mapping
-  has an expression ``is_simple_expression`` refuses, it is a pattern with no code template, a
-  stored-procedure call, a SOAP starter or a JMS selector code cannot read). A condition code
-  cannot write is an ``If`` (or a ``QueueLink``) whose ``cond`` is ``None``, with the TIBCO text kept.
+* ``agent``: true on a step whose body is left to the Code Builder from the expressions' shape
+  alone (its mapping has an expression ``is_simple_expression`` refuses, it is a pattern with no
+  code template, a stored-procedure call, a SOAP starter or a JMS selector code cannot read). A
+  condition whose shape code cannot write is an ``If`` (or a ``QueueLink``) whose ``cond`` is
+  ``None``, with the TIBCO text kept.
+
+The agent flags are a LOWER BOUND. ``agent=False`` and a non-``None`` ``cond`` say only that the
+expression has a shape code can write; whether its paths resolve against the contracts and the
+state is the generator's call, as it is in .NET (``ProcGen.map_origin``, ``translate_condition``).
+A stack generator marks the step, its row and its file ``agent`` whenever its own path resolution
+or condition translation fails, whatever the plan says; it never writes code for a step the plan
+flags ``agent``. ``test_stacks_plan`` pins the bound: every plan flag is also a .NET agent body on
+the whole sample estate.
 """
 from __future__ import annotations
 
@@ -54,7 +63,7 @@ class PlanStep:
     # destination of a JMS send or publish.
     call_target: str | None
     throws: str | None  # a throw: the TIBCO fault name
-    agent: bool
+    agent: bool  # a lower bound (module docstring): the generator may still find it needs the agent
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,9 @@ class QueueLink:
     kind: Literal["success", "conditional", "otherwise", "error"]
     cond: Expr | None  # conditional links only; None there means the agent writes it
     tibco: str
+    # One end lies outside the queue's nodes (a link into or out of a group). BW does not draw
+    # these; kept, not dropped, so a printer can refuse them or hand them to the agent.
+    crosses: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,16 +109,28 @@ class Queue:
 @dataclass(frozen=True)
 class Try:
     body: FlowNode
-    catch: dict[str, FlowNode]  # TIBCO fault name -> the handler's flow
+    catch: tuple[tuple[str, FlowNode], ...]  # (TIBCO fault name, the handlers' flow), in IR order
     catch_all: FlowNode | None
 
 
 @dataclass(frozen=True)
 class Loop:
+    """A group. ``over`` and the counters drive an ``iterate`` group, ``condition`` and ``style`` a
+    ``loop``; the other kinds (transaction, critical, parallel, scope) only bound ``body``. Each
+    expression is ``None`` when code cannot write it; its TIBCO text is in ``tibco``."""
+
     group_id: str
-    over: Expr | None  # what an iterate group walks (its ``over`` setting), when code can read it
+    over: Expr | None  # iterate: the list walked (BW6 ``variable_list``, BW5 ``over``)
     body: FlowNode
     kind: str = ""  # the IR group kind: loop, iterate, transaction, critical, parallel, scope
+    style: str = ""  # forEach, while, repeatUntil (BW6 loop element); repeatUntil for a BW5 repeat
+    counter: str | None = None  # the index variable (BW6 ``counter``, BW5 ``index_slot``)
+    element: str | None = None  # the current element variable (BW6 ``current_element``, BW5 slot)
+    start: Expr | None = None  # iterate without a list: the counter's first value
+    final: Expr | None = None  # and its last
+    condition: Expr | None = None  # loop: while / until
+    parallel: bool = False  # iterate: iterations may run in parallel
+    tibco: tuple[tuple[str, str], ...] = ()  # (setting, TIBCO text) of every expression setting
 
 
 FlowNode = Seq | Run | If | Queue | Try | Loop
@@ -129,15 +153,12 @@ class ServicePlan:
     starter: Starter
     steps: list[PlanStep]
     flow: FlowNode
-    contracts: ContractModel
+    contracts: dict[str, ContractModel]  # by the namespace the stack emits them in
     config: list[ConfigMap] = field(default_factory=list)
     messaging: list[MessagingEntity] = field(default_factory=list)
 
 
 # ------------------------------------------------------------------- steps
-_GENERIC = frozenset({"java.invoke", "xslt.transform", "json.parse", "json.render", "xml.parse", "xml.render",
-                      "shared.get", "shared.set", "file.read", "file.write", "file.list", "ftp.get", "ftp.put",
-                      "mail.send", "mail.receive", "cmd.exec"})
 _INVOKE = frozenset({"http.invoke", "rest.invoke", "soap.invoke"})
 _CODE_ONLY = frozenset({"noop", "catch", "confirm", "throw", "reply", "end", "log", "mapper", "assign",
                         "call.process", "jdbc.query", "jdbc.update"})
@@ -239,9 +260,27 @@ class _Graph:
         if node_id not in self.groups:
             return Run(node_id)
         g = self.groups[node_id]
-        over = g.config.get("over")
-        body = self.flow(self.nested[node_id], self._entries(node_id))
-        return Loop(node_id, parse_simple(over) if isinstance(over, str) else None, body, kind=g.kind)
+        cfg = g.config
+
+        def text(*keys: str) -> str:
+            return next((str(cfg[k]).strip() for k in keys if isinstance(cfg.get(k), str) and cfg[k].strip()), "")
+
+        current = cfg.get("current_element") if isinstance(cfg.get("current_element"), dict) else {}
+        settings = (("variable_list", text("variable_list", "over")), ("start_counter", text("start_counter")),
+                    ("final_counter", text("final_counter")),
+                    ("condition", text("condition", "while_condition", "repeat_condition")),
+                    ("current_element", str(current.get("expression") or "").strip()))
+        tib = dict(settings)
+
+        def expr(key: str) -> Expr | None:
+            return parse_simple(tib[key]) if tib[key] else None
+
+        style = text("loop") or ("repeatUntil" if text("repeat_condition") else "while" if text("while_condition") else "")
+        return Loop(node_id, expr("variable_list"), self.flow(self.nested[node_id], self._entries(node_id)),
+                    kind=g.kind, style=style, counter=text("counter", "index_slot") or None,
+                    element=str(current.get("variable") or "") or text("iteration_element_slot") or None,
+                    start=expr("start_counter"), final=expr("final_counter"), condition=expr("condition"),
+                    parallel=cfg.get("parallel") is True, tibco=tuple((k, v) for k, v in settings if v))
 
     def _entries(self, group_id: str) -> list[str]:
         e = self.groups[group_id].config.get("entry_ids")
@@ -257,9 +296,9 @@ class _Graph:
         inside = set(nodes)
         links = tuple(QueueLink(t.id, t.from_id, t.to_id, t.kind,
                                 parse_simple(t.expression or "") if t.kind == "conditional" else None,
-                                t.expression or "")
-                      for t in self.p.transitions if t.from_id in inside and t.to_id in inside)
-        targets = {lk.to_id for lk in links}
+                                t.expression or "", crosses=not (t.from_id in inside and t.to_id in inside))
+                      for t in self.p.transitions if t.from_id in inside or t.to_id in inside)
+        targets = {lk.to_id for lk in links if not lk.crosses}
         st = self.p.starter
         if st and st.activity_id in inside:
             starts = [st.activity_id]
@@ -376,14 +415,15 @@ def _flow(process: Process) -> FlowNode:
     body = g.flow(g.main_nodes(), [])
     if not process.fault_handlers:
         return body
-    catch: dict[str, FlowNode] = {}
+    by_fault: dict[str, list[str]] = {}  # several handlers of one fault run as one catch
     catch_all: list[str] = []
     for h in process.fault_handlers:
         ids = [a for a in h.activity_ids if a in g.acts]
         if h.fault_name:
-            catch.setdefault(h.fault_name, g.flow(ids, []))
+            by_fault.setdefault(h.fault_name, []).extend(i for i in ids if i not in by_fault[h.fault_name])
         else:
-            catch_all += ids
+            catch_all += [i for i in ids if i not in catch_all]
+    catch = tuple((fault, g.flow(ids, [])) for fault, ids in by_fault.items())
     return Try(body, catch, g.flow(catch_all, []) if catch_all else None)
 
 
@@ -418,15 +458,16 @@ def _starter(process: Process) -> Starter:
 
 
 # --------------------------------------------------------------- contracts
-def _contracts(app: Application, design: DesignRecord) -> ContractModel:
-    """The design's contracts as one model, with the record names the stack's plan emits."""
+def _contracts(app: Application, design: DesignRecord) -> dict[str, ContractModel]:
+    """The design's contracts, one model per namespace the stack emits them in, with the record
+    names its plan gives (unique within a namespace, so nothing is shadowed)."""
     from engine.stacks import get_stack
 
     naming = get_stack(design.stack).naming
     app_name = naming.type_name(app.id, "App")
     plans = plan_contracts(app_name, app.contracts, naming)
     by_id = {c.id: c for c in app.contracts}
-    out = ContractModel()
+    out: dict[str, ContractModel] = {}
     for cm in design.contracts:
         contract, plan = by_id.get(cm.contract_id), plans.get(cm.contract_id)
         if contract is None or plan is None:
@@ -435,12 +476,14 @@ def _contracts(app: Application, design: DesignRecord) -> ContractModel:
             model = contract_model(contract, plan.reserved)
         except (etree.XMLSyntaxError, ValueError):
             continue  # an unparsable contract has no records (``contracts.record_names`` gives [])
-        for name, rec in model.records.items():
-            out.records.setdefault(name, rec)
-        for name, enum in model.enums.items():
-            out.enums.setdefault(name, enum)
-        out.root_paths += [rp for rp in model.root_paths if rp not in out.root_paths]
-    return out
+        merged = out.setdefault(plan.namespace, ContractModel())
+        clash = (set(model.records) | set(model.enums)) & (set(merged.records) | set(merged.enums))
+        if clash:  # plan_contracts reserves names per namespace, so this is a planning bug
+            raise ValueError(f"contract {cm.contract_id} redefines {sorted(clash)} in {plan.namespace}")
+        merged.records.update(model.records)
+        merged.enums.update(model.enums)
+        merged.root_paths += [rp for rp in model.root_paths if rp not in merged.root_paths]
+    return {ns: out[ns] for ns in sorted(out)}
 
 
 # -------------------------------------------------------------------- build

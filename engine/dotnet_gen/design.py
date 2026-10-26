@@ -28,7 +28,7 @@ from typing import Any
 
 from engine.analysis.models import Citation, Finding, Rule
 from engine.domains.models import IOCard
-from engine.dotnet_gen import csharp_contracts, xpath
+from engine.dotnet_gen import xpath
 from engine.dotnet_gen.datamodel import design_views
 from engine.dotnet_gen.models import (
     DEFAULT_STACK,
@@ -47,7 +47,7 @@ from engine.dotnet_gen.models import (
     SolutionLayout,
     compute_design_hash,
 )
-from engine.dotnet_gen.patterns import PATTERNS, PatternSpec
+from engine.dotnet_gen.patterns import JMS_PATTERNS, PATTERNS, PatternSpec
 from engine.ir.catalogue import GROUP_KIND_TO_CANONICAL
 from engine.ir.models import Activity, Application, Contract, Group, Process, Resource, Transition
 from engine.ir.spec_hash import spec_hash as compute_spec_hash
@@ -55,11 +55,8 @@ from engine.stacks import get_stack
 from engine.stacks.base import StackNaming
 from engine.stacks.contracts import plan_contracts
 
-pascal = csharp_contracts.pascal
-
 _PROJECT_KINDS = ("api", "core", "infrastructure", "tests")
 _API_STARTERS = ("rest", "http", "soap")
-_JMS_TYPES = ("jms.receive", "jms.send", "jms.publish", "jms.reply", "jms.request_reply")
 _INVOKE_TYPES = ("http.invoke", "rest.invoke", "soap.invoke")
 _LIVE_RULES = ("draft", "approved", "edited", "unverified")
 _NOT_A_DECISION = "A recommendation, not a decision: the architect decides at G3."
@@ -141,7 +138,7 @@ class _Ctx:
         self.starter_kind = process.starter.kind if process.starter else None
         acts = {a.id: a for a in process.activities}
         st_act = acts.get(process.starter.activity_id) if process.starter else None
-        self.starter_name = naming.type_name(st_act.name if st_act else "Execute", "Step")
+        self.starter_words = st_act.name if st_act else "Execute"
         self.calls = {c.activity_id: c.target_process for c in process.calls}
         # node id -> [(rule or finding id, citation)] in input order
         self.rule_cits: dict[str, list[tuple[str, Citation]]] = defaultdict(list)
@@ -172,46 +169,40 @@ class _Ctx:
     def project(self, kind: str) -> str:
         return self.naming.layer_folder(kind, self.app_name)
 
-    def values(self, act: Activity | None, name: str) -> dict[str, str]:
-        """The ``patterns.TEMPLATE_KEYS`` placeholders of a row, each named by the stack's naming."""
-        type_name = self.naming.type_name
+    def words(self, act: Activity | None, name: str) -> dict[str, str]:
+        """The raw TIBCO words behind a row's names, keyed by ``patterns.TEMPLATE_KEYS`` (no
+        ``exception``: the stack names it from ``fault``). ``StackNaming.row_names`` cases them."""
         resource = name
-        fault_words = name
+        fault = name
         target = ""
         destination = ""
         if act is not None:
             res = _find_resource(self.app, act.config.get("resource_ref"))
-            raw = res.name if res else str(act.config.get("resource_ref") or name).rsplit(".", 1)[-1]
-            resource = type_name(raw, "Step")
-            if resource.endswith("Client") and len(resource) > len("Client"):
-                resource = resource[: -len("Client")]
+            resource = res.name if res else str(act.config.get("resource_ref") or name).rsplit(".", 1)[-1]
             if act.config.get("fault_name"):
-                fault_words = str(act.config["fault_name"])
+                fault = str(act.config["fault_name"])
             tgt = self.calls.get(act.id) or act.config.get("sub_process") or act.config.get("subprocess") or ""
-            target = type_name(str(tgt).rsplit(".", 1)[-1], "Step") if tgt else ""
+            target = str(tgt).rsplit(".", 1)[-1] if tgt else ""
             destination = _destination(act)
-        return {"app": self.app_name, "process": self.proc_name, "activity": type_name(name, "Step"),
-                "starter": self.starter_name, "resource": resource, "fault": type_name(fault_words, "Step"),
-                "exception": self.naming.exception_name(fault_words), "target": target,
-                "destination": destination}
+        return {"app": self.app.id, "process": self.p.name, "activity": name, "starter": self.starter_words,
+                "resource": resource, "fault": fault, "target": target, "destination": destination}
 
     def row(self, node_id: str, name: str, ctype: str, pattern: str, spec: PatternSpec,
             act: Activity | None, origin: str | None = None) -> MappingRow:
-        v = self.values(act, name)
+        w = self.words(act, name)
+        if pattern == "call.process" and not w["target"]:
+            w["target"] = name
         project = spec.project
-        file_t, class_t, method_t = self.naming.pattern_paths(pattern)
+        file, class_name, method = self.naming.row_names(pattern, w)
         if pattern == "reply":  # the reply belongs to whatever receives the request
             if self.starter_kind == "soap":
-                file_t, class_t, _ = self.naming.pattern_paths("soap.receive")
+                file, class_name, _ = self.naming.row_names("soap.receive", w)
             elif self.starter_kind not in _API_STARTERS:
                 project = PATTERNS["end"].project
-                file_t, class_t, method_t = self.naming.pattern_paths("end")
-        if pattern == "call.process" and not v["target"]:
-            v["target"] = v["activity"]
+                file, class_name, method = self.naming.row_names("end", w)
         return MappingRow(
             activity_id=node_id, activity_name=name, canonical_type=ctype, pattern=pattern,
-            project=self.project(project), file=file_t.format(**v), class_name=class_t.format(**v),
-            method=method_t.format(**v),
+            project=self.project(project), file=file, class_name=class_name, method=method,
             rule_ids=self._ids(self.rule_cits.get(node_id, []), act, pattern == "input.mapping"),
             finding_ids=self._ids(self.finding_cits.get(node_id, []), act, pattern == "input.mapping"),
             origin=origin or spec.origin,
@@ -341,7 +332,7 @@ def _messaging(p: Process) -> list[MessagingEntity]:
             out.append(e)
 
     for act in p.activities:
-        if act.type not in _JMS_TYPES or act.type == "jms.reply":
+        if act.type not in JMS_PATTERNS or act.type == "jms.reply":
             continue
         dest, style = _destination(act), _messaging_style(act)
         if act.type == "jms.receive":
@@ -453,9 +444,7 @@ def _short(text: str, n: int = 80) -> str:
 
 def _sequence(ctx: _Ctx, primary: dict[str, MappingRow]) -> list[SequenceStep]:
     p = ctx.p
-    v = ctx.values(None, ctx.proc_name)
-    _, service_t, run_t = ctx.naming.pattern_paths("end")  # the process service and its entry method
-    service, run = service_t.format(**v), run_t.format(**v)
+    _, service, run = ctx.naming.row_names("end", ctx.words(None, p.name))  # the service and its entry method
     steps: list[SequenceStep] = []
     st = p.starter
     starter_row = primary.get(st.activity_id) if st else None

@@ -103,6 +103,13 @@ def test_dotnet_naming_reproduces_every_pattern():
         assert naming.pattern_paths(name) == (spec.file_template, spec.class_template, spec.method_template)
     with pytest.raises(KeyError):
         naming.pattern_paths("no.such.pattern")
+    words = {"app": "gmf.credit", "process": "DealerFundingRequest", "activity": "Lookup Dealer",
+             "starter": "get", "resource": "EquifaxClient", "fault": "DealerInactiveFault", "target": "",
+             "destination": "gmf.funding.events"}
+    assert naming.row_names("jdbc.query", words) == (
+        "Repositories/DealerFundingRequestRepository.cs", "DealerFundingRequestRepository", "LookupDealerAsync")
+    assert naming.row_names("http.invoke", words)[1] == "EquifaxClient"  # Equifax + Client, not EquifaxClientClient
+    assert naming.row_names("throw", words)[1] == "DealerInactiveFaultException"
 
 
 def test_dotnet_naming_members():
@@ -171,10 +178,11 @@ class SnakeNaming:
     def connection_key(self, resource: str) -> str:
         return "DB_" + "_".join(self._words(resource)).upper()
 
-    def pattern_paths(self, pattern: str) -> tuple[str, str, str]:
+    def row_names(self, pattern: str, words: dict[str, str]) -> tuple[str, str, str]:
         PATTERNS[pattern]  # KeyError for an unknown pattern, as the contract says
-        return f"{pattern.replace('.', '_')}/{{process}}.snk", "{process}" + pattern.title().replace(".", ""), \
-            "run_{activity}"
+        folder = pattern.replace(".", "_")
+        return (f"{folder}/{self.file_name(words['process'])}", self.type_name(f"{words['process']} {folder}"),
+                self.method_name("run", words["activity"]))
 
     def layer_folder(self, kind: str, app: str) -> str:
         return f"{app.lower()}/{kind}"
@@ -207,10 +215,14 @@ def _naming_contract(naming) -> None:
     assert naming.connection_key("FundingDB")
     assert all(isinstance(getattr(naming, a), str) and getattr(naming, a)
                for a in ("platform", "config_file", "messaging_actor"))
+    words = {"app": "gmf.credit", "process": "Dealer Funding Request", "activity": "Lookup Dealer",
+             "starter": "Receive", "resource": "EquifaxClient", "fault": "DealerInactiveFault",
+             "target": "Audit Log", "destination": "gmf.funding.events"}
     for name in PATTERNS:
-        assert all(isinstance(x, str) for x in naming.pattern_paths(name))
+        file, cls, method = naming.row_names(name, words)
+        assert file and cls and method and "{" not in file + cls + method
     with pytest.raises(KeyError):
-        naming.pattern_paths("no.such.pattern")
+        naming.row_names("no.such.pattern", words)
     kinds = ("api", "core", "infrastructure", "tests")
     folders = [naming.layer_folder(k, naming.type_name("gmf.credit", "App")) for k in kinds]
     assert len(set(folders)) == 4
@@ -244,11 +256,11 @@ def test_design_takes_every_name_from_the_stack(monkeypatch, gmf_app, gmf_proces
                    ".csproj"):
         assert dotnet not in blob, dotnet
     row = next(r for r in rec.mapping if r.activity_id == "LookupDealer" and r.pattern == "jdbc.query")
-    assert (row.file, row.class_name, row.method) == ("jdbc_query/DealerFundingRequest.snk",
-                                                      "DealerFundingRequestJdbcQuery", "run_LookupDealer")
+    # raw words reach the stack: its method and file casing, not a pre-cased PascalCase name
+    assert (row.file, row.class_name, row.method) == ("jdbc_query/dealer_funding_request.snk",
+                                                      "DealerFundingRequestJdbcQuery", "run_lookup_dealer")
     assert row.project == "gmfcredit/infrastructure"
-    throw = next(r for r in rec.mapping if r.pattern == "throw")
-    assert "{exception}" not in throw.file
+    assert rec.sequence[1].label == "run_dealer_funding_request"  # the service entry, from row_names("end")
     assert rec.sequence[0].from_ == "Broker"
     assert {c.key for c in rec.config} and all(c.key.startswith(("GMF_", "DB_")) for c in rec.config)
     assert all("Snake" in i.reason and "settings.toml" in i.reason for i in rec.config_ignored)

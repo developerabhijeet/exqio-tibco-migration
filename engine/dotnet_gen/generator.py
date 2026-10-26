@@ -54,6 +54,7 @@ from engine.dotnet_gen.models import DesignRecord, MappingRow
 from engine.dotnet_gen.xpath import call as _call
 from engine.ir.models import Activity, Application, Contract, Process, Transition
 from engine.parity.models import Scenario
+from engine.stacks.sql import rewrite_placeholders
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 RESERVED_FOR_INFRA: tuple[str, ...] = (
@@ -213,25 +214,6 @@ def raw_string_literal(text: str, indent: int) -> str:
     return f"{quotes}\n" + "\n".join(lines) + f"\n{pad}{quotes}"
 
 
-_DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$")
-
-
-def _skip_quoted(sql: str, i: int, quote: str, backslash: bool) -> int:
-    j, n = i + 1, len(sql)
-    while j < n:
-        c = sql[j]
-        if backslash and c == "\\":
-            j += 2
-            continue
-        if c == quote:
-            if j + 1 < n and sql[j + 1] == quote:
-                j += 2
-                continue
-            return j + 1
-        j += 1
-    return n
-
-
 def to_named_parameters(sql: str) -> str:
     """Convert JDBC ``?`` placeholders to named Npgsql parameters ``@p0, @p1, ...`` in order.
 
@@ -240,53 +222,7 @@ def to_named_parameters(sql: str) -> str:
     escape ``??`` becomes the single ``?`` operator Npgsql expects. Everything else is kept byte for
     byte, so (without ``??``) replacing ``@pN`` back with ``?`` gives the TIBCO statement.
     """
-    out: list[str] = []
-    i, n, k = 0, len(sql), 0
-    while i < n:
-        c = sql[i]
-        if c == "'":
-            prev = sql[i - 1] if i else ""
-            before = sql[i - 2] if i > 1 else ""
-            escape = prev in "eE" and not (before.isalnum() or before == "_")
-            j = _skip_quoted(sql, i, "'", escape)
-        elif c == '"':
-            j = _skip_quoted(sql, i, '"', False)
-        elif sql.startswith("--", i):
-            j = sql.find("\n", i)
-            j = n if j == -1 else j
-        elif sql.startswith("/*", i):
-            depth, j = 1, i + 2
-            while j < n and depth:
-                if sql.startswith("/*", j):
-                    depth, j = depth + 1, j + 2
-                elif sql.startswith("*/", j):
-                    depth, j = depth - 1, j + 2
-                else:
-                    j += 1
-        elif c == "$" and (m := _DOLLAR_TAG.match(sql, i)) and (not i or not (sql[i - 1].isalnum() or sql[i - 1] == "_")):
-            close = sql.find(m.group(0), m.end())
-            j = n if close == -1 else close + len(m.group(0))
-        elif c == "?":
-            nxt = sql[i + 1:i + 3]
-            if nxt[:1] == "?":  # PgJDBC escape: ?? is a literal ? operator, not a placeholder
-                out.append("?")
-                i += 2
-                continue
-            if nxt[:1] in ("|", "&") and nxt[1:2] != nxt[:1]:
-                out.append("?" + nxt[0])
-                i += 2
-                continue
-            out.append(f"@p{k}")
-            k += 1
-            i += 1
-            continue
-        else:
-            out.append(c)
-            i += 1
-            continue
-        out.append(sql[i:j])
-        i = j
-    return "".join(out)
+    return rewrite_placeholders(sql, lambda k: f"@p{k}")
 
 
 def placeholder_count(sql: str) -> int:

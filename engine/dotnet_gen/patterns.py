@@ -1,7 +1,8 @@
 """Deterministic pattern catalogue: canonical TIBCO step type to .NET pattern (design spec 7.2).
 
-Every canonical type in ``engine.ir.catalogue.CANONICAL_TYPES`` (49) has a pattern. Templates are
-``str.format`` strings over ``TEMPLATE_KEYS``; ``design.build_design_skeleton`` fills them:
+Every canonical type in ``engine.ir.catalogue.CANONICAL_TYPES`` (49) has a pattern. The design
+hands the raw TIBCO words of each key below to ``StackNaming.row_names``; the .NET templates are
+``str.format`` strings over ``TEMPLATE_KEYS``, which ``DotnetNaming`` fills with these values:
 
 ==============  ===========================================================================
 key             value
@@ -18,9 +19,9 @@ target          PascalCase name of a called subprocess (``AuditLog``)
 destination     JMS queue or topic name, verbatim (``gmf.funding.events``)
 ==============  ===========================================================================
 
-The ``.cs`` templates (``file_template``, ``class_template``, ``method_template``) are the .NET row of
-``StackNaming.pattern_paths``: only ``engine.stacks.dotnet.naming.DotnetNaming`` reads them, and the
-design asks the target stack's naming for a pattern's paths. Name, project kind, description,
+The ``.cs`` templates (``file_template``, ``class_template``, ``method_template``) are .NET's:
+only ``engine.stacks.dotnet.naming.DotnetNaming`` reads them, and the design asks the target
+stack's naming for a row's names (``StackNaming.row_names``). Name, project kind, description,
 origin and decision hint are stack neutral.
 
 A pattern with a ``decision`` is flagged: the design record carries a Decision for every step
@@ -30,6 +31,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal
+
+#: The JMS and JDBC step types, for the code that treats them as a family.
+JMS_PATTERNS: frozenset[str] = frozenset({"jms.receive", "jms.send", "jms.publish", "jms.reply", "jms.request_reply"})
+JDBC_PATTERNS: frozenset[str] = frozenset({"jdbc.query", "jdbc.update", "jdbc.call"})
 
 TEMPLATE_KEYS: tuple[str, ...] = (
     "app", "process", "activity", "starter", "resource", "fault", "exception", "target", "destination",

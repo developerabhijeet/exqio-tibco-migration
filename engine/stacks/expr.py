@@ -74,6 +74,7 @@ _STEP = re.compile(r"^(@?)(?:[\w.\-]+:)?([\w.\-]+)(?:\[(\d+)\])?$")
 _STRING = re.compile(r"""^(?:"([^"]*)"|'([^']*)')$""")
 _INT = re.compile(r"^-?\d+$")
 _DECIMAL = re.compile(r"^-?\d+\.\d+$")
+MAX_DEPTH = 64  # nesting beyond this is not an expression code writes: None, never a RecursionError
 _OPS: dict[str, CompareOp] = {"=": "==", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
 
 
@@ -153,10 +154,10 @@ def _path(expr: str) -> Path | None:
     return Path(m.group(1), tuple(steps), attribute)
 
 
-def _operand(expr: str) -> Expr | None:
+def _operand(expr: str, depth: int = 0) -> Expr | None:
     """A value: literal, path, ``count(path)`` or a translatable function call."""
     e = expr.strip()
-    if not e:
+    if not e or depth > MAX_DEPTH:
         return None
     if m := _STRING.match(e):
         return Lit(m.group(1) if m.group(1) is not None else m.group(2))
@@ -178,32 +179,32 @@ def _operand(expr: str) -> Expr | None:
     counts = FUNCTIONS.get(name)
     if counts is None or len(args) not in counts:
         return None
-    parsed = [_operand(a) for a in args]
+    parsed = [_operand(a, depth + 1) for a in args]
     if any(p is None for p in parsed):
         return None
     return Call(name, tuple(parsed))  # type: ignore[arg-type]
 
 
-def parse_simple(expr: str) -> Expr | None:
+def parse_simple(expr: str, _depth: int = 0) -> Expr | None:
     """The AST of ``expr``, or ``None`` when code cannot write it (see the module docstring)."""
     e = " ".join(str(expr or "").split())
-    if not e or not _balanced(e):
+    if not e or _depth > MAX_DEPTH or not _balanced(e):
         return None
     for word, node in (("or", Or), ("and", And)):
         parts = _split_word(e, word)
         if len(parts) > 1:
-            items = [parse_simple(p) for p in parts]
+            items = [parse_simple(p, _depth + 1) for p in parts]
             return None if any(i is None for i in items) else node(tuple(items))  # type: ignore[arg-type]
     if e.startswith("(") and e.endswith(")") and _balanced(e[1:-1]):
-        return parse_simple(e[1:-1])
+        return parse_simple(e[1:-1], _depth + 1)
     if e.startswith("not(") and e.endswith(")") and _balanced(e[4:-1]):
-        inner = parse_simple(e[4:-1])
+        inner = parse_simple(e[4:-1], _depth + 1)
         return None if inner is None else Not(inner)
     cmp = _compare_split(e)
     if cmp is not None:
         left, op, right = cmp
-        lhs, rhs = _operand(left), _operand(right)
+        lhs, rhs = _operand(left, _depth + 1), _operand(right, _depth + 1)
         if lhs is None or rhs is None or op not in _OPS:
             return None
         return Compare(_OPS[op], lhs, rhs)
-    return _operand(e)
+    return _operand(e, _depth)
