@@ -105,6 +105,7 @@ shows each provider as configured or missing and never shows a value.
 | `make api`         | the API with reload on `API_PORT` (default 9000); refuses a busy port and names what holds it                                                                                          |
 | `make web`         | the web dev server on `WEB_PORT` (default 3000), pointed at `API_URL`; refuses a busy port, since a dev server left from an earlier session keeps calling the port it was started with |
 | `make test`        | engine and API test suites (pytest)                                                                                                                                                    |
+| `make test-all`    | everything, including `slow` tests (the 20 000-node ingest); `make test` deselects them (`PYTEST_MARK`) |
 | `make e2e`         | Playwright through the seven tabs; starts its own API and web on two free ports                                                                                                        |
 | `make demo-check`  | the acceptance run (below)                                                                                                                                                             |
 | `make samples`     | regenerate the synthetic estate                                                                                                                                                        |

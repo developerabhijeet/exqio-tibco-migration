@@ -20,7 +20,7 @@ DB_PORT ?= $(or $(shell sed -n 's|^DATABASE_URL=.*:\([0-9][0-9]*\)/.*|\1|p' .env
 PORT_OPEN = python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0)'
 WEB_CORS_ENV := $(if $(filter-out 3000,$(WEB_PORT)),CORS_ORIGINS=$${CORS_ORIGINS:-$(WEB_ORIGIN)})
 
-.PHONY: setup db neo4j neo4j-test api worker web test e2e demo-check toolchain samples samples-zip nuget-cache \
+.PHONY: setup db neo4j neo4j-test api worker web test test-all e2e demo-check toolchain samples samples-zip nuget-cache \
 	images image-test image-lint image-scan pilot-up egress-audit chart-check \
 	azure-validate pipeline-lint kind-tools kind-e2e
 
@@ -106,7 +106,14 @@ web:
 	cd web && ([ -d node_modules ] || npm install) && \
 		NEXT_PUBLIC_API_URL=$${NEXT_PUBLIC_API_URL:-$(API_URL)} npm run dev -- -p $(WEB_PORT)
 
+# `make test` skips tests marked `slow` (e.g. the 20 000-node ingest); `make test-all` runs everything.
+# Override the selection with PYTEST_MARK (empty = no filter); PYTEST still overrides the command.
+PYTEST_MARK ?= -m "not slow"
+
 test: neo4j-test
+	NEO4J_TEST_URI=$${NEO4J_TEST_URI:-bolt://localhost:7688} NEO4J_TEST_PASSWORD=$${NEO4J_TEST_PASSWORD:-exiqo-test-neo4j} $(PYTEST) $(PYTEST_MARK)
+
+test-all: neo4j-test
 	NEO4J_TEST_URI=$${NEO4J_TEST_URI:-bolt://localhost:7688} NEO4J_TEST_PASSWORD=$${NEO4J_TEST_PASSWORD:-exiqo-test-neo4j} $(PYTEST)
 
 # Playwright starts its own API (PROVIDER=fake, EMBEDDINGS_BACKEND=hash) and web on two free ports,

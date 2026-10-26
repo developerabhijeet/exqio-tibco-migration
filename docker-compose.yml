@@ -34,22 +34,22 @@ services:
       timeout: 5s
       retries: 12
 
-  # Tests only (profile `test`, started by `make test`): throwaway data on tmpfs, its own port.
+  # Tests only (profile `test`, started by `make test`): throwaway data on an anonymous volume, its own port.
   neo4j-test:
     image: neo4j:5.26.32
     profiles: ["test"]
     environment:
       NEO4J_AUTH: neo4j/exiqo-test-neo4j
       NEO4J_server_memory_heap_max__size: 1G
-      # /data is tmpfs (RAM): bound the page cache and keep no old transaction logs, so the
-      # 20 000-node ingest test does not grow the container past the Docker VM's memory.
+      # /data is an anonymous volume (not RAM): bound the page cache and keep no old transaction
+      # logs, so the 20 000-node ingest test does not grow the container past the Docker VM's memory.
       NEO4J_server_memory_pagecache_size: 512M
       NEO4J_db_tx__log_rotation_retention__policy: "false"
       NEO4J_db_tx__log_rotation_size: 64M
       NEO4J_dbms_usage__report_enabled: "false"
     ports:
       - "7688:7687"
-    tmpfs:
+    volumes:
       - /data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
