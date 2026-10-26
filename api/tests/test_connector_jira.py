@@ -4,6 +4,7 @@ worker."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -11,14 +12,18 @@ from sqlalchemy import select
 
 from api.app.connectors.config import STORED_KEY
 from api.app.connectors.jira import (
+    DESCRIPTION_MAX,
+    TRUNCATED,
     IssueItem,
     IssueSource,
     JiraConnector,
     issue_fields,
+    question_id,
     ref_label,
     wiki_escape,
 )
 from api.app.connectors.registry import AtlassianConnector, connector_for
+from api.app.jobs.runner import JobWorker
 from api.app.models import (
     Application,
     AuditLog,
@@ -50,8 +55,10 @@ def proc_with_text(text: str) -> IssueSource:
                        findings={"F1": {"finding_key": "F1", "severity": "high", "text": text, "decision": None,
                                         "source": "static", "citations": [CITATION]}},
                        questions=[{"question": "Reject inactive dealers?", "recommendation": "Yes"}],
-                       diffs={"d1": {"scenario": "happy path", "field": "funding.amount", "kind": "field",
-                                     "expected": 100, "actual": 99, "classification": "defect"}})
+                       diffs={"S1:funding.amount": {"scenario": "happy path", "scenario_key": "S1",
+                                                    "field": "funding.amount", "kind": "field", "expected": 100,
+                                                    "actual": 99, "classification": "defect"}},
+                       diff_ids={"d1": "S1:funding.amount"})
 
 
 def app() -> str:
@@ -233,12 +240,14 @@ def test_fields_per_source_summary_labels_and_masking():
                      labels=["exiqo"])["fields"]
     assert q["summary"] == "[DealerFundingRequest] Open question: Reject inactive dealers?"
     assert q["labels"][:2] == ["exiqo", "open-question"] and "Yes" in q["description"]
-    assert q["description"].endswith(f"process {IR_ID}, question 0")
+    assert q["description"].endswith(f"process {IR_ID}, question {question_id('Reject inactive dealers?')}")
 
     p = issue_fields(IssueItem(type="parity", ref="d1"), src, app(), project_key="GMF", issue_type="Task",
                      labels=["exiqo"])["fields"]
     assert p["summary"] == "[DealerFundingRequest] Parity: happy path funding.amount"
     assert p["labels"][:2] == ["exiqo", "parity"] and "99" in p["description"] and "100" in p["description"]
+    assert p["labels"][-1] == ref_label("proc-1", "parity:S1:funding.amount")
+    assert p["description"].endswith(f"process {IR_ID}, parity S1:funding.amount")
 
 
 def test_summary_is_one_line_of_at_most_255_characters():
@@ -275,12 +284,12 @@ async def test_wire_format(client_atlassian, flavor, process_with_findings, wait
     assert {r.path for r in jira.requests if r.method == "GET"} == {search}  # the lost-answer check
     links = await _links(c.app, process_with_findings)
     assert [(lk.local_ref, lk.remote_id, lk.object_type, lk.kind) for lk in links] == [
-        ("finding:F3", "GMF-2", "jira_issue", "atlassian"), ("parity:diff-defect", "GMF-1", "jira_issue", "atlassian")]
+        ("finding:F3", "GMF-2", "jira_issue", "atlassian"), ("parity:S1:funding.amount", "GMF-1", "jira_issue", "atlassian")]
     assert links[0].remote_url == f"{jira.url}/browse/GMF-2"
     rows = await _audits(c.app, "connector jira create")
     assert [(r.detail["outcome"], r.detail["target"]) for r in rows] == [
         ("ok", f"{jira.url}/browse/GMF-1"), ("ok", f"{jira.url}/browse/GMF-2")]
-    assert rows[0].actor == "sme.vicky" and rows[0].detail["local_ref"] == "parity:diff-defect"
+    assert rows[0].actor == "sme.vicky" and rows[0].detail["local_ref"] == "parity:S1:funding.amount"
 
 
 async def test_republish_puts_summary_and_description_only(client_atlassian, jira_linked_finding, wait_terminal):
@@ -316,6 +325,7 @@ async def test_stale_link_is_marked_then_created_again_only_when_asked(client_at
     assert not link.stale and link.remote_id == "GMF-2"
     update_rows = await _audits(c.app, "connector jira update")
     assert update_rows[0].detail["outcome"] == "failed" and "marked stale" in update_rows[0].detail["message"]
+    assert update_rows[1].detail["outcome"] == "refused" and update_rows[1].detail["local_ref"] == "finding:F1"
 
 
 async def test_create_again_reuses_a_stale_issue_that_exists_again(client_atlassian, jira_linked_finding,
@@ -411,18 +421,25 @@ async def test_concurrent_jobs_do_not_duplicate(client_atlassian, jira_app, proc
     assert sorted(k for r in results for k in r["created"]) == ["GMF-1", "GMF-2"]
 
 
-async def test_same_request_twice_while_queued_is_409(client_atlassian, process_with_findings, wait_terminal):
+async def test_same_request_twice_while_queued_is_409(client_atlassian, jira_app, process_with_findings,
+                                                     wait_terminal):
     c, fake = client_atlassian("datacenter")
+    await jira_app.state.runner.worker.stop()  # nothing is claimed: the first job stays queued
     body = {"items": [{"type": "finding", "ref": "F1"}]}
-    statuses = [(await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME))
-                for _ in range(2)]
-    assert statuses[0].status_code == 202
-    assert statuses[1].status_code in (202, 409)  # 409 while the first is still queued
-    if statuses[1].status_code == 409:
-        assert statuses[1].json()["detail"] == "the same issues are already queued for this process"
-    for r in statuses:
-        if r.status_code == 202:
-            await wait_terminal(c, r.json()["job_id"])
+    first = await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME)
+    second = await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME)
+    by_index = await c.post(f"/processes/{process_with_findings}/jira/issues",  # same item, other order/form
+                            json={"items": [{"type": "finding", "ref": "F1"}] * 2}, headers=SME)
+    assert first.status_code == 202
+    assert second.status_code == 409 == by_index.status_code
+    assert second.json()["detail"] == "the same issues are already queued for this process"
+    worker = JobWorker(jira_app.state.sessionmaker, jira_app.state.worker_services, name="w-dedupe", slots=1,
+                       heartbeat_s=1, stale_s=90, max_attempts=1, reap_s=0.5, poll_s=0.1)
+    await worker.start()
+    try:
+        assert (await wait_terminal(c, first.json()["job_id"]))["created"] == ["GMF-1"]
+    finally:
+        await worker.stop()
     assert fake.jira.issue_count() == 1
 
 
@@ -455,7 +472,8 @@ async def test_jira_connector_calls(client_atlassian, jira_app):
     assert await jira.exists("GMF-1") and not await jira.exists("GMF-404")
     await jira.update("GMF-1", {"fields": {"summary": "changed"}})
     assert fake.jira.issue("GMF-1")["summary"] == "changed"
-    assert await jira.find_by_label("GMF", ref_label("proc-1", "question:0")) == (key, url)
+    qref = f"question:{question_id('Reject inactive dealers?')}"
+    assert await jira.find_by_label("GMF", ref_label("proc-1", qref)) == (key, url)
     assert await jira.find_by_label("GMF", "exiqo-ref-none") is None
     test = await jira.test()
     assert test.ok and test.account == "ExiQO bot"
@@ -524,3 +542,117 @@ async def test_unknown_process_is_404(client_atlassian):
     c, _ = client_atlassian("datacenter")
     r = await c.post("/processes/nope/jira/issues", json={"items": [{"type": "finding", "ref": "F1"}]}, headers=SME)
     assert r.status_code == 404
+
+
+# ------------------------------------------------------------------ fix round 1: identity, isolation, text
+
+
+async def _new_design(app_, pid: str, questions: list[dict]) -> None:
+    async with app_.state.sessionmaker() as s:
+        s.add(DesignRecord(process_id=pid, version=2, spec_hash="s" * 64, design_hash="e" * 64,
+                           record={"open_questions": questions}))
+        await s.commit()
+
+
+async def test_reordered_questions_update_the_right_issue(client_atlassian, process_with_findings, wait_terminal):
+    c, fake = client_atlassian("datacenter")
+    a = "Should inactive dealers be rejected before the deal lookup?"
+    out = await _issues(c, process_with_findings, [{"type": "question", "ref": "0"}], wait_terminal)
+    assert out["created"] == ["GMF-1"]
+    await _new_design(c.app, process_with_findings, [  # a re-design puts a new question first
+        {"question": "Is the funding event ordered?", "recommendation": "Use sessions"},
+        {"question": a, "recommendation": "Yes, always"}])
+    moved = await _issues(c, process_with_findings, [{"type": "question", "ref": "1"}], wait_terminal)
+    assert moved == {"created": [], "updated": ["GMF-1"], "stale": []}
+    assert fake.jira.issue("GMF-1")["summary"].endswith(a) and "Yes, always" in fake.jira.issue("GMF-1")["description"]
+    new = await _issues(c, process_with_findings, [{"type": "question", "ref": "0"}], wait_terminal)
+    assert new["created"] == ["GMF-2"] and fake.jira.issue("GMF-1")["summary"].endswith(a)  # never overwritten
+    by_id = await _issues(c, process_with_findings, [{"type": "question", "ref": question_id(a)}], wait_terminal)
+    assert by_id["updated"] == ["GMF-1"]
+    refs = [lk.local_ref for lk in await _links(c.app, process_with_findings)]
+    assert sorted(refs) == sorted([f"question:{question_id(a)}", f"question:{question_id('Is the funding event ordered?')}"])
+
+
+async def test_reverify_maps_the_same_difference_to_the_same_issue(client_atlassian, process_with_findings,
+                                                                   wait_terminal):
+    c, fake = client_atlassian("datacenter")
+    out = await _issues(c, process_with_findings, [{"type": "parity", "ref": "diff-defect"}], wait_terminal)
+    assert out["created"] == ["GMF-1"]
+    async with c.app.state.sessionmaker() as s:  # a re-verify: a new run, new field diff ids
+        build = (await s.execute(select(Build))).scalar_one()
+        scenario = (await s.execute(select(Scenario))).scalar_one()
+        run = ScenarioRun(build_id=build.id, scenario_id=scenario.id, job_id="j2", status="differs", report={})
+        s.add(run)
+        await s.flush()
+        s.add(FieldDiff(id="diff-defect-2", run_id=run.id, field="funding.amount", expected=100, actual=98,
+                        classification="defect"))
+        await s.commit()
+    gone = await c.post(f"/processes/{process_with_findings}/jira/issues",
+                        json={"items": [{"type": "parity", "ref": "diff-defect"}]}, headers=SME)
+    assert gone.status_code == 422  # the old run's id is not in the latest verify run
+    again = await _issues(c, process_with_findings, [{"type": "parity", "ref": "diff-defect-2"}], wait_terminal)
+    assert again == {"created": [], "updated": ["GMF-1"], "stale": []} and fake.jira.issue_count() == 1
+    assert "98" in fake.jira.issue("GMF-1")["description"]
+    stable = await _issues(c, process_with_findings, [{"type": "parity", "ref": "S1:funding.amount"}], wait_terminal)
+    assert stable["updated"] == ["GMF-1"]
+
+
+async def test_one_failed_item_does_not_stop_the_others(client_atlassian, process_with_findings, wait_terminal):
+    c, fake = client_atlassian("datacenter")
+    fake.jira.lose_create_answers, fake.jira.search_lag = 1, True  # the first item's create is unconfirmed
+    job = await _issues(c, process_with_findings, [{"type": "finding", "ref": "F1"},
+                                                   {"type": "finding", "ref": "F3"}], wait_terminal,
+                        expect="failed")
+    assert "1 of 2 item(s) failed" in job["error"] and "finding:F1" in job["error"] and "GMF-2" in job["error"]
+    rows = await _audits(c.app, "connector jira create")
+    assert [(r.detail["outcome"], r.detail["local_ref"]) for r in rows] == [("failed", "finding:F1"),
+                                                                             ("ok", "finding:F3")]
+    assert [lk.local_ref for lk in await _links(c.app, process_with_findings)] == ["finding:F3"]
+
+
+def test_long_description_is_cut_and_keeps_the_back_reference():
+    f = issue_fields(IssueItem(type="finding", ref="F1"), proc_with_text("{" * 40_000), app(), project_key="GMF",
+                     issue_type="Task", labels=[])["fields"]["description"]
+    assert len(f) <= DESCRIPTION_MAX < 32_767
+    assert TRUNCATED in f and f.endswith(f"ExiQO: project P1, process {IR_ID}, finding F1")
+    body = f[:f.index(TRUNCATED)].rstrip("\n")
+    assert (len(body) - len(body.rstrip("\\"))) % 2 == 0  # no escape cut in half
+
+
+def test_line_start_markup_and_emoticons_are_text():
+    out = wiki_escape("# one\n  h3. head\nbq. quote\nnot h1. here :) ;) :P (y) (flag) (on) \\)")
+    lines = out.split("\n")
+    assert lines[0].startswith("\\#") and lines[1] == "  h3\\. head" and lines[2].startswith("bq\\.")
+    assert "not h1. here" in lines[3]
+    for token in (":)", ";)", ":P"):
+        assert token not in out, token
+    for token in ("(y)", "(flag)", "(on)"):  # the ( is escaped
+        assert out.count(token) == out.count("\\" + token) == 1, token
+    assert "&#92;\\)" in out  # an entity is never followed by a bare face
+
+
+async def test_route_refusals_are_audited(client_atlassian, jira_app, atlassian_app, process_with_findings):
+    c, fake = client_atlassian("datacenter")
+    async with jira_app.state.sessionmaker() as s:
+        row = await s.get(Setting, STORED_KEY)
+        row.value = {**row.value, "atlassian": {**row.value["atlassian"], "project_key": "gmf-x"}}
+        await s.commit()
+    body = {"items": [{"type": "finding", "ref": "F1"}]}
+    bad = await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME)
+    assert bad.status_code == 422 and "is not a project key" in bad.json()["detail"]
+    async with jira_app.state.sessionmaker() as s:
+        row = await s.get(Setting, STORED_KEY)
+        row.value = {**row.value, "atlassian": {**row.value["atlassian"], "project_key": ""}}
+        await s.commit()
+    none = await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME)
+    assert none.status_code == 409
+    settings = jira_app.state.settings
+    install = json.loads(settings.connectors)
+    install["atlassian"]["jiraUrl"] = ""
+    settings.connectors = json.dumps(install)
+    no_url = await c.post(f"/processes/{process_with_findings}/jira/issues", json=body, headers=SME)
+    assert no_url.status_code == 409 and "no Jira URL" in no_url.json()["detail"]
+    rows = await _audits(c.app, "connector jira create")
+    assert [r.detail["outcome"] for r in rows] == ["refused"] * 3
+    assert [r.detail["items"] for r in rows] == [["finding:F1"]] * 3
+    assert fake.jira.requests == []

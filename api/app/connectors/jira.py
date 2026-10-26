@@ -5,15 +5,29 @@ descriptions; v3's ADF is Cloud only and v2 is still served there. Search is
 ``/rest/api/2/search`` on Data Center and ``/rest/api/2/search/jql`` on Cloud, where Atlassian
 removed the old endpoint.
 
-Issue text is built by code from stored rows only. Every value is masked (``mask_sensitive`` plus
-the password, secret and token fields) and then escaped for wiki markup, so ``{code}``,
-``[link|url]``, ``!image!`` or ``[~user]`` in a finding shows as text. The summary is plain text,
-so it is masked but not escaped.
+Identity (ruling X17): an item's ``local_ref`` and label never depend on a list position or a
+per-run id. A finding is ``finding:<finding key>``; an open question is
+``question:<sha256(normalised question text)[:16]>``, so a re-design that reorders the questions
+still updates the right issue; a parity difference is ``parity:<scenario key>:<field path>``, so
+the same difference found by a re-verify maps to the same issue. A request may still name a
+question by its index or a difference by its field diff id: ``canonical`` turns either into the
+stable form against the current data.
 
-Every issue carries a label derived from its process and local item (``ref_label``). A create
-whose answer is lost (a timeout, a 5xx: Jira may have stored the issue) is never posted again:
-the label is searched, and an issue found there is adopted. When nothing is found yet, the create
-is reported as failed, and the next run searches again before creating.
+Issue text is built by code from stored rows only. Every value is masked (``mask_sensitive`` plus
+the password, secret and token fields) and then escaped for wiki markup: ``{code}``,
+``[link|url]``, ``!image!``, ``[~user]``, line-start ``#``, ``h1.``-``h6.`` and ``bq.``, and the
+emoticon tokens (``:)``, ``(y)``...) show as text. Bare URLs (``http://...``) are still turned into
+links by Jira's renderer: wiki markup has no escape for them (an explicit link or image needs
+``[`` or ``!``, which are escaped). The summary is plain text, so it is masked but not escaped.
+A description longer than Jira's 32,767 characters is cut, keeping the back-reference line.
+
+Every issue carries a label derived from its process and identity (``ref_label``). A create whose
+answer is lost (a timeout, a 5xx: Jira may have stored the issue) is never posted again: the label
+is searched, and an issue found there is adopted. When nothing is found yet, the create is
+reported as failed, and the next run searches again before creating. Adoption trusts the label:
+an issue someone cloned in Jira keeps its labels, so a clone of an ExiQO issue (or an issue
+labelled by hand) can be adopted for an item that has no link; the oldest issue with the label
+wins.
 """
 from __future__ import annotations
 
@@ -34,17 +48,27 @@ if TYPE_CHECKING:
 
 ItemType = Literal["finding", "question", "parity"]
 SUMMARY_MAX = 255
+DESCRIPTION_MAX = 32_000  # Jira refuses more than 32,767 characters
+TRUNCATED = "… (cut to fit Jira; the full text is in ExiQO)"
 PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 TYPE_LABELS: dict[str, str] = {"finding": "finding", "question": "open-question", "parity": "parity"}
 JSON = {"Accept": "application/json"}
-#: Wiki-markup characters escaped with a backslash; a backslash itself becomes an entity, since a
-#: doubled one is a forced line break and a single one would escape the next character.
-_WIKI_SPECIAL = re.compile(r"([{}\[\]|*_\-+^~!])")
+_QUESTION_ID = re.compile(r"^[0-9a-f]{16}$")
+#: One pass over the text (the output is never rescanned). A backslash becomes ``&#92;`` (doubled
+#: it is a forced line break, single it escapes the next character); the markup characters get a
+#: backslash; so does the face of ``:) :( :P :D ;)`` and the ``(`` of ``(y) (n) (i) (/) (x) (?) (on)
+#: (off) (flag) (flagoff)`` (the other emoticons hold an escaped ``! + - *``). An entity is never
+#: followed by a bare face character, or its ``;`` would make an emoticon.
+_WIKI_TOKEN = re.compile(r"(?P<bs>\\)(?P<after>[()PDp])?|(?P<smile>[:;])(?P<face>[()PDp])"
+                         r"|(?P<paren>\()(?=(?:y|n|i|/|x|\?|on|off|flag|flagoff)\))"
+                         r"|(?P<special>[{}\[\]|*_\-+^~!])")
+_LINE_START = re.compile(r"(?m)^([ \t]*)(#|h[1-6](?=\.)|bq(?=\.))")
 
 
 class IssueItem(BaseModel):
     type: ItemType
-    ref: str = Field(min_length=1, max_length=200)  # finding key, question index, field diff id
+    # finding key; question id or index; ``<scenario key>:<field path>`` or field diff id
+    ref: str = Field(min_length=1, max_length=500)
 
     @property
     def local_ref(self) -> str:
@@ -53,8 +77,9 @@ class IssueItem(BaseModel):
 
 class IssueSource(BaseModel):
     """What a process's issues are made of, read from the database (``services.jira_issues``):
-    findings by key, the latest design's open questions, and the unexplained differences of the
-    latest verify run of the latest finished build by field diff id."""
+    findings by key, the latest design's open questions (in order), and the unexplained
+    differences of the latest verify run of the latest finished build by
+    ``<scenario key>:<field path>`` (``diff_ids`` maps a field diff id to that key)."""
 
     project_id: str
     process_id: str
@@ -63,11 +88,54 @@ class IssueSource(BaseModel):
     findings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     questions: list[dict[str, Any]] = Field(default_factory=list)
     diffs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    diff_ids: dict[str, str] = Field(default_factory=dict)
+
+
+def question_id(text: str) -> str:
+    """The identity of an open question: its text, whitespace collapsed and case folded."""
+    return hashlib.sha256(" ".join(str(text or "").split()).casefold().encode()).hexdigest()[:16]
+
+
+def parity_key(scenario_key: str, field: str) -> str:
+    return f"{scenario_key}:{field}"
+
+
+def canonical(item: IssueItem, src: IssueSource) -> IssueItem:
+    """``item`` with its stable ref (X17); ``ValueError`` when ``src`` has no such item."""
+    if item.type == "finding":
+        if item.ref not in src.findings:
+            raise ValueError(f"finding {item.ref} not found")
+        return item
+    if item.type == "question":
+        ids = [question_id(q.get("question") or "") for q in src.questions]
+        if _QUESTION_ID.match(item.ref) and item.ref in ids:
+            return item
+        if item.ref.isdigit() and int(item.ref) < len(src.questions):
+            return IssueItem(type="question", ref=ids[int(item.ref)])
+        raise ValueError(f"open question {item.ref} not found")
+    if item.ref in src.diffs:
+        return item
+    if item.ref in src.diff_ids:
+        return IssueItem(type="parity", ref=src.diff_ids[item.ref])
+    raise ValueError(f"parity difference {item.ref} is not in the latest verify run")
+
+
+def question_of(src: IssueSource, qid: str) -> dict[str, Any]:
+    return next(q for q in src.questions if question_id(q.get("question") or "") == qid)
+
+
+def _escape(m: re.Match[str]) -> str:
+    if m.group("bs"):
+        return "&#92;" + ("\\" + m.group("after") if m.group("after") else "")
+    if m.group("smile"):
+        return m.group("smile") + "\\" + m.group("face")
+    return "\\" + m.group(0)
 
 
 def wiki_escape(text: str) -> str:
     """``text`` shown as itself in Jira wiki markup."""
-    return _WIKI_SPECIAL.sub(r"\\\1", text.replace("\\", "&#92;"))
+    out = _WIKI_TOKEN.sub(_escape, text)
+    return _LINE_START.sub(lambda m: m.group(1) + (r"\#" if m.group(2) == "#" else m.group(2) + "\\"), out)
 
 
 def _mask(value: Any) -> str:
@@ -85,6 +153,28 @@ def _wiki(value: Any) -> str:
 def _summary(text: str) -> str:
     one = " ".join(_mask(text).split())
     return one if len(one) <= SUMMARY_MAX else one[:SUMMARY_MAX - 1].rstrip() + "…"
+
+
+def _cut(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters without splitting an escape (``\\x`` or ``&#nn;``)."""
+    if len(text) <= limit:
+        return text
+    out = text[:limit]
+    amp = out.rfind("&", max(0, len(out) - 6))
+    if amp != -1 and ";" not in out[amp:]:
+        out = out[:amp]
+    trailing = len(out) - len(out.rstrip("\\"))
+    if trailing % 2:
+        out = out[:-1]
+    return out
+
+
+def _description(body: str, back: str) -> str:
+    tail = "\n\n" + back
+    if len(body) + len(tail) <= DESCRIPTION_MAX:
+        return body + tail
+    room = DESCRIPTION_MAX - len(tail) - len(TRUNCATED) - 2
+    return _cut(body, room) + "\n\n" + TRUNCATED + tail
 
 
 def _label(value: str) -> str:
@@ -111,9 +201,7 @@ def _citations(citations: list[dict[str, Any]]) -> list[str]:
 
 
 def _finding(item: IssueItem, src: IssueSource) -> tuple[str, list[str], list[str]]:
-    f = src.findings.get(item.ref)
-    if f is None:
-        raise KeyError(f"finding {item.ref} not found")
+    f = src.findings[item.ref]
     lines = [(f"*Finding {_wiki(item.ref)}* (severity {_wiki(f.get('severity'))}, "
               f"decision {_wiki(f.get('decision') or 'undecided')}, source {_wiki(f.get('source'))})"), "",
              _wiki(f.get("text"))]
@@ -127,22 +215,14 @@ def _finding(item: IssueItem, src: IssueSource) -> tuple[str, list[str], list[st
 
 
 def _question(item: IssueItem, src: IssueSource) -> tuple[str, list[str], list[str]]:
-    q = _question_at(src, item.ref)
-    lines = [f"*Open question {_wiki(item.ref)}*", "", _wiki(q.get("question")), "",
+    q = question_of(src, item.ref)
+    lines = ["*Open question*", "", _wiki(q.get("question")), "",
              f"*Recommendation:* {_wiki(q.get('recommendation'))}"]
     return f"Open question: {q.get('question') or ''}", lines, [TYPE_LABELS["question"]]
 
 
-def _question_at(src: IssueSource, ref: str) -> dict[str, Any]:
-    if not ref.isdigit() or int(ref) >= len(src.questions):
-        raise KeyError(f"open question {ref} not found")
-    return src.questions[int(ref)]
-
-
 def _parity(item: IssueItem, src: IssueSource) -> tuple[str, list[str], list[str]]:
-    d = src.diffs.get(item.ref)
-    if d is None:
-        raise KeyError(f"parity difference {item.ref} is not in the latest verify run")
+    d = src.diffs[item.ref]
     lines = [(f"*Parity difference* in scenario {_wiki(d.get('scenario'))}, {_wiki(d.get('kind') or 'field')} "
               f"{_wiki(d.get('field'))} ({_wiki(d.get('classification'))})"), "",
              f"*Expected (TIBCO):* {_wiki(d.get('expected'))}", f"*Actual (migrated):* {_wiki(d.get('actual'))}"]
@@ -158,20 +238,21 @@ _BUILDERS = {"finding": _finding, "question": _question, "parity": _parity}
 
 def issue_fields(item: IssueItem, process: IssueSource, app: str, *, project_key: str, issue_type: str,
                  labels: list[str]) -> dict[str, Any]:
-    """The create body (``{"fields": ...}``) of ``item``'s issue; ``KeyError`` for an unknown item.
-    The description ends with the back-reference line ``ExiQO: project <id>, process <ir id>,
-    <type> <ref>``."""
+    """The create body (``{"fields": ...}``) of ``item``'s issue (its stable identity:
+    ``canonical``); ``ValueError`` for an unknown item. The description ends with the
+    back-reference line ``ExiQO: project <id>, process <ir id>, <type> <ref>``."""
+    item = canonical(item, process)
     title, lines, own_labels = _BUILDERS[item.type](item, process)
     back = (f"ExiQO: project {_wiki(process.project_id)}, process {_wiki(process.ir_id)}, "
             f"{item.type} {_wiki(item.ref)}")
-    description = "\n".join([*lines, "", f"Application {_wiki(app)}, process {_wiki(process.name)}.", "", back])
+    body = "\n".join([*lines, "", f"Application {_wiki(app)}, process {_wiki(process.name)}."])
     all_labels = list(dict.fromkeys(
         [_label(x) for x in labels if str(x).strip()] + own_labels + [ref_label(process.process_id, item.local_ref)]))
     return {"fields": {
         "project": {"key": project_key},
         "issuetype": {"name": issue_type},
         "summary": _summary(f"[{process.name}] {title}"),
-        "description": description,
+        "description": _description(body, back),
         "labels": all_labels,
     }}
 

@@ -77,10 +77,10 @@ from api.app.services.github_push import PUSH_KIND
 from api.app.services.jira_issues import (
     ISSUES_KIND,
     NO_PROJECT,
-    check_item,
+    bad_project_key,
+    check_items,
     dedupe_key,
     issue_source,
-    unique_items,
 )
 from api.app.services.jira_issues import NO_URL as NO_JIRA_URL
 from api.app.services.settings import load_stored
@@ -297,32 +297,37 @@ IssueRoles = Annotated[Principal, Depends(require_roles("architect", "sme", "qa"
 async def jira_issues(process_id: str, body: JiraIssuesIn, session: SessionDep, settings: SettingsDep,
                       runner: RunnerDep, principal: IssueRoles) -> JobAccepted:
     """Queue ``connector.jira.issues``: 422 for an item that does not exist or has nothing to track
-    (a finding decided ``keep`` or ``ask``, an answered question, an explained difference); 409
-    when Atlassian is off, has no credential, no Jira URL or project key (no request is made), or
-    the same request is already queued."""
+    (a finding decided ``keep`` or ``ask``, an answered question, an explained difference) and for
+    a malformed project key; 409 when Atlassian is off, has no credential, no Jira URL or project
+    key (audited ``refused``; no request is made), or the same request is already queued. Items
+    are queued in their stable form (ruling X17)."""
     proc = await session.get(Process, process_id)
     if proc is None:
         raise HTTPException(status_code=404, detail=f"process {process_id} not found")
-    items = unique_items(body.items)
     src = await issue_source(session, proc)
-    for item in items:
-        try:
-            check_item(src, item)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        items = check_items(src, body.items)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     connector = await connector_for(session, settings, "atlassian")
+
+    async def refuse(status: int, message: str) -> HTTPException:
+        await audit_connector(session, principal.actor, "jira", "create", project_id=proc.project_id,
+                              process_id=proc.id, target=proc.ir_id, outcome="refused",
+                              detail={"items": [i.local_ref for i in items], "message": message})
+        await session.commit()
+        return HTTPException(status_code=status, detail=message)
+
     try:
         connector.ready()
     except (ConnectorDisabled, ConnectorNotConfigured) as exc:
-        await audit_connector(session, principal.actor, "jira", "create", project_id=proc.project_id,
-                              process_id=proc.id, target=proc.ir_id, outcome="refused",
-                              detail={"items": [i.local_ref for i in items], "message": str(exc)})
-        await session.commit()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise await refuse(409, str(exc)) from exc
     if not connector.config.url("jira_url"):
-        raise HTTPException(status_code=409, detail=NO_JIRA_URL)
-    if not getattr(connector.config.app, "project_key", ""):
-        raise HTTPException(status_code=409, detail=NO_PROJECT)
+        raise await refuse(409, NO_JIRA_URL)
+    project_key = str(getattr(connector.config.app, "project_key", "") or "")
+    problem = bad_project_key(project_key)
+    if problem:
+        raise await refuse(409 if problem == NO_PROJECT else 422, problem)
     job_id = await runner.submit(ISSUES_KIND, {
         "process_id": proc.id, "items": [i.model_dump() for i in items], "create_again": body.create_again,
         "actor": principal.actor, "dedupe_key": dedupe_key(proc.id, items, body.create_again)},
