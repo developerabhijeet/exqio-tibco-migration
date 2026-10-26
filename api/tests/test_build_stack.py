@@ -238,4 +238,6 @@ def test_alembic_has_one_head_and_it_is_the_stacks_revision():
 
     cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0011_target_stack"]  # X25 (down '0010' at integration)
+    script = ScriptDirectory.from_config(cfg)
+    assert script.get_heads() == ["0011_target_stack"]  # X25
+    assert script.get_revision("0011_target_stack").down_revision == "0010"

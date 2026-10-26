@@ -1,11 +1,9 @@
 """target stack: ``projects.target_stack`` and ``builds.stack``
 
-down_revision becomes '0010' at integration (X25).
-
 Both are ``NOT NULL DEFAULT 'dotnet'``, so every existing project and build stays a .NET one.
 
 Revision ID: 0011_target_stack
-Revises: 0007
+Revises: 0010
 Create Date: 2026-10-26 12:00:00.000000
 """
 from collections.abc import Sequence
@@ -14,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = '0011_target_stack'
-down_revision: str | None = '0007'
+down_revision: str | None = '0010'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
