@@ -4,7 +4,7 @@
 // not configured, ready, last test failed), then the install ceiling, the toggle, the URLs and
 // defaults, the credentials (their Key Vault names and whether each file is mounted: never a
 // value) and the connection test. An admin edits and tests; everyone else reads.
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { CheckCircle2, CircleSlash, KeyRound, Loader2, Lock, PlugZap, Save, ServerCog, XCircle } from "lucide-react";
 import { errorText } from "@/components/tabs/build/Panel";
 import { ErrorNote } from "@/components/ui/Empty";
@@ -16,10 +16,15 @@ import {
   connectorState,
   isAdminView,
   productOn,
+  serverErrors,
   testConnector,
+  urlFields,
+  validateConnector,
   type ConnectorField,
   type ConnectorState,
+  type FieldErrors,
 } from "@/lib/connectors";
+import { ApiError } from "@/lib/api";
 import type {
   ConnectionTest,
   ConnectorFlags,
@@ -35,13 +40,14 @@ const STATE_TONE: Record<ConnectorState, "det" | "decision" | "error" | "gate" |
   off: "det",
   "not-configured": "decision",
   failed: "error",
+  changed: "decision",
   ready: "gate",
   untested: "purple",
   on: "gate",
 };
 
 const INPUT =
-  "mt-1 w-full rounded-btn border border-line bg-white px-2.5 py-1.5 text-[13.5px] text-ink placeholder:text-slate/70 disabled:cursor-not-allowed disabled:bg-page disabled:text-slate";
+  "mt-1 w-full rounded-btn border border-line bg-white px-2.5 py-1.5 text-[13.5px] text-ink placeholder:text-slate disabled:cursor-not-allowed disabled:bg-page disabled:text-slate";
 
 type Form = { enabled: boolean; values: Record<string, string> };
 
@@ -151,7 +157,6 @@ export function ConnectorCard({
 }) {
   const meta = CONNECTOR_META[kind];
   const admin = isAdminView(view);
-  const state = connectorState(kind, view);
   const uid = useId();
   const [initial, setInitial] = useState<Form>(() => formOf(kind, view));
   const [form, setForm] = useState<Form>(initial);
@@ -161,24 +166,77 @@ export function ConnectorCard({
   const [testing, setTesting] = useState(false);
   const [fresh, setFresh] = useState<ConnectorLastTest | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  // Fields the admin has edited (their client errors show from then on), whether Save was tried,
+  // the API's refusal attached to fields, and whether this screen saved a URL or the toggle after
+  // the last test.
+  const [touched, setTouched] = useState<Set<string>>(() => new Set());
+  const [submitted, setSubmitted] = useState(false);
+  const [refused, setRefused] = useState<FieldErrors>({});
+  const [changedLocally, setChangedLocally] = useState(false);
 
+  const state = connectorState(kind, view, { changedLocally });
   const editable = admin && view.install_enabled && !busy;
+  const patch = useMemo(() => patchOf(kind, initial, form), [kind, initial, form]);
+  const dirty = Object.keys(patch).length > 0;
+  const clientErrors = useMemo(
+    () =>
+      admin
+        ? validateConnector(kind, {
+            values: form.values,
+            enabled: form.enabled,
+            install: view.install,
+            allowedHosts: view.allowed_hosts,
+          })
+        : {},
+    [admin, kind, form, view.install, view.allowed_hosts],
+  );
+  const fieldError = (key: string): string | undefined =>
+    refused[key] ?? (submitted || touched.has(key) ? clientErrors[key] : undefined);
+  const edit = (key: string, value: string) => {
+    setSaved(false);
+    setTouched((t) => new Set(t).add(key));
+    setRefused((r) => {
+      if (!(key in r)) return r;
+      const next = { ...r };
+      delete next[key];
+      return next;
+    });
+    setForm((f) => ({ ...f, values: { ...f.values, [key]: value } }));
+  };
   const last = fresh ?? view.last_test ?? null;
   const tid = (suffix: string) => `connector-${kind}-${suffix}`;
 
   const save = async () => {
-    setBusy(true);
-    setError(null);
+    setSubmitted(true);
     setSaved(false);
+    setError(null);
+    const invalid = Object.keys(clientErrors);
+    if (invalid.length > 0) {
+      document.getElementById(`${uid}-${invalid[0]}`)?.focus();
+      return;
+    }
+    setBusy(true);
     try {
-      const all = await api.putConnectorSettings({ [kind]: patchOf(kind, initial, form) });
+      const all = await api.putConnectorSettings({ [kind]: patch });
       const next = formOf(kind, all[kind]);
       setInitial(next);
       setForm(next);
+      setTouched(new Set());
+      setSubmitted(false);
+      setRefused({});
       setSaved(true);
+      if ("enabled" in patch || urlFields(kind).some((f) => f in patch)) setChangedLocally(true);
       onSaved(all);
     } catch (e) {
-      setError(errorText(e));
+      if (e instanceof ApiError && e.status === 422) {
+        const { fields, message } = serverErrors(kind, e.detail);
+        setRefused(fields);
+        setError(message);
+        const first = Object.keys(fields)[0];
+        if (first) document.getElementById(`${uid}-${first}`)?.focus();
+      } else {
+        setError(errorText(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -190,6 +248,7 @@ export function ConnectorCard({
     try {
       const result = await testConnector(kind);
       setFresh({ result, at: new Date().toISOString(), actor: user });
+      setChangedLocally(false);
       onTested();
     } catch (e) {
       setFresh(null);
@@ -255,7 +314,10 @@ export function ConnectorCard({
               checked={admin ? form.enabled : view.enabled}
               disabled={!editable}
               aria-describedby={`${uid}-toggle-hint`}
-              onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+              onChange={(e) => {
+                setSaved(false);
+                setForm((f) => ({ ...f, enabled: e.target.checked }));
+              }}
             />
             On in Settings
           </label>
@@ -287,6 +349,7 @@ export function ConnectorCard({
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   {section.fields.map((field) => {
                     const id = `${uid}-${field.key}`;
+                    const err = fieldError(field.key);
                     const installValue = String(view.install?.[field.key] ?? "");
                     const placeholder =
                       field.kind === "url" ? installValue || "not set in the install" : field.kind === "list" ? "none" : "";
@@ -300,13 +363,20 @@ export function ConnectorCard({
                           type={field.kind === "url" ? "url" : "text"}
                           inputMode={field.kind === "url" ? "url" : undefined}
                           spellCheck={false}
-                          className={`${INPUT} ${field.kind === "url" ? "font-mono text-[12.5px]" : ""}`}
+                          className={`${INPUT} ${field.kind === "url" ? "font-mono text-[12.5px]" : ""} ${err ? "border-error" : ""}`}
                           data-testid={field.key === meta.primaryUrl ? tid("url") : tid(`field-${field.key}`)}
                           placeholder={placeholder}
                           value={form.values[field.key] ?? ""}
                           aria-describedby={`${id}-hint`}
-                          onChange={(e) => setForm((f) => ({ ...f, values: { ...f.values, [field.key]: e.target.value } }))}
+                          aria-invalid={err ? true : undefined}
+                          aria-errormessage={err ? `${id}-error` : undefined}
+                          onChange={(e) => edit(field.key, e.target.value)}
                         />
+                        {err ? (
+                          <p id={`${id}-error`} data-testid={`connector-${kind}-error-${field.key}`} className="mt-1 text-[12px] font-medium text-error">
+                            {err}
+                          </p>
+                        ) : null}
                         <p id={`${id}-hint`} className="mt-1 text-[12px] text-slate">
                           {field.kind === "url"
                             ? `${field.hint ? `${field.hint}. ` : ""}Empty uses the install's value.`
@@ -384,7 +454,7 @@ export function ConnectorCard({
               {testBlocked}
             </p>
           ) : null}
-          <div data-testid={tid("result")} aria-live="polite" className="mt-2 rounded-btn border border-line px-3 py-2.5">
+          <div data-testid={tid("result")} aria-live="polite" aria-atomic="true" className="mt-2 rounded-btn border border-line px-3 py-2.5">
             {admin ? (
               <TestResult last={last} testing={testing} error={testError} />
             ) : (
@@ -396,12 +466,13 @@ export function ConnectorCard({
 
       {admin ? (
         <footer className="mt-5 flex flex-wrap items-center gap-3 border-t border-line pt-4">
-          <button type="button" className="btn-primary" data-testid={tid("save")} disabled={!editable} onClick={save}>
+          <button type="button" className="btn-primary" data-testid={tid("save")} disabled={!editable || !dirty} onClick={save}>
             {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Save size={15} aria-hidden />} Save {meta.name}
           </button>
           <span role="status" className="text-[13px] text-gate">
             {saved ? "Saved." : ""}
           </span>
+          {!dirty && !saved ? <span className="text-[12px] text-slate">No unsaved changes.</span> : null}
           {error ? (
             <div className="w-full">
               <ErrorNote error={error} />

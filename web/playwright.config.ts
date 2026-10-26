@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apiPort as devApiPort, apiUrl as devApiUrl, webPort as devWebPort } from "./scripts/root-env";
@@ -33,7 +33,11 @@ if (!process.env.E2E_FAKE_PORTS) {
   const free = execFileSync(process.execPath, ["-e", probe]).toString().split(",");
   process.env.E2E_FAKE_PORTS = FAKE_SERVICES.map((name, i) => `${name}=${free[i]}`).join(",");
 }
-process.env.E2E_FAKE_TOKENS ??= join(tmpdir(), `exiqo-e2e-fakes-${process.pid}`);
+// A fresh private directory for the fakes' token files; e2e/global-teardown.ts removes it.
+if (!process.env.E2E_FAKE_TOKENS) {
+  process.env.E2E_FAKE_TOKENS = mkdtempSync(join(tmpdir(), "exiqo-e2e-fakes-"));
+  process.env.E2E_FAKE_TOKENS_CREATED = "1";
+}
 const fakePorts = Object.fromEntries(process.env.E2E_FAKE_PORTS.split(",").map((p) => p.split("="))) as Record<
   (typeof FAKE_SERVICES)[number],
   string
@@ -63,6 +67,7 @@ const CONNECTORS = {
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   timeout: 120_000,
   expect: { timeout: 20_000 },
   fullyParallel: false,
@@ -74,7 +79,11 @@ export default defineConfig({
     viewport: { width: 1440, height: 1000 },
     launchOptions: executablePath ? { executablePath } : {},
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1000 } } },
+    // Pure functions of web/lib (no browser): e2e/*.unit.ts.
+    { name: "unit", testMatch: /.*\.unit\.ts$/ },
+  ],
   webServer: [
     {
       // The connector fakes; the token files are written before the ports open.
