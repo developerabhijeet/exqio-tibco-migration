@@ -49,6 +49,7 @@ include = ["engine*", "api*"]
 [tool.setuptools.package-data]
 "engine.knowledge" = ["seed_patterns.yaml", "prompts/*.md"]
 "engine.agents" = ["prompts/*.md"]
+"engine.exiqoian" = ["prompts/*.md"]
 "engine.infra_gen" = ["templates/**/*", "templates/*"]
 
 [tool.pytest.ini_options]
