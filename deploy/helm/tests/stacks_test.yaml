@@ -84,8 +84,18 @@ tests:
     set: {mirrors.maven: "https://unused.gmf.internal/maven"}
     asserts:
       - notMatchRegex: {path: data.EGRESS_ALLOWLIST, pattern: unused.gmf.internal}
+  - it: a dotnet-only install has no stacks cache volume
+    template: templates/worker-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: stacks-cache, emptyDir: {sizeLimit: 10Gi}}
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: stacks-cache, mountPath: /cache/stacks}
   - it: the worker gets a per-pod stacks cache of stackCacheSize at /cache/stacks
     template: templates/worker-deployment.yaml
+    set: {stacks.enabled: [dotnet, java], mirrors.maven: "https://artifactory.gmf.internal/maven"}
     asserts:
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
@@ -95,7 +105,7 @@ tests:
           content: {name: stacks-cache, emptyDir: {sizeLimit: 10Gi}}
   - it: stackCacheSize is configurable
     template: templates/worker-deployment.yaml
-    set: {worker.stackCacheSize: 20Gi}
+    set: {worker.stackCacheSize: 20Gi, stacks.enabled: [dotnet, java], mirrors.maven: "https://artifactory.gmf.internal/maven"}
     asserts:
       - contains:
           path: spec.template.spec.volumes

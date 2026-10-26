@@ -90,8 +90,10 @@ spec:
             {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
             - name: cache
               mountPath: /cache
+            {{- if without (.Values.stacks.enabled | default (list "dotnet")) "dotnet" }}
             - name: stacks-cache
               mountPath: /cache/stacks
+            {{- end }}
             {{- if .Values.mirrors.caBundle }}
             - name: mirror-ca
               mountPath: /etc/exiqo-ca
@@ -102,10 +104,13 @@ spec:
         - name: cache
           emptyDir:
             sizeLimit: {{ .Values.worker.nugetCacheSize }}
-        # The Maven, Go and uv caches (MAVEN_OPTS, GOMODCACHE, UV_CACHE_DIR in the image point here).
+        {{- if without (.Values.stacks.enabled | default (list "dotnet")) "dotnet" }}
+        # The Maven, Go and uv caches (MAVEN_OPTS, GOMODCACHE, UV_CACHE_DIR in the image point here);
+        # only when a stack other than dotnet is enabled, so a .NET-only install reserves nothing.
         - name: stacks-cache
           emptyDir:
             sizeLimit: {{ .Values.worker.stackCacheSize }}
+        {{- end }}
         {{- if .Values.mirrors.caBundle }}
         - name: mirror-ca
           configMap:

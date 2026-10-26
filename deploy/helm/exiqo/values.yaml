@@ -168,7 +168,7 @@ worker:
   # NUGET_PACKAGES, per pod: NuGet's lock is per machine, so restores from several workers into one
   # shared folder collide, and SMB is slow for many small files. Refilled from the mirror.
   nugetCacheSize: 10Gi
-  # /cache/stacks, per pod (an emptyDir): the Maven repository (m2), the Go module and build caches
+  # /cache/stacks, per pod (an emptyDir, only when a stack other than dotnet is enabled): the Maven repository (m2), the Go module and build caches
   # and uv's cache of the other target stacks. Refilled from the mirrors after a restart.
   stackCacheSize: 10Gi
 
