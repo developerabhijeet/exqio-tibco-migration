@@ -108,3 +108,9 @@ def test_dotnet_runner_refuses_an_ambiguous_api_project(tmp_path):
         (tmp_path / f"{app}.Api" / f"{app}.Api.csproj").write_text("")
     with pytest.raises(FileNotFoundError, match="expected one"):
         get_stack("dotnet").runner(tmp_path).api_project()
+
+
+def test_dotnet_stack_runner_takes_the_cli_path(tmp_path):
+    from engine.stacks.dotnet.runner import DotnetStackRunner
+
+    assert DotnetStackRunner(tmp_path, dotnet="/opt/dotnet/dotnet").dotnet == "/opt/dotnet/dotnet"

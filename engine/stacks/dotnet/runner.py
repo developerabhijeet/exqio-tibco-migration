@@ -23,12 +23,13 @@ _BUILD_OUTPUT = frozenset({"bin", "obj"})
 
 
 class DotnetStackRunner(DotnetRunner):
-    def __init__(self, root: Path, *, env: dict[str, str] | None = None,
+    def __init__(self, root: Path, *, dotnet: str | None = None, env: dict[str, str] | None = None,
                  coverage_scope: set[str] | None = None, timeout_s: int | None = None,
                  api_entry: str | None = None) -> None:
-        """``api_entry`` is the API project (``src/<App>.Api/<App>.Api.csproj``, relative to
+        """``dotnet`` is the CLI to run (found on the machine when omitted, as the other stacks'
+        ``java=``/``go=``/``uv=``); ``api_entry`` is the API project (``src/<App>.Api/<App>.Api.csproj``, relative to
         ``root``); when omitted, the single ``*.Api.csproj`` under ``root`` is used."""
-        super().__init__(root, timeout_s=timeout_s or DEFAULT_TIMEOUT_S, env=env, coverage_scope=coverage_scope)
+        super().__init__(root, dotnet=dotnet, timeout_s=timeout_s or DEFAULT_TIMEOUT_S, env=env, coverage_scope=coverage_scope)
         self.api_entry = api_entry
 
     def api_project(self) -> str:
