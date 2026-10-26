@@ -13,7 +13,7 @@ import { CitedText } from "@/components/citations/CitedText";
 import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
 import { Inspector } from "@/components/canvas/Inspector";
 import { ALL, DomainSelect } from "./DomainSelect";
-import { graphElements, type GraphFilters } from "./DomainGraph";
+import { DomainLegend, graphElements, type GraphFilters } from "./DomainGraph";
 import { IOCard } from "./IOCard";
 
 const DomainGraph = dynamic(() => import("./DomainGraph"), { ssr: false });
@@ -117,7 +117,7 @@ export function DiscoverTab() {
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-        <section className="card flex p-0 h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[540px] flex-col overflow-hidden">
           <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
             <h3 className="text-lg font-semibold text-heading">Domain graph</h3>
             <label className="ml-auto flex items-center gap-1.5 text-sm text-slate">
@@ -153,21 +153,10 @@ export function DiscoverTab() {
             ) : (
               <DomainGraph elements={elements} selectedProcessId={processId} onOpen={(id) => openProcess(id)} />
             )}
-            <div className="pointer-events-none absolute bottom-2 left-3 flex gap-3 text-2xs text-slate">
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-4 rounded bg-accent-strong" /> process
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-4 rounded border border-accent bg-accent-soft" /> other domain
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-3 w-2.5 rounded-sm border border-slate/40 bg-sunken" /> table
-              </span>
-              <span>queue, topic, endpoint: small gray</span>
-            </div>
+            {graph.data === null ? null : <DomainLegend />}
           </div>
         </section>
-        <section className="card flex p-0 h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[540px] flex-col overflow-hidden">
           <div className="border-b border-line px-4 py-2.5">
             <h3 className="text-lg font-semibold text-heading">Processes</h3>
           </div>

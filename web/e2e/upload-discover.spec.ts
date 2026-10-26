@@ -81,13 +81,11 @@ test("graph and canvas recolour on theme change", async ({ page }) => {
   await page.getByTestId("process-list").getByRole("button", { name: /DealerFundingRequest/ }).click();
   await expect(page.locator('.react-flow__node[data-id="LookupDealer"]')).toBeVisible();
 
-  type Cy = { nodes: (sel?: string) => { length: number; [i: number]: { style: (k: string) => string } } };
   // A resource node (table, queue, endpoint): its label is drawn in the ink colour.
   const labelColour = () =>
     page.evaluate(() => {
-      const cy = (window as unknown as { __cy?: Cy }).__cy;
-      const n = cy?.nodes('[kind != "process"][kind != "process-ext"]');
-      return n && n.length ? n[0].style("color").replace(/\s+/g, "") : null;
+      const el = document.querySelector('[data-testid="domain-node"]:not([data-kind^="process"]) [data-testid="domain-node-label"]');
+      return el ? getComputedStyle(el).color.replace(/\s+/g, "") : null;
     });
   const edgeStroke = () =>
     page.evaluate(() => {

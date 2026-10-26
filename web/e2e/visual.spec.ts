@@ -28,7 +28,7 @@ function masks(page: Page): Locator[] {
     page.getByRole("heading", { level: 1 }).first(),
     page.getByTestId("project-select"),
     page.getByTestId("design-hash"),
-    // Cytoscape's force layout places the domain graph's nodes differently on each run.
+    // The domain graph (React Flow over elk) is masked: its fit depends on the panel's size.
     page.getByTestId("domain-graph"),
     // The ExiQoian panel's subtitle names the project.
     page.getByTestId("exiqoian-panel").locator("h2 + p"),
