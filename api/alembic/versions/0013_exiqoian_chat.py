@@ -3,8 +3,8 @@
 Conversations are private to their owner; messages hold the masked text, the cited text (JSONB)
 and the verdict. Both cascade from the project.
 
-Revision ID: 0012
-Revises: 0007
+Revision ID: 0013
+Revises: 0010 (temporary: becomes '0012_iterations' when SP6 lands (X25))
 Create Date: 2026-10-26 12:00:00.000000
 """
 from collections.abc import Sequence
@@ -13,8 +13,9 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = '0012'
-down_revision: str | None = '0007'
+revision: str = '0013'
+# Temporary parent for the integration rehearsal: becomes '0012_iterations' when SP6 lands (X25).
+down_revision: str | None = '0010'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
