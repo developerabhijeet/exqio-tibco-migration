@@ -23,6 +23,7 @@ from api.app.config import Settings
 from api.app.jobs.runner import JobContext
 from api.app.models import DesignRecord, Process
 from api.app.services import evidence
+from api.app.services import figma_sync as figma_svc
 from api.app.services import gates as gate_svc
 from api.app.services.context import engine_app, engine_findings, engine_process, engine_rules
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
@@ -68,6 +69,8 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
         rules = await engine_rules(s, process_id)
         findings = await engine_findings(s, process_id)
         card = await io_card_for(s, row)
+        references = (await figma_svc.design_references(s, process_id)
+                      if proc.starter is not None and proc.starter.kind in figma_svc.UI_STARTERS else [])
         spec = row.spec_hash
         project_id = row.project_id
 
@@ -107,7 +110,9 @@ async def run_design(ctx: JobContext, process_id: str, settings: Settings,
     else:
         try:
             design = await design_narrative(design, proc, rules, findings, memory_items, provider,
-                                            app.contracts)
+                                            app.contracts, references=references)
+            if references:
+                await ctx.log(f"{len(references)} Figma design reference(s) passed to the designer")
             await ctx.log(f"Solution Designer wrote the narrative, {len(design.decisions)} decision(s) and "
                           f"{len(design.open_questions)} open question(s); design hash unchanged", tag="ai")
         except (ProviderError, JsonOutputError, DesignHashChanged) as exc:

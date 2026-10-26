@@ -75,7 +75,7 @@ async def page_context(session: AsyncSession, proc: Process) -> PageContext:
                 "evidence_hash": g.evidence_hash} for g in gates],
         build=({"id": build.id, "status": build.status, "build_hash": build.build_hash} if build else None),
         stack=str(getattr(build, "stack", None) or DEFAULT_STACK), iteration=DEFAULT_ITERATION,
-        figma=[{"name": f.remote_id, "url": f.remote_url} for f in figma])
+        figma=[{"name": (f.detail or {}).get("name") or f.remote_id, "url": f.remote_url} for f in figma])
 
 
 class Refused(Exception):

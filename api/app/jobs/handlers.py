@@ -21,6 +21,7 @@ from api.app.services import confluence_publish as confluence_svc
 from api.app.services import deploy_creds
 from api.app.services import design as design_svc
 from api.app.services import domains as domains_svc
+from api.app.services import figma_sync as figma_svc
 from api.app.services import github_push as github_push_svc
 from api.app.services import infra as infra_svc
 from api.app.services import jira_issues as jira_svc
@@ -153,3 +154,10 @@ async def jira_issues(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
     """Create or update the selected items' Jira issues (``services.jira_issues``); the credential
     is read from its mounted file now, never stored."""
     return await jira_svc.issues_job(ctx, w)
+
+
+@job(figma_svc.SYNC_KIND)
+async def figma_sync(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
+    """Attach chosen Figma frames (name, page, text, thumbnail when allowed) to a process as design
+    references (``services.figma_sync``); the token is read from its mounted file now, never stored."""
+    return await figma_svc.sync_job(ctx, w)

@@ -45,7 +45,7 @@ def load_prompt(name: str) -> tuple[str, str]:
 # them raw; wrapping happens here so no template can be fed unwrapped content.
 DATA_KEYS = frozenset({
     "source", "process_name", "rules", "findings", "memory", "design", "targets", "code",
-    "failures", "files",
+    "failures", "files", "references",
 })
 _SOURCE_TAG = re.compile(r"<\s*(/?)\s*source\s*>", re.IGNORECASE)
 

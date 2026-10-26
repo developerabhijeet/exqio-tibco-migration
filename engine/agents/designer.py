@@ -89,6 +89,16 @@ def findings_block(findings: list[Finding]) -> str:
     return "\n".join(lines) or "(none)"
 
 
+def references_block(references: list[dict[str, Any]] | None) -> str:
+    """Design references (Figma frames an architect attached): name, page, link and screen text."""
+    lines: list[str] = []
+    for r in references or []:
+        where = f" (page {r['page']})" if r.get("page") else ""
+        lines.append(f"- frame {r.get('name') or 'unnamed'}{where}" + (f", {r['url']}" if r.get("url") else ""))
+        lines += [f"    text: {line}" for line in str(r.get("text") or "").splitlines() if line.strip()]
+    return "\n".join(lines) or "(none)"
+
+
 def skeleton_text(design: DesignRecord) -> str:
     """The part of the design record code decided, as JSON (the model's advice is left out)."""
     payload = design.model_dump(mode="json", exclude=set(HASH_EXCLUDED), by_alias=True)
@@ -146,6 +156,7 @@ async def design_narrative(
     memory_items: list[MemoryItem],
     provider: Any,
     contracts: list[Contract] | None = None,
+    references: list[dict[str, Any]] | None = None,
 ) -> DesignRecord:
     """Return a copy of ``design`` with ``narrative``, ``decisions`` and ``open_questions`` filled.
 
@@ -164,6 +175,7 @@ async def design_narrative(
         rules=rules_block(rules),
         findings=findings_block(findings),
         memory=memory_block(memory_items),
+        references=references_block(references),
     )
     data, _ = await ask_json(
         provider, "design", process, system, user, DESIGN_SCHEMA,

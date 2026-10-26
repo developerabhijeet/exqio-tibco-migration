@@ -13,6 +13,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = '0010'
 down_revision: str | None = '0007'
@@ -34,6 +35,7 @@ def upgrade() -> None:
         sa.Column('remote_url', sa.String(), nullable=False),
         sa.Column('remote_version', sa.Integer(), nullable=True),
         sa.Column('stale', sa.Boolean(), server_default='false', nullable=False),
+        sa.Column('detail', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('created_by', sa.String(), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.ForeignKeyConstraint(['process_id'], ['api.processes.id'],

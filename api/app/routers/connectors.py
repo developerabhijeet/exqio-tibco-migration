@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import FileResponse
 
 from api.app.auth.roles import Principal, dev_principal
 from api.app.connectors.audit import audit_connector
@@ -23,6 +24,13 @@ from api.app.connectors.base import (
     ConnectorNotConfigured,
 )
 from api.app.connectors.config import LAST_TEST_KEY, STORED_KEY, load_install, validate_app
+from api.app.connectors.figma import (
+    FigmaConnector,
+    FileNotAllowed,
+    Frame,
+    valid_file_key,
+    valid_node_id,
+)
 from api.app.connectors.github import (
     PUSH_REFUSED,
     default_push_branch,
@@ -43,8 +51,11 @@ from api.app.deps import (
     require_roles,
 )
 from api.app.models import AuditLog, Build, Process, Setting
+from api.app.models.connector import ConnectorLink
 from api.app.schemas.connector import (
     ConnectorsPatch,
+    FigmaFramesIn,
+    FrameLinkOut,
     GithubPushIn,
     JiraIssuesIn,
     JobAccepted,
@@ -59,6 +70,9 @@ from api.app.services.confluence_publish import (
     page_link,
 )
 from api.app.services.evidence import latest_design
+from api.app.services.figma_sync import SYNC_KIND as FIGMA_SYNC_KIND
+from api.app.services.figma_sync import dedupe_key as figma_dedupe_key
+from api.app.services.figma_sync import frame_links
 from api.app.services.github_push import PUSH_KIND
 from api.app.services.jira_issues import (
     ISSUES_KIND,
@@ -316,3 +330,109 @@ async def jira_issues(process_id: str, body: JiraIssuesIn, session: SessionDep, 
     if job_id is None:
         raise HTTPException(status_code=409, detail="the same issues are already queued for this process")
     return JobAccepted(job_id=job_id)
+
+
+FigmaRoles = Annotated[Principal, Depends(require_roles("architect", "admin"))]
+NO_FIGMA_URL = "the Figma connector has no API URL (connectors.figma.apiUrl)"
+
+
+def _frame_link_out(link: Any) -> FrameLinkOut:
+    d = link.detail or {}
+    return FrameLinkOut(id=link.id, file_key=str(d.get("file_key") or link.local_ref.partition(":")[0]),
+                        node_id=link.remote_id, name=str(d.get("name") or link.remote_id),
+                        page=str(d.get("page") or ""), text=str(d.get("text") or ""), url=link.remote_url,
+                        has_image=bool(d.get("image_path")), image_note=d.get("image_note"),
+                        stale=link.stale, updated_at=link.updated_at)
+
+
+async def _figma_ready(session: SessionDep, settings: SettingsDep) -> FigmaConnector:
+    connector = await connector_for(session, settings, "figma")
+    if not isinstance(connector, FigmaConnector):
+        raise HTTPException(status_code=500, detail="the Figma connector is not available")
+    return connector
+
+
+def _check_figma_file(connector: FigmaConnector, key: str) -> None:
+    try:
+        connector.check_file(key)
+    except (FileNotAllowed, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/figma/files/{key}/frames")
+async def figma_file_frames(key: str, session: SessionDep, settings: SettingsDep,
+                            principal: FigmaRoles) -> list[Frame]:
+    """The frames of a Figma file, to choose from: 422 for a file outside the install's Figma
+    files, 409 when Figma is off, has no credential or no API URL, 502 when Figma fails."""
+    connector = await _figma_ready(session, settings)
+    _check_figma_file(connector, key)
+    try:
+        connector.ready()
+        connector.api_url  # noqa: B018  raises when there is none
+    except (ConnectorDisabled, ConnectorNotConfigured) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConnectorError as exc:
+        raise HTTPException(status_code=409, detail=NO_FIGMA_URL) from exc
+    secrets = header_secrets(connector.auth_header())
+    try:
+        return await connector.frames(key)
+    except ConnectorError as exc:
+        status = 404 if exc.status == 404 else 502
+        raise HTTPException(status_code=status, detail=redact(exc.message, secrets)) from exc
+
+
+@router.post("/processes/{process_id}/figma/frames", status_code=202)
+async def attach_figma_frames(process_id: str, body: FigmaFramesIn, session: SessionDep, settings: SettingsDep,
+                              runner: RunnerDep, principal: FigmaRoles) -> JobAccepted:
+    """Queue ``connector.figma.sync``: 422 for a malformed or disallowed file or frame id, 409 when
+    Figma is off, has no credential or API URL (no request is made) or the same frames are already
+    queued."""
+    proc = await session.get(Process, process_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail=f"process {process_id} not found")
+    node_ids = list(dict.fromkeys(body.node_ids))
+    if not valid_file_key(body.file_key):
+        raise HTTPException(status_code=422, detail=f"file_key: not a Figma file key: {body.file_key!r}")
+    for node_id in node_ids:
+        if not valid_node_id(node_id):
+            raise HTTPException(status_code=422, detail=f"node_ids: not a Figma node id: {node_id!r}")
+    connector = await _figma_ready(session, settings)
+    _check_figma_file(connector, body.file_key)
+    try:
+        connector.ready()
+    except (ConnectorDisabled, ConnectorNotConfigured) as exc:
+        await audit_connector(session, principal.actor, "figma", "sync", project_id=proc.project_id,
+                              process_id=proc.id, target=body.file_key, outcome="refused",
+                              detail={"node_ids": node_ids, "message": str(exc)})
+        await session.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not connector.config.url("api_url"):
+        raise HTTPException(status_code=409, detail=NO_FIGMA_URL)
+    job_id = await runner.submit(FIGMA_SYNC_KIND, {
+        "process_id": proc.id, "file_key": body.file_key, "node_ids": node_ids, "actor": principal.actor,
+        "dedupe_key": figma_dedupe_key(proc.id, body.file_key, node_ids)},
+        project_id=proc.project_id, process_id=proc.id)
+    if job_id is None:
+        raise HTTPException(status_code=409, detail="the same frames are already queued for this process")
+    return JobAccepted(job_id=job_id)
+
+
+@router.get("/processes/{process_id}/figma/frames")
+async def process_figma_frames(process_id: str, session: SessionDep) -> list[FrameLinkOut]:
+    if await session.get(Process, process_id) is None:
+        raise HTTPException(status_code=404, detail=f"process {process_id} not found")
+    return [_frame_link_out(link) for link in await frame_links(session, process_id)]
+
+
+@router.get("/figma/frames/{link_id}/image")
+async def figma_frame_image(link_id: str, session: SessionDep, settings: SettingsDep) -> FileResponse:
+    """The stored thumbnail of an attached frame (404 when it has none)."""
+    link = await session.get(ConnectorLink, link_id)
+    if link is None or link.object_type != "figma_frame":
+        raise HTTPException(status_code=404, detail="frame not found")
+    stored = (link.detail or {}).get("image_path")
+    root = settings.data_dir.resolve() / "figma"
+    path = Path(str(stored)).resolve() if stored else None
+    if path is None or not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="this frame has no thumbnail")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})

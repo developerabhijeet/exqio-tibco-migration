@@ -4,8 +4,10 @@ second publish updates the remote object instead of creating another."""
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.app.db import Base, CreatedMixin, IdMixin, fk
@@ -27,6 +29,8 @@ class ConnectorLink(IdMixin, CreatedMixin, Base):
     remote_version: Mapped[int | None]  # Confluence page version
     # the remote object is gone (a Jira 404): a re-publish skips it unless asked to create again
     stale: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # what the link carries besides the remote object (a Figma frame: name, page, text, image path)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_by: Mapped[str]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
                                                  onupdate=func.now())

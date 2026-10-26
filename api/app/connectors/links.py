@@ -10,7 +10,7 @@ from api.app.db import utcnow
 from api.app.models.connector import OBJECT_TYPES, ConnectorLink
 
 KEY_FIELDS = ("kind", "object_type", "process_id", "local_ref")
-UPDATABLE = ("remote_id", "remote_url", "remote_version")
+UPDATABLE = ("remote_id", "remote_url", "remote_version", "detail")
 
 
 async def find_link(session: AsyncSession, *, kind: str, object_type: str, process_id: str,

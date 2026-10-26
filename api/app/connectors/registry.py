@@ -151,7 +151,7 @@ def register(kind: ConnectorKind, cls: type[BaseConnector]) -> None:
 
 def _load_builtin() -> None:
     """Import the connector modules (each ``register``s its class); deferred, as they import this one."""
-    from api.app.connectors import github  # noqa: F401
+    from api.app.connectors import figma, github  # noqa: F401
 
 
 def get_connector(kind: ConnectorKind, *, settings: Settings, stored: dict[str, Any]) -> BaseConnector:

@@ -90,3 +90,30 @@ class JiraIssuesIn(BaseModel):
 
 class JobAccepted(BaseModel):
     job_id: str
+
+
+class FigmaFramesIn(BaseModel):
+    """``POST /processes/{id}/figma/frames``: 1 to 20 frames (node ids) of one Figma file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_key: str = Field(min_length=1, max_length=64)
+    node_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class FrameLinkOut(BaseModel):
+    """An attached frame: what the design tab shows and the designer reads. ``url`` is empty when
+    the install has no Figma web URL (show the name only); ``has_image`` says whether a thumbnail
+    is stored (``GET /figma/frames/{id}/image``), else ``image_note`` says why not."""
+
+    id: str
+    file_key: str
+    node_id: str
+    name: str
+    page: str
+    text: str
+    url: str
+    has_image: bool
+    image_note: str | None = None
+    stale: bool
+    updated_at: datetime
