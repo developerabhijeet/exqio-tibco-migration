@@ -127,15 +127,20 @@ async def test_api_audience_accepted(signer, fake_entra):
     assert claims["aud"] == f"api://{CLIENT}"
 
 
+# Times are offsets from when the test runs, not from collection: a full suite reaches this file
+# more than ten minutes after collecting it, by which point a collection-time "nbf = now + 600"
+# is already in the past and the token is valid.
 @pytest.mark.parametrize("mutate,reason", [
     ({"iss": "https://login.microsoftonline.com/other/v2.0"}, "issuer"),
     ({"aud": "someone-else"}, "audience"),
-    ({"exp": int(time.time()) - 120}, "expired"),
-    ({"nbf": int(time.time()) + 600}, "not yet valid"),
+    ({"exp": -120}, "expired"),
+    ({"nbf": 600}, "not yet valid"),
     ({"exp": None}, "exp")])
 async def test_jwt_rejected(mutate, reason, signer, fake_entra):
+    now = int(time.time())
+    claims = {k: (now + v if k in ("exp", "nbf") and v is not None else v) for k, v in mutate.items()}
     with pytest.raises(TokenInvalid) as exc:
-        await validate_jwt(signer.token(**mutate), tenant_id=TENANT, audience=CLIENT,
+        await validate_jwt(signer.token(**claims), tenant_id=TENANT, audience=CLIENT,
                            jwks=jwks_for(fake_entra))
     assert reason in str(exc.value).lower()
 
