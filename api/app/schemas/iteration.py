@@ -76,6 +76,7 @@ class TimelineEntry(BaseModel):
     id: str
     iteration: int | None = None
     summary: str
+    decisions: list[str] = []  # a design record's decision titles (read-only view of an earlier iteration)
 
 
 class IterationDetail(IterationOut):

@@ -21,6 +21,18 @@ test("architect re-enters design from a failed build", async ({ page }) => {
   await page.getByTestId("open-iteration").click();
   await expect(page.getByTestId("iteration-strip")).toContainText("Iteration 2");
   await expect(page.getByTestId("gate-G3")).toContainText("pending");
+  // An iteration opens read only from the strip: its requirements, inputs and timeline.
+  await page.getByTestId("iteration-2").click();
+  const panel = page.getByTestId("iteration-panel");
+  await expect(panel).toContainText("Funding over 50k needs a second approver.");
+  await expect(panel.getByTestId("iteration-panel-inputs").locator("li").first()).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Close the iteration" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  // Iteration 1 holds the first design and the failed build: its decisions and a link to the build.
+  await page.getByTestId("iteration-1").click();
+  await expect(panel.getByTestId("iteration-decisions").first()).toBeVisible();
+  await expect(panel.getByTestId("iteration-build-link").first()).toHaveAttribute("href", /step=build&process=/);
 });
 
 test("engineer uploads an edited zip and sees exactly the edits", async ({ page }) => {
@@ -127,6 +139,28 @@ test("the estate repository panel connects and pulls a branch", async ({ page })
   expect(posted).toEqual({ repo: "gmf/estate", branch: "main", purpose: "estate" });
   await panel.getByRole("button", { name: "Pull" }).click();
   await expect(panel).toContainText("no new commit");
+});
+
+test("a pull fetches the branch picked from the repository's branches", async ({ page }) => {
+  await githubOn(page);
+  await page.route("**/projects/*/repos", (route) => route.fulfill({ json: [REPO] }));
+  await page.route("**/repos/repo-1/branches", (route) =>
+    route.fulfill({ json: { branches: ["exiqo/dealer-funding-request/iteration-2", "main", "feature/x"] } }),
+  );
+  let pulled: Record<string, unknown> | null = null;
+  await page.route("**/repos/repo-1/pull", (route) => {
+    pulled = route.request().postDataJSON();
+    return route.fulfill({ json: { changed: false } });
+  });
+  await actAs(page, "sme.vicky");
+  await newProject(page);
+  const picker = page.getByTestId("repo-panel").getByTestId("repo-branch");
+  // the connected branch first, then the others by name
+  await expect(picker.locator("option")).toHaveText(["main", "exiqo/dealer-funding-request/iteration-2", "feature/x"]);
+  await picker.selectOption("exiqo/dealer-funding-request/iteration-2");
+  await page.getByTestId("repo-panel").getByRole("button", { name: "Pull" }).click();
+  await expect(page.getByTestId("repo-panel")).toContainText("no new commit on exiqo/dealer-funding-request/iteration-2");
+  expect(pulled).toEqual({ branch: "exiqo/dealer-funding-request/iteration-2" });
 });
 
 test("the repository panel is hidden when the API has no repository routes", async ({ page }) => {

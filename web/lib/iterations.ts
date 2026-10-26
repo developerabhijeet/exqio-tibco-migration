@@ -56,6 +56,17 @@ export const useEditDiff = (id: string | null, path: string | null) =>
 export const useRepos = (projectId: string | null) =>
   useQuery({ queryKey: ["repos", projectId], queryFn: () => api.repos(projectId!), enabled: !!projectId, retry: false });
 
+/** A connected repository's branches, the connected branch first (then by name). */
+export const useRepoBranches = (repoId: string | null, connected: string) =>
+  useQuery({
+    queryKey: ["repo-branches", repoId],
+    queryFn: () => api.repoBranches(repoId!),
+    enabled: !!repoId,
+    retry: false,
+    staleTime: 30_000,
+    select: (r) => [connected, ...r.branches.filter((b) => b !== connected).sort()],
+  });
+
 /** The newest iteration (n > 1) that names this process, if any. */
 export function iterationOf(list: IterationView[] | undefined, processId: string | null): IterationView | null {
   if (!list || !processId) return null;

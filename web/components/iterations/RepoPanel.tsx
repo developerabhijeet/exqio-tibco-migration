@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { GitBranch, GitPullRequest, Loader2, RefreshCw, Upload } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useConnectors } from "@/lib/connectors";
-import { connectRepo, pullRepo, pushRepo, useIterationAccess, useRepos } from "@/lib/iterations";
+import { connectRepo, pullRepo, pushRepo, useIterationAccess, useRepoBranches, useRepos } from "@/lib/iterations";
 import { useAppState } from "@/lib/state";
 import type { RepoView } from "@/lib/types";
 import { RoleLock } from "@/components/shell/RoleNotice";
@@ -66,14 +66,18 @@ function Row({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pr, setPr] = useState<{ number: number; url: string } | null>(null);
+  const branches = useRepoBranches(repo.id, repo.branch);
+  // The branch a pull fetches: the connected one by default, or e.g. exiqo/<process>/iteration-<n>,
+  // where a reviewer commits on top of a pushed build.
+  const [branch, setBranch] = useState(repo.branch);
 
   const pull = async () => {
     setBusy("pull");
     setError(null);
     setStatus(null);
     try {
-      const r = await pullRepo(repo.id);
-      if (!r.changed) setStatus(`no new commit on ${repo.branch}`);
+      const r = await pullRepo(repo.id, branch === repo.branch ? undefined : branch);
+      if (!r.changed) setStatus(`no new commit on ${branch}`);
       else {
         setStatus(`fetching ${r.commit.slice(0, 12)}`);
         const failed = await watch(r.job_id);
@@ -95,6 +99,7 @@ function Row({
       const r = await pushRepo(repo.id, buildId);
       setPr(r.pull_request);
       setStatus(`pushed ${r.branch} at ${r.commit.slice(0, 12)}`);
+      qc.invalidateQueries({ queryKey: ["repo-branches", repo.id] });
     } catch (e) {
       setError(e instanceof ApiError && (e.status === 404 || e.status === 405) ? "This API cannot push to a repository yet." : errorText(e));
     } finally {
@@ -113,6 +118,23 @@ function Row({
           {repo.last_commit ? `at ${repo.last_commit.slice(0, 12)}` : "not fetched yet"}
         </span>
         <span className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1 text-[12.5px] text-slate" htmlFor={`repo-branch-${repo.id}`}>
+            Branch
+            <select
+              id={`repo-branch-${repo.id}`}
+              data-testid="repo-branch"
+              className="input py-1 font-mono text-[12.5px]"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              disabled={!canPull || busy !== null}
+            >
+              {(branches.data ?? [repo.branch]).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          </label>
           <span title={pullReason}>
             <button type="button" className="btn-secondary" disabled={!canPull || busy !== null} onClick={pull}>
               {busy === "pull" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <RefreshCw size={15} aria-hidden />}

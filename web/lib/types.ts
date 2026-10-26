@@ -576,6 +576,8 @@ export interface IterationTimelineEntry {
   id: string;
   iteration?: number | null;
   summary: string;
+  /** A design record's decision titles. */
+  decisions?: string[];
 }
 
 export interface IterationDetail extends IterationView {

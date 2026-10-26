@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, ChevronRight, Repeat } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Repeat, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { isActive, iterationOf, useIteration, useIterations } from "@/lib/iterations";
 import { useAppState } from "@/lib/state";
@@ -33,41 +33,139 @@ function describe(it: IterationView): string {
 }
 
 /**
+ * One iteration, read only: what it brought in (requirements, failures, logs), its design records
+ * with their decisions, its builds (a link to each) and the gate decisions while it was open.
+ */
+function IterationPanel({ iterationId, onClose }: { iterationId: string; onClose: () => void }) {
+  const detail = useIteration(iterationId);
+  const close = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    close.current?.focus();
+  }, []);
+  const it = detail.data;
+  return (
+    <section
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="iteration-panel-title"
+      data-testid="iteration-panel"
+      className="card mt-2 space-y-3 p-4"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div className="flex items-start gap-2">
+        <div className="min-w-0">
+          <p className="label">Read only</p>
+          <h3 id="iteration-panel-title" className="flex items-center gap-2 text-[16px] font-semibold text-plum">
+            {it ? (
+              <>
+                Iteration {it.n} <span className="text-[13px] font-normal text-slate">{KIND[it.kind] ?? it.kind}</span>
+                <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
+              </>
+            ) : (
+              "Iteration"
+            )}
+          </h3>
+          {it ? <p className="text-[12.5px] text-slate">{describe(it)}</p> : null}
+        </div>
+        <button ref={close} type="button" className="btn-secondary ml-auto" onClick={onClose} aria-label="Close the iteration">
+          <X size={14} aria-hidden />
+        </button>
+      </div>
+      {detail.error ? <ErrorNote error={detail.error} /> : null}
+      {it?.requirements ? (
+        <div>
+          <p className="label">Requirements</p>
+          <p className="whitespace-pre-wrap text-[13.5px] text-ink">{it.requirements}</p>
+        </div>
+      ) : null}
+      {it && it.inputs.length > 0 ? (
+        <div>
+          <p className="label">Inputs</p>
+          <ul className="mt-1 space-y-1.5" data-testid="iteration-panel-inputs">
+            {it.inputs.map((i) => (
+              <InputRow key={i.id} iterationId={it.id} input={i} />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {it ? (
+        <div>
+          <p className="label">What happened</p>
+          {it.timeline.length === 0 ? (
+            <p className="text-[13px] text-slate">No design, build or gate decision in this iteration.</p>
+          ) : (
+            <ol className="mt-1 space-y-1 text-[13px]" data-testid="iteration-panel-timeline">
+              {it.timeline.map((t) => (
+                <li key={`${t.kind}-${t.id}`} data-kind={t.kind}>
+                  <span className="text-slate">{t.at ? new Date(t.at).toLocaleString() : ""}</span>{" "}
+                  {t.kind === "build" && t.process_id ? (
+                    <a className="text-purple underline" href={`/?step=build&process=${t.process_id}`} data-testid="iteration-build-link">
+                      {t.summary}
+                    </a>
+                  ) : (
+                    <span className="text-ink">{t.summary}</span>
+                  )}
+                  {t.decisions && t.decisions.length > 0 ? (
+                    <ul className="ml-4 list-disc text-[12.5px] text-slate" data-testid="iteration-decisions">
+                      {t.decisions.map((d) => (
+                        <li key={d}>{d}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
  * The project's iterations under the stepper: each pass through the pipeline, its kind and where
  * it stands. Iteration 1 is the first pass; every re-entry, edit set or repository fetch adds one.
+ * Each is a button that opens it read only (IterationPanel).
  */
 export function IterationStrip() {
   const { projectId } = useAppState();
   const iterations = useIterations(projectId);
+  const [opened, setOpened] = useState<string | null>(null);
   if (!projectId || !iterations.data || iterations.data.length === 0) return null;
   const rows = [...iterations.data].sort((a, b) => a.n - b.n);
   const current = [...rows].reverse().find(isActive) ?? rows[rows.length - 1];
   return (
-    <div
-      data-testid="iteration-strip"
-      className="mt-2 flex flex-wrap items-center gap-2 border-t border-line px-2 pt-2 text-[12.5px]"
-    >
-      <span className="label flex items-center gap-1">
-        <Repeat size={13} aria-hidden /> Iterations
-      </span>
-      <ol className="flex flex-wrap items-center gap-1.5" aria-label="Iterations of this project">
-        {rows.map((it) => (
-          <li
-            key={it.id}
-            data-iteration={it.n}
-            data-status={it.status}
-            aria-current={it.id === current.id ? "true" : undefined}
-            title={describe(it)}
-            className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${
-              it.id === current.id ? "border-purple bg-purple-lt text-plum" : "border-line text-slate"
-            }`}
-          >
-            <span className="font-semibold">Iteration {it.n}</span>
-            <span className="text-[11.5px]">{KIND[it.kind] ?? it.kind}</span>
-            <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
-          </li>
-        ))}
-      </ol>
+    <div data-testid="iteration-strip" className="mt-2 border-t border-line px-2 pt-2 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label flex items-center gap-1">
+          <Repeat size={13} aria-hidden /> Iterations
+        </span>
+        <ol className="flex flex-wrap items-center gap-1.5" aria-label="Iterations of this project">
+          {rows.map((it) => (
+            <li key={it.id} data-iteration={it.n} data-status={it.status}>
+              <button
+                type="button"
+                data-testid={`iteration-${it.n}`}
+                aria-current={it.id === current.id ? "true" : undefined}
+                aria-expanded={opened === it.id}
+                aria-label={describe(it)}
+                title={describe(it)}
+                onClick={() => setOpened(opened === it.id ? null : it.id)}
+                className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${
+                  it.id === current.id ? "border-purple bg-purple-lt text-plum" : "border-line text-slate"
+                } hover:bg-warm`}
+              >
+                <span className="font-semibold">Iteration {it.n}</span>
+                <span className="text-[11.5px]">{KIND[it.kind] ?? it.kind}</span>
+                <Pill tone={STATUS_TONE[it.status] ?? "det"}>{it.status}</Pill>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+      {opened ? <IterationPanel iterationId={opened} onClose={() => setOpened(null)} /> : null}
     </div>
   );
 }

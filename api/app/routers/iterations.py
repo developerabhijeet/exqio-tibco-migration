@@ -282,8 +282,9 @@ async def _timeline(session, row: Iteration) -> list[TimelineEntry]:
     out: list[TimelineEntry] = []
     for d in (await session.scalars(select(DesignRecord).where(DesignRecord.process_id.in_(pids),
                                                                DesignRecord.iteration == row.n))).all():
+        decisions = [str(x.get("title") or "") for x in (d.record or {}).get("decisions") or [] if x.get("title")]
         out.append(TimelineEntry(kind="design", at=d.created_at, process_id=d.process_id, id=d.id,
-                                 iteration=d.iteration, summary=f"design record v{d.version}"))
+                                 iteration=d.iteration, summary=f"design record v{d.version}", decisions=decisions))
     for b in (await session.scalars(select(Build).where(Build.process_id.in_(pids),
                                                         Build.iteration == row.n))).all():
         out.append(TimelineEntry(kind="build", at=b.created_at, process_id=b.process_id, id=b.id,

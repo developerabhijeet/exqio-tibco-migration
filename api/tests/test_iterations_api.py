@@ -274,6 +274,8 @@ async def test_list_detail_close_and_abandon(client, built_and_failed, architect
     kinds = {t["kind"] for t in detail["timeline"]}
     assert {"design", "gate"} <= kinds
     assert any(t["kind"] == "design" and t["iteration"] == 2 for t in detail["timeline"])
+    design = next(t for t in detail["timeline"] if t["kind"] == "design" and t["iteration"] == 2)
+    assert design["decisions"] == ["Data access"]  # the fake designer's decision, for the read-only view
     assert (await client.post(f"/iterations/{first['id']}/close", json={"note": "fixed"}, headers=sme)).status_code == 403
     r = await client.post(f"/iterations/{first['id']}/close", json={"note": "fixed"}, headers=architect)
     assert r.status_code == 200 and r.json()["status"] == "closed" and r.json()["note"] == "fixed"
