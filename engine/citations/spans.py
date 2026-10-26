@@ -33,9 +33,14 @@ def sentence_bounds(text: str) -> list[tuple[int, int]]:
     return bounds
 
 
+_BULLET = re.compile(r"[-*\u2022]\s+")
+
+
 def _strip(text: str, a: int, b: int) -> tuple[int, int]:
     while a < b and (text[a].isspace() or text[a] in ",;:"):
         a += 1
+    if bullet := _BULLET.match(text, a, b):  # a list dash is not part of the claim
+        a = bullet.end()
     while b > a and text[b - 1].isspace():
         b -= 1
     return a, b

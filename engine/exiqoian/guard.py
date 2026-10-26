@@ -36,7 +36,7 @@ _BLANKS = re.compile(r"\s*\n\s*")
 _SPLIT_LETTERS = re.compile(r"(?<![a-z])(?:[a-z][ \t._\-*]+){2,}[a-z](?![a-z])")
 _SPLIT_SEP = re.compile(r"[ \t._\-*]+")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
-_WRAPPED = re.compile(r"(?<=[a-z0-9+/=])[ \t]*\n(?=[a-z0-9+/=])")
+_B64_LINE = re.compile(r"[a-z0-9+/=]+")
 
 
 def normalise(text: str) -> str:
@@ -62,6 +62,22 @@ def _deobfuscate(n: str) -> tuple[str, bool]:
     return _SPLIT_LETTERS.sub(join, n.translate(LEET)), joined
 
 
+def _join_base64_lines(n: str) -> str:
+    """Consecutive lines made only of base64 characters are joined (a payload wrapped at 60-76
+    characters); lines of prose are left alone."""
+    out: list[str] = []
+    prev_b64 = False
+    for line in n.split("\n"):
+        stripped = line.strip()
+        is_b64 = bool(_B64_LINE.fullmatch(stripped))
+        if is_b64 and prev_b64:
+            out[-1] += stripped
+        else:
+            out.append(line)
+        prev_b64 = is_b64
+    return "\n".join(out)
+
+
 def detect_injection(text: str) -> str | None:
     """Name of the first matching injection rule for ``text`` (normalised here), else None."""
     n = normalise(text)
@@ -74,7 +90,7 @@ def detect_injection(text: str) -> str | None:
             if joined and OVERRIDE_COMPACT.search(_NON_ALNUM.sub("", d)):
                 return name
         elif name == "encoded_payload":
-            if pattern.search(_WRAPPED.sub("", n)):  # base64 wrapped across lines
+            if pattern.search(_join_base64_lines(n)):  # base64 wrapped across lines
                 return name
         elif pattern.search(n):
             return name

@@ -223,7 +223,7 @@ def exiqoian_reply(user: str) -> dict:
     sources = re.findall(r'<source id="(S\d+)"[^>]*>(.*?)</source>', user, flags=re.DOTALL)
     if not sources:
         return {"verdict": "not_covered", "answer": ""}
-    parts = [f"{' '.join(text.split())[:160]} [{sid}]." for sid, text in sources[:2]]
+    parts = [f"{' '.join(text.split())[:160].rstrip('.!? ')} [{sid}]." for sid, text in sources[:2]]
     return {"verdict": "answer", "answer": "From the project memory: " + " ".join(parts)}
 
 

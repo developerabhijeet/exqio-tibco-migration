@@ -16,7 +16,7 @@ from engine.agents.provider import ProviderError, mask_sensitive
 from engine.agents.routing import RoutedProvider
 from engine.citations.model import CitedText, CiteRef
 from engine.citations.spans import from_markers, sentence_bounds
-from engine.exiqoian.guard import check
+from engine.exiqoian.guard import check, detect_injection, normalise
 from engine.exiqoian.personas import PersonaKey
 from engine.exiqoian.replies import REPLY_FOR, Verdict
 from engine.exiqoian.sources import (
@@ -42,7 +42,6 @@ COMPOSER_SOURCES = 3
 COMPOSER_CHARS = 240
 _LEAK_TAG = re.compile(r"<\s*/?\s*(?:source|history|question|system)", re.IGNORECASE)
 _FIRST_SENTENCE = re.compile(r"^.*?\.(?=\s|$)", re.DOTALL)
-_LEADING_MARKERS = re.compile(r"\s*((?:\[S\d+(?:\s*,\s*S\d+)*\]\s*)+)")
 
 
 class Turn(BaseModel):
@@ -65,43 +64,74 @@ def _fixed(verdict: Verdict, rule: str | None = None, *, used_model: bool = Fals
                  used_model=used_model, sources=sources or [], dropped_sources=dropped)
 
 
+_LIST_NUMBER = re.compile(r"^\s*(?:\d+[.)]|[-*\u2022])\s+")
+_BODYLESS = re.compile(r"^[\s\-*\u2022>#\d.)(:]*$")  # what may precede a marker that leads its sentence
+_MARKER_GROUP = re.compile(r"[ \t]*\[S\d+(?:\s*,\s*S\d+)*\][ \t]*")
+_ALLOWED_DECLINES = ("off_topic", "injection", "not_covered")
+
+
 def _first_sentence(text: str, limit: int = COMPOSER_CHARS) -> str:
-    flat = " ".join(strip_markers(text).split())
-    m = _FIRST_SENTENCE.match(flat)
-    return (m.group().rstrip(".!? ") if m else flat)[:limit].rstrip()
+    flat = _LIST_NUMBER.sub("", " ".join(strip_markers(text).split()))
+    bounds = sentence_bounds(flat)
+    cut = flat[bounds[0][0]:bounds[0][1]] if bounds else ""
+    return cut.rstrip(".!? ")[:limit].rstrip()
 
 
 def compose_without_model(sources: list[Source]) -> str:
-    """The offline answer: up to three sources, one sentence each, each ending with its marker."""
-    lines = [f"{_first_sentence(s.hit.text)} [{s.marker}]." for s in sources[:COMPOSER_SOURCES]]
-    return COMPOSER_INTRO + "\n" + "\n".join(lines)
+    """The offline answer: up to three sources, one sentence each, each ending with its marker.
+    Empty when no source has a sentence to quote."""
+    lines = []
+    for s in sources:
+        if sentence := _first_sentence(s.hit.text):
+            lines.append(f"{sentence} [{s.marker}].")
+        if len(lines) == COMPOSER_SOURCES:
+            break
+    return COMPOSER_INTRO + "\n" + "\n".join(lines) if lines else ""
 
 
 def _trailing_markers(answer: str) -> str:
-    """Leading markers (`[S1] Text.`) cite nothing as written: move them to the end of the first
-    sentence that follows, before its closing punctuation."""
-    m = _LEADING_MARKERS.match(answer)
-    if not m:
-        return answer
-    rest = answer[m.end():]
-    bounds = sentence_bounds(rest)
-    if not bounds:
-        return rest
-    end = bounds[0][1]
-    while end > bounds[0][0] and rest[end - 1] in ".!?":
-        end -= 1
-    return rest[:end] + " " + m.group(1).strip() + rest[end:]
+    """A marker that leads its sentence or list item (`[S1] Text.`, `- [S2] Text.`, a marker on
+    its own line before the claim) cites nothing as written: move it to the end of that sentence,
+    before the closing punctuation. Repeats until no marker leads."""
+    for _ in range(100):
+        moved = False
+        for m in _MARKER_GROUP.finditer(answer):
+            start = m.start() + len(m.group()) - len(m.group().lstrip())  # the spaces before it stay
+            bounds = sentence_bounds(answer)
+            sentence = next(((a, b) for a, b in bounds if a <= start < b), None)
+            if sentence is None or not _BODYLESS.match(answer[sentence[0]:start]):
+                continue
+            group = m.group().strip()
+            rest = answer[:start] + answer[m.end():]
+            pos = start
+            body = next(((a, b) for a, b in sentence_bounds(rest) if a <= pos < b), None)
+            if body is None:  # nothing follows the marker: drop it
+                answer = rest
+            else:
+                end = body[1]
+                while end > pos and rest[end - 1] in ".!?":
+                    end -= 1
+                answer = rest[:end] + " " + group + rest[end:]
+            moved = True
+            break
+        if not moved:
+            break
+    return answer
 
 
 def validate_answer(answer: str, sources: list[Source], canary: str,
                     system_first_sentence: str) -> tuple[Verdict, CitedText, str | None]:
-    """Layer 7 steps 2-5 on an answer the model gave with verdict ``answer``."""
-    low = answer.lower()
-    if canary.lower() in low or _LEAK_TAG.search(answer) or system_first_sentence.lower() in low:
+    """Layer 7 steps 2-5 on an answer the model gave with verdict ``answer``, plus X22: the text
+    that would be shown must itself pass the injection check."""
+    low, folded = answer.lower(), normalise(answer)
+    if (canary.lower() in low or canary.lower() in folded.replace(" ", "") or _LEAK_TAG.search(folded)
+            or system_first_sentence.lower() in low):
         return "injection", CitedText.plain(REPLY_FOR["injection"]), "output_leak"
     cited, _dropped = from_markers(_trailing_markers(mask_sensitive(answer)), {s.marker: s.ref for s in sources})
     if not cited.refs:
         return "not_covered", CitedText.plain(REPLY_FOR["not_covered"]), "uncited"
+    if detect_injection(cited.text) is not None:
+        return "injection", CitedText.plain(REPLY_FOR["injection"]), "output_leak"
     return "answer", cited, None
 
 
@@ -143,7 +173,7 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
         if data is not None:
             verdict = data.get("verdict")
             if verdict != "answer":
-                verdict = verdict if verdict in REPLY_FOR else "not_covered"
+                verdict = verdict if verdict in _ALLOWED_DECLINES else "not_covered"
                 return _fixed(verdict, used_model=True, sources=refs, dropped=dropped)
             first = _FIRST_SENTENCE.match(system)
             v, cited, rule = validate_answer(str(data.get("answer", "")), sources, canary,
@@ -151,5 +181,8 @@ async def respond(*, retriever: MemoryRetriever, project_id: str, question: str,
             return Reply(verdict=v, cited=cited, rule=rule, used_model=True, sources=refs,
                          dropped_sources=dropped)
 
-    cited, _ = from_markers(compose_without_model(sources), {s.marker: s.ref for s in sources})
+    composed = compose_without_model(sources)
+    cited, _ = from_markers(composed, {s.marker: s.ref for s in sources})
+    if not cited.refs:
+        return _fixed("not_covered", dropped=dropped)
     return Reply(verdict="answer", cited=cited, used_model=False, sources=refs, dropped_sources=dropped)

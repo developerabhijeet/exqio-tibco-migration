@@ -115,12 +115,12 @@ def render_prompt(question: str, sources: list[Source], history: list[tuple[str,
                   persona: PersonaKey, canary: str) -> tuple[str, str]:
     """(system, user) prompt. History keeps the last 6 messages cut to 600 characters."""
     def turn(role: str, text: str) -> str:  # mask, then flatten lines, then cut
-        flat = " ".join(mask_sensitive(text).split())[:HISTORY_CHARS]
+        flat = " ".join(mask_sensitive(strip_markers(text)).split())[:HISTORY_CHARS]
         return f"{'assistant' if role == 'assistant' else 'user'}: {escape_tags(flat)}"
     hist = "\n".join(turn(role, text) for role, text in history[-HISTORY_MESSAGES:])
     system = _fill(_SYSTEM, {"persona_line": PERSONAS[persona].prompt_line, "canary": canary,
                              "history": "", "question": "", "sources": ""})
     user = _fill(_USER, {"persona_line": "", "canary": "", "history": hist or "(none)",
-                         "question": escape_tags(mask_sensitive(question)),
+                         "question": escape_tags(mask_sensitive(strip_markers(question))),
                          "sources": "\n".join(_source_block(s) for s in sources) or "(none)"})
     return system, user

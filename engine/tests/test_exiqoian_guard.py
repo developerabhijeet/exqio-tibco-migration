@@ -151,3 +151,8 @@ def test_dotnet_is_a_project_word():
     from engine.exiqoian.lexicon import tokens
     assert "dotnet" in tokens(normalise("Which .NET class maps this?"))
     assert check("Which .NET class maps this?", frozenset(MIGRATION_VOCABULARY)).verdict is None
+
+
+def test_only_pure_base64_lines_are_joined():
+    prose = "\n".join(["which build had hash " + "a" * 70, "b" * 70 + " is the other"])  # edges look like base64
+    assert detect_injection(prose) is None

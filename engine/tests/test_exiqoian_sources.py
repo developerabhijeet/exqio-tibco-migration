@@ -169,3 +169,8 @@ async def test_a_failed_group_is_dropped_and_logged_but_all_failing_propagates(c
     assert [s.hit.uid for s in sources] == ["chunk:p:rule:R1"] and "boom" in caplog.text
     with pytest.raises(RuntimeError):
         await gather_sources(FlakyRetriever(hits, {tuple(lb) for _, lb, _ in GROUPS}), "proj", "dealer funding", "sme", {})
+
+
+def test_question_and_history_lose_their_markers_in_the_prompt():
+    _, user = render_prompt("What is [S1]?", [], [("assistant", "It funds [S2].")], "sme", "c")
+    assert "[S1]" not in user and "[S2]" not in user
