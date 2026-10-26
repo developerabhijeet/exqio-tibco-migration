@@ -18,6 +18,8 @@ class FakeJira(FakeService):
         self._n = 0
         self._serve(Starlette(routes=[
             Route("/rest/api/2/myself", self._guard(self._myself)),
+            Route("/rest/api/2/project", self._guard(self._projects)),
+            Route("/rest/api/2/project/{key}", self._guard(self._project)),
             Route("/rest/api/2/issue", self._guard(self._create), methods=["POST"]),
             Route("/rest/api/2/issue/{key}", self._guard(self._issue), methods=["GET", "PUT"]),
         ]))
@@ -33,6 +35,15 @@ class FakeJira(FakeService):
     async def _myself(self, request: Request) -> Response:
         return json_response({"name": "exiqo-bot", "displayName": "ExiQO bot", "active": True,
                               "accountId": "5b10ac8d82e05b22cc7d4ef5"})
+
+    async def _projects(self, request: Request) -> Response:
+        return json_response([{"key": self.project, "name": f"{self.project} project"}])
+
+    async def _project(self, request: Request) -> Response:
+        if request.path_params["key"] != self.project:
+            return json_response({"errorMessages": ["No project could be found"], "errors": {}}, 404)
+        return json_response({"key": self.project, "name": f"{self.project} project",
+                              "issueTypes": [{"name": "Task"}, {"name": "Story"}]})
 
     def _view(self, issue: dict) -> dict:
         return {"id": issue["id"], "key": issue["key"], "self": f"{self.url}/rest/api/2/issue/{issue['id']}",

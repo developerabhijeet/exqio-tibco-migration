@@ -22,7 +22,8 @@ class FakeConfluence(FakeService):
         self.attachments: dict[str, list[dict]] = {}
         self._next = 1000
         routes = []
-        for prefix in ("", "/wiki"):
+        # Data Center serves /rest/api; Cloud serves /wiki/rest/api and the v2 API under /wiki/api/v2.
+        for prefix in ("/wiki" if flavor == "cloud" else "",):
             routes += [
                 Route(f"{prefix}/rest/api/user/current", self._guard(self._current)),
                 Route(f"{prefix}/rest/api/content", self._guard(self._v1_collection), methods=["GET", "POST"]),
@@ -30,11 +31,12 @@ class FakeConfluence(FakeService):
                 Route(f"{prefix}/rest/api/content/{{pid}}/child/attachment",
                       self._guard(self._attachments), methods=["GET", "POST"]),
             ]
-        routes += [
-            Route("/wiki/api/v2/pages", self._guard(self._v2_collection), methods=["GET", "POST"]),
-            Route("/wiki/api/v2/pages/{pid}", self._guard(self._v2_page), methods=["GET", "PUT"]),
-            Route("/wiki/api/v2/spaces", self._guard(self._v2_spaces)),
-        ]
+        if flavor == "cloud":
+            routes += [
+                Route("/wiki/api/v2/pages", self._guard(self._v2_collection), methods=["GET", "POST"]),
+                Route("/wiki/api/v2/pages/{pid}", self._guard(self._v2_page), methods=["GET", "PUT"]),
+                Route("/wiki/api/v2/spaces", self._guard(self._v2_spaces)),
+            ]
         self._serve(Starlette(routes=routes))
 
     def _guard(self, handler):
@@ -45,7 +47,7 @@ class FakeConfluence(FakeService):
 
         return run
 
-    def _view(self, page: dict, *, v2: bool = False) -> dict:
+    def _view(self, page: dict, *, v2: bool = False, body: bool = False) -> dict:
         webui = f"/spaces/{page['space']}/pages/{page['id']}"
         base = {"id": page["id"], "type": "page", "status": "current", "title": page["title"],
                 "version": {"number": page["version"]},
@@ -53,12 +55,20 @@ class FakeConfluence(FakeService):
         if v2:
             base["spaceId"] = page["space"]
             base["parentId"] = page["parent"]
-            base["body"] = {"storage": {"value": page["body"], "representation": "storage"}}
         else:
             base["space"] = {"key": page["space"]}
             base["ancestors"] = [{"id": page["parent"]}] if page["parent"] else []
+        if body:
             base["body"] = {"storage": {"value": page["body"], "representation": "storage"}}
         return base
+
+    @staticmethod
+    def _expands_body(request: Request) -> bool:
+        return "body.storage" in request.query_params.get("expand", "").split(",")
+
+    @staticmethod
+    def _wants_body(request: Request) -> bool:
+        return request.query_params.get("body-format") == "storage"
 
     def _new(self, space: str, title: str, body: str, parent: str = "") -> dict:
         self._next += 1
@@ -75,7 +85,7 @@ class FakeConfluence(FakeService):
     async def _v1_collection(self, request: Request) -> Response:
         if request.method == "GET":
             title, space = request.query_params.get("title"), request.query_params.get("spaceKey")
-            rows = [self._view(p) for p in self.pages.values()
+            rows = [self._view(p, body=self._expands_body(request)) for p in self.pages.values()
                     if (not title or p["title"] == title) and (not space or p["space"] == space)]
             return json_response({"results": rows, "size": len(rows)})
         body = await request.json()
@@ -85,14 +95,14 @@ class FakeConfluence(FakeService):
         ancestors = body.get("ancestors") or []
         value = ((body.get("body") or {}).get("storage") or {}).get("value", "")
         return json_response(self._view(self._new(space, body["title"], value,
-                                                  str(ancestors[-1]["id"]) if ancestors else "")))
+                                                  str(ancestors[-1]["id"]) if ancestors else ""), body=True))
 
     async def _v1_page(self, request: Request) -> Response:
         page = self.pages.get(request.path_params["pid"])
         if page is None:
             return json_response({"message": "No content found"}, 404)
         if request.method == "GET":
-            return json_response(self._view(page))
+            return json_response(self._view(page, body=self._expands_body(request)))
         body = await request.json()
         return self._update(page, body, ((body.get("body") or {}).get("storage") or {}).get("value"))
 
@@ -105,7 +115,7 @@ class FakeConfluence(FakeService):
         page["title"] = body.get("title", page["title"])
         if value is not None:
             page["body"] = value
-        return json_response(self._view(page, v2=v2))
+        return json_response(self._view(page, v2=v2, body=True))
 
     async def _attachments(self, request: Request) -> Response:
         pid = request.path_params["pid"]
@@ -113,6 +123,8 @@ class FakeConfluence(FakeService):
             return json_response({"message": "No content found"}, 404)
         rows = self.attachments.setdefault(pid, [])
         if request.method == "POST":
+            if request.headers.get("x-atlassian-token") != "no-check":
+                return json_response({"statusCode": 403, "message": "XSRF check failed"}, 403)
             ctype = request.headers.get("content-type", "")
             message = BytesParser(policy=policy.default).parsebytes(
                 b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + await request.body())
@@ -126,21 +138,22 @@ class FakeConfluence(FakeService):
     async def _v2_collection(self, request: Request) -> Response:
         if request.method == "GET":
             title = request.query_params.get("title")
-            rows = [self._view(p, v2=True) for p in self.pages.values() if not title or p["title"] == title]
+            rows = [self._view(p, v2=True, body=self._wants_body(request)) for p in self.pages.values()
+                    if not title or p["title"] == title]
             return json_response({"results": rows})
         body = await request.json()
         if not body.get("spaceId") or not body.get("title"):
             return json_response({"message": "spaceId and title are required"}, 400)
         return json_response(self._view(self._new(str(body["spaceId"]), body["title"],
                                                   (body.get("body") or {}).get("value", ""),
-                                                  str(body.get("parentId") or "")), v2=True))
+                                                  str(body.get("parentId") or "")), v2=True, body=True))
 
     async def _v2_page(self, request: Request) -> Response:
         page = self.pages.get(request.path_params["pid"])
         if page is None:
             return json_response({"message": "Not Found"}, 404)
         if request.method == "GET":
-            return json_response(self._view(page, v2=True))
+            return json_response(self._view(page, v2=True, body=self._wants_body(request)))
         body = await request.json()
         return self._update(page, body, (body.get("body") or {}).get("value"), v2=True)
 

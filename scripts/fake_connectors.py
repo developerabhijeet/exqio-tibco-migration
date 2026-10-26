@@ -2,7 +2,7 @@
 run and manual tries. Writes the token files to a temp directory and prints the settings to use
 (``CONNECTORS`` plus the ``*_FILE`` variables). Stops on Ctrl-C.
 
-    python scripts/fake_connectors.py --ports github=9711,confluence=9712,jira=9713,figma=9714,figma-images=9715
+    python scripts/fake_connectors.py --repo gmf/svc=samples/synthetic-gmf --ports github=9711,confluence=9712,jira=9713,figma=9714,figma-images=9715
 """
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ports", default=DEFAULT_PORTS)
     parser.add_argument("--flavor", choices=("datacenter", "cloud"), default="datacenter")
+    parser.add_argument("--repo", action="append", default=[], metavar="OWNER/NAME[=DIR]",
+                        help="seed a GitHub repository (main branch from DIR, else empty); repeatable")
+    parser.add_argument("--space", default="GMF", help="the Confluence space key to seed")
     args = parser.parse_args(argv)
     ports = parse_ports(args.ports)
 
@@ -49,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     servers = [images, github.server, confluence.server, jira.server, figma.server]
     for srv in servers:
         srv.start()
+
+    for spec in args.repo or ["gmf/svc"]:
+        name, _, tree = spec.partition("=")
+        github.add_repo(name, tree=Path(tree) if tree else None)
+    parent = confluence.create_page(args.space, "ExiQO", "<p>ExiQO pages live under this page.</p>")
 
     tokens = Path(tempfile.mkdtemp(prefix="fake-connectors-"))
     files = {"GITHUB_TOKEN_FILE": ("github", github.token), "ATLASSIAN_TOKEN_FILE": ("atlassian", confluence.token),
@@ -71,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     print("CONNECTORS_ALLOW_INSECURE_LOOPBACK=true")
     for var, path in env.items():
         print(f"{var}={path}")
+    print("GITHUB_REPOS=" + ",".join(r.partition("=")[0] for r in args.repo or ["gmf/svc"]))
+    print(f"CONFLUENCE_SPACE={args.space} CONFLUENCE_PARENT_PAGE_ID={parent} JIRA_PROJECT={jira.project}")
     print("Fake connectors are up; Ctrl-C to stop.", flush=True)
     try:
         while True:

@@ -26,6 +26,9 @@ def _run_cgi(project_root: Path, request: Request, body: bytes) -> Response:
     if "git-protocol" in request.headers:
         env["GIT_PROTOCOL"] = request.headers["git-protocol"]
     proc = subprocess.run(["git", "http-backend"], input=body, env=env, capture_output=True, check=False)
+    if proc.returncode != 0 and not proc.stdout:
+        return Response(f"git http-backend failed ({proc.returncode}): {proc.stderr.decode(errors='replace')}",
+                        status_code=500, media_type="text/plain")
     head, _, payload = proc.stdout.partition(b"\r\n\r\n")
     if not _:
         head, _, payload = proc.stdout.partition(b"\n\n")

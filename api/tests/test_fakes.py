@@ -2,25 +2,17 @@
 from __future__ import annotations
 
 import base64
-import os
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@example.org", "GIT_TERMINAL_PROMPT": "0"}
-
-
-def git_env() -> dict[str, str]:
-    """No askpass helper (an IDE's would wait for a person) and no credential helper."""
-    env = {k: v for k, v in os.environ.items() if "ASKPASS" not in k}
-    return {**env, **GIT_ENV, "GIT_ASKPASS": "true", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+from api.tests.fakes.github import COMMIT_FLAGS, hermetic_git_env
 
 
 def run_git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=git_env(),
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=hermetic_git_env(),
                           check=False, timeout=60)
 
 
@@ -31,7 +23,7 @@ def init_repo(path: Path, files: dict[str, str]) -> Path:
     for name, text in files.items():
         (path / name).write_text(text)
     run_git("add", "-A", cwd=path)
-    assert run_git("commit", "-m", "init", cwd=path).returncode == 0
+    assert run_git(*COMMIT_FLAGS, "commit", "-m", "init", cwd=path).returncode == 0
     return path
 
 
@@ -69,8 +61,8 @@ async def test_fake_github_rejects_missing_token_on_git(fake_github):
     fake_github.add_repo("gmf/svc")
     proc = run_git("ls-remote", f"{fake_github.url}/gmf/svc.git")
     assert proc.returncode != 0
-    assert "401" in proc.stderr + proc.stdout or "Authentication failed" in proc.stderr \
-        or "terminal prompts disabled" in proc.stderr
+    assert "terminal prompts disabled" in proc.stderr or "Authentication failed" in proc.stderr \
+        or "error: 401" in proc.stderr
     assert fake_github.requests and all(r.path.endswith("info/refs") for r in fake_github.requests)
 
 
@@ -92,6 +84,7 @@ async def test_fake_github_git_push_with_a_wrong_token_fails(fake_github, tmp_pa
 async def test_fake_github_rest(fake_github, token):
     fake_github.add_repo("gmf/svc", tree={"README.md": "hello", "src/a.cs": "x"})
     fake_github.commit("feature", {"src/a.cs": lambda old: old + "y", "b.txt": "b"})
+    fake_github.commit("other", {"c.txt": "c"})
     assert fake_github.branch_files("gmf/svc", "main") == {"README.md": "hello", "src/a.cs": "x"}
     assert fake_github.branch_files("gmf/svc", "feature")["src/a.cs"] == "xy"
     h = {"Authorization": f"Bearer {token}"}
@@ -100,18 +93,97 @@ async def test_fake_github_rest(fake_github, token):
         assert (await c.get("/rate_limit")).status_code == 200
         assert (await c.get("/repos/gmf/svc")).json()["default_branch"] == "main"
         assert (await c.get("/repos/gmf/none")).status_code == 404
-        assert {b["name"] for b in (await c.get("/repos/gmf/svc/branches")).json()} == {"main", "feature"}
+        assert {b["name"] for b in (await c.get("/repos/gmf/svc/branches")).json()} == {"main", "feature", "other"}
         assert (await c.get("/repos/gmf/svc/branches/feature")).json()["name"] == "feature"
         assert (await c.get("/repos/gmf/svc/branches/nope")).status_code == 404
         made = await c.post("/repos/gmf/svc/pulls", json={"title": "T", "head": "feature", "base": "main"})
         assert made.status_code == 201
         assert made.json()["number"] == 1
         assert made.json()["html_url"] == f"{fake_github.url}/gmf/svc/pull/1"
-        second = await c.post("/repos/gmf/svc/pulls", json={"title": "U", "head": "feature", "base": "main"})
+        second = await c.post("/repos/gmf/svc/pulls", json={"title": "U", "head": "other", "base": "main"})
         assert second.json()["number"] == 2
         assert (await c.patch("/repos/gmf/svc/pulls/1", json={"state": "closed"})).json()["state"] == "closed"
         assert [p["number"] for p in (await c.get("/repos/gmf/svc/pulls?state=open")).json()] == [2]
         assert (await c.get("/user", headers={"Authorization": "Bearer no"})).status_code == 401
+
+
+async def test_fake_github_pull_validation_and_filters(fake_github, token):
+    fake_github.add_repo("gmf/svc")
+    fake_github.commit("feature", {"a": "1"})
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(base_url=fake_github.url + "/api/v3", headers=h) as c:
+        pr = {"title": "T", "head": "feature", "base": "main"}
+        assert (await c.post("/repos/gmf/svc/pulls", json=pr)).status_code == 201
+        dup = await c.post("/repos/gmf/svc/pulls", json=pr)
+        assert dup.status_code == 422 and dup.json()["message"] == "Validation Failed"
+        assert dup.json()["errors"] == [{"message": "A pull request already exists for gmf:feature."}]
+        gone = await c.post("/repos/gmf/svc/pulls", json={**pr, "head": "nope"})
+        assert gone.status_code == 422 and gone.json()["errors"]
+        assert (await c.post("/repos/gmf/svc/pulls", json={**pr, "base": "nope"})).status_code == 422
+        assert len((await c.get("/repos/gmf/svc/pulls", params={"head": "gmf:feature"})).json()) == 1
+        assert (await c.get("/repos/gmf/svc/pulls", params={"head": "feature"})).json() == []
+
+
+async def test_fake_github_paginates_with_link_headers(fake_github, token):
+    fake_github.add_repo("gmf/svc")
+    for i in range(5):
+        fake_github.commit(f"b{i}", {"f": str(i)})
+    h = {"Authorization": f"Bearer {token}"}
+    names: list[str] = []
+    async with httpx.AsyncClient(base_url=fake_github.url + "/api/v3", headers=h) as c:
+        page, pages = 1, 0
+        while True:
+            r = await c.get("/repos/gmf/svc/branches", params={"per_page": 2, "page": page})
+            names += [b["name"] for b in r.json()]
+            pages += 1
+            if 'rel="next"' not in r.headers.get("link", ""):
+                break
+            page += 1
+        assert pages == 3 and sorted(names) == ["b0", "b1", "b2", "b3", "b4", "main"]
+        everything = await c.get("/repos/gmf/svc/branches")
+        assert len(everything.json()) == 6 and "link" not in everything.headers
+
+
+async def test_fake_github_git_clone_and_fetch_with_auth(fake_github, tmp_path, token):
+    fake_github.add_repo("gmf/svc", tree={"a.txt": "1"})
+    auth = ["-c", f"http.extraHeader=Authorization: Bearer {token}"]
+    url = f"{fake_github.url}/gmf/svc.git"
+    clone = tmp_path / "clone"
+    assert run_git(*auth, "clone", "--quiet", url, str(clone)).returncode == 0
+    assert (clone / "a.txt").read_text() == "1"
+    fake_github.commit("main", {"a.txt": "2"})
+    assert run_git(*auth, "pull", "--quiet", "--ff-only", cwd=clone).returncode == 0
+    assert (clone / "a.txt").read_text() == "2"
+    assert run_git("clone", url, str(tmp_path / "anon")).returncode != 0
+
+
+async def test_fake_github_git_accepts_basic_x_access_token(fake_github, token):
+    fake_github.add_repo("gmf/svc", tree={"a.txt": "1"})
+    cred = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    ok = run_git("-c", f"http.extraHeader=Authorization: Basic {cred}", "ls-remote",
+                 f"{fake_github.url}/gmf/svc.git")
+    assert ok.returncode == 0 and "refs/heads/main" in ok.stdout
+    bad = base64.b64encode(b"x-access-token:wrong").decode()
+    assert run_git("-c", f"http.extraHeader=Authorization: Basic {bad}", "ls-remote",
+                   f"{fake_github.url}/gmf/svc.git").returncode != 0
+
+
+async def test_fake_github_git_401_challenges_and_unknown_repo_fails(fake_github, token):
+    url = f"{fake_github.url}/gmf/x.git/info/refs?service=git-upload-pack"
+    async with httpx.AsyncClient() as c:
+        r = await c.get(url)
+        assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Basic")
+        r = await c.get(url, headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 404  # git http-backend: no such repository
+
+
+async def test_fake_github_stop_removes_its_root():
+    from api.tests.fakes.github import FakeGitHub
+
+    with FakeGitHub() as g:
+        root = g.root
+        assert root.exists()
+    assert not root.exists()
 
 
 async def test_fake_github_add_repo_from_a_directory(fake_github, tmp_path):
@@ -144,9 +216,17 @@ async def test_fake_confluence_v1_create_get_and_auth(fake_confluence_dc):
             "body": {"storage": {"value": "<p>b</p>", "representation": "storage"}}})
         assert r.status_code == 200 and r.json()["version"]["number"] == 1
         got = (await c.get(f"/rest/api/content/{r.json()['id']}?expand=version", headers=h)).json()
-        assert got["title"] == "P" and got["ancestors"] == [{"id": "7"}]
+        assert got["title"] == "P" and got["ancestors"] == [{"id": "7"}] and "body" not in got
+        full = (await c.get(f"/rest/api/content/{r.json()['id']}?expand=version,body.storage", headers=h)).json()
+        assert full["body"]["storage"]["value"] == "<p>b</p>"
+        assert (await c.get("/wiki/rest/api/user/current", headers=h)).status_code == 404  # Cloud-only path
+        assert (await c.get("/wiki/api/v2/pages", headers=h)).status_code == 404
         assert (await c.get("/rest/api/content/999", headers=h)).status_code == 404
         up = await c.post(f"/rest/api/content/{r.json()['id']}/child/attachment", headers=h,
+                          files={"file": ("diagram.png", b"png-bytes", "image/png")})
+        assert up.status_code == 403 and "XSRF" in up.text
+        up = await c.post(f"/rest/api/content/{r.json()['id']}/child/attachment",
+                          headers={**h, "X-Atlassian-Token": "no-check"},
                           files={"file": ("diagram.png", b"png-bytes", "image/png")})
         assert up.json()["results"][0]["title"] == "diagram.png"
         listed = (await c.get(f"/rest/api/content/{r.json()['id']}/child/attachment", headers=h)).json()
@@ -173,6 +253,8 @@ async def test_fake_confluence_cloud_v2_and_basic_auth(fake_confluence_cloud):
         assert good.status_code == 200
         got = (await c.get(f"/wiki/api/v2/pages/{pid}?body-format=storage", headers=basic(f))).json()
         assert got["body"]["storage"]["value"] == "<p>2</p>" and got["version"]["number"] == 2
+        assert "body" not in (await c.get(f"/wiki/api/v2/pages/{pid}", headers=basic(f))).json()
+        assert (await c.get("/rest/api/user/current", headers=basic(f))).status_code == 404  # DC-only path
 
 
 # ------------------------------------------------------------------ Jira
@@ -209,7 +291,7 @@ async def test_fake_figma_file_has_two_pages_and_three_frames(fake_figma):
 
 async def test_fake_figma_requires_the_token_and_knows_its_files(fake_figma):
     async with httpx.AsyncClient(base_url=fake_figma.url) as c:
-        assert (await c.get("/v1/me")).status_code == 401 or (await c.get("/v1/me")).status_code == 403
+        assert (await c.get("/v1/me")).status_code == 403
         assert (await c.get("/v1/files/NOPE", headers={"X-Figma-Token": fake_figma.token})).status_code == 404
 
 
