@@ -40,6 +40,7 @@ from api.app.services.infra import make_fernet
 from api.app.services.knowledge import Knowledge
 from api.app.services.memory_ingest import open_memory
 from api.app.services.settings import apply_stored, load_stored
+from engine import masking
 from engine.parity import xslt
 
 log = logging.getLogger("api.app.worker")
@@ -102,6 +103,9 @@ class _Server(uvicorn.Server):
 
 
 async def run(settings: Settings) -> None:
+    # Before anything else: every job masks (memory nodes, decisions, cited text) with the
+    # deployment's configured sensitive fields, as the API does.
+    masking.configure(settings.sensitive_fields)
     if not settings.internal_token:
         raise RuntimeError("INTERNAL_TOKEN (or INTERNAL_TOKEN_FILE) is required in role worker: the API "
                            "pods authenticate to this worker's internal listener with it")

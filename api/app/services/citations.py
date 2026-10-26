@@ -18,7 +18,8 @@ from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Any
 
-from engine.agents.provider import MASK, mask_sensitive
+from engine import masking
+from engine.agents.provider import MASK
 from engine.citations.claims import HintedRef, anchor, link_entities, tail
 from engine.citations.model import (
     LABEL_MAX,
@@ -33,24 +34,18 @@ from engine.citations.uids import activity_uid, finding_chunk_uid, rule_chunk_ui
 from engine.domains.discover import activity_messages, activity_sql, sql_tables
 from engine.ir.models import Activity
 
-# The field names a deployment adds to the default sensitive ones (Settings.sensitive_fields, set
-# at app start). Every text a client shows from these builders, and every value the API shows on
-# their behalf (parity values, Deploy evidence lines), is masked with them here; the browser never
-# masks anything itself.
-_EXTRA_SENSITIVE: tuple[str, ...] = ()
-
 
 def configure_masking(fields: Iterable[str]) -> None:
-    """Use ``fields`` as the configured sensitive field names from now on (the app calls it at
-    start with ``Settings.sensitive_fields``)."""
-    global _EXTRA_SENSITIVE
-    _EXTRA_SENSITIVE = tuple(f for f in fields if f)
+    """Use ``fields`` as the configured sensitive field names in this process (``engine.masking``;
+    the API calls it at start with ``Settings.sensitive_fields``, and so does the worker)."""
+    masking.configure(fields)
 
 
 def mask(text: str) -> str:
-    """``text`` masked for display: SSNs and the values of the default and configured sensitive
-    fields (``engine.agents.provider.mask_sensitive``)."""
-    return mask_sensitive(text, _EXTRA_SENSITIVE)
+    """``text`` masked for display with the default and configured sensitive fields: every text a
+    client shows from these builders, and every value the API shows on their behalf (parity
+    values, Deploy evidence lines). The browser never masks."""
+    return masking.mask(text)
 
 
 def mask_lines(text: str) -> str:

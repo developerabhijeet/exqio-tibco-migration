@@ -10,7 +10,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel
 
-from engine.agents.provider import mask_sensitive
+from engine.masking import mask
 from engine.memory.diff import DiffSet
 
 NODE_LABELS: tuple[str, ...] = (
@@ -177,7 +177,7 @@ def rel_hash(r: MemRel) -> str:
 
 def _mask_value(value: Any) -> Any:
     if isinstance(value, str):
-        return mask_sensitive(value)
+        return mask(value)
     if isinstance(value, list):
         return [_mask_value(v) for v in value]
     return value
@@ -197,8 +197,8 @@ def mask_node(n: MemNode) -> tuple[MemNode, bool]:
         except KnowledgeError:
             text, refused = "", True
     masked = n.model_copy(update={
-        "name": mask_sensitive(n.name),
-        "text": mask_sensitive(text),
+        "name": mask(n.name),
+        "text": mask(text),
         "props": _mask_props(n.props),
     })
     return masked, refused

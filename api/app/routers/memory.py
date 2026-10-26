@@ -26,7 +26,7 @@ from api.app.schemas.memory import (
 from api.app.services import gates as gate_svc
 from api.app.services.knowledge import KnowledgeUnavailable
 from api.app.services.memory_ingest import enqueue_ingest
-from engine.agents.provider import mask_sensitive
+from engine.masking import mask
 from engine.memory.model import NODE_LABELS, NodeLabel, Phase
 
 router = APIRouter(prefix="/memory/{project_id}", tags=["memory"])
@@ -192,8 +192,8 @@ async def curate(project_id: str, body: CurationIn, request: Request, session: S
 
     actor = principal.actor
     row = MemoryEvent(project_id=project_id, kind="curation", action=body.action,
-                      text=mask_sensitive(body.text or ""),
-                      context={"reason": mask_sensitive(body.reason)}, target_uid=target,
+                      text=mask(body.text or ""),
+                      context={"reason": mask(body.reason)}, target_uid=target,
                       replacement_uid=body.replacement_uid, actor=actor)
     session.add(row)
     await session.flush()

@@ -46,8 +46,8 @@ from api.app.models import Build, Gate, MemoryEvent, Plan, Process, Project
 from api.app.services import evidence as evidence_svc
 from api.app.services import memory_ingest as mi
 from api.app.services.knowledge import _mask_value, about_uid
-from engine.agents.provider import mask_sensitive
 from engine.knowledge import embeddings
+from engine.masking import mask
 from engine.memory.graph import MemoryGraph
 from engine.memory.model import KnowledgeError, MemNode, MemRel, RevisionMeta, ScopedDelta
 
@@ -159,7 +159,7 @@ async def _copy_items(s: AsyncSession, project_id: str, items: list[dict[str, An
         if about and "about_uid" not in context:
             context["about_uid"] = about
         s.add(MemoryEvent(id=item["id"], project_id=project_id, kind="decision",
-                          text=mask_sensitive(item["text"]), context=context,
+                          text=mask(item["text"]), context=context,
                           actor=item["created_by"], created_at=item["created_at"]))
         added += 1
     await s.commit()
@@ -227,17 +227,17 @@ def _reuse_vectors(deltas: list[ScopedDelta], project_id: str, items: list[dict[
     for d in deltas:
         for n in d.nodes:
             item = old.get(n.uid)
-            if n.label == "Memory" and item and mask_sensitive(item["text"]) == mask_sensitive(n.text):
+            if n.label == "Memory" and item and mask(item["text"]) == mask(n.text):
                 n.embedding = _vector(item["embedding"])
 
 
 async def _orphans(s: AsyncSession, deltas: list[ScopedDelta], chunks: list[dict[str, Any]],
                    reuse: bool) -> ScopedDelta:
-    projected = {mask_sensitive(n.text) for d in deltas for n in d.nodes if n.label == "Chunk"}
+    projected = {mask(n.text) for d in deltas for n in d.nodes if n.label == "Chunk"}
     nodes: list[MemNode] = []
     rels: list[MemRel] = []
     for c in chunks:
-        masked = mask_sensitive(c["text"])
+        masked = mask(c["text"])
         if masked in projected:
             continue
         uid = f"chunk:migrated:{c['id']}"
@@ -270,7 +270,7 @@ async def _verify(memory: MemoryGraph, project_id: str, items: list[dict[str, An
             continue
         if uid not in memories:
             missing.append(i["id"])
-    missing += [c["id"] for c in chunks if mask_sensitive(c["text"]) not in texts]
+    missing += [c["id"] for c in chunks if mask(c["text"]) not in texts]
     return missing
 
 

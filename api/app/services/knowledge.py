@@ -2,7 +2,7 @@
 graph (``MemoryGraph``); SME decisions are stored in Postgres (``memory_events``) and reach the
 graph through a ``memory.ingest`` job of phase ``decision``.
 
-Decision text and context pass through ``mask_sensitive`` before Postgres (``apply_revision``
+Decision text and context pass through ``engine.masking.mask`` before Postgres (``apply_revision``
 masks again on the way into Neo4j). Reads report a missing or unreachable memory as
 ``KnowledgeUnavailable`` (``memory not configured`` when ``NEO4J_URI`` is empty, ``memory
 unavailable: <class>`` when Neo4j fails), so a decision or an analysis never fails because
@@ -23,10 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.app.models import MemoryEvent, Process
 from engine.agents.jsonout import JsonOutputError
-from engine.agents.provider import ProviderError, mask_sensitive
+from engine.agents.provider import ProviderError
 from engine.knowledge.ask import Answer
 from engine.knowledge.ask import ask as engine_ask
 from engine.knowledge.memory import MEMORY_KINDS, MemoryItem
+from engine.masking import mask
 from engine.memory.graph import MemoryGraph, MemoryUnavailable
 from engine.memory.model import KnowledgeError, MemoryHit
 
@@ -51,7 +52,7 @@ class KnowledgeUnavailable(Exception):
 
 def _mask_value(value: Any) -> Any:
     if isinstance(value, str):
-        return mask_sensitive(value)
+        return mask(value)
     if isinstance(value, dict):
         return {k: _mask_value(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -163,7 +164,7 @@ class Knowledge:
                 about = await about_uid(s, context)
                 if about:
                     masked["about_uid"] = about
-                row = MemoryEvent(project_id=project_id, kind="decision", text=mask_sensitive(text),
+                row = MemoryEvent(project_id=project_id, kind="decision", text=mask(text),
                                   context=masked, actor=user)
                 s.add(row)
                 await s.commit()
