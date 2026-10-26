@@ -52,6 +52,11 @@ export default defineConfig({
         // Infra validation's `terraform init` needs the provider registry (or a mirror), which a dev
         // machine or CI without one cannot reach: skip init and module validate (recorded as skipped).
         INFRA_VALIDATE_INIT: process.env.INFRA_VALIDATE_INIT ?? "false",
+        // The specs assert the fake provider and an unconfigured Claude: a developer's own model
+        // credentials must not leak in from the shell.
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+        AZURE_OPENAI_ENDPOINT: "",
+        AZURE_OPENAI_API_KEY: "",
         // The browser calls the API directly: allow this run's web origin.
         CORS_ORIGINS: process.env.CORS_ORIGINS ?? `http://localhost:${webPort}`,
         // The API passes CORS_ORIGINS on to the generated service it starts (Cors__Origins__<i>),
