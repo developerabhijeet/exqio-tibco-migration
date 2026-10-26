@@ -19,9 +19,9 @@ from engine.stacks.python.text import doc, py_string
 _FORBIDDEN_FIELDS = frozenset({
     "copy", "dict", "json", "parse_obj", "parse_raw", "parse_file", "schema", "schema_json", "construct",
     "validate", "fields", "from_orm", "update_forward_refs", "str", "int", "float", "bool", "bytes", "list",
-    "any", "decimal", "dt", "field", "masking", "enum", "base_model", "config_dict",
+    "any", "decimal", "dt", "field", "masking", "tib", "enum", "base_model", "config_dict",
 })
-_SCALAR = {"string": "str", "int": "int", "long": "int", "ulong": "int", "decimal": "Decimal", "double": "float",
+_SCALAR = {"string": "tib.Text", "int": "int", "long": "int", "ulong": "int", "decimal": "Decimal", "double": "float",
            "float": "float", "bool": "bool", "date": "_dt.date", "datetime": "_dt.datetime", "time": "_dt.time",
            "bytes": "bytes", "any": "Any"}
 
@@ -61,7 +61,7 @@ def render(model: ContractModel, source: str, app_package: str) -> str:
         used: set[str] = set()
         body += ["", "", f"class {rec.name}(BaseModel):",
                  f'    """{doc(rec.doc or f"TIBCO element {rec.tibco_path or rec.name}.")}"""', "",
-                 ("    model_config = ConfigDict(populate_by_name=True, json_schema_extra="
+                 ("    model_config = ConfigDict(populate_by_name=True, coerce_numbers_to_str=True, json_schema_extra="
                  f"{{\"tibco_path\": {py_string(rec.tibco_path or '/' + rec.name)}}})"), ""]
         for p in rec.props:
             pt = python_type(p)
@@ -88,7 +88,7 @@ def render(model: ContractModel, source: str, app_package: str) -> str:
         std.append("from typing import Any")
     if std:
         lines += std + [""]
-    lines += ["from pydantic import BaseModel, ConfigDict, Field", "", f"from {app_package}.core import masking"]
+    lines += ["from pydantic import BaseModel, ConfigDict, Field", "", f"from {app_package}.core import masking, tib"]
     lines += body
     if names:
         lines += ["", ""] + [f"{n}.model_rebuild()" for n in names]

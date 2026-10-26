@@ -34,10 +34,21 @@ DEV_DEPENDENCIES: tuple[tuple[str, str], ...] = (
 BASE_IMAGE = f"python:{PYTHON}-slim"
 
 
-def requirements() -> str:
-    """The requirements the lock is compiled from (``name==version`` lines)."""
-    return "".join(f"{name}=={version}\n" for name, version in DEPENDENCIES + DEV_DEPENDENCIES)
+#: The uv the pipelines install (by hash, from ``uv-tool.lock``); the platform image's uv is the same.
+UV = "0.11.7"
+
+
+def requirements(group: str = "all") -> str:
+    """The requirements a lock is compiled from (``name==version`` lines): ``all`` for
+    ``requirements.lock`` (the build and its tests), ``runtime`` for ``requirements.runtime.lock``
+    (what the service image installs), ``uv`` for ``uv-tool.lock`` (the pipelines' uv)."""
+    if group == "uv":
+        return f"uv=={UV}\n"
+    deps = DEPENDENCIES if group == "runtime" else DEPENDENCIES + DEV_DEPENDENCIES
+    return "".join(f"{name}=={version}\n" for name, version in deps)
 
 
 if __name__ == "__main__":
-    print(requirements(), end="")
+    import sys
+
+    print(requirements(sys.argv[1] if len(sys.argv) > 1 else "all"), end="")

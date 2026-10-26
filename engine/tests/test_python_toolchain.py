@@ -330,8 +330,9 @@ def test_runner_commands_are_the_spec_s(tmp_path, monkeypatch):
         (root / ".venv" / "bin" / "calls.txt").read_text().splitlines()
     venv = root / ".venv" / "bin"
     assert calls[:2] == ["uv venv .venv --python /usr/bin/python3 --allow-existing",
-                         f"uv pip install --require-hashes -r requirements.lock --python {venv}/python"]
-    assert calls[2:] == ["python -m compileall -q src",
+                         f"uv pip install --require-hashes --no-build -r requirements.lock --python {venv}/python"]
+    assert calls[2] == "python -c import sys; sys.exit(sys.version_info[:2] != (3, 12))"  # the 3.12 line
+    assert calls[3:] == ["python -m compileall -q src",
                          "ruff check --no-cache --select E9,F63,F7,F82 --output-format concise src tests",
                          "ruff format --no-cache src tests", "ruff format --no-cache --check src tests",
                          ("python -m pytest --junitxml=.exiqo-bin/junit.xml --cov=src "
@@ -381,7 +382,7 @@ def test_python_dockerfile_installs_the_lock_and_runs_as_10001(python_infra, pyt
     # no silent Docker Hub default (as for Java); the upstream image is named for GMF to mirror
     assert re.search(r"^ARG BASE_IMAGE_BUILD$", df, re.MULTILINE) and re.search(r"^ARG BASE_IMAGE_RUNTIME$", df, re.MULTILINE)
     assert "python:3.12-slim" in df and "=python:" not in df
-    assert "ARG PIP_INDEX_URL=" in df and "pip install --require-hashes --no-deps -r /tmp/requirements.lock" in df
+    assert "ARG PIP_INDEX_URL=" in df and "pip install --require-hashes --no-deps --only-binary=:all: -r /tmp/requirements.lock" in df
     assert re.search(r"^USER 10001$", df, re.MULTILINE) and "EXPOSE 8080" in df and "PORT=8080" in df
     assert 'ENTRYPOINT ["python", "-m", "gmf_credit.main"]' in df
     for line in df.splitlines():  # every COPY source exists in the generated project
@@ -407,7 +408,7 @@ def test_python_pipelines_build_with_uv(python_infra):
     gh = python_infra[".github/workflows/gmf-credit.yml"]
     ado = python_infra["azure-pipelines.yml"]
     for text in (gh, ado):
-        assert "uv pip install --require-hashes -r requirements.lock" in text
+        assert "uv pip install --require-hashes --no-build -r requirements.lock" in text
         assert ".venv/bin/ruff check --select E9,F63,F7,F82 src tests" in text and "--junitxml=.exiqo-bin/junit.xml" in text
         assert "--build-arg" in text and "PIP_INDEX_URL" in text and "BASE_IMAGE_RUNTIME" in text
         assert "for name in BASE_IMAGE_BUILD BASE_IMAGE_RUNTIME; do" in text
@@ -425,3 +426,95 @@ def test_the_design_scaffold_names_files_the_generator_writes(python_solution_wi
         for project in design.solution.projects:
             for name in project.files:
                 assert f"{project.name}/{name}" in paths, (project.kind, name)
+
+
+# ------------------------------------------------------------------ review fix round 1
+def test_restore_refuses_an_interpreter_off_the_3_12_line(tmp_path):
+    root = tmp_path / "app"
+    (root / ".venv" / "bin").mkdir(parents=True)
+    _fake(root / ".venv" / "bin", "python", code=1).rename(root / ".venv" / "bin" / "python")
+    step = UvRunner(root, python="/usr/bin/python3", uv=str(_fake(tmp_path, "uv"))).restore()
+    assert not step.ok and "Python 3.12" in step.log
+
+
+def test_the_runner_asks_uv_for_the_pinned_line_by_default(tmp_path):
+    assert UvRunner(tmp_path, uv="uv").python == "3.12"
+
+
+def test_runtime_lock_has_no_dev_tools_and_the_image_installs_it(python_solution_with_tests, python_infra):
+    files = {f.path: f.content for f in python_solution_with_tests.files}
+    runtime, full = files["requirements.runtime.lock"], files["requirements.lock"]
+    names = {ln.split("==")[0] for ln in runtime.splitlines() if ln and not ln.startswith((" ", "#"))}
+    assert {"fastapi", "uvicorn", "psycopg", "pydantic", "pyjwt"} <= names
+    assert not names & {"pytest", "pytest-cov", "coverage", "ruff", "pluggy", "iniconfig"}
+    for ln in runtime.splitlines():  # the same files, the same hashes as the full lock
+        if ln.strip().startswith("--hash=") or (ln and not ln.startswith("#")):
+            assert ln in full, ln
+    df = python_infra["Dockerfile"]
+    assert "COPY requirements.runtime.lock /tmp/requirements.lock" in df
+    assert "--only-binary=:all:" in df and "TZ=UTC" in df
+
+
+def test_ci_installs_uv_by_hash(python_solution_with_tests, python_infra):
+    files = {f.path: f.content for f in python_solution_with_tests.files}
+    tool = files["uv-tool.lock"]
+    assert tool.startswith("# ") and "uv==0.11.7 " in tool and "--hash=sha256:" in tool
+    for path in (".github/workflows/gmf-credit.yml", "azure-pipelines.yml"):
+        text = python_infra[path]
+        assert "pip install --require-hashes --no-deps --only-binary=uv -r uv-tool.lock" in text, path
+        assert "setup-uv" not in text and '"uv==0.11.7"' not in text, path
+    assert "uv pip install --require-hashes --no-build" in python_infra["azure-pipelines.yml"]
+
+
+def test_contract_models_take_scalars_for_strings_as_jackson_does():
+    from engine.stacks.contracts import ContractModel, ContractProp, ContractRecord
+    from engine.stacks.python import contracts as py_contracts
+
+    rec = ContractRecord("Deal", props=[ContractProp("DealId", "dealId", "string", True, False, "dealId")])
+    text = py_contracts.render(ContractModel(records={"Deal": rec}), "x.xsd", "app")
+    assert "coerce_numbers_to_str=True" in text and 'deal_id: tib.Text = Field(alias="dealId")' in text
+
+
+def test_service_auth_and_database_review_fixes(python_solution_with_tests):
+    files = {f.path: f.content for f in python_solution_with_tests.files}
+    auth = files["src/gmf_credit/api/auth.py"]
+    assert "await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)" in auth
+    assert "connect_timeout" in files["src/gmf_credit/infrastructure/database.py"]
+    assert "add_exception_handler(StarletteHTTPException" in files["src/gmf_credit/main.py"]
+
+
+GENERATED_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import warnings
+warnings.simplefilter("ignore")
+from fastapi.testclient import TestClient
+from gmf_credit.config import Settings
+from gmf_credit.core import tib
+from gmf_credit.core.contracts.dealerfunding.funding_status_lookup_funding import FundingStatusResponseJson as M
+from gmf_credit.main import create_app
+out = {"number": tib.invalid({"dealId": 123}, M), "bool": tib.invalid({"dealId": True}, M),
+       "decimal": tib.invalid({"dealId": 1.5}, M), "wrong": tib.invalid({"fundingId": "x"}, M),
+       "text": M.model_validate({"dealId": True, "status": 7}).model_dump(include={"deal_id", "status"})}
+with TestClient(create_app(Settings.load({"ASPNETCORE_ENVIRONMENT": "Development"}))) as c:
+    r = c.get("/funding/D1")
+    out["401"] = [r.status_code, r.headers["content-type"], r.json().get("title"), r.headers.get("www-authenticate")]
+print(json.dumps(out, default=str))
+"""
+
+
+@needs_uv
+def test_generated_contracts_and_401_in_the_service(restored, tmp_path):
+    import subprocess
+
+    script = tmp_path / "check.py"
+    script.write_text(GENERATED_CHECK)
+    venv_python = restored.root / ".venv" / "bin" / "python"
+    proc = subprocess.run([str(venv_python), "-I", str(script), str(restored.root / "src")], capture_output=True,
+                          text=True, timeout=120, check=False, env={"PATH": os.environ.get("PATH", "")})
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["number"] is None and out["bool"] is None and out["decimal"] is None  # as Jackson reads them
+    assert out["wrong"] and "funding" in out["wrong"].lower()  # a real type error still answers 400
+    assert out["text"] == {"deal_id": "true", "status": "7"}
+    assert out["401"] == [401, "application/problem+json", "Unauthorized", "Bearer"]

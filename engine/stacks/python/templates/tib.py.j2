@@ -16,7 +16,9 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BeforeValidator
 
 
 # ------------------------------------------------------------------ JSON text
@@ -98,6 +100,21 @@ def without_nulls(value: Any) -> Any:
 def problem(status: int, title: str, detail: str) -> dict[str, Any]:
     """An application/problem+json body."""
     return {"type": "about:blank", "title": title, "status": status, "detail": detail}
+
+
+def scalar_text(value: Any) -> Any:
+    """A JSON scalar read into a string field as Jackson's default coercion reads it: a number as its
+    text, a boolean as ``true``/``false``; anything else is left to pydantic."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | Decimal | float):
+        return text(value) if not isinstance(value, Decimal) else str(value)
+    return value
+
+
+# The string type of the contract models: a number or a boolean sent for a string element is accepted
+# (as TIBCO and the Java stack accept it), anything that is not a scalar is still refused.
+Text = Annotated[str, BeforeValidator(scalar_text)]
 
 
 def invalid(body: Any, model: type) -> str | None:

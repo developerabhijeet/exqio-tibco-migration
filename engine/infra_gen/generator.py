@@ -541,8 +541,10 @@ def _ci(stack: str) -> dict[str, str]:
             "label": "Python 3.12",
             "python_version": "3.12",
             # UvRunner's steps: the locked files from the mirror (UV_INDEX_URL), hash-checked, then offline
-            "restore": "uv venv .venv --python python3 && uv pip install --require-hashes -r requirements.lock "
-                       "--python .venv/bin/python",
+            "restore": "uv venv .venv --python 3.12 && uv pip install --require-hashes --no-build "
+                       "-r requirements.lock --python .venv/bin/python",
+            # the pipelines' uv, from uv-tool.lock (every platform's wheel hash)
+            "install_uv": "python -m pip install --require-hashes --no-deps --only-binary=uv -r uv-tool.lock",
             "build": f".venv/bin/python -m compileall -q src && .venv/bin/ruff check --select {LINT_RULES} src tests",
             "test": ".venv/bin/python -m pytest --junitxml=.exiqo-bin/junit.xml --cov=src "
                     "--cov-report=xml:.exiqo-bin/coverage.xml",

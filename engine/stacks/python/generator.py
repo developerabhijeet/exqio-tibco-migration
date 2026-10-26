@@ -78,6 +78,8 @@ from engine.stacks.testindex import write_index
 log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 LOCK = Path(__file__).resolve().parent / "requirements.lock"
+RUNTIME_LOCK = LOCK.with_name("requirements.runtime.lock")
+UV_TOOL_LOCK = LOCK.with_name("uv-tool.lock")
 CONTRACT_FILE = ".exiqo/service-contract.json"
 _JINJA = jinja2.Environment(
     loader=jinja2.FileSystemLoader(str(TEMPLATES)), keep_trailing_newline=True, trim_blocks=True,
@@ -280,6 +282,8 @@ class _PythonSolution:
         add("pyproject.toml", render("pyproject.toml.j2", **self.ctx(dist=self.paths["dist"], v=versions,
                                                                    next_python=f"3.{minor + 1}")))
         add("requirements.lock", LOCK.read_text(encoding="utf-8"))
+        add("requirements.runtime.lock", RUNTIME_LOCK.read_text(encoding="utf-8"))  # the image: no dev tools
+        add("uv-tool.lock", UV_TOOL_LOCK.read_text(encoding="utf-8"))  # the pipelines' uv, by hash
         add(".gitignore", render("gitignore.j2"))
         add(".editorconfig", render("editorconfig.j2"))
         self.template("main.py", "main.py.j2")

@@ -2,7 +2,7 @@
 ConnectionStrings__<Resource> in the environment), on psycopg 3. The string is the runtime contract's
 Npgsql form (Host=..;Port=..;Database=..;Username=..;Password=..), a jdbc:postgresql: URL, or a
 postgresql:// URL. Every statement runs in autocommit, as a TIBCO JDBC activity without a
-transaction group does."""
+transaction group does, on its own connection (no pool: psycopg_pool is not in the locked set)."""
 
 from __future__ import annotations
 
@@ -46,6 +46,9 @@ def conninfo(value: str) -> str:
     return psycopg.conninfo.make_conninfo(**parts)
 
 
+CONNECT_TIMEOUT_S = 10  # seconds to open a connection
+
+
 class Database:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -58,8 +61,9 @@ class Database:
         if not value:
             raise RuntimeError(f"connection string ConnectionStrings__{name} ({key}) is not set")
         extra = {"options": f"-c statement_timeout={timeout_s * 1000}"} if timeout_s > 0 else {}
+        # a database that does not answer fails the step instead of hanging it
         connection = await psycopg.AsyncConnection.connect(conninfo(value), autocommit=True, row_factory=dict_row,
-                                                           **extra)
+                                                           connect_timeout=CONNECT_TIMEOUT_S, **extra)
         try:
             yield connection
         finally:

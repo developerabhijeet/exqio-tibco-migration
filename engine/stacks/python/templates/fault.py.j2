@@ -4,8 +4,11 @@ the job): the fault name is the title and the fault data, with its sensitive fie
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 from fastapi import Request
 from fastapi.responses import Response
+from starlette.exceptions import HTTPException
 
 from {{ pkg }}.api.http import problem_response
 from {{ pkg }}.core import masking, tib
@@ -18,3 +21,17 @@ async def fault_handler(request: Request, fault: Exception) -> Response:
     body = tib.problem(500, fault.fault_name, masking.mask_text(str(fault)))
     body["fault"] = masking.mask_json(fault.fault_data)
     return problem_response(500, body)
+
+
+async def http_error_handler(request: Request, error: Exception) -> Response:
+    """An HTTP error the framework raises (401 without a token, 404, 405) as application/problem+json,
+    like every other error the service answers; its headers (WWW-Authenticate) are kept."""
+    if not isinstance(error, HTTPException):
+        raise error
+    try:
+        title = HTTPStatus(error.status_code).phrase
+    except ValueError:
+        title = "Error"
+    response = problem_response(error.status_code, tib.problem(error.status_code, title, str(error.detail)))
+    response.headers.update(error.headers or {})
+    return response

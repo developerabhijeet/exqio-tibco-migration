@@ -15,10 +15,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from {{ pkg }}.api import bus_dev, devtoken
 from {{ pkg }}.api.auth import TokenValidator, development_auth, require_user
-from {{ pkg }}.api.fault import fault_handler
+from {{ pkg }}.api.fault import fault_handler, http_error_handler
 from {{ pkg }}.config import Settings
 from {{ pkg }}.container import Container
 from {{ pkg }}.core.exceptions import ProcessFault
@@ -53,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.bus = container.bus
     app.state.tokens = TokenValidator(settings)
     app.add_exception_handler(ProcessFault, fault_handler)
+    app.add_exception_handler(StarletteHTTPException, http_error_handler)  # 401, 404, 405 as problem+json
 
     app.include_router(router)
     protected = [Depends(require_user)]

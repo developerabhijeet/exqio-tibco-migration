@@ -8,6 +8,7 @@ signing keys read from the tenant's JWKS.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,11 +58,12 @@ class TokenValidator:
             self.audience = settings.text("AUTH_ENTRA_ID_AUDIENCE")
             self.jwks = jwt.PyJWKClient(f"{instance.rstrip('/')}/{tenant}/discovery/v2.0/keys")
 
-    def validate(self, token: str) -> dict[str, Any]:
+    async def validate(self, token: str) -> dict[str, Any]:
         if self.dev:
             s = self.dev_settings
             return jwt.decode(token, s.key, algorithms=["HS256"], audience=s.audience, issuer=s.issuer)
-        key = self.jwks.get_signing_key_from_jwt(token).key
+        # the JWKS fetch is blocking HTTP: it runs off the event loop
+        key = (await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)).key
         return jwt.decode(token, key, algorithms=["RS256"], audience=self.audience, issuer=self.issuer)
 
 
@@ -74,7 +76,7 @@ async def require_user(request: Request) -> dict[str, Any]:
                             headers={"WWW-Authenticate": "Bearer"})
     validator: TokenValidator = request.app.state.tokens
     try:
-        return validator.validate(token.strip())
-    except jwt.PyJWTError as ex:
+        return await validator.validate(token.strip())
+    except (jwt.PyJWTError, jwt.PyJWKClientError) as ex:
         raise HTTPException(status_code=401, detail=f"invalid token: {ex}",
                             headers={"WWW-Authenticate": "Bearer"}) from ex

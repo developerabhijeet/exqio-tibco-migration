@@ -16,12 +16,13 @@ ARG PIP_INDEX_URL=
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-# The dependency layer is cached until requirements.lock changes; nothing is resolved, only the
-# locked files are installed (--require-hashes --no-deps).
-COPY requirements.lock /tmp/requirements.lock
+# The dependency layer is cached until the lock changes; nothing is resolved and nothing is built, only
+# the locked wheels are installed (--require-hashes --no-deps --only-binary). The runtime lock is the
+# full lock's files without the test and format tools.
+COPY requirements.runtime.lock /tmp/requirements.lock
 RUN if [ -n "${PIP_INDEX_URL}" ]; then export PIP_INDEX_URL; else unset PIP_INDEX_URL; fi \
  && python -m venv /opt/venv \
- && /opt/venv/bin/pip install --require-hashes --no-deps -r /tmp/requirements.lock
+ && /opt/venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /tmp/requirements.lock
 
 FROM ${BASE_IMAGE_RUNTIME} AS runtime
 WORKDIR /app
@@ -30,13 +31,15 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    TZ=UTC \
     PORT=8080
 EXPOSE 8080
 
 COPY --from=build /opt/venv /opt/venv
 COPY src ./src
 
-# A numeric id lets Kubernetes verify runAsNonRoot; the service writes nothing to disk.
+# A numeric id lets Kubernetes verify runAsNonRoot; the service writes nothing to disk. TZ=UTC: a
+# database timestamp without a zone is read as UTC, as the Java stack reads it in its container.
 USER 10001
 # Exec form (no shell needed); the module reads PORT.
 ENTRYPOINT ["python", "-m", "{{ package }}.main"]

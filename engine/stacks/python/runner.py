@@ -1,9 +1,10 @@
 """``UvRunner``: restore, build, format, test and run a generated Python project (spec section 1).
 
-* restore: ``uv venv .venv --python <python3>`` (the platform's interpreter, never a download:
-  ``UV_PYTHON_DOWNLOADS=never``), then ``uv pip install --require-hashes -r requirements.lock`` from
-  GMF's mirror (``UV_INDEX_URL``, passed only when set); nothing is resolved, every file's hash is
-  checked. Every later step runs from ``.venv`` with no network;
+* restore: ``uv venv .venv --python 3.12`` (an installed interpreter of the pinned line, never a
+  download: ``UV_PYTHON_DOWNLOADS=never``), then ``uv pip install --require-hashes --no-build -r
+  requirements.lock`` from GMF's mirror (``UV_INDEX_URL``, passed only when set); nothing is resolved
+  or built, every file's hash is checked, and a venv off the 3.12 line fails the step. Every later
+  step runs from ``.venv`` with no network;
 * build: ``python -m compileall -q src`` and ``ruff check --select E9,F63,F7,F82 src tests``; the
   compileall ``File "<f>", line <l>`` and ruff ``<f>:<l>:<c>: <code> <msg>`` diagnostics are the
   build errors;
@@ -40,6 +41,7 @@ from engine.dotnet_gen.runner import (
     _toolchain_detect,
 )
 from engine.stacks.coverage import parse_cobertura_xml
+from engine.stacks.python import versions
 from engine.stacks.results import parse_junit
 from engine.stacks.testindex import join, read_index
 
@@ -102,13 +104,15 @@ class UvRunner:
     def __init__(self, root: Path, python: str | None = None, uv: str | None = None,
                  env: dict[str, str] | None = None, coverage_scope: set[str] | None = None,
                  timeout_s: int = DEFAULT_TIMEOUT_S, api_entry: str | None = None) -> None:
-        """``python`` is the interpreter the venv is made from (``python3`` per the toolchain);
+        """``python`` is the interpreter the venv is made from (a path, or by default the pinned line,
+        ``3.12``, which uv finds among the installed interpreters; restore refuses any other line);
         ``env`` is passed to every step (``TEST_DATABASE_URL`` for the generated tests);
         ``coverage_scope`` are the source files of the process being built (line coverage is
         measured over them); ``api_entry`` is the app factory ``run_service`` starts
         (``<pkg>.main:create_app``, the single package under ``src`` when omitted)."""
         self.root = Path(root).resolve()
-        self.python = python or find_tool("python3") or "python3"
+        # uv finds an installed interpreter of the pinned line (UV_PYTHON_DOWNLOADS=never: never a download)
+        self.python = python or versions.PYTHON
         self.uv = uv or find_tool("uv") or "uv"
         self.timeout_s = timeout_s or DEFAULT_TIMEOUT_S
         self.extra_env: dict[str, str] = dict(env or {})
@@ -157,9 +161,17 @@ class UvRunner:
         code, log = self._run([self.uv, "venv", VENV, "--python", self.python, "--allow-existing"], env)
         if code != 0:
             return StepResult(ok=False, log=log)
-        code, more = self._run([self.uv, "pip", "install", "--require-hashes", "-r", "requirements.lock",
-                                "--python", self.tool("python")], env)
-        return StepResult(ok=code == 0, log=f"{log}\n{more}")
+        code, more = self._run([self.uv, "pip", "install", "--require-hashes", "--no-build", "-r",
+                                "requirements.lock", "--python", self.tool("python")], env)
+        log = f"{log}\n{more}"
+        if code != 0:
+            return StepResult(ok=False, log=log)
+        line = tuple(int(p) for p in versions.PYTHON.split("."))
+        code, _ = self._run([self.tool("python"), "-c", f"import sys; sys.exit(sys.version_info[:2] != {line})"], env)
+        if code != 0:
+            return StepResult(ok=False, log=f"{log}\nthe venv's interpreter is not Python {versions.PYTHON} "
+                                            f"({self.python}): the generated project is pinned to that line")
+        return StepResult(ok=True, log=log)
 
     def build(self) -> BuildResult:
         c1, log1 = self._run([self.tool("python"), "-m", "compileall", "-q", "src"])

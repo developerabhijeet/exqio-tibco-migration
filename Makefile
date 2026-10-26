@@ -202,18 +202,27 @@ nuget-cache:
 
 # Target-stack dependency locks, refreshed on a machine that reaches GMF's mirrors. Python: the
 # requirements of engine/stacks/python/versions.py with every hash, for every platform, from
-# UV_INDEX_URL (the lock names no index; builds install it with --require-hashes).
+# UV_INDEX_URL (the locks name no index; builds install them with --require-hashes):
+# requirements.lock (build and tests), requirements.runtime.lock (the service image: the same files,
+# without the dev tools) and uv-tool.lock (the uv the generated pipelines install).
 .PHONY: stack-locks stack-locks-python
 UV ?= uv
+PY_LOCKS := engine/stacks/python
+UV_COMPILE = $(UV) pip compile --generate-hashes --universal --python-version 3.12 --index-url "$(UV_INDEX_URL)" \
+	--no-emit-index-url --no-annotate --custom-compile-command "make stack-locks"
 stack-locks: stack-locks-python
 
 stack-locks-python:
 	@test -n "$(UV_INDEX_URL)" || { echo "stack-locks-python: set UV_INDEX_URL to GMF's PyPI mirror (.../simple)"; exit 1; }
-	mkdir -p .tools && $(PY) -m engine.stacks.python.versions > .tools/python-requirements.in
-	$(UV) pip compile .tools/python-requirements.in --generate-hashes --universal --python-version 3.12 \
-		--index-url "$(UV_INDEX_URL)" --no-emit-index-url --no-annotate --custom-compile-command "make stack-locks" \
-		-o engine/stacks/python/requirements.lock
-	rm -f .tools/python-requirements.in
+	mkdir -p .tools
+	$(PY) -m engine.stacks.python.versions all > .tools/python-all.in
+	$(PY) -m engine.stacks.python.versions runtime > .tools/python-runtime.in
+	$(PY) -m engine.stacks.python.versions uv > .tools/python-uv.in
+	$(UV_COMPILE) .tools/python-all.in -o $(PY_LOCKS)/requirements.lock
+	sed -n 's/^\([A-Za-z0-9_.-]*==[^ ]*\).*/\1/p' $(PY_LOCKS)/requirements.lock > .tools/python-pins.txt
+	$(UV_COMPILE) .tools/python-runtime.in -c .tools/python-pins.txt -o $(PY_LOCKS)/requirements.runtime.lock
+	$(UV_COMPILE) .tools/python-uv.in -o $(PY_LOCKS)/uv-tool.lock
+	rm -f .tools/python-all.in .tools/python-runtime.in .tools/python-uv.in .tools/python-pins.txt
 
 # ---------------------------------------------------------------- container images (deploy/docker)
 # `make images` builds both images for this machine's architecture; the pipelines (deploy/pipelines)

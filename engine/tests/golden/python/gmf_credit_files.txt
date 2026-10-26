@@ -4,6 +4,7 @@
 .gitignore
 pyproject.toml
 requirements.lock
+requirements.runtime.lock
 src/gmf_credit/__init__.py
 src/gmf_credit/api/__init__.py
 src/gmf_credit/api/auth.py
@@ -60,3 +61,4 @@ tests/test_dealer_funding_request_scenario.py
 tests/test_funding_status_lookup_branch.py
 tests/test_funding_status_lookup_rules.py
 tests/test_funding_status_lookup_scenario.py
+uv-tool.lock

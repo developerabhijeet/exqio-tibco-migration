@@ -104,8 +104,8 @@ stages:
             displayName: Use [[ ci.label ]]
             inputs:
               versionSpec: "[[ ci.python_version ]]"
-          - script: python -m pip install "uv==0.11.7"
-            displayName: Install uv
+          - script: [[ ci.install_uv ]]
+            displayName: Install uv (by hash)
 [% else %]
           - task: JavaToolInstaller@0
             displayName: Use [[ ci.label ]]

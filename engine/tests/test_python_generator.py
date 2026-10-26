@@ -308,8 +308,8 @@ def test_contract_renderer_types():
     text = py_contracts.render(model, "x.xsd", "app")
     assert 'count: int = Field(alias="count", json_schema_extra={"tibco_path": "/Loan/count"})' in text
     assert 'score: int | None = Field(default=None, alias="score")' in text
-    assert 'notes: list[str] = Field(default_factory=list, alias="notes")' in text
-    assert "status: Status = " in text and "class_: str = " in text and "json_: Decimal = " in text
+    assert 'notes: list[tib.Text] = Field(default_factory=list, alias="notes")' in text
+    assert "status: Status = " in text and "class_: tib.Text = " in text and "json_: Decimal = " in text
     assert 'ON_HOLD = "ON-HOLD"' in text and 'V_1ST = "1st"' in text and 'ON_HOLD_2 = "ON_HOLD"' in text
     compile(text, "loan.py", "exec")
 
