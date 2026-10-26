@@ -1,6 +1,9 @@
 """Tests for infrastructure generation and validation (Task 16)."""
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import stat
 from pathlib import Path
@@ -11,8 +14,12 @@ from engine.analysis.static_rules import run_static_rules
 from engine.domains import graph as graph_mod
 from engine.dotnet_gen import design as design_mod
 from engine.dotnet_gen import generator as dotnet_generator
+from engine.dotnet_gen.design import build_design_skeleton
 from engine.dotnet_gen.models import ConfigMap, MessagingEntity
 from engine.infra_gen import generator, validators
+from engine.stacks.base import Mirrors
+from engine.stacks.java.generator import generate_java
+from engine.tests.conftest import PROCESS_IDS
 from engine.tibco_parser.scanner import scan_folder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -631,3 +638,145 @@ def test_child_env_passes_tf_cli_config(monkeypatch):
     monkeypatch.delenv("TF_CLI_CONFIG_FILE", raising=False)
     env = ce.child_env({"TF_CLI_CONFIG_FILE": "/etc/gmf/terraform.rc"})
     assert env["TF_CLI_CONFIG_FILE"] == "/etc/gmf/terraform.rc"
+
+
+# ------------------------------------------------------ per stack (target stacks, Task 9)
+GOLDEN = Path(__file__).resolve().parent / "golden"
+UPDATE_GOLDEN = os.environ.get("UPDATE_GOLDEN") == "1"
+
+
+def sha_of(files) -> str:
+    """One digest over (path, content) of every file, in order."""
+    h = hashlib.sha256()
+    for f in sorted(files, key=lambda f: f.path):
+        h.update(f.path.encode("utf-8") + b"\0" + f.content.encode("utf-8") + b"\0")
+    return h.hexdigest()
+
+
+def secret_names_in(files: dict[str, str]) -> list[str]:
+    """The Key Vault secret names the dev key_vault unit provisions."""
+    unit = next(c for p, c in files.items() if p.endswith("/key_vault/terragrunt.hcl") and "/dev/" in p)
+    block = unit[unit.index("secret_names"):]
+    block = block[: block.index("]") + 1]
+    return re.findall(r'"([A-Za-z0-9-]+)"', block)
+
+
+@pytest.fixture(scope="module")
+def dotnet_infra_files(solution, estate, tmp_path_factory):
+    """.NET infrastructure: beside a generated solution, without one, and on AKS."""
+    app, record = estate
+    _, with_solution = solution
+    bare = generator.generate_infra(app, record, tmp_path_factory.mktemp("bare"), SOLUTION)
+    aks = generator.generate_infra(app, record, tmp_path_factory.mktemp("aks"), SOLUTION, runtime="aks")
+    out = []
+    for label, files in (("solution", with_solution), ("bare", bare), ("aks", aks)):
+        out += [f.model_copy(update={"path": f"{label}/{f.path}"}) for f in files]
+    return out
+
+
+def test_dotnet_infra_unchanged(dotnet_infra_files):
+    golden = GOLDEN / "infra_gmf_credit.sha256"
+    if UPDATE_GOLDEN:
+        golden.write_text(sha_of(dotnet_infra_files) + "\n", encoding="utf-8")
+    assert sha_of(dotnet_infra_files) == golden.read_text().strip()
+
+
+@pytest.fixture(scope="module")
+def java_designs(gmf_apps, gmf_app, gmf_processes, gmf_rules, gmf_findings):
+    graph = graph_mod.build_graph(list(gmf_apps.values()))
+    return {pid: build_design_skeleton(gmf_processes[pid], gmf_app, gmf_rules[pid], gmf_findings[pid],
+                                       graph_mod.io_card(gmf_processes[pid], gmf_app, graph), stack="java")
+            for pid in PROCESS_IDS}
+
+
+@pytest.fixture(scope="module")
+def java_solution(tmp_path_factory, gmf_app, java_designs, gmf_rules, gmf_findings, gmf_scenarios):
+    return generate_java(gmf_app, PROCESS_IDS, java_designs, gmf_rules, gmf_findings, gmf_scenarios,
+                         tmp_path_factory.mktemp("javainfra") / "GmfCredit", Mirrors(maven="https://maven.gmf.example/repo"))
+
+
+@pytest.fixture(scope="module")
+def java_infra(java_solution, java_designs, gmf_app):
+    files = generator.generate_infra(gmf_app, list(java_designs.values()), java_solution.root, java_solution.name,
+                                     stack="java")
+    return {f.path: f.content for f in files}
+
+
+def test_java_dockerfile_and_contract_secrets(java_solution, java_designs, gmf_app):
+    files = {f.path: f.content for f in generator.generate_infra(
+        gmf_app, list(java_designs.values()), java_solution.root, java_solution.name, stack="java")}
+    df = files["Dockerfile"]
+    assert "ARG BASE_IMAGE_BUILD=maven:3.9-eclipse-temurin-21" in df and "USER 10001" in df and "MAVEN_MIRROR_URL" in df
+    assert "dotnet" not in df
+    contract = json.loads((java_solution.root / ".exiqo/service-contract.json").read_text())
+    assert set(secret_names_in(files)) == {s["name"] for s in contract["secrets"]}
+
+
+def test_java_dockerfile_builds_the_jar_the_layout_names(java_infra, java_solution):
+    from engine.stacks import get_stack
+
+    df = java_infra["Dockerfile"]
+    layout = get_stack("java").layout(java_solution.name)
+    assert "ARG BASE_IMAGE_RUNTIME=eclipse-temurin:21-jre" in df
+    assert "FROM ${BASE_IMAGE_BUILD} AS build" in df and "FROM ${BASE_IMAGE_RUNTIME} AS runtime" in df
+    assert f"/src/{layout.api_entry}" in df
+    assert "EXPOSE 8080" in df and "ENV PORT=8080" in df
+    assert re.search(r"^USER 10001$", df, re.MULTILINE) and "USER root" not in df
+    # every COPY source exists in the generated project
+    for line in df.splitlines():
+        if line.startswith("COPY ") and "--from" not in line:
+            for src in line.split()[1:-1]:
+                assert (java_solution.root / src).exists(), line
+    # offline after the dependency layer, with the project's Maven settings (the mirror)
+    assert "-s .exiqo/maven-settings.xml" in df and " -o " in df
+    ignore = java_infra[".dockerignore"]
+    assert "**/target" in ignore and "**/bin" not in ignore and ".exiqo" not in ignore.split()
+
+
+def test_java_infra_has_no_dotnet_and_no_public_host(java_infra):
+    assert "run-local.sh" not in java_infra  # the scripts drive dotnet; compose is the local run
+    for path, text in java_infra.items():
+        if path.startswith("infra/modules/"):
+            continue  # shared, static modules
+        low = text.lower()
+        assert "dotnet" not in low and "nuget" not in low and ".csproj" not in low, path
+        assert "repo.maven.apache.org" not in low and "repo1.maven.org" not in low, path
+    assert "maven.gmf.example" not in java_infra["Dockerfile"]  # the mirror is a build argument
+
+
+def test_java_pipelines_build_with_maven(java_infra):
+    import yaml
+
+    gh = java_infra[".github/workflows/gmf-credit.yml"]
+    ado = java_infra["azure-pipelines.yml"]
+    for text in (gh, ado):
+        assert "mvn -B -ntp -s .exiqo/maven-settings.xml" in text
+        assert "--build-arg" in text and "MAVEN_MIRROR_URL" in text and "BASE_IMAGE_BUILD" in text
+        assert "DotNetCoreCLI" not in text and "setup-dotnet" not in text
+    assert "actions/setup-java@v4" in gh and "JavaToolInstaller" not in gh
+    assert yaml.safe_load(gh)["jobs"] and yaml.safe_load(ado)["stages"]
+
+
+def test_java_container_env_is_what_the_service_reads(java_infra, java_solution):
+    """The runtime contract's environment names: the same as .NET's, bound by EnvBinding."""
+    env = _env_names(java_infra["infra/live/dev/gmf-credit/container_app/terragrunt.hcl"])
+    assert {"Messaging__Mode", "Messaging__ServiceBus__FullyQualifiedNamespace", "KeyVault__Uri",
+            "AZURE_CLIENT_ID"} <= env
+    contract = json.loads((java_solution.root / ".exiqo/service-contract.json").read_text())
+    extra = env - {"Messaging__Mode", "Messaging__ServiceBus__FullyQualifiedNamespace", "KeyVault__Uri",
+                   "AZURE_CLIENT_ID", "ASPNETCORE_ENVIRONMENT"}
+    assert extra <= set(contract["plain_keys"]), extra
+    compose = yaml_load(java_infra["docker-compose.override.yml"])
+    api = compose["services"]["api"]
+    assert "CONFIGURATION" not in (api["build"].get("args") or {})
+    assert {f"ConnectionStrings__{n}" for n in contract["connections"]} <= set(api["environment"])
+
+
+def yaml_load(text: str):
+    import yaml
+    return yaml.safe_load(text)
+
+
+def test_java_infra_without_the_contract_is_refused(gmf_app, java_designs, tmp_path):
+    with pytest.raises(FileNotFoundError, match="service-contract.json"):
+        generator.generate_infra(gmf_app, list(java_designs.values()), tmp_path, "GmfCredit", stack="java")

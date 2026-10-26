@@ -50,7 +50,7 @@ _BASE = ["-B", "-ntp", "-s", SETTINGS]
 # Platform provider) and not always the versions the build resolves, so restore also resolves the
 # project's dependencies and loads the two plugins without running them: spotless on a file pattern
 # no path matches, surefire with its tests skipped.
-_RESTORE = ["dependency:resolve", "dependency:go-offline", "spotless:apply", "-DspotlessFiles=^$",
+RESTORE_GOALS = ["dependency:resolve", "dependency:go-offline", "spotless:apply", "-DspotlessFiles=^$",
             "surefire:test", "-DskipTests"]
 _DIAG = re.compile(r"^\[(?P<kind>ERROR|WARNING)\]\s+(?P<file>(?:[A-Za-z]:)?[^\s:\[][^:\[]*\.java):\[(?P<line>\d+),(?P<col>\d+)\]\s*(?P<msg>.*?)\s*$")
 _DETAIL = re.compile(r"^\s*(?:\[ERROR\]\s*)?(symbol|location)\s*:\s*(.*?)\s*$")
@@ -183,7 +183,7 @@ class MavenRunner:
 
     # steps
     def restore(self, env: dict[str, str] | None = None) -> StepResult:
-        code, log = self._mvn(_RESTORE, env=env, offline=False)
+        code, log = self._mvn(RESTORE_GOALS, env=env, offline=False)
         return StepResult(ok=code == 0, log=log)
 
     def build(self) -> BuildResult:

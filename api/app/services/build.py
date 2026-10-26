@@ -839,7 +839,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 8. infrastructure (code)
     await ctx.stage(STAGES[11])
     infra_files = await asyncio.to_thread(generate_infra, app, design, solution.root, solution.name,
-                                          runtime=runtime)
+                                          runtime=runtime, stack=stack.key)
     await ctx.log(f"{len(infra_files)} infrastructure file(s): Terraform modules, Terragrunt live config "
                   f"({runtime}), Dockerfile, pipelines")
     await ctx.stage(STAGES[12])

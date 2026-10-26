@@ -36,14 +36,23 @@ class JavaStack:
         return self._language
 
     def layout(self, app_name: str) -> StackLayout:
+        from engine.stacks.java import versions
         from engine.stacks.java.generator import CONTRACT_FILE, layout_paths
+        from engine.stacks.java.runner import RESTORE_GOALS
 
         paths = layout_paths(app_name)
         projects = {kind: ProjectFolder(name=paths[kind], folder=paths[kind], build_file=None)
                     for kind in ("api", "core", "infrastructure", "tests")}
         return StackLayout(
             solution_file="pom.xml", projects=projects, api_entry=paths["jar"], test_root=paths["tests"],
-            dockerfile_context={"artifact": paths["artifact"], "jar": paths["jar"], "package": paths["package"]},
+            dockerfile_context={"artifact": paths["artifact"], "jar": paths["jar"], "package": paths["package"],
+                                "java_release": versions.JAVA_RELEASE,
+                                "base_image_build": versions.BASE_IMAGE_BUILD,
+                                "base_image_runtime": versions.BASE_IMAGE_RUNTIME,
+                                "build_args": ["BASE_IMAGE_BUILD", "BASE_IMAGE_RUNTIME", "MAVEN_MIRROR_URL"],
+                                # MavenRunner's restore goals: go-offline misses the formatter and
+                                # Surefire's JUnit provider, which the offline package step needs
+                                "restore_goals": " ".join(f"'{g}'" if "$" in g else g for g in RESTORE_GOALS)},
             contract_file=CONTRACT_FILE)
 
     def generate(self, app: Any, process_ids: list[str], designs: Any, rules: Any, findings: Any,

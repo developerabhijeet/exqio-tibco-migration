@@ -7,6 +7,9 @@
 #      in azureServiceConnection below.
 #   3. A variable group "[[ app_slug ]]-infra" holding PG_ADMIN_PASSWORD (secret) and optionally
 #      TF_STATE_RESOURCE_GROUP / TF_STATE_STORAGE_ACCOUNT.
+[% if build_args %]
+#      Image build arguments, optional: [[ build_args | join(', ') ]].
+[% endif %]
 #   4. Azure DevOps environments ([[ envs | map(attribute='name') | join(', ') ]]) with approvals on "[[ envs[-1].name ]]".
 trigger:
   branches:
@@ -53,6 +56,7 @@ export ARM_OIDC_TOKEN="$idToken"
 export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 [% endmacro %]
 stages:
+[% if stack == "dotnet" %]
   - stage: Build
     jobs:
       - job: build_test
@@ -90,6 +94,31 @@ stages:
               testResultsFiles: "**/*.trx"
               searchFolder: $(Agent.TempDirectory)/TestResults
 
+[% else %]
+  - stage: Build
+    jobs:
+      - job: build_test
+        steps:
+          - task: JavaToolInstaller@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              versionSpec: "[[ ci.java_version ]]"
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+          - script: [[ ci.restore ]]
+            displayName: Restore
+          - script: [[ ci.build ]]
+            displayName: Build
+          - script: [[ ci.test ]]
+            displayName: Test
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "[[ ci.results ]]"
+
+[% endif %]
   - stage: ValidateInfra
     dependsOn: []
     jobs:
@@ -150,7 +179,16 @@ stages:
                   (cd "infra/live/[[ envs[0].name ]]/$(appDir)/$unit" && terragrunt run --non-interactive -- apply -auto-approve)
                 done
                 az acr login --name [[ envs[0].acr ]]
+[% if build_args %]
+                # image build arguments from the variable group (empty ones are not passed)
+                args=()
+                for name in [[ build_args | join(' ') ]]; do
+                  if [ -n "${!name:-}" ]; then args+=(--build-arg "${name}=${!name}"); fi
+                done
+                docker build "${args[@]}" --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
+[% else %]
                 docker build --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
+[% endif %]
                 docker push "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)"
 [% for env in envs %]
 

@@ -82,6 +82,7 @@ from engine.parity.models import Scenario as EngineScenario
 from engine.parity.scenarios import generate_scenarios, took_link
 from engine.parity.seed import SeedData, estate_root
 from engine.parity.stubs import DEFAULT_TIMEOUT_MS, StubRegistry, WireMockStubs
+from engine.stacks import get_stack
 
 if TYPE_CHECKING:
     from api.app.services.hosting import Hosting
@@ -369,6 +370,7 @@ class RunInfo:
     started_at: str = field(default_factory=lambda: utcnow().isoformat())
     stubs: StubServer | None = None  # the outbound HTTP stub server the service's clients point at
     clients: list[str] = field(default_factory=list)
+    swagger_path: str | None = "/swagger"  # None: the service has no Swagger UI (the Java stack)
 
     def stop(self) -> None:
         try:
@@ -411,7 +413,25 @@ def release_port(port: int) -> None:
         _RESERVED_PORTS.discard(port)
 
 
-def connection_names(build_root: Path, app_name: str) -> list[str]:
+def service_contract(build_root: Path, app_name: str, stack: str) -> dict[str, Any] | None:
+    """The project's ``.exiqo/service-contract.json`` (``StackLayout.contract_file``); ``None`` for
+    a stack without one (.NET) or when it cannot be read."""
+    contract_file = get_stack(stack).layout(app_name).contract_file
+    if contract_file is None:
+        return None
+    try:
+        data = json.loads((build_root / contract_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def connection_names(build_root: Path, app_name: str, stack: str = "dotnet") -> list[str]:
+    """The ``ConnectionStrings__<name>`` the service reads: from appsettings for .NET, from the
+    service contract's ``connections`` for the other stacks."""
+    if stack != "dotnet":
+        contract = service_contract(build_root, app_name, stack) or {}
+        return sorted(str(n) for n in contract.get("connections") or [] if str(n).lower() != "servicebus")
     layout = solution_layout(app_name)
     folder = layout["projects"]["api"]["folder"]
     path = build_root / folder / "appsettings.Development.json"
@@ -447,8 +467,9 @@ def run_status(info: RunInfo | None) -> dict[str, Any]:
         return {"running": False, "url": None, "port": None, "pid": None, "swagger_url": None,
                 "started_at": None, "exit_code": None}
     code = info.handle.poll()
+    swagger = f"{info.url}{info.swagger_path}" if info.swagger_path else None
     return {"running": code is None, "url": info.url, "port": info.port, "pid": info.handle.pid,
-            "swagger_url": f"{info.url}/swagger", "started_at": info.started_at, "exit_code": code}
+            "swagger_url": swagger, "started_at": info.started_at, "exit_code": code}
 
 
 def read_log(info: RunInfo | None, limit: int = 20000) -> str:
@@ -461,7 +482,14 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
     return text[-limit:]
 
 
-START_TIMEOUT_S = 240.0  # dotnet run until /health answers
+START_TIMEOUT_S = 240.0  # dotnet run (java -jar) until /health answers
+
+
+def missing_service_tools(stack: str) -> list[str]:
+    """The tools of a non-.NET stack's ``required_tools`` this worker lacks (the cached detector);
+    blocking, so ``start_service`` calls it off the loop; tests monkeypatch it."""
+    tools = settings_svc.detect_toolchains()
+    return [t for t in get_stack(stack).required_tools if not (tools.get(t) or {}).get("present")]
 
 
 def find_dotnet() -> str | None:
@@ -472,17 +500,34 @@ def find_dotnet() -> str | None:
 
 async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
                         lock: ScenarioLock, timeout_s: float = START_TIMEOUT_S) -> RunInfo:
-    """``dotnet run`` of the build's Api project on a free port against the seeded scenario
-    database (raises ``RuntimeError`` with the log tail)."""
+    """``dotnet run`` of the build's Api project (another stack: its runner's ``run_service``, for
+    Java ``java -jar`` of the packaged jar) on a free port against the seeded scenario database
+    (raises ``RuntimeError`` with the log tail). A non-.NET stack's tools are checked first and a
+    missing one is named (X14a)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise RuntimeError("the build has no solution on disk")
-    dotnet = await asyncio.to_thread(find_dotnet)
-    if dotnet is None:
-        raise RuntimeError("dotnet not found: install the .NET 10 SDK (see Settings, toolchains)")
+    stack_key = build.stack or "dotnet"
+    is_dotnet = stack_key == "dotnet"
     root = Path(build.output_dir)
-    app_name = next((p.stem for p in root.glob("*.sln")), None)
-    if app_name is None:
-        raise RuntimeError("no .sln in the build folder")
+    dotnet: str | None = None
+    if is_dotnet:
+        dotnet = await asyncio.to_thread(find_dotnet)
+        if dotnet is None:
+            raise RuntimeError("dotnet not found: install the .NET 10 SDK (see Settings, toolchains)")
+        app_name = next((p.stem for p in root.glob("*.sln")), None)
+        if app_name is None:
+            raise RuntimeError("no .sln in the build folder")
+        clients = client_names(root)
+    else:
+        missing = await asyncio.to_thread(missing_service_tools, stack_key)
+        if missing:
+            raise RuntimeError(f"the {stack_key} toolchain is missing on this worker: {', '.join(missing)}; "
+                               "install it (Settings shows the toolchains) to start the service")
+        app_name = root.name
+        contract = service_contract(root, app_name, stack_key)
+        if contract is None:
+            raise RuntimeError("no .exiqo/service-contract.json in the build folder")
+        clients = sorted(str(c) for c in contract.get("clients") or [])
     dsn = scenario_dsn(settings, project_id)
 
     def seed() -> None:
@@ -494,7 +539,6 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
 
     async with lock():
         await asyncio.to_thread(seed)
-    clients = client_names(root)
     stubs: StubServer | None = None
     held: socket.socket | None = None
     port: int | None = None
@@ -512,15 +556,22 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
         stubs = StubServer()
         # through the API's proxy the browser is same-origin with the service; only the local
         # all-in-one process (role all) still lets the web origins call it directly
-        env = service_env(dsn, connection_names(root, app_name), clients, stubs.url,
+        env = service_env(dsn, connection_names(root, app_name, stack_key), clients, stubs.url,
                           settings.cors_origin_list if settings.exiqo_role == "all" else [])
         held, port = reserve_port()
-        runner = DotnetRunner(root, dotnet=dotnet)
         sock, service_port = held, port
+        if is_dotnet:
+            runner = DotnetRunner(root, dotnet=dotnet)
 
-        def launch() -> ServiceHandle:
-            sock.close()  # hand the port to the service at the last moment
-            return runner.run_service(solution_layout(app_name)["api_project"], service_port, env, timeout_s)
+            def launch() -> ServiceHandle:
+                sock.close()  # hand the port to the service at the last moment
+                return runner.run_service(solution_layout(app_name)["api_project"], service_port, env, timeout_s)
+        else:
+            stack_runner = get_stack(stack_key).runner(root)
+
+            def launch() -> ServiceHandle:
+                sock.close()
+                return stack_runner.run_service(service_port, env, timeout_s)
 
         launching = asyncio.ensure_future(asyncio.to_thread(launch))
         handle: ServiceHandle = await asyncio.shield(launching)
@@ -537,7 +588,8 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
     except BaseException:
         cleanup()
         raise
-    return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients)
+    return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients,
+                   swagger_path="/swagger" if is_dotnet else None)
 
 
 _BACKGROUND: set[asyncio.Task[Any]] = set()
@@ -1053,13 +1105,25 @@ def _unique_rules(reports: Any) -> list[dict[str, str]]:
 
 
 # ------------------------------------------------------------------ startup
-def _owned_service(pid: int, build: Build) -> bool:
-    """The recorded pid is still a ``dotnet`` process started for this build (not a reused pid)."""
+def process_cmdline(pid: int) -> str | None:
+    """The command line of ``pid`` (``/proc``, Linux pods); ``None`` when it cannot be read."""
     try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
     except OSError:
+        return None
+
+
+def _owned_service(pid: int, build: Build) -> bool:
+    """The recorded pid is still the build's stack's service process (``dotnet``, ``java``: the
+    stack's ``service_process_marker``) started for this build (not a reused pid)."""
+    cmdline = process_cmdline(pid)
+    if cmdline is None:
         return False
-    return "dotnet" in cmdline and bool(build.output_dir) and build.output_dir in cmdline
+    try:
+        marker = get_stack(build.stack or "dotnet").service_process_marker
+    except KeyError:  # a stack this install no longer has: never kill what cannot be identified
+        return False
+    return marker in cmdline and bool(build.output_dir) and build.output_dir in cmdline
 
 
 async def clear_stale_runs(sessionmaker: Any, owner: str | None = None) -> int:

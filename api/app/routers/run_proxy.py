@@ -26,7 +26,8 @@ def public_urls(request: Request, build_id: str, status: dict) -> dict:
     if status.get("port") is None:
         return {**status, "url": None, "swagger_url": None}
     root = proxy_root(request, build_id)
-    return {**status, "url": root, "swagger_url": f"{root}swagger/index.html"}
+    swagger = f"{root}swagger/index.html" if status.get("swagger_url") else None  # none on Java
+    return {**status, "url": root, "swagger_url": swagger}
 
 
 @router.api_route("/builds/{build_id}/run/proxy/{path:path}", methods=svc.PROXY_METHODS, name="run_proxy",

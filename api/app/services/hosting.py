@@ -1,6 +1,8 @@
 """Generated services hosted on workers, reached by the browser only through the API.
 
-Verify starts the build's generated .NET service with ``dotnet run`` on a loopback port. In the
+Verify starts the build's generated service on a loopback port: ``dotnet run`` for .NET, the
+stack runner's ``run_service`` for the others (``java -jar`` for Java; that service has no Swagger
+UI, so its ``swagger_url`` is ``None``). In the
 cluster that happens on a worker pod (the ``service_start`` job), and the worker's
 :class:`Hosting` keeps the process. The build row records where it runs: ``run_host`` (the
 worker's internal listener, ``WORKER_HOST:INTERNAL_PORT``), ``run_owner`` (the worker's name, so
