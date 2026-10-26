@@ -1,11 +1,14 @@
 "use client";
 
-// The selected node, on the right: Overview, History, Knowledge and Lineage (Curate joins them in
-// Task 15). Everything is read as of the explorer's revision.
+// The selected node, on the right: Overview, History, Knowledge, Lineage and, for curators only,
+// Curate. Everything is read as of the explorer's revision.
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Copy, Crosshair, Loader2, X } from "lucide-react";
 import { ErrorNote } from "@/components/ui/Empty";
+import { ApiError } from "@/lib/api";
 import { Pill } from "@/components/ui/Pill";
+import { useCan } from "@/lib/personas";
+import { CurateForm, type Submission } from "./CurateForm";
 import { LabelChip } from "./SearchRail";
 import {
   GROUP_LABEL,
@@ -18,7 +21,7 @@ import {
   type VersionOut,
 } from "@/lib/memory";
 
-export const DRAWER_TABS = ["Overview", "History", "Knowledge", "Lineage"] as const;
+export const DRAWER_TABS = ["Overview", "History", "Knowledge", "Lineage", "Curate"] as const;
 export type DrawerTab = (typeof DRAWER_TABS)[number];
 
 export interface NodeDrawerProps {
@@ -28,6 +31,10 @@ export interface NodeDrawerProps {
   onClose(): void;
   onSelect(uid: string): void;
   onFocus(uid: string): void;
+  /** Leaves the as-of view (the Curate tab offers it: curation acts on the current memory). */
+  onBackToCurrent?(): void;
+  /** Shown under the uid when the node is a removed item of a revision diff (read as of the revision before). */
+  removedNote?: string | null;
 }
 
 function show(value: unknown): string {
@@ -217,6 +224,9 @@ function LineageRow({ l, onSelect }: { l: LineageOut; onSelect(uid: string): voi
             <LabelChip label={l.other.label} side={l.other.side} />
             <span className="truncate text-[13.5px] font-medium text-plum">{displayName(l.other)}</span>
           </span>
+          <span className="mt-0.5 block truncate font-mono text-[11.5px] text-slate" title={l.other.uid}>
+            {l.other.uid}
+          </span>
         </span>
       </button>
     </li>
@@ -249,9 +259,14 @@ function Lineage({ lineage, onSelect }: { lineage: LineageOut[]; onSelect(uid: s
   );
 }
 
-export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }: NodeDrawerProps) {
+export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus, onBackToCurrent, removedNote }: NodeDrawerProps) {
   // The tab stays put as the selection moves from node to node.
-  const [tab, setTab] = useState<DrawerTab>("Overview");
+  const [chosenTab, setTab] = useState<DrawerTab>("Overview");
+  const can = useCan();
+  const tabs = DRAWER_TABS.filter((t) => t !== "Curate" || can.curate);
+  const tab: DrawerTab = tabs.includes(chosenTab) ? chosenTab : "Overview";
+  // Curations sent from here, so "Pending" outlives switching tab or node.
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   const panel = useRef<HTMLElement>(null);
 
   // Opening moves focus into the drawer; closing gives it back to whatever opened it (a search
@@ -316,13 +331,16 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }:
           </button>
         </div>
         <CopyUid uid={uid} />
+        {removedNote ? (
+          <p className="mt-2 rounded-btn bg-error-bg px-3 py-1.5 text-[12.5px] text-error ring-1 ring-inset ring-error/15">{removedNote}</p>
+        ) : null}
         <div className="mt-2 flex justify-end">
           <button type="button" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-purple hover:underline" onClick={() => onFocus(uid)}>
             <Crosshair size={14} aria-hidden /> Explore around this node
           </button>
         </div>
         <div role="tablist" aria-label="Node detail" className="-mb-px mt-3 flex gap-5">
-          {DRAWER_TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               type="button"
@@ -346,6 +364,10 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }:
           <p className="flex items-center gap-2 text-[14px] text-slate">
             <Loader2 size={15} className="animate-spin" aria-hidden /> Reading the node…
           </p>
+        ) : detail.error instanceof ApiError && detail.error.status === 404 ? (
+          <p className="rounded-btn bg-warm/80 px-4 py-3 text-[14px] leading-relaxed text-slate">
+            {asOf !== null ? `Not in the memory at revision ${asOf}: recorded after it, or removed before it.` : "Not in this project's memory."}
+          </p>
         ) : detail.error ? (
           <ErrorNote error={detail.error} />
         ) : !d ? null : tab === "Overview" ? (
@@ -354,8 +376,18 @@ export function NodeDrawer({ projectId, uid, asOf, onClose, onSelect, onFocus }:
           <History versions={d.versions} />
         ) : tab === "Knowledge" ? (
           <Knowledge d={d} onSelect={onSelect} />
-        ) : (
+        ) : tab === "Lineage" ? (
           <Lineage lineage={d.lineage} onSelect={onSelect} />
+        ) : (
+          <CurateForm
+            projectId={projectId}
+            detail={d}
+            asOf={asOf}
+            submissions={submissions}
+            onSubmitted={(s) => setSubmissions((xs) => [...xs, s])}
+            onShowKnowledge={() => setTab("Knowledge")}
+            onBackToCurrent={onBackToCurrent}
+          />
         )}
       </div>
     </aside>

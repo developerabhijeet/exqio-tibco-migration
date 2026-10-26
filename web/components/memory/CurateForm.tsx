@@ -1,0 +1,419 @@
+"use client";
+
+// The drawer's Curate tab (curators only: useCan().curate). The actions offered are the ones that
+// apply to the node: a note on anything; reject or correct a mapping when it has an outgoing
+// MIGRATED_TO; obsolete on a Memory item. Every action needs a reason. A curation becomes part of
+// the memory with the next ingest revision, so a submission shows "Pending" until the revision
+// whose scopes hold it lands, then "Applied in revision <n>".
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Ban, CheckCircle2, Loader2, PenLine, Pin, Search, Archive } from "lucide-react";
+import { ErrorNote } from "@/components/ui/Empty";
+import { ApiError } from "@/lib/api";
+import { LabelChip } from "./SearchRail";
+import {
+  curationScope,
+  displayName,
+  hitTitle,
+  useCurate,
+  useMemorySearch,
+  useMemoryStatus,
+  useRevisions,
+  type CurationAction,
+  type LineageOut,
+  type NodeDetail,
+} from "@/lib/memory";
+
+/** One submitted curation, kept by the drawer so it outlives tab and node switches. */
+export interface Submission {
+  eventId: string;
+  uid: string;
+  action: CurationAction;
+  /** The memory's revision when it was sent. */
+  base: number | null;
+}
+
+export interface CurateFormProps {
+  projectId: string;
+  detail: NodeDetail;
+  /** The explorer's as-of revision: curation acts on the current memory only. */
+  asOf: number | null;
+  submissions: Submission[];
+  onSubmitted(s: Submission): void;
+  onShowKnowledge(): void;
+  onBackToCurrent?(): void;
+}
+
+const ACTIONS: Record<CurationAction, { title: string; blurb: string; submit: string; icon: typeof Pin }> = {
+  note: { title: "Pin a note", blurb: "Context agents and reviewers read with this node.", submit: "Pin note", icon: Pin },
+  reject_mapping: { title: "Reject mapping", blurb: "The generated code does not implement this.", submit: "Reject mapping", icon: Ban },
+  correct_mapping: { title: "Correct mapping", blurb: "Point it at the method or class that does.", submit: "Correct mapping", icon: PenLine },
+  obsolete: { title: "Mark obsolete", blurb: "Agents stop retrieving this memory.", submit: "Mark obsolete", icon: Archive },
+};
+
+const REASON_MAX = 2000;
+const NOTE_MAX = 4000;
+
+/** The revision that applied a curation: the one whose ingest scopes hold it. Re-read whenever the
+ * memory's revision moves on. */
+function useAppliedIn(projectId: string, eventId: string | null): number | null {
+  const status = useMemoryStatus(projectId);
+  const revisions = useRevisions(projectId);
+  const revision = status.data?.revision ?? null;
+  const { refetch } = revisions;
+  const seen = useRef(revision);
+  useEffect(() => {
+    if (!eventId || seen.current === revision) return;
+    seen.current = revision;
+    void refetch();
+  }, [eventId, revision, refetch]);
+  if (!eventId) return null;
+  const scope = curationScope(eventId);
+  return revisions.data?.find((r) => r.scopes.includes(scope))?.n ?? null;
+}
+
+function SubmissionState({ projectId, s, onShowKnowledge }: { projectId: string; s: Submission; onShowKnowledge(): void }) {
+  const applied = useAppliedIn(projectId, s.eventId);
+  const what = ACTIONS[s.action].title.toLowerCase();
+  // The submit button sits at the foot of a scrolled panel: bring the new state into view.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const smooth = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    box.current?.scrollIntoView({ block: "nearest", behavior: smooth ? "smooth" : "auto" });
+  }, [s.eventId]);
+  return (
+    <div
+      ref={box}
+      className={`flex scroll-mt-4 items-start gap-3 rounded-btn px-4 py-3 ring-1 ring-inset transition-colors ${
+        applied ? "bg-gate-bg ring-gate/20" : "bg-warm/80 ring-line"
+      }`}
+      role="status"
+    >
+      {applied ? (
+        <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-gate" aria-hidden />
+      ) : (
+        <Loader2 size={17} className="mt-0.5 shrink-0 animate-spin text-slate" aria-hidden />
+      )}
+      <div className="min-w-0 flex-1">
+        <p data-testid="curate-state" className={`text-[14px] font-semibold ${applied ? "text-gate" : "text-plum"}`}>
+          {applied ? `Applied in revision ${applied}` : "Pending"}
+        </p>
+        <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate">
+          {applied ? (
+            <>
+              Your {what.replace(/^pin a /, "")} is part of the memory.{" "}
+              {s.action === "note" ? (
+                <button type="button" className="font-medium text-purple hover:underline" onClick={onShowKnowledge}>
+                  See it under Knowledge
+                </button>
+              ) : null}
+            </>
+          ) : (
+            "Recorded. It joins the memory with the next ingest revision, usually within seconds."
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Text fields: Escape with something typed clears focus rather than closing the drawer (and the
+ * draft with it). */
+const keepDraft = (e: React.KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
+  if (e.key === "Escape" && e.currentTarget.value) {
+    e.preventDefault();
+    e.currentTarget.blur();
+  }
+};
+
+function ReplacementPicker({
+  projectId,
+  value,
+  onChange,
+}: {
+  projectId: string;
+  value: { uid: string; name: string } | null;
+  onChange(v: { uid: string; name: string } | null): void;
+}) {
+  const [q, setQ] = useState("");
+  const [debounced, setDebounced] = useState("");
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(q), 250);
+    return () => window.clearTimeout(t);
+  }, [q]);
+  const hits = useMemorySearch(projectId, debounced, { labels: ["Method", "Class"], side: null, phase: null, asOf: null });
+  if (value) {
+    return (
+      <div className="flex items-center gap-2 rounded-btn border border-purple/40 bg-purple-lt/40 px-3 py-2">
+        <LabelChip label="Method" side="new" />
+        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink" title={value.uid}>
+          {value.name}
+        </span>
+        <button type="button" className="text-[12.5px] font-medium text-purple hover:underline" onClick={() => onChange(null)}>
+          Change
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="relative">
+        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate" aria-hidden />
+        <input
+          id="curate-replacement"
+          className="input w-full pl-8"
+          placeholder="Search methods and classes"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={keepDraft}
+          autoComplete="off"
+        />
+      </div>
+      {debounced.trim() ? (
+        <ul className="mt-1.5 max-h-44 overflow-y-auto rounded-btn border border-line/80" aria-label="Replacement candidates">
+          {hits.isFetching && !hits.data ? (
+            <li className="px-3 py-2 text-[13px] text-slate">Searching…</li>
+          ) : (hits.data ?? []).length === 0 ? (
+            <li className="px-3 py-2 text-[13px] text-slate">No method or class matches.</li>
+          ) : (
+            (hits.data ?? []).slice(0, 8).map((h) => (
+              <li key={h.uid}>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-warm/70"
+                  onClick={() => onChange({ uid: h.uid, name: hitTitle(h) })}
+                >
+                  <LabelChip label={h.label} side="new" />
+                  <span className="min-w-0 truncate text-[13px] text-plum">{hitTitle(h)}</span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+export function CurateForm({ projectId, detail, asOf, submissions, onSubmitted, onShowKnowledge, onBackToCurrent }: CurateFormProps) {
+  const node = detail.node;
+  const mappings: LineageOut[] = useMemo(
+    () => detail.lineage.filter((l) => l.direction === "out" && l.edge.type === "MIGRATED_TO" && l.edge.status !== "rejected"),
+    [detail.lineage],
+  );
+  const available = useMemo(() => {
+    const a: CurationAction[] = ["note"];
+    if (mappings.length) a.push("reject_mapping", "correct_mapping");
+    if (node.label === "Memory" && !node.obsolete) a.push("obsolete");
+    return a;
+  }, [mappings.length, node.label, node.obsolete]);
+
+  const [action, setAction] = useState<CurationAction>("note");
+  const [text, setText] = useState("");
+  const [reason, setReason] = useState("");
+  const [mapping, setMapping] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState<{ uid: string; name: string } | null>(null);
+  const [tried, setTried] = useState(false);
+  const curate = useCurate(projectId);
+  const status = useMemoryStatus(projectId);
+
+  // Another node: start over (the action may not apply to it).
+  useEffect(() => {
+    setAction("note");
+    setText("");
+    setReason("");
+    setMapping(null);
+    setReplacement(null);
+    setTried(false);
+    curate.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on the node only
+  }, [node.uid]);
+  useEffect(() => {
+    if (!available.includes(action)) setAction("note");
+  }, [available, action]);
+
+  const latest = [...submissions].reverse().find((s) => s.uid === node.uid) ?? null;
+  const chosenMapping = mapping ?? mappings[0]?.edge.uid ?? null;
+
+  if (asOf !== null) {
+    return (
+      <div className="rounded-btn bg-decision-bg px-4 py-3.5 text-[13.5px] leading-relaxed text-decision ring-1 ring-inset ring-decision/20">
+        You are viewing revision {asOf}. Curation applies to the current memory.
+        {onBackToCurrent ? (
+          <button type="button" className="ml-1 font-semibold underline" onClick={onBackToCurrent}>
+            Curate the current memory
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  const missing = {
+    text: action === "note" && !text.trim(),
+    reason: !reason.trim(),
+    replacement: action === "correct_mapping" && !replacement,
+  };
+  const invalid = missing.text || missing.reason || missing.replacement;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTried(true);
+    if (invalid || curate.isPending) return;
+    const mapped = action === "reject_mapping" || action === "correct_mapping";
+    curate.mutate(
+      {
+        action,
+        target_uid: mapped && chosenMapping ? chosenMapping : node.uid,
+        reason: reason.trim(),
+        text: action === "note" ? text.trim() : null,
+        replacement_uid: action === "correct_mapping" ? replacement?.uid ?? null : null,
+      },
+      {
+        onSuccess: (out) => {
+          onSubmitted({ eventId: out.event_id, uid: node.uid, action, base: status.data?.revision ?? null });
+          setText("");
+          setReason("");
+          setReplacement(null);
+          setTried(false);
+        },
+      },
+    );
+  };
+
+  const err = curate.error;
+  const errText =
+    err instanceof ApiError && err.status === 403
+      ? new Error("Your role can read the memory but not curate it.")
+      : err instanceof ApiError && err.status === 503 && /stored/.test(err.detail)
+        ? new Error("Recorded, but memory is not reachable right now: it is applied when memory catches up.")
+        : err;
+
+  return (
+    <div className="space-y-5">
+      {latest ? <SubmissionState projectId={projectId} s={latest} onShowKnowledge={onShowKnowledge} /> : null}
+
+      <form onSubmit={submit} className="space-y-5" noValidate aria-label="Curate this node">
+        {available.length > 1 ? (
+          <div role="radiogroup" aria-label="Action" className="grid grid-cols-2 gap-2">
+            {available.map((a) => {
+              const A = ACTIONS[a];
+              const on = action === a;
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setAction(a)}
+                  className={`rounded-btn border px-3 py-2.5 text-left transition-all ${
+                    on ? "border-purple bg-purple-lt/50 shadow-card" : "border-line/80 hover:border-line-dk hover:bg-warm/50"
+                  }`}
+                >
+                  <span className={`flex items-center gap-1.5 text-[13.5px] font-semibold ${on ? "text-purple-dk" : "text-plum"}`}>
+                    <A.icon size={14} aria-hidden />
+                    {A.title}
+                  </span>
+                  <span className="mt-0.5 block text-[12px] leading-snug text-slate">{A.blurb}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-[13.5px] leading-relaxed text-slate">
+            Pin context to <span className="font-medium text-plum">{displayName(node)}</span> that agents and reviewers read with it.
+          </p>
+        )}
+
+        {action === "reject_mapping" || action === "correct_mapping" ? (
+          <fieldset>
+            <legend className="label mb-2">Mapping</legend>
+            <ul className="space-y-1.5">
+              {mappings.map((m) => (
+                <li key={m.edge.uid}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={chosenMapping === m.edge.uid}
+                    onClick={() => setMapping(m.edge.uid)}
+                    disabled={mappings.length === 1}
+                    className={`flex w-full items-center gap-2 rounded-btn border px-3 py-2 text-left text-[13px] disabled:cursor-default ${
+                      chosenMapping === m.edge.uid ? "border-purple/50 bg-purple-lt/30" : "border-line/80 hover:bg-warm/50"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate text-plum">{displayName(node)}</span>
+                    <ArrowRight size={13} className="shrink-0 text-purple" aria-hidden />
+                    <LabelChip label={m.other.label} side={m.other.side} />
+                    <span className="min-w-0 truncate font-medium text-plum">{displayName(m.other)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </fieldset>
+        ) : null}
+
+        {action === "correct_mapping" ? (
+          <div>
+            <label htmlFor="curate-replacement" className="label mb-1.5 block">
+              Replacement
+            </label>
+            <ReplacementPicker projectId={projectId} value={replacement} onChange={setReplacement} />
+            {tried && missing.replacement ? <p className="mt-1 text-[12.5px] text-error">Pick the method or class that implements it.</p> : null}
+          </div>
+        ) : null}
+
+        {action === "note" ? (
+          <div>
+            <label htmlFor="curate-note" className="label mb-1.5 block">
+              Note
+            </label>
+            <textarea
+              id="curate-note"
+              className="input min-h-[96px] w-full resize-y leading-relaxed"
+              value={text}
+              maxLength={NOTE_MAX}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={keepDraft}
+              placeholder="What should anyone working on this know?"
+              aria-invalid={tried && missing.text}
+            />
+            {tried && missing.text ? <p className="mt-1 text-[12.5px] text-error">Write the note.</p> : null}
+          </div>
+        ) : null}
+
+        <div>
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <label htmlFor="curate-reason" className="label block">
+              Reason
+            </label>
+            <span className="tnum text-[11.5px] text-slate/80">
+              {reason.length}/{REASON_MAX.toLocaleString("en-US")}
+            </span>
+          </div>
+          <textarea
+            id="curate-reason"
+            className="input min-h-[64px] w-full resize-y leading-relaxed"
+            value={reason}
+            maxLength={REASON_MAX}
+            required
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={keepDraft}
+            placeholder="Why: recorded in the audit trail with your name."
+            aria-invalid={tried && missing.reason}
+            aria-describedby="curate-reason-hint"
+          />
+          <p id="curate-reason-hint" className={`mt-1 text-[12.5px] ${tried && missing.reason ? "text-error" : "text-slate"}`}>
+            {tried && missing.reason ? "A reason is required." : "Every curation needs a reason."}
+          </p>
+        </div>
+
+        {errText ? <ErrorNote error={errText} /> : null}
+
+        <div className="flex items-center justify-end gap-3 border-t border-line/70 pt-4">
+          <button type="submit" className="btn-primary" disabled={curate.isPending}>
+            {curate.isPending ? <Loader2 size={15} className="animate-spin" aria-hidden /> : null}
+            {ACTIONS[action].submit}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

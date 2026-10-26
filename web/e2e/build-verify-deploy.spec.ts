@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
-import { actAs, newProjectAndScan, openDealerProcess } from "./helpers";
+import { expect, test, type Route } from "@playwright/test";
+import { actAs, approveG1toG3, gate, newProjectAndScan, openDealerProcess } from "./helpers";
 import { apiUrl } from "../scripts/root-env";
 
 // The API runs with PROVIDER=fake. Whether `dotnet restore` can reach NuGet depends on the machine,
@@ -20,47 +20,6 @@ const PARITY = readFileSync(join(__dirname, "fixtures", "parity.json"), "utf8");
 
 /** The routed build the fixture test shows; no request for it reaches the API. */
 const FIXTURE_BUILD = "fixture-build";
-
-async function gate(page: Page, name: string): Promise<Locator> {
-  const g = page.getByTestId(`gate-${name}`);
-  await expect(g).toBeVisible();
-  return g;
-}
-
-async function approveG1toG3(page: Page): Promise<void> {
-  await page.getByTestId("step-validate").click();
-  await page.getByRole("button", { name: "Run analysis" }).click();
-  await expect(page.getByTestId("analysis-log")).toContainText("citations verified", { timeout: 60_000 });
-  const rules = page.getByTestId("rule-card");
-  await expect(rules.first()).toBeVisible();
-  const count = await rules.count();
-  for (let i = 0; i < count; i++) {
-    const card = rules.nth(i);
-    await card.getByRole("button", { name: "Approve", exact: true }).click();
-    await expect(card).toHaveAttribute("data-status", "approved");
-  }
-  const g1 = await gate(page, "G1");
-  await g1.getByRole("button", { name: "Approve G1" }).click();
-  await expect(g1).toHaveAttribute("data-state", "approved");
-  const findings = page.getByTestId("finding-card");
-  const total = await findings.count();
-  for (let i = 0; i < total; i++) {
-    const card = findings.nth(i);
-    await card.getByRole("button", { name: "Ask business" }).click();
-    await expect(card).toHaveAttribute("data-decision", "ask");
-  }
-  const g2 = await gate(page, "G2");
-  await g2.getByRole("button", { name: "Approve G2" }).click();
-  await expect(g2).toHaveAttribute("data-state", "approved");
-
-  await actAs(page, "architect.lee");
-  await page.getByTestId("step-design").click();
-  await page.getByRole("button", { name: "Generate design" }).click();
-  await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/, { timeout: 60_000 });
-  const g3 = await gate(page, "G3");
-  await g3.getByRole("button", { name: "Approve G3" }).click();
-  await expect(g3).toHaveAttribute("data-state", "approved");
-}
 
 test("FundingStatusLookup as far as this machine allows, branching on the restore probe", async ({ page }) => {
   test.setTimeout(480_000);

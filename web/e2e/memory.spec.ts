@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { API_ORIGIN, SAMPLE_PROCESS_NAME, WEB_ORIGIN, openNode, uploadAndAnalyse, uploadSample } from "./helpers";
+import {
+  API_ORIGIN,
+  SAMPLE_ACTIVITY_NAME,
+  SAMPLE_PROCESS_NAME,
+  WEB_ORIGIN,
+  actAs,
+  openNode,
+  throughBuild,
+  uploadAndAnalyse,
+  uploadSample,
+} from "./helpers";
 
 // The memory explorer (/memory). The API runs with NEO4J_URI set (playwright.config.ts), so the
 // scan and the analysis are ingested into the memory graph by the worker; `make neo4j` first.
@@ -72,4 +82,55 @@ test("the drawer keeps its tab, closes on Escape and gives focus back", async ({
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("node-drawer")).toHaveCount(0);
   await expect(page.getByTestId("memory-results").getByRole("button").first()).toBeFocused();
+});
+
+test("timeline as-of and diff highlight", async ({ page }) => {
+  test.setTimeout(240_000);
+  await uploadAndAnalyse(page);
+  await page.goto("/memory");
+  // The analysis lands as revision 2 (or later): wait for the timeline to hold it.
+  await expect(page.getByTestId("rev-2")).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId("rev-2").click();
+  await expect(page.getByText(/Viewing revision 2 of \d+/)).toBeVisible();
+  await page.getByRole("button", { name: "Show changes" }).click();
+  await expect(page.getByTestId("memory-diff")).toContainText("Added");
+  await page.getByRole("button", { name: "Back to current" }).click();
+  await expect(page.getByText(/Viewing revision/)).toHaveCount(0);
+});
+
+test("lineage after a build highlights MIGRATED_TO", async ({ page }) => {
+  test.setTimeout(480_000);
+  await throughBuild(page);
+  await openNode(page, SAMPLE_ACTIVITY_NAME);
+  await page.getByRole("tab", { name: "Lineage" }).click();
+  await expect(page.getByTestId("node-drawer")).toContainText("MIGRATED_TO", { timeout: 60_000 });
+  await expect(page.getByTestId("node-drawer")).toContainText("method:dotnet:");
+});
+
+test("an SME note goes pending then applied", async ({ page }) => {
+  await uploadSample(page);
+  await actAs(page, "sme.vicky");
+  await openNode(page, SAMPLE_PROCESS_NAME);
+  await page.getByRole("tab", { name: "Curate" }).click();
+  await page.getByLabel("Note").fill("Owned by the payoff team");
+  await page.getByLabel("Reason").fill("context for agents");
+  await page.getByRole("button", { name: "Pin note" }).click();
+  await expect(page.getByTestId("curate-state")).toHaveText(/Pending|Applied in revision \d+/);
+  await expect(page.getByTestId("curate-state")).toHaveText(/Applied in revision \d+/, { timeout: 60_000 });
+});
+
+test("a viewer sees no Curate tab", async ({ page }) => {
+  await uploadSample(page);
+  await actAs(page, "viewer.val");
+  await openNode(page, SAMPLE_PROCESS_NAME);
+  await expect(page.getByRole("tab", { name: "Curate" })).toHaveCount(0);
+});
+
+test("unavailable state when the API reports Neo4j down", async ({ page }) => {
+  await page.route("**/memory/*/status", (r) =>
+    r.fulfill({ json: { configured: true, available: false, revision: null, counts: {}, pending_ingests: 0 } }),
+  );
+  await page.goto("/memory");
+  await expect(page.getByTestId("memory-unavailable")).toContainText("Memory is unavailable");
+  await expect(page.getByTestId("memory-canvas")).toHaveCount(0);
 });

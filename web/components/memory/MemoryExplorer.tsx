@@ -1,37 +1,46 @@
 "use client";
 
 // The /memory explorer: search rail, graph canvas and node drawer over the selected project's
-// memory graph. The view lives in the URL (uid, rev, q, labels, side, mode) so it can be shared;
+// memory graph, with the revision timeline underneath. The view lives in the URL (uid, rev, q,
+// labels, side, mode, and `changes`: the revision whose diff is open) so it can be shared;
 // the node the neighbourhood is read around (the focus) follows the selected uid whenever the
 // selection is not already on the canvas.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, GitBranch, Loader2, Share2, Waypoints } from "lucide-react";
+import { ArrowLeft, DatabaseBackup, GitBranch, Loader2, Share2, Waypoints } from "lucide-react";
 import { Empty, ErrorNote } from "@/components/ui/Empty";
 import { useAppState } from "@/lib/state";
 import { ApiError } from "@/lib/api";
 import {
-  GROUP_HEX,
-  GROUP_LABEL,
   LABEL_GROUPS,
   memoryApi,
+  parseRelUid,
   rankHits,
   useMemoryGraph,
   useMemorySearch,
   useMemoryStatus,
+  useReingest,
+  useRevisionDiff,
+  useRevisions,
+  type EdgeOut,
   type GraphMode,
   type GraphQuery,
+  type MemNodeOut,
   type MemoryHit,
+  type RevisionDiff,
   type Side,
   type Subgraph,
 } from "@/lib/memory";
-import { MemoryCanvas } from "./MemoryCanvas";
+import { useSystemStatus } from "@/components/help/HelpNav";
+import { DiffPanel } from "./DiffPanel";
+import { MemoryCanvas, type CanvasHighlight } from "./MemoryCanvas";
 import { MemoryStatusPill } from "./MemoryStatusPill";
 import { MemoryUnavailable, memoryState } from "./MemoryUnavailable";
 import { NodeDrawer } from "./NodeDrawer";
 import { SearchRail } from "./SearchRail";
+import { Timeline } from "./Timeline";
 
 const ALL_LABELS = new Set<string>([...LABEL_GROUPS.old, ...LABEL_GROUPS.new, ...LABEL_GROUPS.knowledge]);
 const SIDES = new Set(["old", "new", "knowledge"]);
@@ -42,9 +51,11 @@ function useView() {
   const router = useRouter();
   const pathname = usePathname();
   const rev = Number(params.get("rev"));
+  const changes = Number(params.get("changes"));
   const view = {
     uid: params.get("uid") || null,
     rev: Number.isInteger(rev) && rev >= 1 ? rev : null,
+    changes: Number.isInteger(changes) && changes >= 1 ? changes : null,
     q: params.get("q") ?? "",
     labels: (params.get("labels") ?? "").split(",").filter((l) => ALL_LABELS.has(l)),
     side: (SIDES.has(params.get("side") ?? "") ? params.get("side") : null) as Side | null,
@@ -61,7 +72,7 @@ function useView() {
     pending.current = null;
   }, [rendered]);
   const set = useCallback(
-    (patch: Partial<Record<"uid" | "rev" | "q" | "labels" | "side" | "mode" | "phase", string | null>>, push = false) => {
+    (patch: Partial<Record<"uid" | "rev" | "changes" | "q" | "labels" | "side" | "mode" | "phase", string | null>>, push = false) => {
       const next = new URLSearchParams(pending.current ?? paramsRef.current.toString());
       for (const [k, v] of Object.entries(patch)) {
         if (v === null || v === "" || (k === "mode" && v === "neighbourhood")) next.delete(k);
@@ -80,6 +91,7 @@ function useView() {
 /** useQueries' combine, stable at module level so its result is structurally shared between
  * renders: the merged graph is rebuilt only when an expansion's data changes. */
 const graphsOnly = (results: { data?: Subgraph }[]) => results.map((r) => r.data);
+const ghostsOnly = (results: { data?: MemNodeOut }[]) => results.map((r) => r.data);
 
 function mergeGraphs(base: Subgraph, more: (Subgraph | undefined)[]): Subgraph {
   const extra = more.filter((g): g is Subgraph => !!g);
@@ -127,32 +139,130 @@ function Segmented<T extends string | number>({
   );
 }
 
-/** The strip under the canvas: what the memory holds per group. The revision timeline (Task 15)
- * takes this slot. */
-function SummaryStrip({ counts }: { counts: Record<string, number> }) {
-  const groups = (["old", "new", "knowledge"] as const).map((g) => {
-    const members: readonly string[] = LABEL_GROUPS[g];
-    const top = members
-      .filter((l) => (g === "old" || l !== "Endpoint") && counts[l])
-      .map((l) => [l, counts[l]] as const)
-      .sort((a, b) => b[1] - a[1]);
-    return { g, total: top.reduce((s, [, n]) => s + n, 0), top: top.slice(0, 4) };
-  });
+/** The canvas outlines of a revision diff: node and relationship uids by kind. */
+function diffHighlight(d: RevisionDiff): CanvasHighlight {
+  const uids = (k: "added" | "changed" | "removed") => [...d.nodes[k], ...d.relationships[k]].map((v) => v.uid);
+  return { added: uids("added"), changed: uids("changed"), removed: uids("removed") };
+}
+
+/** Removed nodes worth drawing as ghosts: those a removed relationship tied to a node on screen. */
+const MAX_GHOSTS = 40;
+function ghostCandidates(d: RevisionDiff, shown: Subgraph): string[] {
+  const on = new Set(shown.nodes.map((n) => n.uid));
+  const removed = new Set(d.nodes.removed.map((v) => v.uid));
+  const out = new Set<string>();
+  for (const r of d.relationships.removed) {
+    const p = parseRelUid(r.uid);
+    if (!p) continue;
+    if (removed.has(p.src) && on.has(p.dst) && !on.has(p.src)) out.add(p.src);
+    if (removed.has(p.dst) && on.has(p.src) && !on.has(p.dst)) out.add(p.dst);
+    if (out.size >= MAX_GHOSTS) break;
+  }
+  return [...out];
+}
+
+/** The shown graph plus the ghosts and the removed relationships that tie them in. */
+function withGhosts(shown: Subgraph, ghosts: MemNodeOut[], d: RevisionDiff): Subgraph {
+  if (ghosts.length === 0) return shown;
+  const nodes = [...shown.nodes, ...ghosts.filter((g) => !shown.nodes.some((n) => n.uid === g.uid))];
+  const on = new Set(nodes.map((n) => n.uid));
+  const have = new Set(shown.edges.map((e) => e.uid));
+  const edges: EdgeOut[] = [...shown.edges];
+  for (const r of d.relationships.removed) {
+    const p = parseRelUid(r.uid);
+    if (!p || have.has(r.uid) || !on.has(p.src) || !on.has(p.dst)) continue;
+    edges.push({ uid: r.uid, type: p.type, src: p.src, dst: p.dst, props: r.props, status: null });
+  }
+  return { ...shown, nodes, edges };
+}
+
+/** Admin only: re-ingest the whole project, behind a small confirmation. */
+function ReingestButton({ projectId }: { projectId: string }) {
+  const admin = useSystemStatus();
+  const reingest = useReingest(projectId);
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    box.current?.querySelector<HTMLElement>("button")?.focus();
+    const away = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [open]);
+  useEffect(() => {
+    if (done === null) return;
+    const t = window.setTimeout(() => setDone(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [done]);
+  if (!admin.data) return null;
+  const close = () => {
+    setOpen(false);
+    trigger.current?.focus();
+  };
   return (
-    <section className="card flex h-[120px] shrink-0 items-stretch divide-x divide-line/80" data-testid="memory-timeline-slot" aria-label="Memory contents">
-      {groups.map(({ g, total, top }) => (
-        <div key={g} className="flex min-w-0 flex-1 flex-col justify-center px-6">
-          <p className="flex items-center gap-2 text-[13px] font-medium text-slate">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: GROUP_HEX[g].border }} aria-hidden />
-            {GROUP_LABEL[g]}
+    <div className="relative">
+      <button
+        ref={trigger}
+        type="button"
+        className="btn-secondary py-1.5 text-[13.5px]"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        disabled={reingest.isPending}
+      >
+        {reingest.isPending ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <DatabaseBackup size={15} aria-hidden />}
+        {done !== null ? `Queued ${done} ${done === 1 ? "ingest" : "ingests"}` : "Re-ingest project"}
+      </button>
+      {open ? (
+        <div
+          ref={box}
+          role="dialog"
+          aria-label="Re-ingest project"
+          onKeyDown={(e) => {
+            // Escape closes this, not the node drawer underneath.
+            if (e.key !== "Escape") return;
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+          }}
+          className="mem-slide-in absolute right-0 top-full z-30 mt-2 w-[320px] rounded-card bg-white p-4 shadow-pop ring-1 ring-line"
+        >
+          <p className="text-[14px] font-semibold text-plum">Re-ingest this project?</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-slate">
+            Every phase it has run is projected into memory again, as new revisions. Nothing already recorded is lost.
           </p>
-          <p className="tnum mt-1 text-[24px] font-semibold leading-tight text-plum">{total.toLocaleString("en-US")}</p>
-          <p className="mt-0.5 truncate text-[12.5px] text-slate">
-            {top.length ? top.map(([l, n]) => `${n} ${l}`).join(" · ") : "Nothing yet"}
-          </p>
+          {reingest.error ? (
+            <div className="mt-3">
+              <ErrorNote error={reingest.error} />
+            </div>
+          ) : null}
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" className="btn-ghost" onClick={close}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary py-1.5 text-[13.5px]"
+              disabled={reingest.isPending}
+              onClick={() =>
+                reingest.mutate(undefined, {
+                  onSuccess: (r) => {
+                    setDone(r.job_ids.length);
+                    close();
+                  },
+                })
+              }
+            >
+              Re-ingest
+            </button>
+          </div>
         </div>
-      ))}
-    </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -179,19 +289,24 @@ export function MemoryExplorer() {
     if (!switched) return;
     setFocus(null);
     setExpanded([]);
-    set({ uid: null, rev: null, q: null });
+    set({ uid: null, rev: null, changes: null, q: null });
   }, [projectId, set]);
 
-  // When the memory moves on (a new revision) and the view is the current one, re-read it.
+  // When the memory moves on (a new revision): the timeline always grows; the view is re-read
+  // when it is the current one (an as-of view stays as it was).
   const revision = status.data?.revision ?? null;
   const seenRevision = useRef(revision);
   useEffect(() => {
     if (seenRevision.current === revision) return;
     seenRevision.current = revision;
+    qc.invalidateQueries({ queryKey: ["memory-revisions", projectId] });
     if (view.rev === null) {
-      for (const key of ["memory-graph", "memory-node", "memory-search", "memory-revisions"]) qc.invalidateQueries({ queryKey: [key, projectId] });
+      for (const key of ["memory-graph", "memory-node", "memory-search"]) qc.invalidateQueries({ queryKey: [key, projectId] });
     }
   }, [revision, view.rev, projectId, qc]);
+
+  const revisions = useRevisions(ready ? projectId : null);
+  const diff = useRevisionDiff(ready ? projectId : null, view.changes);
 
   const filtered = view.labels.length > 0 || view.side !== null;
   const mode: GraphMode = view.mode === "lineage" && view.uid ? "lineage" : "neighbourhood";
@@ -225,9 +340,32 @@ export function MemoryExplorer() {
       enabled: ready && mode === "neighbourhood",
     })),
   });
-  const shown = useMemo(
+  const merged = useMemo(
     () => (graph.data ? mergeGraphs(graph.data, mode === "neighbourhood" ? moreData : []) : null),
     [graph.data, mode, moreData],
+  );
+
+  // A diff is open: outline what it touched, and draw the nodes it removed from around here as
+  // ghosts, read as of the revision before (only when the view is at or after that revision).
+  const diffData = view.changes !== null ? diff.data : undefined;
+  const highlight = useMemo(() => (diffData ? diffHighlight(diffData) : undefined), [diffData]);
+  const ghostAt = diffData && (view.rev === null || view.rev >= diffData.revision.n) ? diffData.revision.n - 1 : null;
+  const ghostUids = useMemo(
+    () => (diffData && merged && ghostAt !== null && ghostAt >= 1 && mode === "neighbourhood" ? ghostCandidates(diffData, merged) : []),
+    [diffData, merged, ghostAt, mode],
+  );
+  const ghosts = useQueries({
+    combine: ghostsOnly,
+    queries: ghostUids.map((uid) => ({
+      queryKey: ["memory-ghost", projectId, uid, ghostAt],
+      queryFn: () => memoryApi.node(projectId!, uid, ghostAt).then((d) => d.node),
+      staleTime: Infinity,
+      retry: 0,
+    })),
+  });
+  const shown = useMemo(
+    () => (merged && diffData ? withGhosts(merged, ghosts.filter((n): n is MemNodeOut => !!n), diffData) : merged),
+    [merged, diffData, ghosts],
   );
 
   // A selection the canvas does not show (a shared link, back, a drawer link) becomes the focus.
@@ -272,8 +410,26 @@ export function MemoryExplorer() {
     );
   };
 
-  const graphError = graph.error instanceof ApiError && graph.error.status === 404 ? new Error("That node is not in this project's memory (as of this revision).") : graph.error;
+  // A diff item: a removed one is gone at the diff's revision, so it opens as of the one before.
+  const pickFromDiff = (uid: string, removed: boolean) => {
+    if (removed && view.changes !== null) set({ uid, rev: String(view.changes - 1) }, true);
+    else select(uid);
+  };
+  const removedNote =
+    diffData && view.uid && view.rev === diffData.revision.n - 1 && diffData.nodes.removed.some((v) => v.uid === view.uid)
+      ? `Removed in revision ${diffData.revision.n}: shown as of revision ${view.rev}.`
+      : null;
+
+  // A node the view's revision does not hold (added later, or removed before): say so plainly.
+  const missing = graph.error instanceof ApiError && graph.error.status === 404;
+  const graphError = missing ? null : graph.error;
+  const overview = () => {
+    setFocus(null);
+    setExpanded([]);
+    set({ uid: null, mode: null }, true);
+  };
   const counts = status.data?.counts ?? {};
+  const projectReady = ready && projectId ? projectId : null;
   const focusNode = shown?.nodes.find((n) => n.uid === (mode === "lineage" ? view.uid : focus));
 
   return (
@@ -288,6 +444,7 @@ export function MemoryExplorer() {
         </div>
         <div className="flex items-center gap-3">
           <MemoryStatusPill status={status.data} />
+          {projectReady ? <ReingestButton projectId={projectReady} /> : null}
           {ready ? (
             <button type="button" className="btn-secondary py-1.5 text-[13.5px]" onClick={share} title="Copy a link to this view">
               <Share2 size={15} aria-hidden />
@@ -365,7 +522,30 @@ export function MemoryExplorer() {
                 />
               </div>
               <div className="relative min-h-0 flex-1 bg-[radial-gradient(circle,_#E9E6DE_1px,_transparent_1px)] [background-size:22px_22px]">
-                {graphError ? (
+                {missing ? (
+                  <div className="flex h-full items-center justify-center p-6" data-testid="memory-node-missing">
+                    <div className="max-w-sm text-center">
+                      <p className="text-[15.5px] font-semibold text-plum">
+                        {view.rev !== null ? `Not in the memory at revision ${view.rev}` : "Not in this project's memory"}
+                      </p>
+                      <p className="mt-1.5 text-[13.5px] leading-relaxed text-slate">
+                        {view.rev !== null
+                          ? "This node was recorded after that revision, or removed before it."
+                          : "It may have been removed by a later revision."}
+                      </p>
+                      <div className="mt-4 flex justify-center gap-2">
+                        {view.rev !== null ? (
+                          <button type="button" className="btn-secondary py-1.5 text-[13.5px]" onClick={() => set({ rev: null })}>
+                            See the current memory
+                          </button>
+                        ) : null}
+                        <button type="button" className="btn-ghost text-[13.5px]" onClick={overview}>
+                          Project overview
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : graphError ? (
                   <div className="p-6">
                     <ErrorNote error={graphError} />
                   </div>
@@ -377,6 +557,7 @@ export function MemoryExplorer() {
                     lineage={mode === "neighbourhood" ? chain.data : undefined}
                     focus={mode === "neighbourhood" ? canvasFocus : null}
                     filtered={filtered}
+                    highlight={highlight}
                     onSelect={select}
                     onExpand={expand}
                   />
@@ -385,6 +566,17 @@ export function MemoryExplorer() {
                     <Loader2 size={16} className="animate-spin" aria-hidden /> Laying out the graph…
                   </p>
                 )}
+                {view.changes !== null ? (
+                  <DiffPanel
+                    n={view.changes}
+                    diff={diff.data}
+                    loading={diff.isLoading}
+                    error={diff.error}
+                    selected={view.uid}
+                    onSelect={pickFromDiff}
+                    onClose={() => set({ changes: null })}
+                  />
+                ) : null}
               </div>
               <p className="border-t border-line/80 px-5 py-2 text-[12.5px] text-slate">
                 Click a node to open it · double-click to {mode === "lineage" ? "explore around it" : "expand its neighbours"} · scroll to zoom
@@ -399,11 +591,19 @@ export function MemoryExplorer() {
                 onClose={() => set({ uid: null, mode: null }, true)}
                 onSelect={select}
                 onFocus={focusOn}
+                onBackToCurrent={() => set({ rev: null })}
+                removedNote={removedNote}
               />
             ) : null}
           </div>
 
-          <SummaryStrip counts={counts} />
+          <Timeline
+            revisions={revisions.data ?? []}
+            value={view.rev}
+            showing={view.changes}
+            onChange={(n) => set({ rev: n === null ? null : String(n) })}
+            onShowChanges={(n) => set({ changes: view.changes === n ? null : String(n) })}
+          />
         </>
       )}
     </div>

@@ -3,7 +3,7 @@
 // The migration memory (the /memory API): types mirroring engine/memory/model.py and the API's
 // schemas, the label groups the explorer filters and colours by, and the read hooks. Every read
 // takes the project from the path; `asOf` reads the graph as of a revision (current when null).
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { json } from "./api";
 
 export type Side = "old" | "new" | "knowledge";
@@ -160,7 +160,50 @@ export const GROUP_HEX: Record<Side, { fill: string; border: string; strong: str
   knowledge: { fill: "#FCEFD9", border: "#B45309", strong: "#8A3F06" },
 };
 
+/** A curation (POST /memory/{p}/curations): `reason` is always required (1 to 2000 characters);
+ * `text` for a note, `replacement_uid` (a Method or Class) for a corrected mapping. */
+export type CurationAction = "note" | "reject_mapping" | "correct_mapping" | "obsolete";
+
+export interface CurationIn {
+  action: CurationAction;
+  target_uid: string;
+  reason: string;
+  text?: string | null;
+  replacement_uid?: string | null;
+}
+
+export interface CurationOut {
+  event_id: string;
+  job_id: string;
+}
+
+/** The ingest scope a curation lands under: the revision whose scopes hold it applied it. */
+export const curationScope = (eventId: string) => `curation:${eventId}`;
+
 export const PHASES = ["discover", "analysis", "design", "build", "verify", "deploy", "gate", "curation"] as const;
+
+/** One colour per phase, for the timeline's ticks and legend (readable on white). */
+export const PHASE_HEX: Record<string, string> = {
+  seed: "#8A94A6",
+  discover: "#20063B",
+  analysis: "#7E3FCB",
+  design: "#2F5BD3",
+  build: "#0F766E",
+  verify: "#1E7B3C",
+  deploy: "#0E7490",
+  gate: "#B45309",
+  decision: "#9A5E0A",
+  curation: "#D32238",
+};
+export const phaseHex = (phase: string) => PHASE_HEX[phase] ?? "#425466";
+
+/** A relationship's uid is `TYPE:src->dst` (engine/memory/model.py). */
+export function parseRelUid(uid: string): { type: string; src: string; dst: string } | null {
+  const colon = uid.indexOf(":");
+  const arrow = uid.indexOf("->", colon + 1);
+  if (colon < 1 || arrow < 0) return null;
+  return { type: uid.slice(0, colon), src: uid.slice(colon + 1, arrow), dst: uid.slice(arrow + 2) };
+}
 
 export interface SearchFilters {
   labels: string[];
@@ -214,6 +257,9 @@ export const memoryApi = {
   revisions: (projectId: string, before?: number, limit = 200) =>
     json<{ revisions: RevisionOut[] }>(`${base(projectId)}/revisions${qs({ before, limit })}`).then((r) => r.revisions),
   diff: (projectId: string, n: number) => json<RevisionDiff>(`${base(projectId)}/revisions/${n}/diff`),
+  curate: (projectId: string, body: CurationIn) =>
+    json<CurationOut>(`${base(projectId)}/curations`, { method: "POST", body: JSON.stringify(body) }),
+  reingest: (projectId: string) => json<{ job_ids: string[] }>(`${base(projectId)}/reingest`, { method: "POST" }),
 };
 
 /** Polls while ingests are queued or the project has no revision yet, so the header catches up. */
@@ -266,6 +312,25 @@ export const useRevisionDiff = (projectId: string | null, n: number | null) =>
     enabled: !!projectId && n !== null,
     staleTime: Infinity,
   });
+
+/** Submits a curation. It shows once an ingest revision applies it, so the status is re-read at
+ * once: its pending count switches the status poll to the fast interval. */
+export function useCurate(projectId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CurationIn) => memoryApi.curate(projectId!, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["memory-status", projectId] }),
+  });
+}
+
+/** Admin only: queues a fresh ingest of every phase the project has run. */
+export function useReingest(projectId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => memoryApi.reingest(projectId!),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["memory-status", projectId] }),
+  });
+}
 
 /** What a node is called on screen: its name, else the last segment of its uid. */
 export function displayName(node: { name?: string; uid: string }): string {
