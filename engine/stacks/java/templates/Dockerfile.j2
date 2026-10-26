@@ -6,7 +6,7 @@
 # equivalents to mirror: {{ base_image_build }} and {{ base_image_runtime }}.
 #   BASE_IMAGE_BUILD    the Maven + JDK image the jar is built in
 #   BASE_IMAGE_RUNTIME  the JRE image the service runs in
-#   MAVEN_MIRROR_URL    the Maven repository every dependency comes from; empty keeps the mirror
+#   MAVEN_MIRROR_URL    the Maven repository every dependency comes from (required; empty fails the build)
 #                       the project was generated with (.exiqo/maven-settings.xml)
 ARG BASE_IMAGE_BUILD
 ARG BASE_IMAGE_RUNTIME
@@ -18,10 +18,9 @@ ARG MAVEN_MIRROR_URL=
 # Resolve first so the dependency layer is cached until pom.xml changes.
 COPY pom.xml ./
 COPY .exiqo/maven-settings.xml .exiqo/
-RUN if [ -n "${MAVEN_MIRROR_URL}" ]; then \
-      printf '%s\n' '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"><mirrors><mirror><id>gmf</id><mirrorOf>*</mirrorOf><url>${env.MAVEN_MIRROR_URL}</url></mirror></mirrors></settings>' \
-        > .exiqo/maven-settings.xml; \
-    fi \
+RUN test -n "${MAVEN_MIRROR_URL}" || { echo "MAVEN_MIRROR_URL is empty: pass GMF's Maven mirror as a build argument (never Maven Central)" >&2; exit 1; } \
+ && printf '%s\n' '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"><mirrors><mirror><id>gmf</id><mirrorOf>*</mirrorOf><url>${env.MAVEN_MIRROR_URL}</url></mirror></mirrors></settings>' \
+      > .exiqo/maven-settings.xml \
  && mvn -B -ntp -s .exiqo/maven-settings.xml {{ restore_goals }}
 
 COPY src ./src

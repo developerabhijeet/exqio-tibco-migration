@@ -155,11 +155,17 @@ stages:
 [% endif %]
 [% if stack == "python" %]
           - script: |
-              case "${UV_INDEX_URL:-}" in '$('*|'') unset UV_INDEX_URL ;; esac
+              case "${UV_INDEX_URL:-}" in '$('*) UV_INDEX_URL="" ;; esac
+              test -n "${UV_INDEX_URL:-}" || { echo "##vso[task.logissue type=error]set the UV_INDEX_URL variable to GMF's PyPI mirror (never the public index)"; exit 1; }
               [[ ci.restore ]]
             displayName: Restore
             env:
               UV_INDEX_URL: $(UV_INDEX_URL)
+[% elif stack == "java" %]
+          - script: |
+              grep -q '<mirror>' .exiqo/maven-settings.xml || { echo "##vso[task.logissue type=error]no Maven mirror in .exiqo/maven-settings.xml: set MAVEN_MIRROR_URL and generate again (never Maven Central)"; exit 1; }
+              [[ ci.restore ]]
+            displayName: Restore (GMF's Maven mirror only)
 [% else %]
           - script: [[ ci.restore ]]
             displayName: Restore

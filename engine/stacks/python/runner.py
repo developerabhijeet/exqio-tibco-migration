@@ -157,7 +157,17 @@ class UvRunner:
         return code, out
 
     # steps
+    def mirror_problem(self, extra: dict[str, str] | None = None) -> str | None:
+        """Why the restore must not run: no PyPI mirror, so uv would use the public PyPI index."""
+        if self.env(extra).get("UV_INDEX_URL", "").strip():
+            return None
+        return ("UV_INDEX_URL is not set: uv would use the public PyPI index. Set GMF's PyPI mirror (mirrors.pypi, "
+                "the index URL ending /simple).")
+
     def restore(self, env: dict[str, str] | None = None) -> StepResult:
+        problem = self.mirror_problem(env)
+        if problem:
+            return StepResult(ok=False, log=problem)
         code, log = self._run([self.uv, "venv", VENV, "--python", self.python, "--allow-existing"], env)
         if code != 0:
             return StepResult(ok=False, log=log)

@@ -78,6 +78,8 @@ def restored(python_solution_with_tests):
     """The generated project with its venv restored (once for the module)."""
     if not (find_tool("uv") and PYTHON):
         pytest.skip("uv/python3 not found (scripts/toolchain.py)")
+    if not os.environ.get("UV_INDEX_URL"):
+        pytest.skip("UV_INDEX_URL is not set: the restore refuses without GMF's PyPI mirror (X26)")
     r = UvRunner(python_solution_with_tests.root, python=PYTHON)
     step = r.restore()
     assert step.ok, step.log[-3000:]
@@ -429,7 +431,8 @@ def test_the_design_scaffold_names_files_the_generator_writes(python_solution_wi
 
 
 # ------------------------------------------------------------------ review fix round 1
-def test_restore_refuses_an_interpreter_off_the_3_12_line(tmp_path):
+def test_restore_refuses_an_interpreter_off_the_3_12_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("UV_INDEX_URL", "https://pypi.gmf.example/simple")
     root = tmp_path / "app"
     (root / ".venv" / "bin").mkdir(parents=True)
     _fake(root / ".venv" / "bin", "python", code=1).rename(root / ".venv" / "bin" / "python")
@@ -518,3 +521,37 @@ def test_generated_contracts_and_401_in_the_service(restored, tmp_path):
     assert out["wrong"] and "funding" in out["wrong"].lower()  # a real type error still answers 400
     assert out["text"] == {"deal_id": "true", "status": "7"}
     assert out["401"] == [401, "application/problem+json", "Unauthorized", "Bearer"]
+
+
+# ------------------------------------------------------------------ X26: no mirror, no restore
+def test_restore_refuses_without_a_pypi_mirror(tmp_path, monkeypatch):
+    """Never pypi.org: an unset or empty UV_INDEX_URL stops the restore before uv runs."""
+    uv = _fake(tmp_path, "uv")
+    for value in (None, "", "  "):
+        if value is None:
+            monkeypatch.delenv("UV_INDEX_URL", raising=False)
+        else:
+            monkeypatch.setenv("UV_INDEX_URL", value)
+        step = UvRunner(tmp_path, python="/usr/bin/python3", uv=str(uv)).restore()
+        assert not step.ok and "UV_INDEX_URL" in step.log and "public PyPI index" in step.log
+    assert not (tmp_path / "calls.txt").exists()
+
+
+def test_restore_takes_the_mirror_from_the_runner_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("UV_INDEX_URL", raising=False)
+    root = tmp_path / "app"
+    (root / ".venv" / "bin").mkdir(parents=True)
+    _fake(root / ".venv" / "bin", "python").rename(root / ".venv" / "bin" / "python")
+    r = UvRunner(root, python="/usr/bin/python3", uv=str(_fake(tmp_path, "uv")),
+                 env={"UV_INDEX_URL": "https://pypi.gmf.example/simple"})
+    assert r.restore().ok
+
+
+def test_python_bundle_fails_closed_without_the_pypi_mirror(python_infra):
+    df = python_infra["Dockerfile"]
+    assert 'test -n "${PIP_INDEX_URL}"' in df and "never the public index" in df
+    assert "unset PIP_INDEX_URL" not in df
+    gh, ado = python_infra[".github/workflows/gmf-credit.yml"], python_infra["azure-pipelines.yml"]
+    for text in (gh, ado):
+        assert 'test -n "${UV_INDEX_URL:-}"' in text and "never the public index" in text
+        assert "unset UV_INDEX_URL" not in text

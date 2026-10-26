@@ -62,7 +62,8 @@ def java_solution_with_tests(tmp_path_factory, gmf_apps, gmf_app, gmf_processes,
                                           graph_mod.io_card(gmf_processes[pid], gmf_app, graph), stack="java")
                for pid in PROCESS_IDS}
     return generate_java(gmf_app, PROCESS_IDS, designs, gmf_rules, gmf_findings, gmf_scenarios,
-                         tmp_path_factory.mktemp("javatests") / "GmfCredit", Mirrors())
+                         tmp_path_factory.mktemp("javatests") / "GmfCredit",
+                         Mirrors(maven=os.environ.get("MAVEN_MIRROR_URL", "")))  # restore refuses without one (X26)
 
 
 @pytest.fixture
@@ -318,6 +319,8 @@ def _fake_mvn(tmp_path: Path, code: int = 0, out: str = "") -> Path:
 
 def test_runner_commands_are_the_spec_s(tmp_path):
     exe = _fake_mvn(tmp_path)
+    (tmp_path / ".exiqo").mkdir()
+    (tmp_path / ".exiqo" / "maven-settings.xml").write_text("<settings><mirrors><mirror>x</mirror></mirrors></settings>")
     r = MavenRunner(tmp_path, java="/opt/jdk/bin/java", mvn=str(exe))
     assert r.restore().ok and r.build().ok and r.format_write().ok and r.format_check().ok
     r.test()
@@ -419,3 +422,25 @@ def test_runner_environment_keeps_the_mirror_trust_store(tmp_path, monkeypatch):
     env = MavenRunner(tmp_path, java="/opt/java/bin/java", mvn="/opt/maven/bin/mvn").env()
     assert env["MAVEN_OPTS"] == ("-Dmaven.repo.local=/cache/stacks/m2 -Djavax.net.ssl.trustStore=/tmp/exiqo-cacerts "
                                  "-Djavax.net.ssl.trustStorePassword=changeit")
+
+
+# ------------------------------------------------------------------ X26: no mirror, no restore
+def test_restore_refuses_without_a_maven_mirror(tmp_path):
+    """Never Maven Central: settings with no mirror (or none at all) stop the restore with a reason."""
+    exe = _fake_mvn(tmp_path)
+    (tmp_path / ".exiqo").mkdir()
+    for settings in (None, '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">\n</settings>\n'):
+        if settings:
+            (tmp_path / ".exiqo" / "maven-settings.xml").write_text(settings)
+        step = MavenRunner(tmp_path, java="java", mvn=str(exe)).restore()
+        assert not step.ok and "MAVEN_MIRROR_URL" in step.log and "Maven Central" in step.log
+    assert not (tmp_path / "calls.txt").exists()  # mvn never ran
+
+
+def test_restore_runs_with_a_maven_mirror(tmp_path):
+    exe = _fake_mvn(tmp_path)
+    (tmp_path / ".exiqo").mkdir()
+    (tmp_path / ".exiqo" / "maven-settings.xml").write_text(
+        "<settings><mirrors><mirror><id>gmf</id><mirrorOf>*</mirrorOf><url>https://m.gmf.example/maven</url>"
+        "</mirror></mirrors></settings>")
+    assert MavenRunner(tmp_path, java="java", mvn=str(exe)).restore().ok

@@ -141,7 +141,12 @@ jobs:
 [% if stack == "python" %]
       - name: Restore
         run: |
-          [ -n "${UV_INDEX_URL:-}" ] || unset UV_INDEX_URL
+          test -n "${UV_INDEX_URL:-}" || { echo "set the UV_INDEX_URL repository variable to GMF's PyPI mirror (never the public index)"; exit 1; }
+          [[ ci.restore ]]
+[% elif stack == "java" %]
+      - name: Restore (GMF's Maven mirror only)
+        run: |
+          grep -q '<mirror>' .exiqo/maven-settings.xml || { echo "no Maven mirror in .exiqo/maven-settings.xml: set MAVEN_MIRROR_URL and generate again (never Maven Central)"; exit 1; }
           [[ ci.restore ]]
 [% else %]
       - name: Restore

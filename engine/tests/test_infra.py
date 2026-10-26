@@ -799,3 +799,17 @@ def test_java_pipelines_stop_on_an_empty_base_image(java_infra):
     assert "for name in BASE_IMAGE_BUILD BASE_IMAGE_RUNTIME; do" in az and "exit 1" in az
     assert "MAVEN_MIRROR_URL: $(MAVEN_MIRROR_URL)" in az  # secret variables only reach env: explicitly
     assert "PublishCodeCoverageResults@2" in az and "target/site/jacoco/jacoco.xml" in az
+
+
+# ------------------------------------------------------------------ X26: mirrors fail closed in the bundle
+def test_java_bundle_fails_closed_without_the_maven_mirror(java_infra):
+    df = java_infra["Dockerfile"]
+    assert 'test -n "${MAVEN_MIRROR_URL}"' in df and "Maven Central" in df
+    assert "if [ -n \"${MAVEN_MIRROR_URL}\" ]; then" not in df  # no silent fallback
+    for text in (java_infra[".github/workflows/gmf-credit.yml"], java_infra["azure-pipelines.yml"]):
+        assert "<mirror>" in text and ".exiqo/maven-settings.xml" in text and "Maven Central" in text
+
+
+def test_pilot_compose_enables_only_dotnet_unless_mirrors_are_set():
+    text = (REPO_ROOT / "deploy" / "docker" / "compose.pilot.yml").read_text(encoding="utf-8")
+    assert "ENABLED_STACKS" in text and "${ENABLED_STACKS:-dotnet}" in text

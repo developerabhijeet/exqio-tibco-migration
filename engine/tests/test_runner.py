@@ -379,5 +379,7 @@ def test_runner_logs_are_scrubbed(tmp_path, which):
         log = runner.DotnetRunner(tmp_path, dotnet=str(tool)).restore().log
     else:
         from engine.stacks.java.runner import MavenRunner
+        (tmp_path / ".exiqo").mkdir()  # a mirror is configured, so the restore runs
+        (tmp_path / ".exiqo" / "maven-settings.xml").write_text("<settings><mirror>x</mirror></settings>")
         log = MavenRunner(tmp_path, java="java", mvn=str(tool)).restore().log
     assert "https://***@nuget.gmf.example/v3" in log and "hunter2" not in log

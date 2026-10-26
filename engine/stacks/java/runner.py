@@ -183,7 +183,20 @@ class MavenRunner:
         return code, out
 
     # steps
+    def mirror_problem(self) -> str | None:
+        """Why the restore must not run: the project's settings name no mirror, so Maven would use
+        Maven Central. The mirror is GMF's (``MAVEN_MIRROR_URL`` when the project was generated)."""
+        settings = self.root / SETTINGS
+        text = settings.read_text(encoding="utf-8", errors="replace") if settings.is_file() else ""
+        if "<mirror>" in text:
+            return None
+        return ("MAVEN_MIRROR_URL is not set: the project's .exiqo/maven-settings.xml names no mirror, so Maven "
+                "would use Maven Central. Set GMF's Maven mirror (mirrors.maven) and generate again.")
+
     def restore(self, env: dict[str, str] | None = None) -> StepResult:
+        problem = self.mirror_problem()
+        if problem:
+            return StepResult(ok=False, log=problem)
         code, log = self._mvn(RESTORE_GOALS, env=env, offline=False)
         return StepResult(ok=code == 0, log=log)
 

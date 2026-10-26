@@ -20,7 +20,8 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 # the locked wheels are installed (--require-hashes --no-deps --only-binary). The runtime lock is the
 # full lock's files without the test and format tools.
 COPY requirements.runtime.lock /tmp/requirements.lock
-RUN if [ -n "${PIP_INDEX_URL}" ]; then export PIP_INDEX_URL; else unset PIP_INDEX_URL; fi \
+RUN test -n "${PIP_INDEX_URL}" || { echo "PIP_INDEX_URL is empty: pass GMF's PyPI mirror as a build argument (never the public index)" >&2; exit 1; } \
+ && export PIP_INDEX_URL \
  && python -m venv /opt/venv \
  && /opt/venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /tmp/requirements.lock
 
