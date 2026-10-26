@@ -32,6 +32,7 @@ from engine.exiqoian.personas import PERSONA_ORDER, PersonaKey, SuggestionNames,
 from engine.exiqoian.pipeline import Reply, Turn, respond
 from engine.exiqoian.replies import NOT_CONFIGURED_REPLY, UNAVAILABLE_REPLY
 from engine.exiqoian.sources import HISTORY_CHARS, HISTORY_MESSAGES, strip_markers
+from engine.knowledge.embeddings import STOPWORDS
 from engine.memory.graph import MemoryUnavailable
 from engine.memory.search import MemoryRetriever
 
@@ -81,8 +82,10 @@ async def project_lexicon(session: AsyncSession, project_id: str) -> Lexicon:
     words: set[str] = set(MIGRATION_VOCABULARY)
 
     def add(name: str | None) -> None:
+        # Not stopwords or one- and two-letter parts: `MapToResponse` must not make "to" a project
+        # word, which would switch the off-topic filter off for any question containing "to".
         if name:
-            words.update(split_identifier(name))
+            words.update(w for w in split_identifier(name) if len(w) >= 3 and w not in STOPWORDS)
 
     processes = (await session.execute(
         select(Process).where(Process.project_id == project_id).order_by(Process.created_at, Process.name))).scalars().all()

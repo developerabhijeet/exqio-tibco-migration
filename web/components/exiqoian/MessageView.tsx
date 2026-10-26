@@ -6,10 +6,13 @@ import { Pill } from "@/components/ui/Pill";
 import type { CitedText as CitedTextValue } from "@/lib/citations";
 import type { ChatMessage } from "@/lib/exiqoian";
 
-/** A streamed answer in progress: the sentences received so far. */
-export interface Draft {
-  text: string;
-  cited: CitedTextValue;
+/** The asker's bubble, right-aligned. */
+export function UserBubble({ text }: { text: string }) {
+  return (
+    <div data-testid="exiqoian-message" data-role="user" data-verdict="" className="flex justify-end">
+      <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-accent-soft px-3 py-2 text-md text-heading">{text}</p>
+    </div>
+  );
 }
 
 const DECLINED = new Set(["off_topic", "injection", "not_covered", "unavailable", "intro"]);
@@ -17,11 +20,7 @@ const DECLINED = new Set(["off_topic", "injection", "not_covered", "unavailable"
 /** One message of the conversation: the question right-aligned, the answer as cited prose. */
 export function MessageView({ message, draft }: { message?: ChatMessage; draft?: { cited: CitedTextValue } }) {
   if (message?.role === "user") {
-    return (
-      <div data-testid="exiqoian-message" data-role="user" data-verdict="" className="flex justify-end">
-        <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-accent-soft px-3 py-2 text-md text-heading">{message.text}</p>
-      </div>
-    );
+    return <UserBubble text={message.text} />;
   }
   const verdict = message?.verdict ?? "pending";
   const declined = DECLINED.has(verdict);

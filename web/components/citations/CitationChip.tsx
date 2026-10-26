@@ -58,6 +58,7 @@ export function CitationChip({ refItem, number }: { refItem: CiteRef; number: nu
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      e.preventDefault(); // this layer took the key: a panel or dialog underneath stays open
       const refocus = focusInside();
       clear();
       setOpen(false);

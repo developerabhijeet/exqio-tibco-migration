@@ -18,7 +18,7 @@ import { useProjects } from "@/lib/queries";
 import { useAppState } from "@/lib/state";
 import { Composer } from "./Composer";
 import { ConversationMenu } from "./ConversationMenu";
-import { MessageView } from "./MessageView";
+import { MessageView, UserBubble } from "./MessageView";
 
 const STAGE_TEXT: Record<string, string> = {
   checking: "Checking your question…",
@@ -41,7 +41,7 @@ interface Pending {
  * between steps and screens. Closed, it is inert (hidden, not focusable) but keeps its state.
  */
 export function ExiQoianPanel() {
-  const { projectId, chatOpen, setChatOpen } = useAppState();
+  const { projectId, chatOpen, setChatOpen, user } = useAppState();
   const qc = useQueryClient();
   const projects = useProjects();
   const profile = useExiqoianProfile(projectId);
@@ -78,6 +78,15 @@ export function ExiQoianPanel() {
   }, [conversation.data, pending]);
   useEffect(() => () => abort.current?.abort(), []);
 
+  // Another persona signed in: its conversations, roles and starter questions are its own.
+  useEffect(() => {
+    abort.current?.abort();
+    abort.current = null;
+    setActiveId(null);
+    setPersona(null);
+    setPending(null);
+  }, [user]);
+
   const close = useCallback(() => {
     setChatOpen(false);
     document.querySelector<HTMLElement>('[data-testid="exiqoian-launcher"]')?.focus();
@@ -105,13 +114,18 @@ export function ExiQoianPanel() {
     const controller = new AbortController();
     abort.current = controller;
     setPending({ question: text, stage: "checking", text: "", spans: [], refs: [], error: null });
-    const patch = (f: (p: Pending) => Pending) => setPending((p) => (p ? f(p) : p));
+    // A superseded send (New chat, another conversation) must not touch the next one's state.
+    const current_ = () => abort.current === controller;
+    const patch = (f: (p: Pending) => Pending) => {
+      if (current_()) setPending((p) => (p ? f(p) : p));
+    };
     let finished = false;
     let streamError: string | null = null;
     try {
       let id = activeId;
       if (!id) {
         id = (await create.mutateAsync(current)).id;
+        if (controller.signal.aborted) return; // New chat while the conversation was being created
         setActiveId(id);
       }
       await askStream(
@@ -146,13 +160,18 @@ export function ExiQoianPanel() {
     }
     // The stored messages replace the draft (a stopped stream may have stored its reply too).
     await qc.invalidateQueries({ queryKey: ["exiqoian", projectId] });
+    if (!current_()) return;
     setPending((p) => (p?.error ? p : null));
     abort.current = null;
   };
 
   const stop = () => abort.current?.abort();
-  const newChat = () => {
+  const supersede = () => {
     abort.current?.abort();
+    abort.current = null;
+  };
+  const newChat = () => {
+    supersede();
     setActiveId(null);
     setPending(null);
     setDraft("");
@@ -205,9 +224,11 @@ export function ExiQoianPanel() {
             conversations={conversations.data ?? []}
             activeId={activeId}
             onSelect={(id) => {
-              abort.current?.abort();
+              supersede();
               setPending(null);
               setActiveId(id);
+              const picked = conversations.data?.find((c) => c.id === id);
+              if (picked && personas.some((p) => p.key === picked.persona)) setPersona(picked.persona);
             }}
             onDelete={async (id) => {
               await remove.mutateAsync(id);
@@ -242,11 +263,7 @@ export function ExiQoianPanel() {
         ))}
         {pending ? (
           <>
-            <div data-testid="exiqoian-message" data-role="user" data-verdict="" className="flex justify-end">
-              <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-accent-soft px-3 py-2 text-md text-heading">
-                {pending.question}
-              </p>
-            </div>
+            <UserBubble text={pending.question} />
             {pending.text ? <MessageView draft={{ cited: { text: pending.text, spans: pending.spans, refs: pending.refs } }} /> : null}
             {pending.error ? (
               <p role="alert" className="rounded-card bg-error-bg px-3 py-2 text-md text-error">

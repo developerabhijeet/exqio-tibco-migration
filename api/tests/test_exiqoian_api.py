@@ -204,3 +204,15 @@ async def test_answer_cites_real_memory(memory_client, scanned):  # noqa: F811  
     done = await last_done(memory_client, scanned, cid, "Which processes handle DealerFundingRequest?")
     assert done["verdict"] == "answer" and done["cited"]["refs"]
     assert all(r["revision"] >= 1 for r in done["cited"]["refs"] if r["memory_uid"])
+
+
+def test_the_web_intro_is_the_engines_intro_reply():
+    """web/lib/exiqoian.ts repeats INTRO_REPLY for the empty state; the two must not drift."""
+    import re
+    from pathlib import Path
+
+    from engine.exiqoian.replies import INTRO_REPLY
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "lib" / "exiqoian.ts").read_text(encoding="utf-8")
+    match = re.search(r'export const INTRO =\s*\n?\s*"((?:[^"\\]|\\.)*)"', source)
+    assert match and match.group(1) == INTRO_REPLY

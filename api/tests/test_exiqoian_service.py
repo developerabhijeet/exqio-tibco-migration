@@ -238,3 +238,15 @@ async def test_lexicon_refreshes_when_the_project_changes_under_the_cache(client
     async with app.state.sessionmaker() as session:
         after, _, names = await project_lexicon(session, pid)
     assert "dealerfundingrequest" in after and names.process
+
+
+async def test_lexicon_parts_skip_stopwords_and_short_words(client, app):
+    """`MapToResponse` must not make "to" a project word: it would switch off the off-topic filter."""
+    from engine.memory.search import query_terms
+    pid, _ = await _scanned(client)
+    async with app.state.sessionmaker() as session:
+        lex, _, _ = await project_lexicon(session, pid)
+    from engine.knowledge.embeddings import STOPWORDS
+    extra = {w for w in lex if (w in STOPWORDS or len(w) < 3) and w not in {"bw", "sql", "jms"}}
+    assert extra == set(), extra
+    assert query_terms("how to cook dosa") and "to" not in lex

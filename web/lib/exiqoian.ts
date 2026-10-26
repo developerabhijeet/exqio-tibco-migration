@@ -4,6 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { json } from "./api";
 import type { CitedText } from "./citations-model";
+import { useAppState } from "./state";
 import { sseFetch, type SseHandlers } from "./sseFetch";
 
 export type PersonaKey = "sme" | "architect" | "engineer" | "qa" | "ops" | "admin" | "viewer";
@@ -48,27 +49,34 @@ export const INTRO =
 
 const base = (projectId: string) => `/exiqoian/${projectId}`;
 
-export const useExiqoianProfile = (projectId: string | null) =>
-  useQuery({
-    queryKey: ["exiqoian", projectId, "profile"],
+// Every key carries the signed-in persona: profile, conversations and personas differ per user.
+export const useExiqoianProfile = (projectId: string | null) => {
+  const { user } = useAppState();
+  return useQuery({
+    queryKey: ["exiqoian", projectId, user, "profile"],
     queryFn: () => json<Profile>(`${base(projectId!)}/profile`),
     enabled: !!projectId,
     staleTime: 60_000,
   });
+};
 
-export const useConversations = (projectId: string | null) =>
-  useQuery({
-    queryKey: ["exiqoian", projectId, "conversations"],
+export const useConversations = (projectId: string | null) => {
+  const { user } = useAppState();
+  return useQuery({
+    queryKey: ["exiqoian", projectId, user, "conversations"],
     queryFn: async () => (await json<{ conversations: Conversation[] }>(`${base(projectId!)}/conversations`)).conversations,
     enabled: !!projectId,
   });
+};
 
-export const useConversation = (projectId: string | null, id: string | null) =>
-  useQuery({
-    queryKey: ["exiqoian", projectId, "conversation", id],
+export const useConversation = (projectId: string | null, id: string | null) => {
+  const { user } = useAppState();
+  return useQuery({
+    queryKey: ["exiqoian", projectId, user, "conversation", id],
     queryFn: () => json<ConversationDetail>(`${base(projectId!)}/conversations/${id}`),
     enabled: !!projectId && !!id,
   });
+};
 
 export function useCreateConversation(projectId: string | null) {
   const qc = useQueryClient();
@@ -78,7 +86,7 @@ export function useCreateConversation(projectId: string | null) {
         method: "POST",
         body: JSON.stringify(persona ? { persona } : {}),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["exiqoian", projectId, "conversations"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["exiqoian", projectId] }),
   });
 }
 

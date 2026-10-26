@@ -1,18 +1,20 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Sparkles } from "lucide-react";
 import { useAppState } from "@/lib/state";
 
 /** The top bar button (a sparkle and "ExiQoian"); Ctrl+J / ⌘J toggles the panel from anywhere. */
 export function ExiQoianLauncher() {
   const { projectId, chatOpen, setChatOpen } = useAppState();
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!projectId) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "j") {
         e.preventDefault();
         setChatOpen(!chatOpen);
+        if (chatOpen) button.current?.focus(); // the panel goes inert: focus must not fall to the page
       }
     };
     document.addEventListener("keydown", onKey);
@@ -21,6 +23,7 @@ export function ExiQoianLauncher() {
   if (!projectId) return null;
   return (
     <button
+      ref={button}
       type="button"
       data-testid="exiqoian-launcher"
       aria-keyshortcuts="Control+J Meta+J"

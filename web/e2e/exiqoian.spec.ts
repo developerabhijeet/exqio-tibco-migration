@@ -203,3 +203,51 @@ test("no request leaves the web or API origin while chatting", async ({ page }) 
   await page.waitForLoadState("networkidle");
   expect(outside).toEqual([]);
 });
+
+test("Escape closes only an open citation preview, not the panel", async ({ page }) => {
+  test.setTimeout(240_000);
+  await uploadSample(page);
+  await actAs(page, "architect.lee");
+  await page.getByTestId("exiqoian-launcher").click();
+  await ask(page, ASK);
+  const answer = lastAnswer(page);
+  await expect(answer).toHaveAttribute("data-verdict", "answer", { timeout: 60_000 });
+  const chip = answer.getByTestId("cite-chip").first();
+  // Keyboard focus on the chip opens its preview.
+  await chip.focus();
+  await expect(page.getByTestId("cite-preview")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("cite-preview")).toHaveCount(0);
+  await expect(panel(page)).toBeVisible();
+  // A hover preview while the caret is in the composer: Escape again closes the preview first.
+  await chip.hover();
+  await expect(page.getByTestId("cite-preview")).toBeVisible();
+  await input(page).focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("cite-preview")).toHaveCount(0);
+  await expect(panel(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel(page)).toBeHidden();
+});
+
+test("New chat during an in-flight send leaves the new chat idle, with no second request", async ({ page }) => {
+  await uploadSample(page);
+  await actAs(page, "qa.priya");
+  let posts = 0;
+  await page.route(/\/exiqoian\/[^/]+\/conversations\/[^/]+\/messages$/, async (route) => {
+    posts += 1;
+    await new Promise((r) => setTimeout(r, 2000));
+    await route.continue();
+  });
+  await page.getByTestId("exiqoian-launcher").click();
+  await ask(page, "how to cook dosa");
+  await expect(panel(page).getByRole("button", { name: "Stop" })).toBeVisible();
+  await panel(page).getByRole("button", { name: "New chat" }).click();
+  await expect(panel(page).getByRole("button", { name: "Send" })).toBeVisible();
+  await expect(page.getByTestId("exiqoian-message")).toHaveCount(0);
+  await page.waitForTimeout(3500);
+  await expect(page.getByTestId("exiqoian-message")).toHaveCount(0);
+  await expect(panel(page).getByRole("alert")).toHaveCount(0);
+  await expect(panel(page).getByRole("button", { name: "Send" })).toBeVisible();
+  expect(posts).toBeLessThanOrEqual(1); // none when New chat beat the conversation create
+});

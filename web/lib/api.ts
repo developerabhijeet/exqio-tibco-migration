@@ -140,7 +140,8 @@ export async function request(path: string, init: RequestInit = {}): Promise<Res
   let res: Response;
   try {
     res = await fetch(`${base}${path}`, oidc ? { ...init, headers, credentials: "include" } : { ...init, headers });
-  } catch {
+  } catch (e) {
+    if (init.signal?.aborted) throw e; // the caller cancelled: not an unreachable API
     throw new ApiError(0, `The API at ${base} is not reachable`);
   }
   if (res.status === 401 && isOidc()) redirectToLogin();
