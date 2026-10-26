@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from api.app.auth.roles import Principal
+from api.app.connectors.audit import audit_connector
 from api.app.connectors.base import ConnectorDisabled, ConnectorError, ConnectorNotConfigured
 from api.app.deps import SessionDep, SettingsDep, require_roles
 from api.app.models import Project, ProjectRepo
@@ -25,6 +26,7 @@ router = APIRouter(tags=["repos"])
 
 SME_ESTATE_ONLY = "an SME may connect an estate repository only"
 ConnectorDep = Annotated[Principal, Depends(require_roles("engineer", "admin", "sme"))]
+PusherDep = Annotated[Principal, Depends(require_roles("engineer", "admin"))]
 
 
 class RepoIn(BaseModel):
@@ -40,6 +42,13 @@ class PullIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     branch: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class PushIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    build_id: str = Field(min_length=1, max_length=64)
+    open_pr: bool = True
 
 
 class RepoOut(BaseModel):
@@ -139,3 +148,31 @@ async def pull(repo_id: str, request: Request, principal: ConnectorDep, session:
         return {"changed": False}
     job_id = await svc.queue_fetch(request.app.state.sessionmaker, row, branch, principal.actor)
     return JSONResponse(status_code=202, content={"changed": True, "job_id": job_id, "commit": head})
+
+
+@router.post("/repos/{repo_id}/push")
+async def push(repo_id: str, body: PushIn, request: Request, principal: PusherDep, session: SessionDep,
+               settings: SettingsDep) -> dict:
+    """Push a build of the repository's process to ``exiqo/<process slug>/iteration-<n>`` (with
+    ``EXIQO_BASELINE.json``, so a reviewer's commit there pulls back as an edit set) and open its pull
+    request into the connected branch."""
+    row = await _repo(session, repo_id)
+    where = {"project_id": row.project_id, "process_id": row.process_id}
+    target = svc.full_name(row)
+    try:
+        out = await svc.push_build(session, request.app.state.sessionmaker, settings, row, body.build_id,
+                                   body.open_pr, principal.actor)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (svc.PushRefused, svc.PushBusy) as exc:
+        await session.rollback()
+        # X20: a refusal before anything is sent is audited "refused", as every connector's is
+        await audit_connector(session, principal.actor, "github", "push", **where, target=target,
+                              outcome="refused", detail={"build_id": body.build_id, "message": str(exc)})
+        await session.commit()
+        raise HTTPException(status_code=422 if isinstance(exc, svc.PushRefused) else 409, detail=str(exc)) from exc
+    except (ConnectorDisabled, ConnectorNotConfigured, ConnectorError) as exc:
+        await session.commit()  # the connector's audit line
+        raise connector_errors(exc) from exc
+    await session.commit()
+    return out

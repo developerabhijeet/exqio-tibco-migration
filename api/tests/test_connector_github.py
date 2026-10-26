@@ -183,7 +183,9 @@ async def test_push_build_and_open_pr(client, app, fake_github, finished_build, 
     assert "EXPORTED_FROM.md" in files and "README.md" in files  # on top of the base branch
     assert finished_build in files["EXPORTED_FROM.md"]
     # the download's exclusions apply to the push (X3)
-    assert set(files) == {"README.md", "EXPORTED_FROM.md", "GmfCredit.sln", "src/Credit/Program.cs", "run-local.sh"}
+    # and the baseline manifest (sub-project 6), so a reviewer's commit on the branch pulls back as edits
+    assert set(files) == {"README.md", "EXPORTED_FROM.md", "EXIQO_BASELINE.json", "GmfCredit.sln",
+                          "src/Credit/Program.cs", "run-local.sh"}
     assert out["pull_request"]["number"] == 1 and out["pull_request"]["url"].endswith("/gmf/credit/pull/1")
     assert len(out["commit"]) == 40
     pull = fake_github.pulls["gmf/credit"][0]

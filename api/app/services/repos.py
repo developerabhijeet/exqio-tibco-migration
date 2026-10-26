@@ -32,14 +32,18 @@ from api.app.config import Settings
 from api.app.connectors.audit import audit_connector
 from api.app.connectors.base import ConnectorDisabled, ConnectorError, ConnectorNotConfigured
 from api.app.connectors.gitcli import NO_HOME
-from api.app.connectors.github import GitHubConnector, valid_branch, valid_repo
+from api.app.connectors.github import GitHubConnector, slug, valid_branch, valid_repo
+from api.app.connectors.links import upsert_link
 from api.app.connectors.registry import connector_for
 from api.app.db import new_id
+from api.app.jobs.locks import try_advisory_lock
 from api.app.jobs.runner import enqueue
-from api.app.models import File, Process, ProjectRepo, Upload
+from api.app.models import Build, File, Process, ProjectRepo, Upload
 from api.app.services import edits as edits_svc
 from api.app.services import gates as gate_svc
+from api.app.services import github_push as github_push_svc
 from api.app.services import uploads
+from api.app.services.build_tree import DOWNLOAD_EXCLUDED, export_note
 from engine.child_env import child_env
 
 if TYPE_CHECKING:
@@ -306,4 +310,78 @@ async def _classify(w: WorkerServices, repo_id: str, tree: Path, branch: str, co
                        detail={"repo_id": row.id, "repo": full_name(row), "branch": branch, "commit": commit,
                                "result": out["kind"], "id": out["id"]})
         await s.commit()
+    return out
+
+
+# ------------------------------------------------------------------ push an iteration's build
+ESTATE_TAKES_NO_BUILD = "an estate repository takes no build: connect a build repository"
+OTHER_PROCESS = "this repository is connected to {name}"
+
+
+class PushRefused(ValueError):
+    """The build cannot go to this repository (HTTP 422)."""
+
+
+class PushBusy(RuntimeError):
+    """Another push of this build to this branch is running (HTTP 409)."""
+
+
+def iteration_branch(process_name: str, n: int) -> str:
+    return f"exiqo/{slug(process_name)}/iteration-{n}"
+
+
+async def push_build(session: AsyncSession, sessionmaker, settings: Settings, row: ProjectRepo, build_id: str,
+                     open_pr: bool, actor: str) -> dict[str, Any]:
+    """Push ``build_id`` (a build of the repository's process) to ``exiqo/<process slug>/iteration-<n>``
+    on top of the connected branch, with ``EXPORTED_FROM.md`` and ``EXIQO_BASELINE.json``, and open
+    (or update) its pull request into that branch. ``{"branch", "commit", "pull_request"}``. Every
+    GitHub call is audited as a connector call; the caller commits."""
+    if row.purpose != "build":
+        raise PushRefused(ESTATE_TAKES_NO_BUILD)
+    build = await session.get(Build, build_id)
+    if build is None:
+        raise LookupError("build not found")
+    owner = await session.get(Process, row.process_id) if row.process_id else None
+    if build.process_id != row.process_id:
+        raise PushRefused(OTHER_PROCESS.format(name=owner.name if owner else row.process_id))
+    if build.status in ("queued", "running"):
+        raise PushRefused("the build has not finished")
+    if not build.output_dir or not Path(build.output_dir).is_dir():
+        raise PushRefused("the build has no solution on disk")
+    proc = owner
+    repo, base = full_name(row), row.default_branch
+    branch = iteration_branch(proc.name, build.iteration)
+    target = f"{repo}@{branch}"
+    gh = await github(session, settings)
+    root = Path(build.output_dir)
+    extras = {github_push_svc.EXPORT_NOTE: export_note(build, proc).encode(),
+              edits_svc.BASELINE_NAME: edits_svc.baseline_file(build, proc, root, DOWNLOAD_EXCLUDED)}
+    async with try_advisory_lock(sessionmaker, github_push_svc.dedupe_key(build.id, repo, branch)) as locked:
+        if not locked:
+            raise PushBusy("another push of this build to this branch is running")
+        base_name, base_exists = await _audited(session, actor, "repository", f"{repo}@{base}", row.project_id,
+                                                row.process_id, lambda: gh.base_of(repo, base), repo=repo)
+        message = f"{proc.name}: iteration {build.iteration}, build {build.id[:8]} from {settings.brand_name} Migrate"
+        commit = await _audited(session, actor, "push", target, row.project_id, row.process_id,
+                                lambda: gh.push_build(root, repo, branch, message,
+                                                      base_branch=base_name if base_exists else None,
+                                                      extra_files=extras, excluded=DOWNLOAD_EXCLUDED),
+                                repo=repo, branch=branch, build_id=build.id, iteration=build.iteration)
+    await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
+                      object_type="branch", local_ref=build.id, remote_id=branch,
+                      remote_url=f"{gh.base_url}/{repo}/tree/{branch}", created_by=actor)
+    out: dict[str, Any] = {"branch": branch, "commit": commit, "pull_request": None}
+    if open_pr and base_exists:
+        body = github_push_svc._pr_body(build, proc, commit, settings.brand_name)
+        pull = await _audited(session, actor, "pull-request", target, row.project_id, row.process_id,
+                              lambda: gh.open_pull_request(repo, branch, base_name,
+                                                           f"{proc.name}: iteration {build.iteration}", body),
+                              repo=repo, head=branch, base=base_name)
+        await upsert_link(session, project_id=row.project_id, process_id=row.process_id, kind="github",
+                          object_type="pull_request", local_ref=build.id, remote_id=str(pull["number"]),
+                          remote_url=pull["url"], created_by=actor)
+        out["pull_request"] = {"number": pull["number"], "url": pull["url"]}
+    gate_svc.audit(session, None, actor, "repo pushed", project_id=row.project_id,
+                   detail={"repo_id": row.id, "repo": repo, "branch": branch, "commit": commit, "build_id": build.id,
+                           "iteration": build.iteration})
     return out

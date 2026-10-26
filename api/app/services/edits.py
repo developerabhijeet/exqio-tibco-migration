@@ -84,6 +84,13 @@ def baseline_manifest(build: Build, process: Process | None, files: dict[str, st
             "files": dict(sorted(files.items()))}
 
 
+def baseline_file(build: Build, process: Process | None, root: Path, excluded: frozenset[str]) -> bytes:
+    """``EXIQO_BASELINE.json`` for a copy of ``root`` (a push to a branch): the same manifest the
+    download writes, over the files the copy ships."""
+    manifest = baseline_manifest(build, process, tree_hashes(root, excluded))
+    return (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+
+
 # ------------------------------------------------------------------ the diff
 Change = Literal["modified", "added", "deleted"]
 ChangeOrigin = Literal["code", "agent", "ai", "infra", "tests", "hand", "new"]

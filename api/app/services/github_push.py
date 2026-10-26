@@ -27,6 +27,7 @@ from api.app.jobs.locks import try_advisory_lock
 from api.app.jobs.registry import RetryLater
 from api.app.models import Build, Process
 from api.app.services.build_tree import download_excluded, export_note
+from api.app.services.edits import BASELINE_NAME, baseline_file
 
 if TYPE_CHECKING:
     from api.app.jobs.registry import WorkerServices
@@ -126,7 +127,9 @@ async def _push(ctx: JobContext, w: WorkerServices) -> dict[str, Any]:
             Path(build.output_dir), repo, branch,
             f"{proc.name}: build {build.id[:8]} from {w.settings.brand_name} Migrate",
             base_branch=base if base_exists else None,
-            extra_files={EXPORT_NOTE: export_note(build, proc).encode()},
+            extra_files={EXPORT_NOTE: export_note(build, proc).encode(),  # and the baseline (sub-project 6):
+                         BASELINE_NAME: baseline_file(build, proc, Path(build.output_dir),
+                                                      download_excluded(build.stack))},
             excluded=download_excluded(build.stack))  # the build stack's own exclusions
         await ctx.log(f"pushed commit {commit[:12]} to {branch}")
         async with w.sessionmaker() as s:
