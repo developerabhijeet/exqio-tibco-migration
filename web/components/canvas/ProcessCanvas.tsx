@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -13,13 +15,21 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Loader2 } from "lucide-react";
 import { layoutCanvas } from "@/lib/layout";
-import { STRIP } from "@/lib/activity";
+import { family, STRIP } from "@/lib/activity";
 import type { ProcessCanvasData } from "@/lib/types";
 import { ActivityNode, GroupNode, TerminalNode } from "./ActivityNode";
 import { FlowEdge, type FlowEdgeData } from "./FlowEdge";
 
 const nodeTypes = { activity: ActivityNode, terminal: TerminalNode, container: GroupNode };
 const edgeTypes = { flow: FlowEdge };
+
+/** The overview's colour per node: an activity's family strip, a terminal's tone, a group faint. */
+function miniColor(n: Node): string {
+  if (n.type === "container") return "rgb(var(--c-line-strong)/0.35)";
+  if (n.type === "terminal") return (n.data as { kind?: string }).kind === "end" ? STRIP.end : STRIP.http;
+  const fam = family(String((n.data as { canonical_type?: string }).canonical_type ?? ""));
+  return fam === "other" ? "rgb(var(--c-line-strong))" : STRIP[fam];
+}
 
 function Inner({
   canvas,
@@ -94,8 +104,20 @@ function Inner({
       maxZoom={1.6}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="rgb(var(--c-line))" gap={20} />
-      <Controls showInteractive={false} position="bottom-right" />
+      <Background variant={BackgroundVariant.Dots} color="rgb(var(--c-line-strong))" gap={22} size={1.4} />
+      <Controls showInteractive={false} position="bottom-left" />
+      <MiniMap
+        position="bottom-right"
+        pannable
+        zoomable
+        nodeColor={miniColor}
+        nodeStrokeWidth={0}
+        nodeBorderRadius={6}
+        maskColor="rgb(var(--c-page)/0.72)"
+        bgColor="rgb(var(--c-surface))"
+        style={{ width: 160, height: 100 }}
+        ariaLabel="Process overview"
+      />
     </ReactFlow>
     </div>
   );
@@ -113,7 +135,7 @@ export function ProcessCanvas({
   onSelect: (id: string | null) => void;
 }) {
   return (
-    <div className="relative h-[600px] overflow-hidden rounded-card border border-line bg-page" data-testid="process-canvas">
+    <div className="process-flow relative h-[600px] overflow-hidden rounded-card border border-line bg-page" data-testid="process-canvas">
       {loading || !canvas ? (
         <div className="flex h-full items-center justify-center gap-2 text-slate">
           <Loader2 size={18} className="animate-spin" aria-hidden /> Loading canvas
@@ -138,15 +160,15 @@ function Legend() {
     ["Throw", STRIP.throw],
   ];
   return (
-    <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-2 rounded-btn bg-surface/90 px-2.5 py-1.5 text-2xs text-slate shadow-sm">
+    <div className="pointer-events-none absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-x-3 gap-y-1 rounded-card bg-surface/90 px-3 py-1.5 text-2xs text-slate shadow-e1 ring-1 ring-line backdrop-blur-sm">
       {items.map(([l, c]) => (
         <span key={l} className="flex items-center gap-1">
-          <span className="h-2.5 w-1 rounded-sm" style={{ background: c }} />
+          <span className="h-3 w-[3px] rounded-full" style={{ background: c }} />
           {l}
         </span>
       ))}
       <span className="flex items-center gap-1">
-        <span className="font-mono text-decision">expr</span> condition
+        <span className="rounded-full border border-decision/40 bg-decision-bg px-1.5 font-mono leading-4 text-decision">if</span> condition
       </span>
       <span className="flex items-center gap-1">
         <span className="inline-block w-4 border-t-2 border-dashed border-slate" /> otherwise

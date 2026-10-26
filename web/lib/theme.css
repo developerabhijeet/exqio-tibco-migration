@@ -382,7 +382,7 @@ kbd,
 }
 .react-flow__node.selected > .activity-card,
 .react-flow__node.selected > .terminal-pill {
-  box-shadow: 0 0 0 3px rgb(var(--c-accent-soft)), 0 0 0 4px rgb(var(--c-accent));
+  box-shadow: 0 0 0 2px rgb(var(--c-accent)), 0 0 0 6px rgb(var(--c-accent) / 0.18), var(--shadow-e2);
 }
 .react-flow__handle {
   opacity: 0;
@@ -484,4 +484,15 @@ kbd,
   .mem-edge-live {
     animation: none;
   }
+}
+.process-flow .react-flow__minimap,
+.mem-flow .react-flow__controls,
+.process-flow .react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-e1);
+  border: 1px solid rgb(var(--c-line));
+}
+.react-flow__node.selected > .activity-card {
+  border-color: transparent;
 }
