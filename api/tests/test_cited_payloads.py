@@ -484,6 +484,17 @@ def test_cite_review_hints_class_and_method():
     assert cite_review({"file": "x.cs", "line": 0, "text": ""}, "b1", DPROC) is None
 
 
+def test_cite_review_hints_plain_basename():
+    """A plain file name (``Program.cs``) is distinctive enough to anchor, though its stem
+    (``Program``) alone is a common word and is not."""
+    f = {"reviewer": "security", "file": "src/Program.cs", "line": 14,
+         "text": "Program.cs maps the endpoint without authorization. Everything else is fine."}
+    ct = cite_review(f, "b1", DPROC)
+    assert ct.text[ct.spans[0].start:ct.spans[0].end] == "Program.cs maps the endpoint without authorization"
+    assert ct.refs[0].label == "Program.cs:14"
+    stem_only = cite_review({**f, "text": "The Program class is fine. Nothing else."}, "b1", DPROC)
+    assert stem_only.text[stem_only.spans[0].start:stem_only.spans[0].end] == "Nothing else"
+
 def test_cite_diff_note_and_no_finding():
     ct = cite_diff({"path": "out.a", "expected": 1, "actual": 2, "status": "defect", "note": "Rounded."},
                    {"scenario_key": "k1", "status": "differs"})

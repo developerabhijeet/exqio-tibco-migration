@@ -240,8 +240,8 @@ def cite_review(finding: dict[str, Any], build_id: str, process: Any,
                 tibco_ref: dict[str, Any] | None = None) -> CitedText | None:
     """A review finding's text with a ``file`` ref to where it points (``line`` is ``None`` when the
     reviewer gave none, which it records as 0) and a ref for each activity of that file the text
-    names. The file ref is hinted by the file's basename, stem and the class and method names its
-    design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise. A
+    names. The file ref is hinted by the file's basename (always: ``Program.cs`` names one file),
+    its stem and the class and method names its design rows give (``BuildFile.tibco_ref``); it falls to the last sentence otherwise. A
     finding with no text has no sentence to carry the ref: ``None`` (no ``cited``), and clients
     show ``text``, ``file`` and ``line`` as before."""
     text = mask_sensitive(str(finding.get("text") or ""))
@@ -262,7 +262,10 @@ def cite_review(finding: dict[str, Any], build_id: str, process: Any,
                                     + (f" at line {line}" if line else ""), PREVIEW_MAX),
                         target=CiteTarget(kind="file", step="build", process_id=process.id,
                                           path=path, line=line)),
-            hints=list(dict.fromkeys(h for h in hints if _identifier_like(h)))))
+            # A file name with its extension (``Program.cs``) is distinctive on its own; the
+            # stem and the design names still need to look like identifiers.
+            hints=list(dict.fromkeys(h for i, h in enumerate(hints)
+                                     if _identifier_like(h) or (i == 0 and "." in h.strip("."))))))
     names = activity_names(process)
     linked = {r.get("activity_id"): r.get("activity_name") or names.get(r.get("activity_id"), "")
               for r in rows if r.get("activity_id")}
