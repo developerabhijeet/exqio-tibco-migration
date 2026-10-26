@@ -193,33 +193,48 @@ kubectl -n exiqo exec deploy/exiqo-api -- python -m api.app.memory_admin <comman
 | Command | Use |
 |---|---|
 | `reingest --project <id>` | queue one ingest per scope (estate, each process's analysis, design, build/verify, deploy and gates, every decision, seeds). Idempotent: unchanged content is a no-op. Use after a Neo4j restore, or after an ingest failed. |
-| `reembed --project <id> [--wait]` | recompute the vectors of the current versions with the active embeddings backend and record it. Run it for every project after changing `EMBEDDINGS_BACKEND`. |
-| `migrate [--wait]` | queue the one-time migration (below) again; `--wait` exits 1 if the job failed. |
+| `reembed [--project <id>] [--wait]` | recompute vectors with the active embeddings backend. Without `--project` it covers every project and records the backend at the end; until then ingests fail with the backend-mismatch error, so re-ingest afterwards. With `--project` it only refreshes that project's vectors under the backend already recorded. Run the all-project form after changing `EMBEDDINGS_BACKEND`. |
+| `migrate [--wait] [--timeout 1800]` | run the one-time migration by hand (below). |
+
+Exit statuses: 0 ok, 1 the job failed, 2 usage (no `NEO4J_URI`, unknown project), 3 the `--wait`
+timed out (`--timeout`, default 1800 s).
 
 **Reading ingest results.** Each ingest is a job (`memory.ingest`); its result has the revision
-number and counts. A job that ends "memory unavailable after 10 attempts: <reason>" means Neo4j was
-unreachable through every retry: fix Neo4j, then `reingest`. The explorer's History shows revisions
-and what changed per key.
+number and counts. "memory unavailable after 10 attempts: <reason>" means Neo4j was unreachable
+through every retry: fix Neo4j, then `reingest`. The explorer's History shows revisions and what
+changed per key. Projects deleted from Postgres keep their old vectors in Neo4j; the API cannot
+reach them.
 
-**Migration from the Postgres knowledge store.** On the first start with `NEO4J_URI` set after an
-upgrade from the Postgres store, the API queues `memory.migrate`. It copies memory items into
-`memory_events`, re-derives the graph through the same projectors as live ingest, reuses old vectors
-when the embeddings backend is unchanged, checks that every item and chunk text is present in
-Neo4j, and only then renames the schema (`knowledge` to `knowledge_retired`) and stamps
-`neo4j_migrated_at`. Ingest waits while it runs. If verification fails the job fails with
-"migration incomplete for <project>: <ids>" and nothing is renamed.
+**Migration from the Postgres knowledge store.** On start with `NEO4J_URI` set, when schema
+`knowledge` exists and `knowledge.meta` has no `neo4j_migrated_at`, the API queues `memory.migrate`
+(once, however many replicas start). Ingests wait (5 s, attempt not counted) while it is queued or
+running. It copies memory items into `memory_events`, re-derives the graph through the live
+projectors, reuses old vectors when the embeddings backend is unchanged, checks that every item
+and chunk text is in Neo4j, and only then renames `knowledge` to `knowledge_retired` and stamps
+`neo4j_migrated_at`. Run by hand: `python -m api.app.memory_admin migrate --wait`.
 
-**Rollback.** The old data is still in `knowledge_retired`. To return to the Postgres store's data
-(for example to re-run the migration or to inspect it), run in the Postgres database:
+*A miss that persists.* The job fails with `migration incomplete for <project>: [<old ids>]` and
+`knowledge` stays.
+
+1. Look at the named rows: `SELECT id, kind, text FROM knowledge.memory_items WHERE id = ANY(...)`,
+   or the same on `knowledge.chunks`.
+2. Usual causes: Neo4j was unavailable, or a text holds raw TIBCO XML (refused on write). A chunk
+   whose process was deleted is still copied as an orphan.
+3. Fix the cause (for a row that should not be migrated, delete it from `knowledge.*` after taking
+   a backup).
+4. Run `memory_admin migrate --wait` again. Migrated projects are no-ops (same revision); only the
+   incomplete ones are redone, and the schema is renamed only when every project verifies.
+
+**Rollback to the previous release.** The old data is in `knowledge_retired`. In the Postgres
+database:
 
 ```sql
 ALTER SCHEMA knowledge_retired RENAME TO knowledge;
 ```
 
-The lifespan does not re-queue the migration while `knowledge.meta` carries `neo4j_migrated_at`;
-re-migrate with `memory_admin migrate` (it is safe to repeat: copied events are skipped and the
-ingest key makes the second apply a no-op). The running release no longer reads the `knowledge`
-schema, so a rollback to the previous release (`helm rollback`) also needs the rename.
+then `helm rollback`. Writes made in Neo4j after the migration are not copied back. Before
+upgrading again, either delete the `neo4j_migrated_at` row from `knowledge.meta` so the API queues
+the migration, or run `memory_admin migrate`.
 
 ## Secret rotation
 
