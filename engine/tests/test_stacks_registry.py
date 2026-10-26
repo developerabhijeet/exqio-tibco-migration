@@ -1,11 +1,14 @@
 """The stack registry, availability reasons and the .NET wrapper (target stacks, Task 1)."""
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from engine.dotnet_gen.generator import generate_solution
-from engine.stacks import get_stack, stack_status
-from engine.stacks.base import Mirrors
+from engine.dotnet_gen.runner import DotnetRunner
+from engine.stacks import all_stacks, get_stack, stack_status
+from engine.stacks.base import Mirrors, StackRunner
 
 
 def test_registry_has_dotnet_and_rejects_unknown():
@@ -52,3 +55,54 @@ def test_dotnet_layout_derives_from_solution_layout():
     assert layout.api_entry == raw["api_project"]
     assert layout.projects["tests"].build_file == raw["test_project"]
     assert layout.test_root == raw["projects"]["tests"]["folder"]
+
+
+def test_get_stack_names_a_known_stack_that_is_not_implemented():
+    with pytest.raises(KeyError, match="stack 'java' is not implemented yet"):
+        get_stack("java")
+
+
+_RUNNER_METHODS = ("restore", "build", "format_write", "format_check", "test", "run_service", "env")
+
+
+@pytest.mark.parametrize("stack", all_stacks(), ids=lambda s: s.key)
+def test_every_runner_has_the_protocol_signatures(stack, tmp_path):
+    runner = stack.runner(tmp_path)
+    assert isinstance(runner, StackRunner)
+    for name in _RUNNER_METHODS:
+        want = inspect.signature(getattr(StackRunner, name))
+        got = inspect.signature(getattr(type(runner), name))
+        assert [(p.name, p.kind, p.default) for p in got.parameters.values()] == \
+               [(p.name, p.kind, p.default) for p in want.parameters.values()], name
+
+
+def test_dotnet_runner_called_positionally_through_the_protocol(tmp_path, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(DotnetRunner, "_run", lambda self, args, timeout_s=None, env=None:
+                        calls.append(("run", args, env)) or (0, ""))
+    monkeypatch.setattr(DotnetRunner, "run_service", lambda self, project, port, env=None, timeout_s=180.0,
+                        health_path="/health": calls.append(("service", project, port, env, timeout_s)) or "h")
+    (tmp_path / "GmfCredit.sln").write_text("")
+    api = tmp_path / "src" / "GmfCredit.Api"
+    api.mkdir(parents=True)
+    (api / "GmfCredit.Api.csproj").write_text("<Project/>")
+    (tmp_path / "src" / "GmfCredit.Api" / "bin").mkdir()
+    (tmp_path / "src" / "GmfCredit.Api" / "bin" / "Copy.Api.csproj").write_text("")  # build output: ignored
+
+    runner = get_stack("dotnet").runner(tmp_path)
+    assert runner.restore({"A": "1"}).ok
+    assert calls[-1] == ("run", ["restore", str((tmp_path / "GmfCredit.sln").resolve())], {"A": "1"})
+    assert runner.run_service(5123, {"B": "2"}, 30.0) == "h"
+    assert calls[-1] == ("service", "src/GmfCredit.Api/GmfCredit.Api.csproj", 5123, {"B": "2"}, 30.0)
+
+    given = get_stack("dotnet").runner(tmp_path, api_entry="src/X.Api/X.Api.csproj")
+    given.run_service(5124, None, 10.0)
+    assert calls[-1][1] == "src/X.Api/X.Api.csproj"
+
+
+def test_dotnet_runner_refuses_an_ambiguous_api_project(tmp_path):
+    for app in ("A", "B"):
+        (tmp_path / f"{app}.Api").mkdir()
+        (tmp_path / f"{app}.Api" / f"{app}.Api.csproj").write_text("")
+    with pytest.raises(FileNotFoundError, match="expected one"):
+        get_stack("dotnet").runner(tmp_path).api_project()

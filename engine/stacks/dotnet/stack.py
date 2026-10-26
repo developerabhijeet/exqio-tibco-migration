@@ -13,7 +13,7 @@ from engine.stacks.dotnet.language import DotnetLanguage
 
 if TYPE_CHECKING:
     from engine.dotnet_gen.generator import GeneratedSolution
-    from engine.dotnet_gen.runner import DotnetRunner
+    from engine.stacks.dotnet.runner import DotnetStackRunner
 
 
 class DotnetStack:
@@ -50,6 +50,10 @@ class DotnetStack:
         return generate_solution(app, process_ids, designs, rules, findings, scenarios, out_dir, mirrors.nuget)
 
     def runner(self, root: Path, *, env: dict[str, str] | None = None,
-               coverage_scope: set[str] | None = None, timeout_s: int | None = None) -> DotnetRunner:
-        from engine.dotnet_gen.runner import DEFAULT_TIMEOUT_S, DotnetRunner
-        return DotnetRunner(root, timeout_s=timeout_s or DEFAULT_TIMEOUT_S, env=env, coverage_scope=coverage_scope)
+               coverage_scope: set[str] | None = None, timeout_s: int | None = None,
+               api_entry: str | None = None) -> DotnetStackRunner:
+        """A ``DotnetRunner`` with the ``StackRunner`` signatures; ``api_entry`` is the API
+        project (``layout(app).api_entry``), discovered under ``root`` when omitted."""
+        from engine.stacks.dotnet.runner import DotnetStackRunner
+        return DotnetStackRunner(root, env=env, coverage_scope=coverage_scope, timeout_s=timeout_s,
+                                 api_entry=api_entry)

@@ -4,6 +4,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -12,12 +13,8 @@ for p in (REPO_ROOT, REPO_ROOT / "scripts"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-
-from engine.analysis.models import Citation, Rule
-from engine.analysis.static_rules import run_static_rules
-from engine.domains import graph as graph_mod
-from engine.dotnet_gen.design import build_design_skeleton
-from engine.tibco_parser.scanner import scan_folder
+if TYPE_CHECKING:
+    from engine.analysis.models import Citation, Rule
 
 SKIP_NO_NEO4J = ("NEO4J_TEST_URI is not set: run make test (starts neo4j-test) or point it at a "
                  "Neo4j 5.26")
@@ -82,12 +79,15 @@ DFR = "dealerfunding.DealerFundingRequest"
 FSL = "dealerfunding.FundingStatusLookup"
 
 
-def _cit(activity: str, kind: str, text: str) -> Citation:
+def _cit(activity: str, kind: str, text: str) -> "Citation":
+    from engine.analysis.models import Citation
     return Citation(activity_id=activity, kind=kind, text=text)
 
 
-def hand_rules() -> dict[str, list[Rule]]:
+def hand_rules() -> "dict[str, list[Rule]]":
     """Approved rules written by hand so the ids and texts are stable for the golden files."""
+    from engine.analysis.models import Rule
+
     dfr = [
         Rule(id="R1", text="A dealer must be ACTIVE to receive funding.", confidence=0.95,
              status="approved",
@@ -114,6 +114,7 @@ def hand_rules() -> dict[str, list[Rule]]:
 
 @pytest.fixture(scope="module")
 def gmf_apps():
+    from engine.tibco_parser.scanner import scan_folder
     return {a.id: a for a in scan_folder(GMF).applications}
 
 
@@ -129,6 +130,8 @@ def gmf_processes(gmf_app):
 
 @pytest.fixture(scope="module")
 def gmf_findings(gmf_app, gmf_processes):
+    from engine.analysis.static_rules import run_static_rules
+
     app, processes = gmf_app, gmf_processes
     out = {}
     for pid in PROCESS_IDS:
@@ -144,6 +147,9 @@ def gmf_rules():
 
 @pytest.fixture(scope="module")
 def gmf_designs(gmf_apps, gmf_app, gmf_processes, gmf_rules, gmf_findings):
+    from engine.domains import graph as graph_mod
+    from engine.dotnet_gen.design import build_design_skeleton
+
     apps, app, processes, rules, findings = gmf_apps, gmf_app, gmf_processes, gmf_rules, gmf_findings
     graph = graph_mod.build_graph(list(apps.values()))
     return {pid: build_design_skeleton(processes[pid], app, rules[pid], findings[pid],
