@@ -238,6 +238,55 @@ then `helm rollback`. Writes made in Neo4j after the migration are not copied ba
 upgrading again, either delete the `neo4j_migrated_at` row from `knowledge.meta` so the API queues
 the migration, or run `memory_admin migrate`.
 
+## Connectors
+
+Optional GitHub, Confluence, Jira and Figma integrations (`GMF-INSTALL.md`, section 6, "Connectors").
+Two layers decide whether one is on: `connectors.<kind>.enabled` in the install, and the admin's
+Settings, Connectors tab; `GET /api/connectors` shows the result.
+
+**Enabling one.** Create the service account and token with the permissions in the install guide,
+write the Key Vault secret, set `connectors.<kind>` (`enabled`, URLs, `allowedHosts`, `cidrs`),
+`helm upgrade`, then in Settings, Connectors set the Confluence space or Jira project and press
+"Test connection". Enable them one at a time; each test is audited.
+
+**Rotating a token.** Write a new Key Vault version, wait for the CSI refresh (or restart api and
+worker), press "Test connection", then revoke the old token. A running push or publish keeps the
+token it started with.
+
+**Private CA.** "certificate verify failed" in a test means the server's certificate chain is not
+trusted by the image: provide `connectors.caBundle` (PEM text) or `keyVault.secrets.connectorsCaBundle`
+with the root and intermediates, restart api and worker, test again. Do not look for a way to turn
+verification off; there is none.
+
+**Troubleshooting.** The test and every failed job show the remote status, with secrets removed.
+
+| Message or symptom | Cause and fix |
+|---|---|
+| 401 or "bad credentials" | The token is wrong, expired or revoked, or (Atlassian cloud) `ATLASSIAN_USER` is not the email of the token's account. Rotate as above. |
+| 403 | The token lacks a permission: GitHub `contents:write`, `pull_requests:write`, `metadata:read`; Confluence "add page" on the space; Jira "create issues" in the project; Figma `file_content:read`. GitHub branch protection or a required SSO authorization of the token (enterprise "Authorize SSO") also gives 403. |
+| "host ... is not in this connector's allowed hosts" or "not allowed" | The URL or a redirect names a host outside `connectors.<kind>.allowedHosts` (or Settings holds a URL for another host). Add the host to the install values; the client never follows a redirect off the list or to plain http. |
+| Redirect to an SSO or login page | The service wants browser sign-in for that URL: the base URL points at the web front door instead of the API, or the token type is not accepted there. Use the API base URL (GitHub `apiUrl`, Confluence and Jira context path). |
+| Timeouts, "connection refused" | Egress. `kubectl -n exiqo get networkpolicy exiqo-connectors-egress -o yaml` should list the connector's `cidrs` on 443; check the Azure Firewall FQDN rule and private DNS for the name, and that the CIDR covers the address the name resolves to from inside the cluster (`kubectl -n exiqo exec deploy/exiqo-api -- python -c "import socket;print(socket.getaddrinfo('<host>',443))"`). The NetworkPolicy exists only when an enabled connector lists `cidrs`. |
+| Confluence publish answers 409 ("Confluence rejected the update twice") | Someone saved the page in Confluence while the platform was updating it: the platform re-reads the current version and retries once, and two conflicts in a row fail the job. Wait until the editing stops and publish again. |
+| Jira shows a 404 on a link, issue marked stale | The issue was deleted or moved out of the project. The link is marked stale; replace it by posting the same items to `POST /api/processes/<id>/jira/issues` with `"create_again": true`. |
+| "the ... connector is not enabled" (409) | Off in the install or in Settings. Nothing was sent. |
+| "the ... connector has no credential: mount ..." (409) | The secret file is missing or empty: check the Key Vault object and `kubectl -n exiqo describe pod`. |
+
+**Audit queries.** Every test, push, publish, issue creation and refusal writes a line to
+`audit_log` with `action` of the form `connector <kind> <operation>`; `detail` carries ids, URLs,
+counts and the outcome (`ok`, `failed`, `refused`), never a token or a request body. Connector
+settings changes are `connector settings changed` (field names only). For example:
+
+```sql
+select ts, actor, action, process_id, detail->>'outcome' as outcome, detail->>'target' as target
+from audit_log where action like 'connector %' order by ts desc limit 50;
+
+select ts, actor, action, detail from audit_log
+where action like 'connector %' and detail->>'outcome' <> 'ok' and ts > now() - interval '7 days';
+```
+
+What was published where is in `connector_links` (kind, object type, remote id and URL, `stale`).
+
 ## Secret rotation
 
 The procedure per secret is in `GMF-INSTALL.md`, section 10; the Deploy-step credentials are in
@@ -247,6 +296,9 @@ The procedure per secret is in `GMF-INSTALL.md`, section 10; the Deploy-step cre
 2. Restart: `kubectl -n exiqo rollout restart deployment/exiqo-api deployment/exiqo-worker`. The
    apps read secrets only at start; workers drain first.
 3. Verify with `/readyz` (`secrets: ok`) and a sign-in.
+
+Connector tokens (`GITHUB_TOKEN`, `ATLASSIAN_TOKEN`, `FIGMA_TOKEN`) and the private CA bundle are
+covered above, under "Connectors".
 
 Keep a calendar of expiries: the Entra client secret (`OIDC_CLIENT_SECRET`), the TLS certificate
 (`ingress.tlsSecretName`), and any Key Vault service principal secrets. The Neo4j password lives in

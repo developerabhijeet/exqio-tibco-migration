@@ -623,6 +623,63 @@ neo4jBackup:
 - Neo4j: see the next subsection. An external Neo4j sets `neo4j.enabled` to false with
   `neo4j.uri` and `neo4j.externalCidrs`.
 
+### Connectors
+
+Four optional integrations with GMF's own servers, all off by default: GitHub Enterprise (push a
+build to a branch and open a pull request), Confluence (publish a process's architecture page),
+Jira (create issues from findings, open questions and parity differences) and Figma (attach design
+frames as references). The install layer is the ceiling: Settings, Connectors (admin role) can
+only narrow what `connectors.<kind>` enables. The chart names no public host; every address below is GMF's.
+
+```yaml values
+connectors:
+  github:
+    enabled: true
+    baseUrl: https://github.gmf.example.com
+    allowedHosts: [github.gmf.example.com]
+    cidrs: [10.20.30.0/28]
+  atlassian:
+    enabled: true
+    flavor: datacenter          # cloud also needs keyVault.secrets.atlassianUser
+    confluenceUrl: https://confluence.gmf.example.com
+    jiraUrl: https://jira.gmf.example.com
+    allowedHosts: [confluence.gmf.example.com, jira.gmf.example.com]
+    cidrs: [10.20.30.16/28]
+keyVault:
+  secrets:
+    githubToken: exiqo-github-token
+    atlassianToken: exiqo-atlassian-token
+```
+
+What each needs, and the least privilege for its token (use a GMF service account, not a person):
+
+| Connector | Values | Key Vault secret | Token permissions |
+|---|---|---|---|
+| GitHub | `connectors.github.baseUrl` (and `apiUrl` when it is not `<baseUrl>/api/v3`), `allowedHosts`, `cidrs`, optional `commitEmail` | `GITHUB_TOKEN` (`keyVault.secrets.githubToken`) | Fine-grained token on the target repositories only: `contents:write`, `pull_requests:write`, `metadata:read`. Branch protection stays on: the platform pushes only `exiqo/...` branches and never to the default branch. |
+| Confluence | `connectors.atlassian.confluenceUrl`, `allowedHosts`, `cidrs`; the space is chosen in Settings, Connectors | `ATLASSIAN_TOKEN` (`keyVault.secrets.atlassianToken`); with `flavor: cloud` also `ATLASSIAN_USER` (the account email) | Space permission "add page" on that one space (and "add comment" is not needed). Data Center: a personal access token of the service account. |
+| Jira | `connectors.atlassian.jiraUrl` (same install block as Confluence); the project key is chosen in Settings | same secret as Confluence | Project permission "create issues" in that one project. |
+| Figma | `connectors.figma.apiUrl`, optional `webUrl` (frame links) and `imageHosts` with `imageCidrs` (thumbnails), `allowedHosts`, `cidrs` | `FIGMA_TOKEN` (`keyVault.secrets.figmaToken`) | Scope `file_content:read`. Read-only; nothing is written to Figma. |
+
+Firewall: allow the api and worker pods to reach exactly the `allowedHosts` of each enabled
+connector on TCP 443 (Azure Firewall FQDN rules for the names, and the CIDRs of their private
+endpoints or load balancers in `cidrs`). The chart renders NetworkPolicy `exiqo-connectors-egress` from
+those `cidrs` and adds the hosts to the About panel's egress list. A redirect to any host outside
+`allowedHosts` (typically an SSO page) is refused by the client, so a service that answers a token
+call with a redirect to a login host needs that host in `allowedHosts` or, more usually, a corrected
+token or URL.
+
+Private CA: if GMF's servers present certificates from an internal CA, set `connectors.caBundle`
+(PEM text) or `keyVault.secrets.connectorsCaBundle`, not both. Verification is never turned off.
+
+Enable in two steps: install with the values above, then an admin opens Settings, Connectors,
+narrows or confirms the URLs, space and project, and runs "Test connection" for each. The test
+names the account the token belongs to and the latency. Rotation is in section 10;
+operating, troubleshooting and the audit queries are in `RUNBOOK.md`, "Connectors".
+
+Roles: pushing a build needs `engineer`, publishing a Confluence page and attaching Figma frames
+need `architect`, creating Jira issues needs `architect`, `sme` or `qa`; `admin` may do all, and
+only `admin` changes connector settings or runs a test.
+
 ### Neo4j
 
 - The chart installs one Community-edition instance (`neo4j.enabled`, default true). High
@@ -817,6 +874,13 @@ check is skipped when a token is used, because the proxied Swagger UI is for bro
 session cookie, not a bearer. The run is `full` mode by default against an installed platform;
 `--mode offline` asserts the honest-failure states instead.
 
+The last step, `connectors`, prints `connectors: SKIP (none enabled)` on an install without
+connectors (a pass). With connectors enabled it runs each one's connection test and prints, for
+example, `connectors: github test ok (exiqo-bot)`; a failing test fails the run. To exercise the
+real thing once, add `--publish --github-repo <owner>/<repo>`: one push and pull request, one
+Confluence page and one Jira issue on the acceptance project. Only the connection tests are run
+without `--publish`. The check can also run alone with `--only connectors`.
+
 ## 9. Backup and restore
 
 Postgres holds everything the platform stores today. The `DATA_DIR` share holds uploaded estates and
@@ -902,6 +966,8 @@ never take a pod down before its replacement is ready. The web pod holds no secr
 | `APP_SECRET` | The Fernet key encrypts values the platform stores itself (an Azure OpenAI key entered in Settings, local-mode credentials). With managed identity and Workload Identity nothing important is stored, but a changed key makes anything already stored unreadable: re-enter those values after the change. |
 | `OIDC_CLIENT_SECRET` | Create a second secret on the Entra app (`az ad app credential reset --append`), write it as a new Key Vault version, restart, then delete the old Entra secret. Do this before the expiry. |
 | `AZURE_OPENAI_API_KEY` | Regenerate the second key in Azure, new version, restart, then regenerate the first. |
+| `GITHUB_TOKEN`, `ATLASSIAN_TOKEN`, `ATLASSIAN_USER`, `FIGMA_TOKEN` | Create the new token at the service, write it as a new Key Vault version, then run "Test connection" in Settings, Connectors; delete the old token at the service afterwards. Connector tokens are read on each call, so no restart is needed once the CSI driver has refreshed the mounted file (up to its poll interval); restarting is also fine. Fine-grained GitHub tokens and Atlassian tokens expire: calendar them. |
+| Connectors CA bundle | New version of the Key Vault object (or a new `connectors.caBundle` and `helm upgrade`), then restart api and worker: the bundle is read when a connector client is built. |
 | Neo4j password | See below: two Key Vault objects change together, plus the live password. |
 
 **Neo4j password.** `exiqo-neo4j-password` (the bare password) and `exiqo-neo4j-auth`
@@ -961,5 +1027,6 @@ exception class, never a value:
 | Plan fails with an authorization error from Azure | The environment's identity lacks a role on the target subscription (`DEPLOY-STEP-SECRETS.md`), or the federated credential's subject does not name `exiqo-worker` in this namespace. |
 | Memory unavailable: agents or Ask answer "memory unavailable: <class>" | Neo4j is down or unreachable. Check `/readyz`, the `exiqo-neo4j-0` pod and its volume, then `NEO4J_URI` and the password (`exiqo-neo4j-password` must match `exiqo-neo4j-auth`). Reads recover on their own once Neo4j answers. |
 | Memory ingest jobs fail ("memory unavailable after 10 attempts: <reason>") | Neo4j was unreachable through all retries. Fix Neo4j, then `python -m api.app.memory_admin reingest --project <id>` (`RUNBOOK.md`, "Memory (Neo4j)"). The failed job's result names the reason. |
+| A connector test or publish fails: 401, "host ... not allowed", a redirect to SSO, Confluence 409, Jira 404 | `RUNBOOK.md`, "Connectors". |
 | A job is stuck or reports "worker lost" | `RUNBOOK.md`, "A stuck job" and "worker lost". |
 | Uploads fail on large estates | The ingress body limit (`ingress.api.annotations`) or, with AGIC, the gateway's WAF and request limits. |

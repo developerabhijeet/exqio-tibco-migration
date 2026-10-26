@@ -81,6 +81,8 @@ def api_url_from_base(base_url: str) -> str:
 
 
 TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
+CONNECTOR_KINDS = ("github", "atlassian", "figma")
+ONLY_STEPS = ("connectors",)
 MODES = ("full", "offline", "toolchain-off")
 TOOLCHAIN_OFF_MARKER = "BUILD_TOOLCHAIN=false"
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
@@ -108,6 +110,7 @@ class Row:
 class Run:
     api: str
     rows: list[Row] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # one line each, printed under the table
 
     def check(self, step: str, name: str, ok: bool, detail: Any = "", *, fatal: bool = False) -> bool:
         self.rows.append(Row(step, name, bool(ok), _short(detail)))
@@ -149,8 +152,9 @@ def registry_probe(terraform_version: str | None) -> tuple[bool, str]:
 # ------------------------------------------------------------------ the flow
 class Flow:
     def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path,
-                 token: bool = False) -> None:
+                 token: bool = False, publish: bool = False, github_repo: str = "") -> None:
         self.run, self.c, self.mode, self.zip = run, client, mode, zip_path
+        self.publish, self.github_repo = publish, github_repo  # connectors step: --publish, --github-repo
         self.token = token  # a bearer token signs in (oidc install): X-User is ignored
         self.actor = ""  # the token's user, as the audit trail names them
         self.full = mode == "full"
@@ -555,6 +559,63 @@ class Flow:
                  if c.get("citation")] if ask.status_code == 200 else []
         self.run.check(s, "ask cites memory", len(cites) > 0, cites[0] if cites else f"HTTP {ask.status_code}")
 
+    def connectors(self) -> None:
+        """Connection tests for the enabled connectors; with ``--publish`` one push, one page and
+        one issue. Off by default on an install, which is a pass, not a failure."""
+        s = "connectors"
+        flags_r = self.get("/connectors")
+        flags = flags_r.json() if flags_r.status_code == 200 else {}
+        enabled = [k for k in CONNECTOR_KINDS if (flags.get(k) or {}).get("enabled")]
+        if not enabled:
+            self.run.check(s, "none enabled", True, "SKIP (none enabled)")
+            self.run.notes.append("connectors: SKIP (none enabled)")
+            return
+        for kind in enabled:
+            r = self.post(f"/connectors/{kind}/test", headers={"X-User": OPS})
+            body = r.json() if r.status_code == 200 else {}
+            ok = r.status_code == 200 and body.get("ok") is True
+            who = body.get("account") or body.get("site") or ""
+            if ok:
+                detail = f"ok ({who})" if who else "ok"
+            else:
+                detail = body.get("message") or _first_line(r.text) or f"HTTP {r.status_code}"
+            self.run.check(s, f"{kind} test", ok, detail)
+            self.run.notes.append(f"connectors: {kind} test {detail if ok else 'FAILED: ' + detail}")
+        if not self.publish:
+            return
+        target = TARGETS[0]
+        pid, build_id = self.process_ids.get(target), self.builds.get(target)
+        if (flags.get("github") or {}).get("enabled"):
+            if self.github_repo and build_id:
+                r = self.post(f"/builds/{build_id}/github/push", headers={"X-User": ENGINEER},
+                              json={"repo": self.github_repo, "open_pr": True})
+                self._connector_job(s, "github push", r)
+            else:
+                self.run.notes.append("connectors: github push skipped (needs a build and --github-repo)")
+        atl = flags.get("atlassian") or {}
+        if atl.get("confluence") and pid:
+            self._connector_job(s, "confluence page", self.post(f"/processes/{pid}/confluence/publish",
+                                                                headers={"X-User": ARCHITECT}))
+        if atl.get("jira") and pid:
+            findings = self.get(f"/processes/{pid}/analysis").json().get("findings") or []
+            open_ones = [f for f in findings if f.get("decision") in (None, "fix")]
+            if open_ones:
+                self._connector_job(s, "jira issue", self.post(
+                    f"/processes/{pid}/jira/issues", headers={"X-User": ARCHITECT},
+                    json={"items": [{"type": "finding", "ref": open_ones[0]["finding_key"]}]}))
+            else:
+                self.run.notes.append("connectors: jira issue skipped (no open finding)")
+
+    def _connector_job(self, step: str, name: str, r: httpx.Response) -> None:
+        if r.status_code != 202:
+            ok, detail = False, f"HTTP {r.status_code}: {_first_line(r.text)}"
+        else:
+            job = self.wait_job(r.json()["job_id"], "connector")
+            ok = job["status"] == "done"
+            detail = "job done" if ok else (job.get("error") or f"job {job['status']}")
+        self.run.check(step, name, ok, detail)
+        self.run.notes.append(f"connectors: {name} {'ok' if ok else 'FAILED: ' + detail}")
+
 
 def _first_line(text: str | None) -> str:
     for line in (text or "").splitlines():
@@ -609,6 +670,11 @@ def main(argv: list[str] | None = None) -> int:
                     "toolchain-off for workers with BUILD_TOOLCHAIN=false)")
     ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
                     help="the synthetic estate zip (make samples-zip)")
+    ap.add_argument("--only", choices=ONLY_STEPS, help="run just this step (connectors: the connection "
+                    "tests, no project needed; --publish then needs a full run)")
+    ap.add_argument("--publish", action="store_true", help="connectors step: also push one build to "
+                    "--github-repo, publish one Confluence page and create one Jira issue")
+    ap.add_argument("--github-repo", default="", help="owner/name for the --publish push")
     args = ap.parse_args(argv)
 
     if args.base_url:
@@ -631,6 +697,18 @@ def main(argv: list[str] | None = None) -> int:
               "Entra ID, so pass an access token with --token (or EXIQO_TOKEN) for a user holding the "
               "sme, architect, engineer and ops roles.")
         return 2
+    if args.only:
+        run.rows.clear()
+        flow = Flow(run, client, "full", args.zip, token=bool(args.token), publish=args.publish,
+                    github_repo=args.github_repo)
+        try:
+            flow.connectors()
+        except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+            run.check("connectors", "unexpected error", False, f"{type(exc).__name__}: {exc}")
+        print_table(run, [f"ExiQO Migrate {args.only} check against {args.api}"])
+        for note in run.notes:
+            print(note)
+        return 1 if any(not r.ok for r in run.rows) else 0
     nuget_ok, nuget_why = nuget_probe()
     registry_ok, registry_why = registry_probe((tools.get("terraform") or {}).get("version"))
     probes_pass = nuget_ok and registry_ok
@@ -646,7 +724,8 @@ def main(argv: list[str] | None = None) -> int:
               f"  NuGet probe:    {'pass' if nuget_ok else 'fail'}: {nuget_why}",
               f"  registry probe: {'pass' if registry_ok else 'fail'}: {registry_why}"]
 
-    flow = Flow(run, client, mode, args.zip, token=bool(args.token))
+    flow = Flow(run, client, mode, args.zip, token=bool(args.token), publish=args.publish,
+                github_repo=args.github_repo)
     # (name, function, later steps depend on it): a failure in a step others depend on stops the
     # run; infra, verify, plan and evidence only end their own step.
     steps: list[tuple[str, Callable[[], None], bool]] = [
@@ -661,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
                   (f"plan {t}", lambda t=t: flow.plan(t), False)]
     steps.append(("evidence", flow.evidence, False))
     steps.append(("memory", flow.memory, False))
+    steps.append(("connectors", flow.connectors, False))
 
     stopped_at: str | None = None
     for name, fn, blocking in steps:
@@ -679,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
     if flow.project_id:
         header.append(f"project: {flow.project_id}")
     print_table(run, header)
+    for note in run.notes:
+        print(note)
     print(f"elapsed {time.monotonic() - started:.0f} s")
     return 1 if any(not r.ok for r in run.rows) else 0
 

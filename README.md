@@ -134,6 +134,22 @@ Azure subscription for a real plan. The generated tests need a Postgres: export
 they start a Testcontainers `postgres:16-alpine`, which needs a Docker daemon and, on the first
 run, a Docker Hub pull.
 
+### Connectors (local fakes)
+
+GitHub, Confluence, Jira and Figma integrations are off by default. To try them without any real
+service, run the fakes and use the settings it prints:
+
+```sh
+python scripts/fake_connectors.py
+```
+
+It serves a fake GitHub, Confluence, Jira and Figma on loopback ports, writes token files to a
+temporary directory and prints the `CONNECTORS` and `*_FILE` variables to start the API with.
+`python scripts/demo_check.py --only connectors` then runs the connection tests (it prints
+`connectors: SKIP (none enabled)` when none is on); `--publish --github-repo <owner>/<repo>` in a
+full run also pushes, publishes a page and creates an issue. Installing them for real is in
+`docs/deploy/GMF-INSTALL.md` ("Connectors") and `docs/deploy/RUNBOOK.md`.
+
 ## Tests
 
 ```sh
@@ -161,7 +177,7 @@ It creates a project, uploads the synthetic zip, scans, discovers, analyzes `Dea
 and `CreditApplicationIntake`, approves G1 to G3 as `sme.vicky` and `architect.lee`, builds,
 checks the infrastructure, verifies, runs the plan in connect-later mode and checks test data
 masking, readiness and the audit trail. It prints a pass/fail table and exits non-zero on any
-failed row. A final `memory` step checks the project memory: available, a revision per
+failed row. A `connectors` step runs the enabled connectors' connection tests (skipped when none is enabled). A `memory` step checks the project memory: available, a revision per
 content phase, lineage and search for each target, a non-empty latest diff, a curation note as
 `sme.vicky` that lands as a new revision, and an answer that cites a memory node.
 
