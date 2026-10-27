@@ -71,7 +71,7 @@ export default function SignInPage() {
             <span className="block font-display text-xl font-semibold tracking-[-0.01em] text-white">
               {brand_name} Migrate
             </span>
-            <span className="block text-xs text-lilac">TIBCO BusinessWorks modernization</span>
+            <span className="block text-xs text-lilac">TIBCO BusinessWorks migration</span>
           </span>
         </div>
 

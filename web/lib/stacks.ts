@@ -48,5 +48,5 @@ export function useStackSubtitle(): string {
   const key = project ?? stacks.data?.default;
   const label = stacks.data?.stacks.find((s) => s.key === key)?.label;
   // Language and framework ("C# · .NET 10", "Java 21 · Spring Boot 3.5"), without the build tool.
-  return label ? `TIBCO BusinessWorks to ${label.split(" · ").slice(0, 2).join(" · ")}` : "TIBCO BusinessWorks modernization";
+  return label ? `TIBCO BusinessWorks to ${label.split(" · ").slice(0, 2).join(" · ")}` : "TIBCO BusinessWorks migration";
 }
