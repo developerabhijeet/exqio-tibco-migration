@@ -40,6 +40,10 @@ def stack_views(settings: Settings, toolchains: dict[str, Any]) -> list[dict[str
     return views
 
 
+#: Who may change a project's target stack: the SME picks it at upload, the architect at design.
+STACK_CHANGERS = frozenset({"sme", "architect", "admin"})
+
+
 def effective_default(settings: Settings) -> str:
     """The stored default stack, or (when the install no longer enables it) the first enabled one,
     dotnet by preference: a stale default must not make every create without a stack a 422."""
@@ -70,4 +74,4 @@ async def list_stacks(request: Request, settings: SettingsDep) -> dict[str, Any]
     except HTTPException:
         roles = frozenset()
     return {"default": effective_default(settings), "stacks": stack_views(settings, toolchains),
-            "can_change_stack": bool(roles & {"architect", "admin"}), "can_set_default": "admin" in roles}
+            "can_change_stack": bool(roles & STACK_CHANGERS), "can_set_default": "admin" in roles}

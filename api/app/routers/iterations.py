@@ -62,7 +62,7 @@ SME_ONLY = "an SME may open an iteration with requirements only"
 QUEUE_FAILED = "the design job could not be queued: nothing was opened, try again"
 TOO_LARGE = "the request is larger than {mb} MB"
 OPENERS = ("architect", "admin", "sme")
-FULL_OPENERS = frozenset({"architect", "admin"})
+FULL_OPENERS = frozenset({"architect", "admin", "sme"})  # the SME may bring logs and choose failures too
 LOG_FIELDS = ("logs", "logs[]")
 
 OpenerDep = Annotated[Principal, Depends(require_roles(*OPENERS))]

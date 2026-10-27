@@ -78,15 +78,19 @@ async def test_only_an_admin_changes_the_default_stack(client):
 
 
 async def test_stacks_report_what_the_caller_may_do(client):
-    for user, change, default in [("architect.lee", True, False), ("ops.sam", True, True), ("viewer.val", False, False)]:
+    for user, change, default in [("architect.lee", True, False), ("sme.vicky", True, False), ("engineer.ravi", False, False),
+                                 ("ops.sam", True, True), ("viewer.val", False, False)]:
         body = (await client.get("/stacks", headers={"X-User": user})).json()
         assert (body["can_change_stack"], body["can_set_default"]) == (change, default), user
 
 
-async def test_patch_stack_needs_architect_or_admin(client, project_id):
+async def test_patch_stack_needs_sme_architect_or_admin(client, project_id):
+    r = await client.patch(f"/projects/{project_id}", json={"target_stack": "dotnet"},
+                           headers={"X-User": "engineer.ravi"})
+    assert r.status_code == 403 and "SME, architect or admin" in r.json()["detail"]
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "dotnet"},
                            headers={"X-User": "sme.vicky"})
-    assert r.status_code == 403 and "architect or admin" in r.json()["detail"]
+    assert r.status_code == 200
     r = await client.patch(f"/projects/{project_id}", json={"target_stack": "dotnet"},
                            headers={"X-User": "architect.lee"})
     assert r.status_code == 200 and r.json()["target_stack"] == "dotnet"
@@ -126,7 +130,7 @@ async def test_viewer_cannot_patch_in_oidc(oidc_client):  # noqa: F811
     r = await oidc_client.patch(f"/projects/{pid}", json={"target_stack": "dotnet"}, headers=as_roles("viewer"))
     assert r.status_code == 403 and r.json()["detail"] == "viewer is read only"
     r = await oidc_client.patch(f"/projects/{pid}", json={"target_stack": "dotnet"}, headers=as_roles("engineer"))
-    assert r.status_code == 403 and "architect or admin" in r.json()["detail"]
+    assert r.status_code == 403 and "SME, architect or admin" in r.json()["detail"]
     r = await oidc_client.patch(f"/projects/{pid}", json={"target_stack": "dotnet"}, headers=as_roles("architect"))
     assert r.status_code == 200
 

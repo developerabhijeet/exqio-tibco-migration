@@ -120,4 +120,4 @@ export function useIterationAccess(action: IterationAction, accepted?: readonly 
 }
 
 /** The roles that may open an iteration with failures and logs, not requirements only. */
-export const FULL_OPENERS = ["architect", "admin"] as const;
+export const FULL_OPENERS = ["architect", "admin", "sme"] as const;

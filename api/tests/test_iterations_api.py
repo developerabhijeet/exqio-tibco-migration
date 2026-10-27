@@ -163,9 +163,8 @@ async def test_proposed_rules_become_draft_rules(client, built_and_failed, archi
     assert gates["G1"] == "approved"  # a draft does not move the spec hash
 
 
-async def test_sme_requirements_only(client, built_and_failed, sme):
+async def test_sme_opens_with_requirements(client, built_and_failed, sme):
     _, proc = built_and_failed
-    assert (await client.post(f"/processes/{proc}/iterations", json={"include": ["x"]}, headers=sme)).status_code == 403
     assert (await client.post(f"/processes/{proc}/iterations", json={"requirements": "r"}, headers=sme)).status_code == 201
 
 
@@ -176,12 +175,11 @@ async def test_viewer_is_refused_in_oidc(client_oidc, built_and_failed, viewer_t
 
 
 # ------------------------------------------------------------------ more of the API
-async def test_sme_refusals_name_the_reason(client, built_and_failed, sme):
+async def test_sme_may_bring_logs(client, built_and_failed, sme):
     _, proc = built_and_failed
     r = await client.post(f"/processes/{proc}/iterations", data={"body": json.dumps({"requirements": "r"})},
                           files={"logs": ("a.log", b"error")}, headers=sme)
-    assert r.status_code == 403 and r.json()["detail"] == "an SME may open an iteration with requirements only"
-    assert (await client.post(f"/processes/{proc}/iterations", json={}, headers=sme)).status_code == 403
+    assert r.status_code == 201, r.text
 
 
 async def test_engineer_cannot_open(client, built_and_failed):

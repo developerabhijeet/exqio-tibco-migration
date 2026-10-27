@@ -18,7 +18,7 @@ from api.app.db import new_id
 from api.app.deps import PrincipalDep, RunnerDep, SessionDep, SettingsDep
 from api.app.jobs.locks import advisory_lock
 from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
-from api.app.routers.stacks import effective_default, require_available
+from api.app.routers.stacks import STACK_CHANGERS, effective_default, require_available
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
 from api.app.schemas.project import (
@@ -66,9 +66,9 @@ async def create_project(body: ProjectCreate, request: Request, session: Session
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
 async def patch_project(project_id: str, body: ProjectPatch, principal: PrincipalDep, session: SessionDep,
                         settings: SettingsDep) -> Project:
-    """Change the target stack; the architect or admin decides, in every auth mode."""
-    if not principal.roles & {"architect", "admin"}:
-        raise HTTPException(status_code=403, detail="changing the target stack needs the architect or admin role")
+    """Change the target stack; the SME, architect or admin decides, in every auth mode."""
+    if not principal.roles & STACK_CHANGERS:
+        raise HTTPException(status_code=403, detail="changing the target stack needs the SME, architect or admin role")
     project = await _project(session, project_id)
     if body.target_stack != project.target_stack:
         require_available(body.target_stack, settings)

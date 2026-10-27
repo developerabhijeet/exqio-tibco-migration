@@ -5,7 +5,7 @@ import { api } from "./api";
 import { useProjects } from "./queries";
 import { useAppState } from "./state";
 
-const NEEDS_ROLE = "changing the target stack needs the architect or admin role";
+const NEEDS_ROLE = "changing the target stack needs the SME, architect or admin role";
 const NEEDS_ADMIN = "the default stack is set by an admin";
 
 /** The stacks the API reports (GET /stacks) and what the acting user may do with them (the server's call). */

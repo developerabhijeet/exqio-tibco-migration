@@ -56,16 +56,15 @@ test("viewer sees iteration controls disabled", async ({ page }) => {
   await expect(page.getByTestId("edit-drop")).toBeDisabled();
 });
 
-test("an SME re-enters design with requirements only, as JSON", async ({ page }) => {
+test("an SME re-enters design with requirements, as JSON", async ({ page }) => {
   test.setTimeout(420_000);
   await actAs(page, "sme.vicky"); await openFailedBuild(page);
   await page.getByTestId("reenter-design").click();
   const dialog = page.getByTestId("reenter-dialog");
-  // The failures are listed for context, but an SME's iteration carries requirements only.
+  // An SME chooses failures and brings logs like an architect.
   await expect(dialog.locator("[data-testid^=failure-]").first()).toBeVisible();
-  await expect(dialog.locator("[data-testid^=failure-] input[type=checkbox]").first()).toBeDisabled();
-  await expect(page.getByTestId("log-drop")).toBeDisabled();
-  await expect(page.getByTestId("open-iteration")).toBeDisabled();
+  await expect(dialog.locator("[data-testid^=failure-] input[type=checkbox]").first()).toBeEnabled();
+  await expect(page.getByTestId("log-drop")).toBeEnabled();
   await page.getByTestId("requirements").fill("Funding over 50k needs a second approver.");
   const posted = page.waitForRequest(
     (r) => r.method() === "POST" && /\/processes\/[^/]+\/iterations$/.test(new URL(r.url()).pathname),
@@ -73,7 +72,7 @@ test("an SME re-enters design with requirements only, as JSON", async ({ page })
   await page.getByTestId("open-iteration").click();
   const req = await posted;
   expect(req.headers()["content-type"]).toContain("application/json");
-  expect(JSON.parse(req.postData() ?? "{}")).toEqual({ requirements: "Funding over 50k needs a second approver." });
+  expect(JSON.parse(req.postData() ?? "{}")).toMatchObject({ requirements: "Funding over 50k needs a second approver." });
   await expect(page.getByTestId("iteration-strip")).toContainText("Iteration 2");
 });
 

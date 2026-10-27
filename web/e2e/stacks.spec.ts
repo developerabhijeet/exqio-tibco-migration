@@ -27,7 +27,7 @@ test("a viewer sees the picker disabled with the reason as text", async ({ page 
   await newProject(page, `stacks viewer ${Date.now()}`);
   await actAs(page, "viewer.val");
   await expect(page.getByTestId("stack-java")).toHaveAttribute("aria-disabled", "true");
-  await expect(page.getByTestId("stack-picker-reason")).toContainText("needs the architect or admin role");
+  await expect(page.getByTestId("stack-picker-reason")).toContainText("needs the SME, architect or admin role");
 });
 
 test("the server's refusal of a stack change is shown", async ({ page }) => {
