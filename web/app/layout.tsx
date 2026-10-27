@@ -37,7 +37,7 @@ const inter = localFont({
 
 export const metadata: Metadata = {
   title: "ExiQO Migrate",
-  description: "TIBCO BusinessWorks to .NET migration",
+  description: "TIBCO BusinessWorks modernization",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

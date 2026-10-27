@@ -37,3 +37,16 @@ export function useProjectStack(): string | undefined {
 
 /** The short name of a stack label: its first segment ("Java 21 · Spring Boot 3.5 · Maven" is "Java 21"). */
 export const shortLabel = (label: string) => label.split(" · ")[0];
+
+/**
+ * The brand subtitle: "TIBCO BusinessWorks to <stack>", naming the open project's target stack,
+ * else the install's default; before the stacks are known (or signed out), no stack is named.
+ */
+export function useStackSubtitle(): string {
+  const stacks = useStacks();
+  const project = useProjectStack();
+  const key = project ?? stacks.data?.default;
+  const label = stacks.data?.stacks.find((s) => s.key === key)?.label;
+  // Language and framework ("C# · .NET 10", "Java 21 · Spring Boot 3.5"), without the build tool.
+  return label ? `TIBCO BusinessWorks to ${label.split(" · ").slice(0, 2).join(" · ")}` : "TIBCO BusinessWorks modernization";
+}

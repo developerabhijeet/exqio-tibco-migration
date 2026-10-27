@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ClipboardCheck, Coins, Headphones, History, MoreHorizontal, Network, ScrollText, Settings } from "lucide-react";
 import { useBrand } from "@/lib/brand";
+import { useStackSubtitle } from "@/lib/stacks";
 import { useStepStates } from "@/lib/steps";
 import { ExiQoianLauncher } from "@/components/exiqoian/ExiQoianLauncher";
 import { ProjectSelector } from "./ProjectSelector";
@@ -150,6 +151,7 @@ function PhasePill() {
 export function TopBar() {
   const path = usePathname();
   const { brand_name } = useBrand();
+  const subtitle = useStackSubtitle();
   return (
     <header className="z-30 border-b border-black/20 bg-plum shadow-e2">
       <div className="flex w-full flex-wrap items-center gap-x-5 md:flex-nowrap px-[var(--gutter)]">
@@ -157,7 +159,7 @@ export function TopBar() {
           <img src="/brand/mark.svg" alt="" className="h-9 w-9" />
           <span className="leading-tight max-2xl:hidden">
             <span className="block font-display text-lg font-semibold tracking-[-0.01em] text-white">{brand_name} Migrate</span>
-            <span className="block text-xs text-lilac max-[1759px]:hidden">TIBCO BusinessWorks to .NET</span>
+            <span data-testid="brand-subtitle" className="block text-xs text-lilac max-[1759px]:hidden">{subtitle}</span>
           </span>
           <span className="sr-only 2xl:hidden">{brand_name} Migrate</span>
         </Link>

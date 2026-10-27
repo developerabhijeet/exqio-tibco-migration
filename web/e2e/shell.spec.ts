@@ -79,7 +79,7 @@ test.describe("app shell", () => {
 
   test("link labels and the brand subtitle appear from 1760 px, not before", async ({ page }) => {
     await page.goto("/");
-    const subtitle = page.getByText("TIBCO BusinessWorks to .NET");
+    const subtitle = page.getByTestId("brand-subtitle");
     const label = page.getByRole("navigation", { name: "Secondary" }).getByText("Tokenomics", { exact: true });
     await page.setViewportSize({ width: 1759, height: 900 });
     await expect(subtitle).toBeHidden();
