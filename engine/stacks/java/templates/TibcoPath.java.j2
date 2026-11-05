@@ -1,0 +1,13 @@
+package {{ pkg }}.core.contracts;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/** Lineage: the TIBCO element path a contract record or field comes from (/FundingRequest/dealId). */
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE, ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER})
+public @interface TibcoPath {
+    String value();
+}

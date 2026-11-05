@@ -39,7 +39,7 @@ export function TestResults({
       id="tests"
       actions={
         s ? (
-          <div className="flex flex-wrap gap-1.5 text-[12.5px]" data-testid="test-totals">
+          <div className="flex flex-wrap gap-1.5 text-sm" data-testid="test-totals">
             <Pill tone="det">{s.total} total</Pill>
             <Pill tone="gate">{s.passed} passed</Pill>
             <Pill tone={s.failed ? "error" : "det"}>{s.failed} failed</Pill>
@@ -52,13 +52,13 @@ export function TestResults({
     >
       {tests.error ? <ErrorNote error={tests.error} /> : null}
       {compiled === false && s && s.not_run > 0 ? (
-        <p className="mb-2 text-[13px] text-slate">
+        <p className="mb-2 text-sm text-slate">
           The solution did not compile here, so the tests are listed from the generated files and none has run.
         </p>
       ) : null}
-      {s && s.total === 0 ? <p className="text-[14px] text-slate">No tests were generated.</p> : null}
+      {s && s.total === 0 ? <p className="text-md text-slate">No tests were generated.</p> : null}
       {unmatched.length > 0 ? (
-        <ul className="mb-2 space-y-0.5 text-[12.5px] text-decision" data-testid="test-warnings">
+        <ul className="mb-2 space-y-0.5 text-sm text-decision" data-testid="test-warnings">
           {unmatched.map((w) => (
             <li key={`${w.path}:${w.method}`}>
               <span className="font-mono">{w.method}</span> in <span className="font-mono">{w.path}</span>: soft assertion, {w.reason}
@@ -67,8 +67,8 @@ export function TestResults({
         </ul>
       ) : null}
       {tests.data && tests.data.cases.length > 0 ? (
-        <div className="max-h-[420px] overflow-auto rounded-btn border border-line">
-          <table className="w-full min-w-[640px] text-[13px]">
+        <div className="table-scroll max-h-[420px] overflow-auto rounded-btn border border-line">
+          <table className="table min-w-[640px] text-sm">
             <thead className="sticky top-0">
               <tr className="table-head">
                 <th className="px-3 py-2">Test</th>
@@ -85,21 +85,21 @@ export function TestResults({
                   <tr key={c.name} data-testid="test-row" data-outcome={c.outcome} className="align-top">
                     <td className="px-3 py-2">
                       <p className="text-ink">{c.display_name ?? c.name}</p>
-                      <p className="font-mono text-[11px] text-slate" title={c.name}>
+                      <p className="font-mono text-2xs text-slate" title={c.name}>
                         {c.file}
                       </p>
                     </td>
                     <td className="px-3 py-2">
                       <Pill tone={KIND_TONE[c.kind] ?? "det"}>{c.kind}</Pill>
                     </td>
-                    <td className="px-3 py-2 font-mono text-[12px]">{c.rule_key ?? c.ref ?? "none"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{c.rule_key ?? c.ref ?? "none"}</td>
                     <td className="px-3 py-2">
                       <OutcomePill outcome={c.outcome} />
                       {!c.has_body ? (
-                        <span className="mt-1 block text-[11.5px] text-decision">no body yet</span>
+                        <span className="mt-1 block text-xs text-decision">no body yet</span>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-[12.5px] text-slate">
+                    <td className="px-3 py-2 text-sm text-slate">
                       {c.message ?? ""}
                       {soft.map((w) => (
                         <span key={w.reason} data-testid="test-warning" className="mt-0.5 block text-decision">

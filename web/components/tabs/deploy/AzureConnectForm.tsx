@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Cloud, Loader2, Unplug } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAzure } from "@/lib/buildQueries";
-import type { AzureConnectBody } from "@/lib/buildTypes";
+import { useBrand } from "@/lib/brand";
+import { useAzure, useDeployEnvironments } from "@/lib/buildQueries";
+import type { AzureConnectBody, DeployAuth } from "@/lib/buildTypes";
 import { ErrorNote } from "@/components/ui/Empty";
 import { Pill } from "@/components/ui/Pill";
 import { errorText, Panel } from "@/components/tabs/build/Panel";
@@ -22,9 +23,17 @@ const FIELDS: { key: keyof AzureConnectBody; label: string; required?: boolean; 
   { key: "location", label: "Location", placeholder: "eastus2" },
 ];
 
+const AUTH_LABEL: Record<DeployAuth | "local", string> = {
+  workload_identity: "Workload Identity (federated, no secret)",
+  keyvault_sp: "Service principal, secret read from Key Vault at plan time",
+  local: "Service principal, secret stored encrypted (local development)",
+};
+
 /**
- * The Azure connection for the project. The service principal secret is posted once, stored
- * encrypted by the API and never shown again. Connect later is a supported state.
+ * The Azure connection for the project. Local development (deploy_credential_mode "local"): the
+ * service principal secret is posted once, stored encrypted by the API and never shown again. An
+ * install: pick a declared environment; its ids come from the install and no secret is entered.
+ * Connect later is a supported state.
  */
 export function AzureConnectForm({
   projectId,
@@ -39,6 +48,9 @@ export function AzureConnectForm({
 }) {
   const qc = useQueryClient();
   const azure = useAzure(projectId);
+  const local = useBrand().deploy_credential_mode === "local";
+  const envs = useDeployEnvironments(!local);
+  const [envName, setEnvName] = useState("");
   const [form, setForm] = useState<AzureConnectBody>({ tenant: "", subscription: "", runtime: "container_app" });
   const [busy, setBusy] = useState<"connect" | "later" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +72,23 @@ export function AzureConnectForm({
     } finally {
       setBusy(null);
       setForm((f) => ({ ...f, client_secret: "" }));
+    }
+  };
+
+  const declared = envs.data?.environments ?? [];
+  const chosen = declared.find((e) => e.name === (envName || declared[0]?.name));
+
+  const connectEnvironment = async () => {
+    if (!chosen) return;
+    setBusy("connect");
+    setError(null);
+    try {
+      await api.connectAzureEnvironment(projectId, chosen.name);
+      qc.invalidateQueries({ queryKey: ["azure", projectId] });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -92,7 +121,7 @@ export function AzureConnectForm({
     <Panel
       title="Azure connection"
       icon={<AzureIcon size={18} />}
-      eyebrow="Subscription and service principal"
+      eyebrow={local ? "Subscription and service principal" : "Deploy environment"}
       testId="azure-form"
       actions={
         conn?.connected ? (
@@ -109,7 +138,7 @@ export function AzureConnectForm({
     >
       {error ? <ErrorNote error={error} /> : null}
       {conn?.connected ? (
-        <div className="mb-4 grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-[13px] md:grid-cols-2">
+        <div className="mb-4 grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-sm md:grid-cols-2">
           <p>
             <span className="label mr-1.5">Tenant</span>
             <span className="font-mono">{conn.tenant}</span>
@@ -126,77 +155,164 @@ export function AzureConnectForm({
                 <span className="font-mono">{v}</span>
               </p>
             ))}
-          <p>
-            <span className="label mr-1.5">Client secret</span>
-            {conn.secret_stored ? "stored encrypted, not shown" : "none"}
-          </p>
+          {conn.environment ? (
+            <p>
+              <span className="label mr-1.5">Environment</span>
+              <span className="font-mono">{conn.environment}</span>
+            </p>
+          ) : null}
+          {conn.auth_mode && conn.auth_mode !== "local" ? (
+            <>
+              <p>
+                <span className="label mr-1.5">Client ID</span>
+                <span className="font-mono">{conn.client_id}</span>
+              </p>
+              <p>
+                <span className="label mr-1.5">Auth</span>
+                {AUTH_LABEL[conn.auth_mode]}
+              </p>
+              {conn.secret_name ? (
+                <p className="md:col-span-2">
+                  <span className="label mr-1.5">Key Vault secret</span>
+                  <span className="font-mono">
+                    {conn.key_vault_uri} / {conn.secret_name}
+                  </span>
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p>
+              <span className="label mr-1.5">Client secret</span>
+              {conn.secret_stored ? "stored encrypted, not shown" : "none"}
+            </p>
+          )}
           {conn.warning ? <p className="text-decision md:col-span-2">{conn.warning}</p> : null}
         </div>
       ) : null}
-      <form
-        className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          // Enter submits too: the same guard as the button.
-          if (busy || !form.tenant || !form.subscription) return;
-          connect();
-        }}
-      >
-        {FIELDS.map((f) => (
-          <label key={f.key} className="text-[13px] text-slate">
-            {f.label}
-            {f.required ? <span className="text-coral"> *</span> : null}
-            <input
-              className="input mt-1 font-mono text-[13px]"
-              value={(form[f.key] as string) ?? ""}
-              required={f.required}
-              placeholder={f.placeholder}
-              onChange={(e) => set(f.key, e.target.value)}
-            />
+      {local ? (
+        <form
+          className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            // Enter submits too: the same guard as the button.
+            if (busy || !form.tenant || !form.subscription) return;
+            connect();
+          }}
+        >
+          {FIELDS.map((f) => (
+            <label key={f.key} className="text-sm text-slate">
+              {f.label}
+              {f.required ? <span className="text-coral"> *</span> : null}
+              <input
+                className="input mt-1 font-mono text-sm"
+                value={(form[f.key] as string) ?? ""}
+                required={f.required}
+                placeholder={f.placeholder}
+                onChange={(e) => set(f.key, e.target.value)}
+              />
+            </label>
+          ))}
+          <label className="text-sm text-slate">
+            Runtime
+            <select className="input select mt-1" value={form.runtime} onChange={(e) => set("runtime", e.target.value)}>
+              <option value="container_app">Azure Container Apps</option>
+              <option value="aks">AKS</option>
+            </select>
           </label>
-        ))}
-        <label className="text-[13px] text-slate">
-          Runtime
-          <select className="input select mt-1" value={form.runtime} onChange={(e) => set("runtime", e.target.value)}>
-            <option value="container_app">Azure Container Apps</option>
-            <option value="aks">AKS</option>
-          </select>
-        </label>
-        <fieldset className="grid gap-3 rounded-btn border border-line p-3 md:col-span-2 md:grid-cols-2 xl:col-span-3">
-          <legend className="px-1 text-[13px] font-semibold text-plum">Service principal</legend>
-          <label className="text-[13px] text-slate">
-            Client ID
-            <input className="input mt-1 font-mono text-[13px]" value={form.client_id ?? ""} onChange={(e) => set("client_id", e.target.value)} autoComplete="off" />
+          <fieldset className="grid gap-3 rounded-btn border border-line p-3 md:col-span-2 md:grid-cols-2 xl:col-span-3">
+            <legend className="px-1 text-sm font-semibold text-heading">Service principal</legend>
+            <label className="text-sm text-slate">
+              Client ID
+              <input className="input mt-1 font-mono text-sm" value={form.client_id ?? ""} onChange={(e) => set("client_id", e.target.value)} autoComplete="off" />
+            </label>
+            <label className="text-sm text-slate">
+              Client secret
+              <input
+                type="password"
+                className="input mt-1 font-mono text-sm"
+                value={form.client_secret ?? ""}
+                onChange={(e) => set("client_secret", e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <p className="text-xs text-slate md:col-span-2">
+              Posted once over the API, stored encrypted, never displayed again. Leave both empty to plan with an existing az login.
+            </p>
+          </fieldset>
+          <div className="flex items-end md:col-span-2 xl:col-span-4">
+            <button type="submit" className="btn-primary" disabled={!!busy || !form.tenant || !form.subscription}>
+              {busy === "connect" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Cloud size={15} aria-hidden />}
+              Connect Azure
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form
+          className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+          data-testid="azure-environment-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (busy || !chosen) return;
+            connectEnvironment();
+          }}
+        >
+          {envs.error ? <ErrorNote error={errorText(envs.error)} /> : null}
+          <label className="text-sm text-slate">
+            Environment
+            <select
+              className="input select mt-1"
+              value={chosen?.name ?? ""}
+              onChange={(e) => setEnvName(e.target.value)}
+              disabled={!declared.length}
+            >
+              {declared.length ? null : <option value="">none declared</option>}
+              {declared.map((e) => (
+                <option key={e.name} value={e.name}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
           </label>
-          <label className="text-[13px] text-slate">
-            Client secret
-            <input
-              type="password"
-              className="input mt-1 font-mono text-[13px]"
-              value={form.client_secret ?? ""}
-              onChange={(e) => set("client_secret", e.target.value)}
-              autoComplete="new-password"
-            />
-          </label>
-          <p className="text-[12px] text-slate md:col-span-2">
-            Posted once over the API, stored encrypted, never displayed again. Leave both empty to plan with an existing az login.
+          {chosen ? (
+            <div className="grid gap-x-6 gap-y-1 rounded-btn border border-line bg-page px-4 py-3 text-sm md:col-span-2 md:grid-cols-2 xl:col-span-3">
+              <p>
+                <span className="label mr-1.5">Tenant</span>
+                <span className="font-mono">{chosen.tenant}</span>
+              </p>
+              <p>
+                <span className="label mr-1.5">Subscription</span>
+                <span className="font-mono">{chosen.subscription}</span>
+              </p>
+              <p className="md:col-span-2">
+                <span className="label mr-1.5">Auth</span>
+                {AUTH_LABEL[chosen.auth]}
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-slate md:col-span-2 xl:col-span-3">
+              No deploy environment is declared for this install (DEPLOY_ENVIRONMENTS).
+            </p>
+          )}
+          <p className="text-xs text-slate md:col-span-2 xl:col-span-4">
+            No secret is entered here: the plan signs in with the environment&apos;s Workload Identity, or reads the service
+            principal secret from Key Vault when it runs.
           </p>
-        </fieldset>
-        <div className="flex items-end md:col-span-2 xl:col-span-4">
-          <button type="submit" className="btn-primary" disabled={!!busy || !form.tenant || !form.subscription}>
-            {busy === "connect" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Cloud size={15} aria-hidden />}
-            Connect Azure
-          </button>
-        </div>
-      </form>
+          <div className="flex items-end md:col-span-2 xl:col-span-4">
+            <button type="submit" className="btn-primary" disabled={!!busy || !chosen}>
+              {busy === "connect" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Cloud size={15} aria-hidden />}
+              Connect Azure
+            </button>
+          </div>
+        </form>
+      )}
       <div className="mt-5 border-t border-line pt-4">
-        <p className="text-[14px] font-semibold text-plum">Connect later</p>
-        <p className="mt-0.5 text-[13px] text-slate">
+        <p className="text-md font-semibold text-heading">Connect later</p>
+        <p className="mt-0.5 text-sm text-slate">
           An operations user records why Azure is not connected yet. The generated assets and their last validation stay the
-          evidence for G6 until a plan runs. Recorded as <span className="font-medium text-plum">{user}</span>.
+          evidence for G6 until a plan runs. Recorded as <span className="font-medium text-heading">{user}</span>.
         </p>
         <div className="mt-2 flex flex-wrap items-end gap-2">
-          <label className="min-w-[320px] flex-1 text-[13px] text-slate">
+          <label className="min-w-[320px] flex-1 text-sm text-slate">
             Connect-later note
             <input className="input mt-1" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Subscription access requested from the platform team" />
           </label>
@@ -207,7 +323,7 @@ export function AzureConnectForm({
             </button>
           </span>
         </div>
-        {canConnectLater ? <p className="mt-1 text-[12.5px] text-slate">{canConnectLater}</p> : null}
+        {canConnectLater ? <p className="mt-1 text-sm text-slate">{canConnectLater}</p> : null}
       </div>
     </Panel>
   );

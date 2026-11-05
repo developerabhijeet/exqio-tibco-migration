@@ -25,9 +25,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+[% if stack == "dotnet" %]
       args:
         # Debug keeps the development endpoints that Auth__Mode=Development needs; Release removes them.
         CONFIGURATION: Debug
+[% endif %]
     depends_on:
       postgres:
         condition: service_healthy

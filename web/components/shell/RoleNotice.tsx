@@ -20,7 +20,7 @@ export function RoleNotice({ step }: { step: StepKey }) {
       className="flex items-start gap-3 rounded-card border border-decision/30 bg-decision-bg px-4 py-3"
     >
       <Eye size={17} className="mt-0.5 shrink-0 text-decision" aria-hidden />
-      <p className="text-[13.5px] leading-relaxed text-ink">
+      <p className="text-md leading-relaxed text-ink">
         <span className="font-semibold text-decision">View only.</span> {reason}
       </p>
     </div>

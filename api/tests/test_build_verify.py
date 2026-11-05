@@ -8,9 +8,10 @@ databases, so the per-project ``exiqo_scn_<project>_test`` default is only exerc
 Where ``dotnet`` or NuGet are missing the build must say so honestly: a failed ``restore`` step
 with the reason, G4 disabled, and still the solution files, the tests (as files), the infra assets
 and their validation. The verify tests drive a stand-in HTTP service registered as the build's
-running service, so the verify job, the comparison and the parity report are exercised without a
-restored .NET solution; ``test_build_scaffold_passes_with_dotnet`` runs the real thing and is
-skipped when NuGet is unreachable.
+running service with the in-process worker's hosting, so the verify job, the comparison and the
+parity report are exercised without a restored .NET solution;
+``test_build_scaffold_passes_with_dotnet`` runs the real thing (also Swagger through the API's
+proxy) and is skipped when NuGet is unreachable.
 """
 from __future__ import annotations
 
@@ -320,7 +321,7 @@ async def test_g4_disabled_when_restore_fails(client, app, monkeypatch):
 
         monkeypatch.setattr(build_svc, "run_restore", lambda root, dotnet: StepResult(
             ok=False, log="error NU1301: Unable to load the service index (simulated)"))
-        monkeypatch.setattr(build_svc, "nuget_probe", lambda: (False, "simulated: source unreachable"))
+        monkeypatch.setattr(build_svc, "nuget_probe", lambda *a: (False, "simulated: source unreachable"))
     _, proc_id, build_id, build = await _built(client, monkeypatch, dotnet=True)
     steps = {s["name"]: s for s in build["steps"]}
     assert steps["restore"]["ok"] is False and "NuGet unreachable" in steps["restore"]["log"]
@@ -434,6 +435,15 @@ async def test_build_scaffold_passes_with_dotnet(client, app, monkeypatch):
     r = await client.post(f"/builds/{build_id}/run")
     assert r.status_code == 200, r.text
     try:
+        # Swagger through the API's proxy: the UI, and an OpenAPI servers entry that is the proxy
+        # root, so "Try it out" calls come back through the proxy rather than the bare origin
+        run = r.json()
+        assert run["swagger_url"] == f"http://test/builds/{build_id}/run/proxy/swagger/index.html"
+        assert (await client.get(run["swagger_url"])).status_code == 200
+        doc = (await client.get(f"{run['url']}swagger/v1/swagger.json")).json()
+        assert doc["servers"] == [{"url": f"/builds/{build_id}/run/proxy"}], doc.get("servers")
+        token = await client.post(f"{run['url']}auth/dev-token", json={"subject": "exiqo-verifier"})
+        assert token.status_code == 200 and token.json()["access_token"]
         r = await client.post(f"/builds/{build_id}/verify")
         assert r.status_code == 202, r.text
         job = await _wait_job(client, r.json()["job_id"], timeout=600)
@@ -456,11 +466,11 @@ async def test_verify_parity_report_shape(client, app, monkeypatch, tmp_path):
     wrong = json.loads(json.dumps(answers))
     wrong["DL-50001"]["body"]["status"] = "PENDING"  # one defect per scenario on DL-50001
     stand_in = StandIn(wrong, tmp_path / "service.log")
-    app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
-                                                      port=int(stand_in.url.rsplit(":", 1)[1]))
+    await app.state.hosting.register(verify_svc.RunInfo(build_id=build_id, handle=stand_in,
+                                                        port=int(stand_in.url.rsplit(":", 1)[1])))
     try:
         state = (await client.get(f"/builds/{build_id}/run")).json()
-        assert state["running"] is True and state["url"] == stand_in.url
+        assert state["running"] is True and state["url"] == f"http://test/builds/{build_id}/run/proxy/"
         assert "stand-in" in (await client.get(f"/builds/{build_id}/run/logs")).json()["log"]
 
         r = await client.post(f"/builds/{build_id}/verify")
@@ -784,8 +794,8 @@ async def test_intended_is_unconfirmed_and_not_unexplained(client, app, monkeypa
     changed = json.loads(json.dumps(answers))
     changed["DL-50001"]["body"]["status"] = "FUNDED (reworded by the fix)"  # produced from the lookup
     stand_in = StandIn(changed, tmp_path / "service.log")
-    app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
-                                                      port=int(stand_in.url.rsplit(":", 1)[1]))
+    await app.state.hosting.register(verify_svc.RunInfo(build_id=build_id, handle=stand_in,
+                                                        port=int(stand_in.url.rsplit(":", 1)[1])))
     # G4 needs a compiling build (no NuGet here): record its approval so G5 depends on parity only
     async with app.state.sessionmaker() as s:
         proc = await s.get(ProcessRow, proc_id)
@@ -1003,7 +1013,7 @@ async def test_start_service_cleans_up_when_it_cannot_start(monkeypatch, tmp_pat
             raise RuntimeError("runner cannot be created")
         monkeypatch.setattr(verify_svc, "DotnetRunner", broken)
     with pytest.raises(RuntimeError):
-        await verify_svc.start_service(settings, build, "proj", None, asyncio.Lock())
+        await verify_svc.start_service(settings, build, "proj", None, asyncio.Lock)
     assert [s.stopped for s in _TrackedStubs.instances] == [True]
     assert verify_svc._RESERVED_PORTS == reserved  # no port stays reserved
 
@@ -1036,7 +1046,7 @@ async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch,
             return Handle()
 
     monkeypatch.setattr(verify_svc, "DotnetRunner", SlowRunner)
-    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock))
     await asyncio.sleep(0.2)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1047,7 +1057,7 @@ async def test_start_service_canceled_stops_what_the_launch_started(monkeypatch,
 
     # a second cancellation while the handler waits for the launch: the stubs and the port are
     # released at once and the service the launch returns is still stopped
-    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock()))
+    task = asyncio.create_task(verify_svc.start_service(settings, build, "proj", None, asyncio.Lock))
     await asyncio.sleep(0.2)
     task.cancel()
     await asyncio.sleep(0.1)
@@ -1088,12 +1098,12 @@ async def test_stop_waits_for_a_start_in_progress(client, app, monkeypatch, tmp_
     assert started.status_code == 200, started.text
     # the stop waited for the start and stopped the service it registered
     assert stopped.json()["stopped"] is True
-    assert build_id not in app.state.services and handle.poll() is not None
+    assert app.state.hosting.get(build_id) is None and handle.poll() is not None
     assert (await client.get(f"/builds/{build_id}/run")).json()["running"] is False
     # the build row is written under the same lock: the stop's null write lands after the start's
     async with app.state.sessionmaker() as s:
         row = await s.get(Build, build_id)
-        assert (row.run_pid, row.run_port) == (None, None)
+        assert (row.run_pid, row.run_port, row.run_host, row.run_owner) == (None, None, None, None)
 
 
 def test_unreadable_secret_is_reported():
@@ -1239,8 +1249,8 @@ async def test_expected_is_derived_again_against_the_run_s_own_seed(client, app,
     scenarios = (await client.get(f"/processes/{proc_id}/scenarios")).json()["scenarios"]
     answers = {s["input"]["parameters"]["dealId"]: s["expected"]["output"] for s in scenarios}
     stand_in = StandIn(json.loads(json.dumps(answers)), tmp_path / "service.log")
-    app.state.services[build_id] = verify_svc.RunInfo(build_id=build_id, handle=stand_in,
-                                                      port=int(stand_in.url.rsplit(":", 1)[1]))
+    await app.state.hosting.register(verify_svc.RunInfo(build_id=build_id, handle=stand_in,
+                                                        port=int(stand_in.url.rsplit(":", 1)[1])))
 
     # the cache goes stale, exactly the way a day's roll-over makes it stale
     poisoned: set[str] = set()
@@ -1276,3 +1286,17 @@ async def test_expected_is_derived_again_against_the_run_s_own_seed(client, app,
         assert "unexplained difference" not in (g5["reason"] or "")
     finally:
         await client.delete(f"/builds/{build_id}/run")
+
+
+def test_nuget_probe_local_folder_source_is_reachable(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(build_svc.dotnet_runner, "NUGET_CACHE", tmp_path / "no-cache")
+    ok, note = build_svc.nuget_probe(source=str(tmp_path))
+    assert ok is True and "local package source" in note
+
+
+def test_nuget_probe_non_url_source_is_unreachable_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(build_svc.dotnet_runner, "NUGET_CACHE", tmp_path / "no-cache")
+    ok, note = build_svc.nuget_probe(source="feeds-share/packages")
+    assert ok is False and "neither an existing folder nor an http(s) URL" in note

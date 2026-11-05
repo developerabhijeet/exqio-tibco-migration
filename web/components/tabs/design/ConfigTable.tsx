@@ -1,5 +1,6 @@
 import { Lock } from "lucide-react";
 import type { DesignRecord } from "@/lib/types";
+import { ScrollRegion } from "@/components/ui/ScrollRegion";
 
 /** TIBCO substitution variables and the .NET configuration keys they become; secrets go to Key Vault. */
 export function ConfigTable({ config, ignored }: { config: DesignRecord["config"]; ignored: DesignRecord["config_ignored"] }) {
@@ -7,10 +8,10 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
   return (
     <div className="space-y-3">
       {config.length === 0 ? (
-        <p className="text-[14px] text-slate">This process reads no substitution variables.</p>
+        <p className="text-md text-slate">This process reads no substitution variables.</p>
       ) : (
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-[13.5px]" data-testid="config-table">
+        <ScrollRegion label="Configuration keys">
+        <table className="table min-w-[640px]" data-testid="config-table">
           <thead>
             <tr className="table-head">
               <th className="px-3 py-2">TIBCO substitution variable</th>
@@ -21,11 +22,11 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
           <tbody className="divide-y divide-line">
             {config.map((c) => (
               <tr key={c.substvar} data-secret={c.secret}>
-                <td className="px-3 py-2 font-mono text-[12.5px]">{c.substvar}</td>
-                <td className="px-3 py-2 font-mono text-[12.5px]">{c.key}</td>
+                <td className="px-3 py-2 font-mono text-sm">{c.substvar}</td>
+                <td className="px-3 py-2 font-mono text-sm">{c.key}</td>
                 <td className="px-3 py-2">
                   {c.secret ? (
-                    <span className="inline-flex items-center gap-1.5 font-medium text-plum">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-heading">
                       <Lock size={14} className="text-coral" aria-label="secret" /> Key Vault secret
                     </span>
                   ) : (
@@ -36,10 +37,10 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
             ))}
           </tbody>
         </table>
-        </div>
+        </ScrollRegion>
       )}
       {secrets > 0 ? (
-        <p className="flex items-start gap-2 rounded-btn bg-warm px-3 py-2 text-[13px] text-slate">
+        <p className="flex items-start gap-2 rounded-btn bg-sunken px-3 py-2 text-sm text-slate">
           <Lock size={14} className="mt-0.5 shrink-0 text-coral" aria-hidden />
           Secret values are never written to appsettings or the repository. The service reads them from Azure Key Vault
           through its managed identity; locally they come from user secrets.
@@ -47,13 +48,13 @@ export function ConfigTable({ config, ignored }: { config: DesignRecord["config"
       ) : null}
       {ignored.length > 0 ? (
         <details className="rounded-btn border border-line px-3 py-2">
-          <summary className="cursor-pointer text-[13.5px] font-medium text-plum">
+          <summary className="cursor-pointer text-md font-medium text-heading">
             {ignored.length} variable{ignored.length > 1 ? "s" : ""} not carried over
           </summary>
-          <ul className="mt-2 space-y-0.5 text-[13px]">
+          <ul className="mt-2 space-y-0.5 text-sm">
             {ignored.map((i) => (
               <li key={i.substvar}>
-                <span className="font-mono text-[12.5px]">{i.substvar}</span>: <span className="text-slate">{i.reason}</span>
+                <span className="font-mono text-sm">{i.substvar}</span>: <span className="text-slate">{i.reason}</span>
               </li>
             ))}
           </ul>

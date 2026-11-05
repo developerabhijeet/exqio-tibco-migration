@@ -1,0 +1,133 @@
+package {{ pkg }}.infrastructure;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import javax.sql.DataSource;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
+/**
+ * One connection pool per TIBCO JDBC resource, from its connection string
+ * (connection-strings.&lt;resource&gt;, ConnectionStrings__&lt;Resource&gt; in the environment). The
+ * string is the runtime contract's Npgsql form (Host=..;Port=..;Database=..;Username=..;Password=..),
+ * a jdbc:postgresql: URL, or a postgresql:// URL.
+ */
+@Component
+public class DataSources implements DisposableBean {
+    private final Environment environment;
+    private final Map<String, HikariDataSource> pools = new ConcurrentHashMap<>();
+
+    public DataSources(Environment environment) {
+        this.environment = environment;
+    }
+
+    /** The pool of a resource: {@code property} is its connection-strings key, {@code name} its contract name. */
+    public DataSource dataSource(String name, String property) {
+        return pools.computeIfAbsent(name, n -> open(n, property));
+    }
+
+    /** A JdbcTemplate with the TIBCO activity's timeout (seconds) and maxRows; 0 means none. */
+    public JdbcTemplate jdbc(String name, String property, int timeoutSeconds, int maxRows) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource(name, property));
+        if (timeoutSeconds > 0) {
+            jdbc.setQueryTimeout(timeoutSeconds);
+        }
+        if (maxRows > 0) {
+            jdbc.setMaxRows(maxRows);
+        }
+        return jdbc;
+    }
+
+    private HikariDataSource open(String name, String property) {
+        String value = environment.getProperty(property, "").strip();
+        if (value.isEmpty()) {
+            throw new IllegalStateException("connection string ConnectionStrings__" + name + " (" + property + ") is not set");
+        }
+        HikariConfig config = new HikariConfig();
+        config.setPoolName(name);
+        config.setMaximumPoolSize(10);
+        if (value.startsWith("jdbc:")) {
+            config.setJdbcUrl(trustStoreFor(value));
+        } else if (value.startsWith("postgresql://") || value.startsWith("postgres://")) {
+            URI uri = URI.create(value);
+            String[] user = uri.getUserInfo() == null ? new String[0] : uri.getUserInfo().split(":", 2);
+            int port = uri.getPort() > 0 ? uri.getPort() : 5432;
+            config.setJdbcUrl(trustStoreFor("jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath()
+                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery())));
+            if (user.length > 0) {
+                config.setUsername(user[0]);
+            }
+            if (user.length > 1) {
+                config.setPassword(user[1]);
+            }
+        } else {
+            Map<String, String> parts = new LinkedHashMap<>();
+            for (String pair : value.split(";")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    parts.put(pair.substring(0, eq).strip().toLowerCase(Locale.ROOT), pair.substring(eq + 1).strip());
+                }
+            }
+            String host = parts.getOrDefault("host", parts.getOrDefault("server", "localhost"));
+            String port = parts.getOrDefault("port", "5432");
+            String database = parts.getOrDefault("database", "");
+            String sslMode = sslMode(parts, host);
+            config.setJdbcUrl(trustStoreFor("jdbc:postgresql://" + host + ":" + port + "/" + database
+                    + (sslMode.isEmpty() ? "" : "?sslmode=" + sslMode)));
+            config.setUsername(parts.getOrDefault("username", parts.get("user id")));
+            config.setPassword(parts.get("password"));
+        }
+        return new HikariDataSource(config);
+    }
+
+    /**
+     * The pgjdbc sslmode of the Npgsql {@code SSL Mode} setting: Require and VerifyFull verify the
+     * server certificate and host name (verify-full) unless {@code Trust Server Certificate} is true
+     * (require: encrypted, not verified); VerifyCA, Prefer, Allow and Disable keep their meaning.
+     * Without a setting an Azure Database for PostgreSQL host gets verify-full, any other host the
+     * driver's default.
+     */
+    static String sslMode(Map<String, String> parts, String host) {
+        String mode = parts.getOrDefault("ssl mode", parts.getOrDefault("sslmode", ""))
+                .replace(" ", "").toLowerCase(Locale.ROOT);
+        boolean trust = "true".equalsIgnoreCase(parts.getOrDefault("trust server certificate",
+                parts.getOrDefault("trustservercertificate", "")));
+        switch (mode) {
+            case "require", "verifyfull", "verify-full":
+                return trust ? "require" : "verify-full";
+            case "verifyca", "verify-ca":
+                return "verify-ca";
+            case "prefer", "allow", "disable":
+                return mode;
+            case "":
+                return host.toLowerCase(Locale.ROOT).endsWith(".postgres.database.azure.com") ? "verify-full" : "";
+            default:
+                return "";
+        }
+    }
+
+    /**
+     * pgjdbc's default socket factory verifies against {@code ~/.postgresql/root.crt}, which the
+     * image does not have. For verify-ca and verify-full the JDK trust store is named instead (pgjdbc
+     * still checks the host name for verify-full); a URL that names its own factory or root is kept.
+     */
+    static String trustStoreFor(String jdbcUrl) {
+        boolean verify = jdbcUrl.contains("sslmode=verify-ca") || jdbcUrl.contains("sslmode=verify-full");
+        if (!verify || jdbcUrl.contains("sslfactory=") || jdbcUrl.contains("sslrootcert=")) {
+            return jdbcUrl;
+        }
+        return jdbcUrl + (jdbcUrl.contains("?") ? "&" : "?") + "sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory";
+    }
+
+    @Override
+    public void destroy() {
+        pools.values().forEach(HikariDataSource::close);
+    }
+}

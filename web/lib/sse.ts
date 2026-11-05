@@ -2,7 +2,10 @@
 // a resumed stream for a finished job answers 204, which closes the EventSource, so the job row
 // is read to report the outcome. The browser reconnects on its own (resuming with Last-Event-ID);
 // after `maxRetries` failed attempts in a row the stream gives up and reports `onLost`.
-import { api, requireApiUrl } from "./api";
+// An EventSource cannot see the status of a refused connection, so in AUTH_MODE=oidc each failure
+// asks /auth/me whether the session ran out, and a 401 there goes to the sign-in.
+import { api, isOidc, requireApiUrl } from "./api";
+import { checkSession } from "./auth";
 import type { JobEvent, JobEventKind } from "./types";
 
 export interface SubscribeOptions {
@@ -15,7 +18,7 @@ export function subscribeJob(
   onEvent: (e: JobEvent) => void,
   { onLost, maxRetries = 5 }: SubscribeOptions = {},
 ): () => void {
-  const source = new EventSource(`${requireApiUrl()}/jobs/${jobId}/events`);
+  const source = new EventSource(`${requireApiUrl()}/jobs/${jobId}/events`, { withCredentials: isOidc() });
   let finished = false;
   let failures = 0;
   source.addEventListener("open", () => {
@@ -47,6 +50,7 @@ export function subscribeJob(
       return;
     }
     if (finished) return;
+    void checkSession();
     if (source.readyState !== EventSource.CLOSED) {
       // The browser is reconnecting; give up after a few failures in a row.
       failures += 1;

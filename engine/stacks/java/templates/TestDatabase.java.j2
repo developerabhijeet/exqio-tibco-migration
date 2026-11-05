@@ -1,0 +1,222 @@
+package {{ pkg }}.support;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.TreeMap;
+import org.junit.jupiter.api.Assumptions;
+import org.springframework.test.context.DynamicPropertyRegistry;
+
+/**
+ * The test database: the estate's own SQL (src/test/resources/database/*.sql, copied from the TIBCO
+ * estate) on the PostgreSQL database at TEST_DATABASE_URL (for example
+ * postgresql://exiqo:exiqo@localhost:5432/exiqo_test). A test that needs it is skipped when
+ * TEST_DATABASE_URL is not set. Every scenario resets the schemas, so scenarios do not see each
+ * other's writes; a database whose name does not end with _test is never reset.
+ */
+public final class TestDatabase {
+    /** Schemas the estate's SQL creates; dropped and recreated on every reset. */
+    public static final List<String> SCHEMAS = List.of({% for s in schemas %}{{ s | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
+
+    /** The estate's SQL files, run in this order on every reset. */
+    public static final List<String> SQL_FILES = List.of({% for f in sql_files %}{{ f | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
+
+    /** The connection-string properties the generated service reads; all point at this database. */
+    public static final List<String> CONNECTION_PROPERTIES = List.of({% for c in connections %}{{ c | java_string }}{% if not loop.last %}, {% endif %}{% endfor %});
+
+    private static TestDatabase instance;
+
+    private final String jdbcUrl;
+    private final String user;
+    private final String password;
+
+    private TestDatabase(String jdbcUrl, String user, String password) {
+        this.jdbcUrl = jdbcUrl;
+        this.user = user;
+        this.password = password;
+    }
+
+    /** The database at TEST_DATABASE_URL; the calling test is skipped when it is not set. */
+    public static synchronized TestDatabase get() {
+        String url = System.getenv("TEST_DATABASE_URL");
+        if (url == null || url.isBlank()) {
+            Assumptions.assumeTrue(false, "TEST_DATABASE_URL is not set");
+        }
+        if (instance == null) {
+            instance = parse(url.strip());
+        }
+        return instance;
+    }
+
+    /** Points every connection string of the service at the test database (when one is set). */
+    public static void register(DynamicPropertyRegistry registry) {
+        String url = System.getenv("TEST_DATABASE_URL");
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        TestDatabase database = parse(url.strip());
+        for (String property : CONNECTION_PROPERTIES) {
+            registry.add(property, database::connectionString);
+        }
+    }
+
+    /** The JDBC URL with the credentials as parameters, as the service's DataSources reads it. */
+    public String connectionString() {
+        if (user == null) {
+            return jdbcUrl;
+        }
+        StringBuilder out = new StringBuilder(jdbcUrl).append(jdbcUrl.contains("?") ? '&' : '?');
+        out.append("user=").append(URLEncoder.encode(user, StandardCharsets.UTF_8));
+        if (password != null) {
+            out.append("&password=").append(URLEncoder.encode(password, StandardCharsets.UTF_8));
+        }
+        return out.toString();
+    }
+
+    /** Recreates the schemas, runs the estate SQL, then inserts the scenario's seed rows. */
+    public void reset(Fixtures.Fixture fixture) {
+        String path = URI.create(jdbcUrl.substring("jdbc:".length())).getPath();
+        String database = path == null ? "" : path.replaceFirst("^/", "");
+        if (!database.endsWith("_test")) {
+            throw new IllegalStateException("Refusing to reset database '" + database + "': the name must end with _test.");
+        }
+        try (Connection connection = open(); Statement statement = connection.createStatement()) {
+            for (String schema : SCHEMAS) {
+                statement.execute("DROP SCHEMA IF EXISTS " + quote(schema) + " CASCADE; CREATE SCHEMA " + quote(schema) + ";");
+            }
+            for (String file : SQL_FILES) {
+                statement.execute(resource("database/" + file));
+            }
+            if (fixture != null) {
+                for (Fixtures.SeedRow seed : fixture.seedRows()) {
+                    insert(connection, seed.table(), seed.row());
+                }
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("resetting the test database failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** Every row of a table (schema-qualified, or in the first schema), column name to value. */
+    public List<Map<String, Object>> query(String table) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        try (Connection connection = open();
+                Statement statement = connection.createStatement();
+                ResultSet result = statement.executeQuery("SELECT * FROM " + quoteTable(table))) {
+            ResultSetMetaData meta = result.getMetaData();
+            while (result.next()) {
+                Map<String, Object> row = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+                for (int i = 1; i <= meta.getColumnCount(); i++) {
+                    row.put(meta.getColumnLabel(i), result.getObject(i));
+                }
+                rows.add(row);
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("reading " + table + " failed: " + ex.getMessage(), ex);
+        }
+        return rows;
+    }
+
+    private Connection open() throws SQLException {
+        Properties properties = new Properties();
+        if (user != null) {
+            properties.setProperty("user", user);
+        }
+        if (password != null) {
+            properties.setProperty("password", password);
+        }
+        return DriverManager.getConnection(jdbcUrl, properties);
+    }
+
+    private static void insert(Connection connection, String table, Map<String, String> row) throws SQLException {
+        List<String> columns = new ArrayList<>(row.keySet());
+        StringBuilder sql = new StringBuilder("INSERT INTO ").append(quoteTable(table)).append(" (");
+        StringBuilder values = new StringBuilder();
+        for (int i = 0; i < columns.size(); i++) {
+            sql.append(i == 0 ? "" : ", ").append(quote(columns.get(i)));
+            values.append(i == 0 ? "?" : ", ?");
+        }
+        sql.append(") VALUES (").append(values).append(')');
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < columns.size(); i++) {
+                String value = row.get(columns.get(i));
+                if (value == null) {
+                    statement.setNull(i + 1, Types.OTHER);
+                } else {
+                    statement.setObject(i + 1, value, Types.OTHER);
+                }
+            }
+            statement.executeUpdate();
+        }
+    }
+
+    private static String resource(String name) {
+        try (InputStream in = TestDatabase.class.getClassLoader().getResourceAsStream(name)) {
+            if (in == null) {
+                throw new IllegalStateException("test resource " + name + " is missing");
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new IllegalStateException("reading " + name + " failed", ex);
+        }
+    }
+
+    private static String quoteTable(String table) {
+        String[] parts = table.split("\\.");
+        if (parts.length == 1 && !SCHEMAS.isEmpty()) {
+            return quote(SCHEMAS.get(0)) + "." + quote(parts[0]);
+        }
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            out.append(out.length() == 0 ? "" : ".").append(quote(part));
+        }
+        return out.toString();
+    }
+
+    private static String quote(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
+    /** postgresql://user:password@host:port/db, jdbc:postgresql://... or the Npgsql key=value form. */
+    private static TestDatabase parse(String url) {
+        if (url.startsWith("jdbc:")) {
+            return new TestDatabase(url, null, null);
+        }
+        if (url.startsWith("postgresql://") || url.startsWith("postgres://")) {
+            URI uri = URI.create(url);
+            String[] info = uri.getRawUserInfo() == null ? new String[0] : uri.getRawUserInfo().split(":", 2);
+            int port = uri.getPort() > 0 ? uri.getPort() : 5432;
+            return new TestDatabase(
+                    "jdbc:postgresql://" + uri.getHost() + ":" + port + uri.getPath(),
+                    info.length > 0 ? URLDecoder.decode(info[0], StandardCharsets.UTF_8) : null,
+                    info.length > 1 ? URLDecoder.decode(info[1], StandardCharsets.UTF_8) : null);
+        }
+        Map<String, String> parts = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (String pair : url.split(";")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0) {
+                parts.put(pair.substring(0, eq).strip(), pair.substring(eq + 1).strip());
+            }
+        }
+        return new TestDatabase(
+                "jdbc:postgresql://" + parts.getOrDefault("Host", "localhost") + ":" + parts.getOrDefault("Port", "5432")
+                        + "/" + parts.getOrDefault("Database", ""),
+                parts.get("Username"),
+                parts.get("Password"));
+    }
+}

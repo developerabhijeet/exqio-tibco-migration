@@ -1,0 +1,412 @@
+package {{ pkg }}.support;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
+import {{ pkg }}.core.messaging.MessageBus;
+import {{ pkg }}.infrastructure.messaging.InMemoryMessageBus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAccessor;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+
+/**
+ * What every generated test class stands on: the generated service started on a random port in
+ * the development profile (development tokens, in-memory bus, timers off) against the test
+ * database, the scenario drivers, and field-by-field comparison with a fixture.
+ *
+ * <p>A test body reaches the service through {@link #bean(Class)} (a process service, a consumer),
+ * sends HTTP requests with {@link #send(String, String, JsonNode)} (already authenticated), reads
+ * the database with {@link #database()} and what was published with {@link #publishedSince(int)}.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("development")
+public abstract class ScenarioSupport {
+    private static final HttpClient HTTP = HttpClient.newHttpClient();
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private ApplicationContext context;
+
+    @Autowired
+    private InMemoryMessageBus bus;
+
+    private String token;
+
+    @DynamicPropertySource
+    static void testDatabase(DynamicPropertyRegistry registry) {
+        registry.add("messaging.mode", () -> "InMemory");
+        registry.add("jobs.enabled", () -> "false");
+        TestDatabase.register(registry);
+    }
+
+    /** A bean of the running service (a process service, a consumer, a repository). */
+    protected <T> T bean(Class<T> type) {
+        return context.getBean(type);
+    }
+
+    /** The test database; the test is skipped when TEST_DATABASE_URL is not set. */
+    protected TestDatabase database() {
+        return TestDatabase.get();
+    }
+
+    /** The in-memory bus the service publishes to. */
+    protected InMemoryMessageBus bus() {
+        return bus;
+    }
+
+    /** How many messages were published so far: pass it to {@link #publishedSince(int)}. */
+    protected int publishedMark() {
+        return bus.published().size();
+    }
+
+    /** The messages published after {@code mark}. */
+    protected List<MessageBus.Message> publishedSince(int mark) {
+        List<MessageBus.Message> all = bus.published();
+        return all.subList(Math.min(mark, all.size()), all.size());
+    }
+
+    /** The fixture of one scenario. */
+    protected Fixtures.Fixture fixture(String process, String scenario) {
+        return Fixtures.load(process, scenario);
+    }
+
+    // ------------------------------------------------------------------ drivers
+    /** A REST or HTTP scenario: reset, send the fixture request, compare response and side effects. */
+    protected void runRequest(String process, String scenario) {
+        Fixtures.Fixture fixture = fixture(process, scenario);
+        database().reset(fixture);
+        int mark = publishedMark();
+        JsonNode request = fixture.request();
+        HttpResponse<String> response = send(
+                request.path("method").asText("GET"), pathWithQuery(request), request.get("body"));
+        assertResponseMatches(fixture, response);
+        assertSideEffectsMatch(fixture, mark);
+    }
+
+    /**
+     * A JMS scenario: reset, hand the fixture input to the consumer as a message on
+     * {@code destination} with {@code properties} (what the TIBCO selector asks for), compare the
+     * settlement and the side effects.
+     */
+    protected void runMessage(String process, String scenario, String destination, Map<String, String> properties,
+            Function<MessageBus.Message, MessageBus.Outcome> consumer) {
+        Fixtures.Fixture fixture = fixture(process, scenario);
+        database().reset(fixture);
+        int mark = publishedMark();
+        MessageBus.Message message = new MessageBus.Message(destination, json(fixture.input()), properties);
+        MessageBus.Outcome outcome = consumer.apply(message);
+        JsonNode fault = fixture.fault();
+        if (fault == null) {
+            assertEquals(MessageBus.Disposition.COMPLETE, outcome.disposition(),
+                    fixture.scenarioId() + ": dead-lettered (" + outcome.reason() + "): " + outcome.description());
+        } else {
+            assertEquals(MessageBus.Disposition.DEAD_LETTER, outcome.disposition(), fixture.scenarioId() + ": no fault");
+            assertEquals(fault.path("name").asText(), outcome.reason(), fixture.scenarioId() + ": fault name");
+        }
+        assertSideEffectsMatch(fixture, mark);
+    }
+
+    /** A timer scenario: reset, run the job once, compare side effects. */
+    protected void runJob(String process, String scenario, Runnable job) {
+        Fixtures.Fixture fixture = fixture(process, scenario);
+        database().reset(fixture);
+        int mark = publishedMark();
+        RuntimeException error = null;
+        try {
+            job.run();
+        } catch (RuntimeException ex) {
+            error = ex;
+        }
+        JsonNode fault = fixture.fault();
+        if (fault == null && error != null) {
+            throw error;
+        }
+        if (fault != null) {
+            assertTrue(error instanceof {{ pkg }}.core.exceptions.ProcessFault, fixture.scenarioId() + ": no fault");
+            assertEquals(fault.path("name").asText(), (({{ pkg }}.core.exceptions.ProcessFault) error).faultName());
+        }
+        assertSideEffectsMatch(fixture, mark);
+    }
+
+    // ------------------------------------------------------------------ HTTP
+    /** Sends a request to the running service with a development token; {@code body} may be null. */
+    protected HttpResponse<String> send(String method, String pathAndQuery, JsonNode body) {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + pathAndQuery))
+                .header("Authorization", "Bearer " + token())
+                .header("Accept", "application/json");
+        if (body == null || body.isNull() || body.isMissingNode()) {
+            request.method(method, HttpRequest.BodyPublishers.noBody());
+        } else {
+            request.header("Content-Type", "application/json")
+                    .method(method, HttpRequest.BodyPublishers.ofString(json(body)));
+        }
+        return exchange(request.build());
+    }
+
+    /** The response body as JSON (a missing node when empty). */
+    protected static JsonNode body(HttpResponse<String> response) {
+        return parse(response.body());
+    }
+
+    private String token() {
+        if (token == null) {
+            HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/auth/dev-token"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"subject\":\"scenario-tests\"}"))
+                    .build();
+            HttpResponse<String> response = exchange(request);
+            if (response.statusCode() != 200) {
+                fail("/auth/dev-token answered " + response.statusCode()
+                        + ": the service under test does not issue development tokens");
+            }
+            token = parse(response.body()).path("access_token").asText();
+        }
+        return token;
+    }
+
+    private static HttpResponse<String> exchange(HttpRequest request) {
+        try {
+            return HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (IOException ex) {
+            throw new IllegalStateException(request.uri() + " failed: " + ex.getMessage(), ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted calling " + request.uri(), ex);
+        }
+    }
+
+    private static String pathWithQuery(JsonNode request) {
+        StringBuilder out = new StringBuilder(request.path("path").asText("/"));
+        Iterator<Map.Entry<String, JsonNode>> query = request.path("query").fields();
+        char sep = '?';
+        while (query.hasNext()) {
+            Map.Entry<String, JsonNode> e = query.next();
+            out.append(sep).append(encode(e.getKey())).append('=').append(encode(text(e.getValue())));
+            sep = '&';
+        }
+        return out.toString();
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    // ------------------------------------------------------------------ comparison
+    /** Status and body against expected.output (status, body); a fault answers 500 with its name as title. */
+    protected static void assertResponseMatches(Fixtures.Fixture fixture, HttpResponse<String> response) {
+        JsonNode fault = fixture.fault();
+        ObjectNode actual = Fixtures.JSON.createObjectNode();
+        actual.put("status", response.statusCode());
+        JsonNode body = body(response);
+        actual.set("body", body.isMissingNode() ? null : body);
+        if (fault != null) {
+            assertEquals(500, response.statusCode(), fixture.scenarioId() + ": status");
+            assertEquals(fault.path("name").asText(), body.path("title").asText(), fixture.scenarioId() + ": fault name");
+            return;
+        }
+        assertFields(fixture.scenarioId(), fixture.expected("output"), actual, fixture.outputNoise());
+    }
+
+    /** Rows written (in the test database) and messages published after {@code mark} (on the bus). */
+    protected void assertSideEffectsMatch(Fixtures.Fixture fixture, int mark) {
+        for (JsonNode effect : fixture.expected("side_effects")) {
+            JsonNode payload = effect.path("payload");
+            Set<String> noise = new java.util.HashSet<>();
+            effect.path("noise").forEach(n -> noise.add(n.asText()));
+            switch (effect.path("kind").asText()) {
+                case "row_written" -> {
+                    String table = effect.path("table").asText();
+                    List<Map<String, Object>> rows = database().query(table);
+                    assertTrue(rows.stream().anyMatch(row -> matches(payload, name -> text(row.get(name)), noise)),
+                            fixture.scenarioId() + ": no row in " + table + " matches " + payload);
+                }
+                case "message_published" -> {
+                    String entity = effect.path("target").asText();
+                    List<JsonNode> messages = new ArrayList<>();
+                    for (MessageBus.Message m : publishedSince(mark)) {
+                        if (m.entity().equals(entity)) {
+                            messages.add(parse(m.body()));
+                        }
+                    }
+                    assertTrue(messages.stream().anyMatch(m -> matches(payload, name -> text(m.path(name)), noise)),
+                            fixture.scenarioId() + ": no message on " + entity + " matches " + payload);
+                }
+                default -> {
+                    // service_called and subprocess_called are compared by the verifier, not here.
+                }
+            }
+        }
+    }
+
+    /** Every leaf of {@code expected} equals the same path of {@code actual}, except the noise paths. */
+    protected static void assertFields(String scenarioId, JsonNode expected, JsonNode actual, Set<String> noise) {
+        Map<String, String> want = flatten(expected);
+        Map<String, String> got = flatten(actual);
+        List<String> mismatches = new ArrayList<>();
+        for (Map.Entry<String, String> e : want.entrySet()) {
+            if (noise.contains(e.getKey())) {
+                continue;
+            }
+            String value = got.get(e.getKey());
+            if (!fieldEquals(e.getValue(), value)) {
+                mismatches.add(e.getKey() + ": expected '" + e.getValue() + "', actual '"
+                        + (value == null ? "(missing)" : value) + "'");
+            }
+        }
+        assertTrue(mismatches.isEmpty(), scenarioId + ": " + mismatches.size() + " field(s) differ:\n"
+                + String.join("\n", mismatches));
+    }
+
+    /** A value as text: a JSON string's content, a number in plain notation, a date in ISO form. */
+    protected static String text(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof JsonNode node) {
+            if (node.isMissingNode() || node.isNull()) {
+                return "";
+            }
+            if (node.isNumber()) {
+                return node.decimalValue().toPlainString();
+            }
+            return node.isValueNode() ? node.asText() : node.toString();
+        }
+        if (value instanceof BigDecimal number) {
+            return number.toPlainString();
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime().toString();
+        }
+        if (value instanceof java.sql.Date date) {
+            return date.toLocalDate().toString();
+        }
+        return value.toString();
+    }
+
+    /** A JSON value as a number, whether the JSON carries it as a number or as a string. */
+    protected static BigDecimal number(Object value) {
+        try {
+            return new BigDecimal(text(value));
+        } catch (NumberFormatException ex) {
+            throw new IllegalStateException("'" + text(value) + "' is not a number", ex);
+        }
+    }
+
+    /** Equal as text, as numbers, or as dates; an empty expected value matches a missing one. */
+    protected static boolean fieldEquals(String expected, String actual) {
+        String e = expected == null ? "" : expected;
+        String a = actual == null ? "" : actual;
+        if (e.equals(a)) {
+            return true;
+        }
+        try {
+            return new BigDecimal(e).compareTo(new BigDecimal(a)) == 0;
+        } catch (NumberFormatException ex) {
+            // not numbers
+        }
+        OffsetDateTime eo = offsetDate(e);
+        OffsetDateTime ao = offsetDate(a);
+        if (eo != null && ao != null) {
+            return eo.toInstant().equals(ao.toInstant()); // both carry an offset: the same instant
+        }
+        TemporalAccessor ed = date(e);
+        TemporalAccessor ad = date(a);
+        return ed != null && ad != null && LocalDateTime.from(ed).equals(LocalDateTime.from(ad));
+    }
+
+    private static OffsetDateTime offsetDate(String text) {
+        try {
+            return OffsetDateTime.parse(text.replace(' ', 'T'));
+        } catch (DateTimeParseException ex) {
+            return null;
+        }
+    }
+
+    private static TemporalAccessor date(String text) {
+        try {
+            return OffsetDateTime.parse(text).toLocalDateTime();
+        } catch (DateTimeParseException ex) {
+            try {
+                return LocalDateTime.parse(text.replace(' ', 'T'));
+            } catch (DateTimeParseException ex2) {
+                return null;
+            }
+        }
+    }
+
+    private static boolean matches(JsonNode expected, Function<String, String> actual, Set<String> noise) {
+        Iterator<Map.Entry<String, JsonNode>> fields = expected.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            if (!noise.contains(e.getKey()) && !fieldEquals(text(e.getValue()), actual.apply(e.getKey()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Map<String, String> flatten(JsonNode node) {
+        Map<String, String> out = new LinkedHashMap<>();
+        walk(node, "", out);
+        return out;
+    }
+
+    private static void walk(JsonNode node, String path, Map<String, String> out) {
+        if (node != null && node.isObject()) {
+            node.fields().forEachRemaining(e -> walk(e.getValue(), path.isEmpty() ? e.getKey() : path + "." + e.getKey(), out));
+        } else if (node != null && node.isArray()) {
+            for (int i = 0; i < node.size(); i++) {
+                walk(node.get(i), path + "[" + i + "]", out);
+            }
+        } else if (!path.isEmpty()) {
+            out.put(path, text(node));
+        }
+    }
+
+    private static String json(JsonNode value) {
+        try {
+            return Fixtures.JSON.writeValueAsString(value);
+        } catch (IOException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static JsonNode parse(String text) {
+        if (text == null || text.isBlank()) {
+            return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+        }
+        try {
+            return Fixtures.JSON.readTree(text);
+        } catch (IOException ex) {
+            return Fixtures.JSON.getNodeFactory().textNode(text);
+        }
+    }
+}

@@ -10,11 +10,15 @@ import { usePermission } from "@/lib/personas";
 import { RoleLock } from "@/components/shell/RoleNotice";
 import type { ProcessSummary } from "@/lib/types";
 import { ErrorNote } from "@/components/ui/Empty";
+import { StackPicker } from "./StackPicker";
+import { useProjectStack, useStackPermission } from "@/lib/stacks";
 import { DropZone, sourceToUpload, type UploadSource } from "./DropZone";
 import { FileTree } from "./FileTree";
 import { ValidationPanel } from "./ValidationPanel";
 import { ScanProgress } from "./ScanProgress";
 import { ParseReportTable, ReportCounters, UnknownsPanel } from "./ParseReport";
+import { RepoPanel } from "@/components/iterations/RepoPanel";
+import { ExpertRulesCard } from "./ExpertRulesCard";
 
 export function UploadTab() {
   const { projectId, scan, watchScan, openProcess, setStep } = useAppState();
@@ -24,6 +28,14 @@ export function UploadTab() {
   const report = useReport(projectId);
   const processes = useProcesses(projectId);
   const [lastUpload, setLastUpload] = useState<string | null>(null);
+  const stack = useProjectStack();
+  const stackPermission = useStackPermission();
+  const changeStack = useMutation({
+    mutationFn: (key: string) => api.patchProject(projectId!, { target_stack: key }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["projects"], exact: true });
+    },
+  });
 
   const upload = useMutation({
     mutationFn: (s: UploadSource) => sourceToUpload(projectId!, s),
@@ -50,14 +62,28 @@ export function UploadTab() {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0">
+    <div className="space-y-5" data-testid="upload-tab">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0">
         <p className="eyebrow">Step 1</p>
         <h2 className="panel-title">Upload the estate</h2>
       </div>
+      <StackPicker
+        value={stack}
+        onChange={(key) => changeStack.mutate(key)}
+        disabledReason={projectId ? stackPermission.reason : "Create a project first."}
+        pending={changeStack.isPending}
+      />
+      {changeStack.error ? <ErrorNote error={changeStack.error} /> : null}
+      {changeStack.isSuccess && (processes.data?.length ?? 0) > 0 ? (
+        <p role="status" data-testid="stack-change-note" className="text-md text-slate">
+          Designs and builds already made keep their old stack. Re-run Design for each process you want on the new one.
+        </p>
+      ) : null}
       <DropZone busy={upload.isPending || scanning} blocked={may.reason ?? null} onSource={(s) => upload.mutate(s)} />
+      <RepoPanel purpose="estate" />
+      <ExpertRulesCard />
       {upload.isPending ? (
-        <p className="flex items-center gap-2 text-[14px] text-slate">
+        <p className="flex items-center gap-2 text-md text-slate">
           <Loader2 size={16} className="animate-spin" aria-hidden /> Uploading
         </p>
       ) : null}
@@ -69,8 +95,8 @@ export function UploadTab() {
             <FileTree files={fileList} collapsible />
             <div className="space-y-4">
               <ValidationPanel files={fileList} report={lastUpload && report.data?.upload_id !== lastUpload ? null : (report.data ?? null)} />
-              <div className="card p-5">
-                <p className="text-[14px] text-slate">
+              <div className="card">
+                <p className="text-md text-slate">
                   The scan parses every process, resource, schema and SQL file, builds the neutral model, groups
                   processes into domains and writes the parse report.
                 </p>

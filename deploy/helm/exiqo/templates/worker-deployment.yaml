@@ -1,0 +1,119 @@
+{{- /*
+The job workers (EXIQO_ROLE=worker). The internal listener on 9100 serves the API only (Verify
+proxy, bearer INTERNAL_TOKEN); the API reaches a worker at the pod IP it advertised (WORKER_HOST).
+On SIGTERM a worker drains running jobs for JOB_DRAIN_SECONDS (570) inside the 600 s grace period.
+Replicas come from the HorizontalPodAutoscaler (worker-hpa.yaml).
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: exiqo-worker
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exiqo.componentLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
+        azure.workload.identity/use: "true"
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: exiqo-worker
+      # Terraform reads the Workload Identity token (AZURE_FEDERATED_TOKEN_FILE) the webhook
+      # projects; the Kubernetes API token is unused.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "exiqo.podSecurityContext" . | nindent 8 }}
+      {{- include "exiqo.imagePullSecrets" . | nindent 6 }}
+      {{- include "exiqo.spread" (dict "ctx" . "component" "worker") | nindent 6 }}
+      terminationGracePeriodSeconds: 600
+      containers:
+        - name: worker
+          image: {{ include "exiqo.image" (dict "ctx" . "which" "platform") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "exiqo.containerSecurityContext" dict | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: exiqo-platform
+          env:
+            - name: EXIQO_ROLE
+              value: worker
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            - name: WORKER_HOST
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - name: JOB_WORKERS
+              value: {{ .Values.worker.slots | quote }}
+            # Per pod (an emptyDir): NuGet's lock is per machine, so a cache shared by several
+            # workers collides, and SMB is slow for many small files.
+            - name: NUGET_PACKAGES
+              value: /cache/nuget/packages
+            {{- if .Values.mirrors.caBundle }}
+            - name: MIRROR_CA_BUNDLE
+              value: /etc/exiqo-ca/ca.pem
+            {{- end }}
+            {{- include "exiqo.secretFileEnv" (dict "ctx" . "role" "worker") | nindent 12 }}
+            {{- include "exiqo.ciEnv" . | nindent 12 }}
+          ports:
+            - name: internal
+              containerPort: 9100
+              protocol: TCP
+          startupProbe:
+            httpGet: {path: /internal/healthz, port: internal}
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: {path: /internal/healthz, port: internal}
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: {path: /internal/healthz, port: internal}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
+            - name: cache
+              mountPath: /cache
+            {{- if without (.Values.stacks.enabled | default (list "dotnet")) "dotnet" }}
+            - name: stacks-cache
+              mountPath: /cache/stacks
+            {{- end }}
+            {{- if .Values.mirrors.caBundle }}
+            - name: mirror-ca
+              mountPath: /etc/exiqo-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "exiqo.platformVolumes" (dict "ctx" . "role" "worker" "tmpSize" .Values.worker.tmpSize) | nindent 8 }}
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.worker.nugetCacheSize }}
+        {{- if without (.Values.stacks.enabled | default (list "dotnet")) "dotnet" }}
+        # The Maven, Go and uv caches (MAVEN_OPTS, GOMODCACHE, UV_CACHE_DIR in the image point here);
+        # only when a stack other than dotnet is enabled, so a .NET-only install reserves nothing.
+        - name: stacks-cache
+          emptyDir:
+            sizeLimit: {{ .Values.worker.stackCacheSize }}
+        {{- end }}
+        {{- if .Values.mirrors.caBundle }}
+        - name: mirror-ca
+          configMap:
+            name: exiqo-mirror-ca
+            defaultMode: 0444
+        {{- end }}

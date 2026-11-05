@@ -1,0 +1,466 @@
+package {{ pkg }}.core.tibco;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.MissingNode;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAccessor;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * TIBCO values as JSON. Every process variable ($LookupDealer, $ReceiveFundingRequest) is a Jackson
+ * tree, read and written with XPath semantics: a path step selects a child by its local name (an
+ * exact match first, then ignoring case), an index is 1-based, a step over a list reads its first
+ * item, and an absent value is {@link MissingNode}, never null. Values convert like XSLT value-of:
+ * the string value first, then the number or boolean a comparison needs.
+ */
+public final class TibValue {
+    /** The JSON settings of every variable, message and reply (java.time types as ISO text). */
+    public static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
+
+    private static final JsonNodeFactory NODES = JsonNodeFactory.withExactBigDecimals(true);
+
+    /** Reads a request into its contract record; fields the contract does not name are ignored. */
+    private static final ObjectReader CONTRACT_READER = JSON.reader().without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    private TibValue() {}
+
+    /**
+     * Why {@code body} is not a {@code record} (a field of the wrong type, a malformed date), or null
+     * when it reads as one; an absent body is not checked. The process still runs on the JSON tree.
+     */
+    public static String invalid(JsonNode body, Class<?> record) {
+        if (body == null || body.isNull() || body.isMissingNode()) {
+            return null;
+        }
+        try {
+            CONTRACT_READER.forType(record).readValue(body);
+            return null;
+        } catch (JsonProcessingException ex) {
+            return ex.getOriginalMessage();
+        } catch (java.io.IOException | IllegalArgumentException ex) {
+            return ex.getMessage();
+        }
+    }
+
+    /** An application/problem+json body. */
+    public static ObjectNode problem(int status, String title, String detail) {
+        ObjectNode problem = object();
+        problem.put("type", "about:blank");
+        problem.put("title", title);
+        problem.put("status", status);
+        problem.put("detail", detail);
+        return problem;
+    }
+
+    public static ObjectNode object() {
+        return NODES.objectNode();
+    }
+
+    public static ArrayNode array() {
+        return NODES.arrayNode();
+    }
+
+    public static JsonNode missing() {
+        return MissingNode.getInstance();
+    }
+
+    /** A Java value (JDBC column, literal, collection) as a JSON node. */
+    public static JsonNode of(Object value) {
+        if (value == null) {
+            return NullNode.getInstance();
+        }
+        if (value instanceof JsonNode node) {
+            return node;
+        }
+        if (value instanceof String text) {
+            return NODES.textNode(text);
+        }
+        if (value instanceof Boolean flag) {
+            return NODES.booleanNode(flag);
+        }
+        if (value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            return NODES.numberNode(((Number) value).intValue());
+        }
+        if (value instanceof Long number) {
+            return NODES.numberNode(number);
+        }
+        if (value instanceof BigDecimal number) {
+            return NODES.numberNode(number);
+        }
+        if (value instanceof BigInteger number) {
+            return NODES.numberNode(number);
+        }
+        if (value instanceof Double || value instanceof Float) {
+            double number = ((Number) value).doubleValue();
+            return Double.isFinite(number) ? NODES.numberNode(new BigDecimal(value.toString())) : NullNode.getInstance();
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return NODES.textNode(dateTime(timestamp.toInstant().atOffset(ZoneOffset.UTC)));
+        }
+        if (value instanceof java.sql.Date date) {
+            return NODES.textNode(date.toLocalDate().toString());
+        }
+        if (value instanceof java.sql.Time time) {
+            return NODES.textNode(time.toLocalTime().toString());
+        }
+        if (value instanceof OffsetDateTime dateTime) {
+            return NODES.textNode(dateTime(dateTime));
+        }
+        if (value instanceof Instant instant) {
+            return NODES.textNode(dateTime(instant.atOffset(ZoneOffset.UTC)));
+        }
+        if (value instanceof TemporalAccessor temporal) {
+            return NODES.textNode(temporal.toString());
+        }
+        if (value instanceof byte[] bytes) {
+            return NODES.binaryNode(bytes);
+        }
+        if (value instanceof Map<?, ?> map) {
+            ObjectNode out = object();
+            map.forEach((k, v) -> out.set(String.valueOf(k), of(v)));
+            return out;
+        }
+        if (value instanceof Collection<?> items) {
+            ArrayNode out = array();
+            items.forEach(item -> out.add(of(item)));
+            return out;
+        }
+        try {
+            return JSON.valueToTree(value);
+        } catch (IllegalArgumentException ex) {
+            return NODES.textNode(value.toString());
+        }
+    }
+
+    /** XSD dateTime text: ISO-8601 with the offset. */
+    public static String dateTime(OffsetDateTime value) {
+        return value.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+    }
+
+    /** The node a TIBCO path selects: names are local names, an Integer is a 1-based index. */
+    public static JsonNode path(JsonNode root, Object... steps) {
+        JsonNode current = root == null ? missing() : root;
+        for (Object step : steps) {
+            current = step instanceof Integer index ? index(current, index) : child(current, String.valueOf(step));
+            if (current.isMissingNode()) {
+                return current;
+            }
+        }
+        return current;
+    }
+
+    private static JsonNode child(JsonNode node, String name) {
+        JsonNode item = node.isArray() ? (node.isEmpty() ? missing() : node.get(0)) : node;
+        if (!item.isObject()) {
+            return missing();
+        }
+        JsonNode exact = item.get(name);
+        if (exact != null) {
+            return exact;
+        }
+        for (Map.Entry<String, JsonNode> field : item.properties()) {
+            if (field.getKey().equalsIgnoreCase(name)) {
+                return field.getValue();
+            }
+        }
+        return missing();
+    }
+
+    private static JsonNode index(JsonNode node, int index) {
+        if (node.isArray()) {
+            return index >= 1 && index <= node.size() ? node.get(index - 1) : missing();
+        }
+        return index == 1 ? node : missing();
+    }
+
+    /** True when the path selected nothing (XPath: an empty node-set). */
+    public static boolean absent(JsonNode node) {
+        return node == null || node.isMissingNode() || node.isNull();
+    }
+
+    /** The XPath string value: "" for nothing, numbers without trailing zeros. */
+    public static String text(JsonNode node) {
+        if (absent(node)) {
+            return "";
+        }
+        if (node.isTextual()) {
+            return node.textValue();
+        }
+        if (node.isNumber()) {
+            return plain(node.decimalValue());
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue() ? "true" : "false";
+        }
+        if (node.isArray()) {
+            return node.isEmpty() ? "" : text(node.get(0));
+        }
+        if (node.isObject()) {
+            StringBuilder out = new StringBuilder();
+            for (Map.Entry<String, JsonNode> field : node.properties()) {
+                out.append(text(field.getValue()));
+            }
+            return out.toString();
+        }
+        return node.asText();
+    }
+
+    private static String plain(BigDecimal number) {
+        return number.signum() == 0 ? "0" : number.stripTrailingZeros().toPlainString();
+    }
+
+    /** The XPath number value, or null where XPath has NaN. */
+    public static BigDecimal number(JsonNode node) {
+        if (absent(node)) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.decimalValue();
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue() ? BigDecimal.ONE : BigDecimal.ZERO;
+        }
+        if (node.isArray()) {
+            return node.isEmpty() ? null : number(node.get(0));
+        }
+        try {
+            return new BigDecimal(text(node).trim());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** The XPath boolean value. */
+    public static boolean bool(JsonNode node) {
+        if (absent(node)) {
+            return false;
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        if (node.isNumber()) {
+            return node.decimalValue().signum() != 0;
+        }
+        if (node.isTextual()) {
+            return !node.textValue().isEmpty();
+        }
+        if (node.isArray()) {
+            return !node.isEmpty();
+        }
+        return true;
+    }
+
+    /** count(): how many nodes the path selected. */
+    public static int count(JsonNode node) {
+        if (absent(node)) {
+            return 0;
+        }
+        return node.isArray() ? node.size() : 1;
+    }
+
+    /** The number as an int (a loop counter's start or end), or {@code fallback} when it is not a number. */
+    public static int integer(JsonNode node, int fallback) {
+        BigDecimal n = number(node);
+        return n == null ? fallback : n.intValue();
+    }
+
+    /** The items an iterate group walks: a list's elements, one value, or nothing. */
+    public static List<JsonNode> items(JsonNode node) {
+        List<JsonNode> out = new ArrayList<>();
+        if (absent(node)) {
+            return out;
+        }
+        if (node.isArray()) {
+            node.forEach(out::add);
+        } else {
+            out.add(node);
+        }
+        return out;
+    }
+
+    /**
+     * An XPath general comparison ({@code ==} for {@code =}): false when either side selected
+     * nothing; true when any item of a list side compares true; numbers compare by value, booleans
+     * as booleans, anything else by string value. Order operators always compare numbers.
+     */
+    public static boolean compare(JsonNode left, String op, JsonNode right) {
+        if (absent(left) || absent(right)) {
+            return false;
+        }
+        if (left.isArray()) {
+            for (JsonNode item : left) {
+                if (compare(item, op, right)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (right.isArray()) {
+            for (JsonNode item : right) {
+                if (compare(left, op, item)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        boolean equality = op.equals("==") || op.equals("!=");
+        if (equality && (left.isBoolean() || right.isBoolean())) {
+            return (bool(left) == bool(right)) == op.equals("==");
+        }
+        if (equality && !left.isNumber() && !right.isNumber()) {
+            return text(left).equals(text(right)) == op.equals("==");
+        }
+        BigDecimal a = number(left);
+        BigDecimal b = number(right);
+        if (a == null || b == null) {
+            return op.equals("!=");
+        }
+        int c = a.compareTo(b);
+        return switch (op) {
+            case "==" -> c == 0;
+            case "!=" -> c != 0;
+            case "<" -> c < 0;
+            case "<=" -> c <= 0;
+            case ">" -> c > 0;
+            case ">=" -> c >= 0;
+            default -> throw new IllegalArgumentException("unknown comparison " + op);
+        };
+    }
+
+    /** Sets {@code value} at the element path {@code segments} under {@code target}, creating the parents. */
+    public static ObjectNode put(ObjectNode target, JsonNode value, String... segments) {
+        ObjectNode current = target;
+        for (int i = 0; i < segments.length - 1; i++) {
+            JsonNode next = current.get(segments[i]);
+            if (!(next instanceof ObjectNode)) {
+                next = current.putObject(segments[i]);
+            }
+            current = (ObjectNode) next;
+        }
+        current.set(segments[segments.length - 1], absent(value) ? NullNode.getInstance() : value);
+        return target;
+    }
+
+    /**
+     * A JDBC parameter from a mapped value, typed like the TIBCO parameter declaration: string, int,
+     * long, decimal, double, bool, datetime, date or time; null when nothing was mapped.
+     */
+    public static Object jdbc(JsonNode value, String type) {
+        if (absent(value)) {
+            return null;
+        }
+        BigDecimal n;
+        switch (type) {
+            case "int":
+                n = number(value);
+                return n == null ? null : n.intValue();
+            case "long":
+                n = number(value);
+                return n == null ? null : n.longValue();
+            case "decimal":
+                return number(value);
+            case "double":
+                n = number(value);
+                return n == null ? null : n.doubleValue();
+            case "bool":
+                return bool(value);
+            case "datetime":
+                return temporal(text(value));
+            case "date":
+                return LocalDate.parse(text(value).substring(0, Math.min(10, text(value).length())));
+            case "time":
+                return LocalTime.parse(text(value));
+            default:
+                return text(value);
+        }
+    }
+
+    private static Object temporal(String text) {
+        try {
+            return OffsetDateTime.parse(text);
+        } catch (DateTimeParseException ex) {
+            try {
+                return LocalDateTime.parse(text);
+            } catch (DateTimeParseException again) {
+                return LocalDate.parse(text);
+            }
+        }
+    }
+
+    /** The output of a JDBC query activity: {@code {"Record": [ {column: value} ]}}. */
+    public static ObjectNode records(List<Map<String, Object>> rows) {
+        ObjectNode out = object();
+        ArrayNode records = out.putArray("Record");
+        for (Map<String, Object> row : rows) {
+            records.add(of(row));
+        }
+        return out;
+    }
+
+    /** The output of a JDBC update activity: {@code {"noOfUpdates": n}}. */
+    public static ObjectNode updated(int count) {
+        ObjectNode out = object();
+        out.put("noOfUpdates", count);
+        return out;
+    }
+
+    /** The JSON text of a value; null fields are left out (message bodies). */
+    public static String json(JsonNode value) {
+        try {
+            return JSON.writeValueAsString(withoutNulls(value));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("value cannot be written as JSON", ex);
+        }
+    }
+
+    /** Parses JSON text (a message body); IllegalArgumentException when it is not JSON. */
+    public static JsonNode parse(String text) {
+        try {
+            return text == null || text.isBlank() ? missing() : JSON.readTree(text);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("not JSON: " + ex.getOriginalMessage(), ex);
+        }
+    }
+
+    /** A deep copy without null fields. */
+    public static JsonNode withoutNulls(JsonNode value) {
+        if (value == null || value.isMissingNode()) {
+            return NullNode.getInstance();
+        }
+        if (value.isObject()) {
+            ObjectNode out = object();
+            for (Map.Entry<String, JsonNode> field : value.properties()) {
+                if (!field.getValue().isNull() && !field.getValue().isMissingNode()) {
+                    out.set(field.getKey(), withoutNulls(field.getValue()));
+                }
+            }
+            return out;
+        }
+        if (value.isArray()) {
+            ArrayNode out = array();
+            value.forEach(item -> out.add(withoutNulls(item)));
+            return out;
+        }
+        return value;
+    }
+}

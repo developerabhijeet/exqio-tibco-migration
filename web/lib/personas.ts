@@ -11,10 +11,11 @@
 // gives ("the engineer approves the build"). The owner is the only persona offered approve and
 // reject, so a G4 approval in the audit trail is always an engineer's.
 //
-// Scope: this is the screen's permission model. Every request still carries the chosen user as
-// X-User and the API records that actor on the gate, but the API does not yet refuse a decision
-// from the wrong persona, so this blocks the control, not the endpoint. Enforcing it server side
-// belongs with the gate service, where the actor is already written.
+// Scope: this is the screen's permission model. In AUTH_MODE=dev every request carries the chosen
+// user as X-User and the API records that actor on the gate without refusing the wrong persona,
+// so this blocks the control, not the endpoint. In AUTH_MODE=oidc there is no switcher: the user
+// signed in with Entra ID holds role keys (one per persona, `roleKey` below), may act wherever any
+// of them may (the union), and the API refuses a gate decision from anyone but its owner's role.
 import { useCallback } from "react";
 import { STEP_KEYS, useAppState, type StepKey } from "./state";
 import { STEP_LABELS } from "./steps";
@@ -26,10 +27,12 @@ export interface Persona {
   role: string;
   /** One line: what they are responsible for. */
   responsibility: string;
-  /** The first step they may act in; every later step is theirs too. */
-  entry: StepKey;
+  /** The first step they may act in; every later step is theirs too. Null: none (read only). */
+  entry: StepKey | null;
   /** The gates only this persona may approve or reject. */
   gates: string[];
+  /** The API's role key for this persona (AUTH_MODE=oidc roles, api/app/auth/roles.py). */
+  roleKey: string;
 }
 
 export const PERSONAS: readonly Persona[] = [
@@ -39,6 +42,7 @@ export const PERSONAS: readonly Persona[] = [
     responsibility: "Owns the estate end to end: the upload, what the processes mean, and the rules and findings behind them.",
     entry: "upload",
     gates: ["G1", "G2"],
+    roleKey: "sme",
   },
   {
     id: "architect.lee",
@@ -46,6 +50,7 @@ export const PERSONAS: readonly Persona[] = [
     responsibility: "Owns the target design and everything downstream of it: the record, the build, the parity run and the plan.",
     entry: "design",
     gates: ["G3"],
+    roleKey: "architect",
   },
   {
     id: "engineer.ravi",
@@ -53,6 +58,7 @@ export const PERSONAS: readonly Persona[] = [
     responsibility: "Owns the generated solution: the build, its tests and its infrastructure.",
     entry: "build",
     gates: ["G4"],
+    roleKey: "engineer",
   },
   {
     id: "qa.priya",
@@ -60,6 +66,7 @@ export const PERSONAS: readonly Persona[] = [
     responsibility: "Owns the verification: the scenarios, the parity report and the differences it explains.",
     entry: "verify",
     gates: ["G5"],
+    roleKey: "qa",
   },
   {
     id: "ops.sam",
@@ -67,6 +74,15 @@ export const PERSONAS: readonly Persona[] = [
     responsibility: "Owns the deployment: the Azure connection, the plan and the release.",
     entry: "deploy",
     gates: ["G6"],
+    roleKey: "ops",
+  },
+  {
+    id: "viewer.val",
+    role: "Viewer",
+    responsibility: "Reads every step and the migration memory; acts in none and curates nothing.",
+    entry: null,
+    gates: [],
+    roleKey: "viewer",
   },
 ] as const;
 
@@ -77,13 +93,99 @@ export function personaOf(user: string): Persona {
   return BY_ID.get(user) ?? PERSONAS[PERSONAS.length - 1];
 }
 
-/** The steps this persona may act in: the entry step and everything after it. */
-export function stepsOf(persona: Persona): StepKey[] {
-  return STEP_KEYS.slice(STEP_KEYS.indexOf(persona.entry)) as StepKey[];
+/**
+ * AUTH_MODE=oidc: the signed-in user as one persona, the union of the personas their role keys
+ * name: acting from the earliest entry step, owning every one of their gates. A user with no
+ * persona role (viewer, admin only) reads everything and acts nowhere.
+ */
+export function personaForRoles(roles: readonly string[]): Persona {
+  const held = PERSONAS.filter((p) => p.entry !== null && roles.includes(p.roleKey));
+  if (held.length === 1) return held[0];
+  if (held.length === 0) {
+    return {
+      id: PERSONAS[PERSONAS.length - 1].id,
+      role: roles.includes("viewer") ? "Viewer" : "No migration role",
+      responsibility: "Reads every step; acts in none.",
+      entry: null,
+      gates: [],
+      roleKey: "",
+    };
+  }
+  const first = held.reduce((a, b) => (stepIndex(b.entry) < stepIndex(a.entry) ? b : a));
+  return {
+    id: first.id,
+    role: held.map((p) => p.role).join(" + "),
+    responsibility: held.map((p) => p.responsibility).join(" "),
+    entry: first.entry,
+    gates: held.flatMap((p) => p.gates),
+    roleKey: held.map((p) => p.roleKey).join(","),
+  };
 }
 
-export function canActOn(persona: Persona, step: StepKey): boolean {
-  return STEP_KEYS.indexOf(step) >= STEP_KEYS.indexOf(persona.entry);
+function stepIndex(step: StepKey | null): number {
+  return step === null ? STEP_KEYS.length : STEP_KEYS.indexOf(step);
+}
+
+/** Who the screens act as: the chosen persona in dev, the signed-in user's roles in oidc. */
+export function useActingPersona(): Persona {
+  const { user, auth } = useAppState();
+  return auth.mode === "oidc" ? personaForRoles(auth.me?.roles ?? []) : personaOf(user);
+}
+
+/** The API's WRITE_ROLES (api/app/deps.py): what `require_curator` lets through. */
+const WRITE_ROLE_KEYS = ["admin", "sme", "architect", "engineer", "qa", "ops"] as const;
+
+/**
+ * Whether this user may curate the migration memory (pin a note, correct or reject a mapping, mark
+ * memory obsolete): any write role; a viewer never. The API refuses the rest (403 read-only).
+ */
+/** AUTH_MODE=dev: the personas that also hold `admin` (api/app/auth/roles.py: ops.sam). */
+const DEV_ADMINS: readonly string[] = ["ops.sam"];
+
+export function useCan(): { curate: boolean; admin: boolean } {
+  const { auth, user } = useAppState();
+  const persona = useActingPersona();
+  const roles = auth.mode === "oidc" ? (auth.me?.roles ?? []) : null;
+  const curate = roles ? roles.some((r) => (WRITE_ROLE_KEYS as readonly string[]).includes(r)) : persona.entry !== null;
+  // Admin-only controls (re-ingest) show from the role, without probing an admin route that
+  // answers 403 to everyone else. The API still decides.
+  const admin = roles ? roles.includes("admin") : DEV_ADMINS.includes(user);
+  return { curate, admin };
+}
+
+/** The steps this persona may act in: the entry step and everything after it. */
+export function stepsOf(persona: Persona): StepKey[] {
+  return STEP_KEYS.slice(stepIndex(persona.entry)) as StepKey[];
+}
+
+/**
+ * The iteration loop's actions (sub-project 6) and the role keys their routes accept
+ * (`require_roles` in api/app/routers/iterations.py, edits.py, repos.py): `iterate` re-enters Design
+ * (an SME with requirements only), `edits` uploads and resumes an edited build, `repo` connects and
+ * pulls a repository (an SME an estate repository only) and pushes a build to one (engineer, admin).
+ */
+export const ITERATION_ACTION_ROLES = {
+  iterate: ["architect", "admin", "sme"],
+  edits: ["engineer", "admin"],
+  repo: ["engineer", "admin", "sme"],
+} as const;
+export type IterationAction = keyof typeof ITERATION_ACTION_ROLES;
+
+function isAction(key: string): key is IterationAction {
+  return Object.prototype.hasOwnProperty.call(ITERATION_ACTION_ROLES, key);
+}
+
+/**
+ * Whether this persona may act on a step (from its entry step on), or take an iteration action:
+ * for an action, `roles` are the role keys held (the persona's own when omitted). The API decides
+ * either way; this only keeps a control it would refuse from being offered as if it worked.
+ */
+export function canActOn(persona: Persona, step: StepKey | IterationAction, roles?: readonly string[]): boolean {
+  if (isAction(step)) {
+    const held = roles ?? persona.roleKey.split(",");
+    return held.some((r) => (ITERATION_ACTION_ROLES[step] as readonly string[]).includes(r));
+  }
+  return STEP_KEYS.indexOf(step) >= stepIndex(persona.entry);
 }
 
 /** The persona that owns a gate, or null for a gate name no persona claims. */
@@ -91,12 +193,16 @@ export function ownerOfGate(gate: string): Persona | null {
   return PERSONAS.find((p) => p.gates.includes(gate)) ?? null;
 }
 
-/** Why this persona cannot act on this step, phrased for a tooltip; null when they can. */
-export function blockedReason(persona: Persona, step: StepKey): string | null {
+/**
+ * Why this persona cannot act on this step, phrased for a tooltip; null when they can. `signedIn`
+ * (AUTH_MODE=oidc) has no switcher to point at: the role has to be granted.
+ */
+export function blockedReason(persona: Persona, step: StepKey, signedIn = false): string | null {
   if (canActOn(persona, step)) return null;
   const owners = PERSONAS.filter((p) => canActOn(p, step)).map((p) => p.role);
   const label = STEP_LABELS[step] ?? step;
-  return `${label} is open to you to read, not to change: you are acting as ${persona.role}, and this step belongs to ${list(owners)}. Switch user in the top bar to act here.`;
+  const next = signedIn ? "Ask for one of those roles to act here." : "Switch user in the top bar to act here.";
+  return `${label} is open to you to read, not to change: you are acting as ${persona.role}, and this step belongs to ${list(owners)}. ${next}`;
 }
 
 function list(items: string[]): string {
@@ -121,21 +227,22 @@ export interface Permission {
  * job, upload, approve); reading is never blocked.
  */
 export function usePermission(step: StepKey): Permission {
-  const { user } = useAppState();
-  const persona = personaOf(user);
+  const { auth } = useAppState();
+  const persona = useActingPersona();
   const canAct = canActOn(persona, step);
-  const reason = blockedReason(persona, step) ?? undefined;
-  const ownsGate = useCallback((gate: string) => personaOf(user).gates.includes(gate), [user]);
+  const reason = blockedReason(persona, step, auth.mode === "oidc") ?? undefined;
+  const gates = persona.gates.join(",");
+  const role = persona.role;
+  const ownsGate = useCallback((gate: string) => gates.split(",").includes(gate), [gates]);
   const gateReason = useCallback(
     (gate: string) => {
-      const me = personaOf(user);
-      if (me.gates.includes(gate)) return null;
+      if (gates.split(",").includes(gate)) return null;
       const owner = ownerOfGate(gate);
       return owner
-        ? `${gate} is the ${owner.role}'s gate. You are acting as ${me.role}, so you can read the evidence here but not decide it.`
+        ? `${gate} is the ${owner.role}'s gate. You are acting as ${role}, so you can read the evidence here but not decide it.`
         : `${gate} has no owner in this screen's role model, so no persona may decide it.`;
     },
-    [user],
+    [gates, role],
   );
   return { persona, canAct, reason, ownsGate, gateReason };
 }

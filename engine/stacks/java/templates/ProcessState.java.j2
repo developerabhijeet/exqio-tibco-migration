@@ -1,0 +1,80 @@
+package {{ pkg }}.core.tibco;
+
+import {{ pkg }}.core.exceptions.ProcessFault;
+import {{ pkg }}.core.messaging.MessageBus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+/**
+ * The variables of one process run, by their TIBCO names: the starter's ($ReceiveFundingRequest,
+ * $get.parameters, $Start), each activity's output ($LookupDealer), the group variables of an
+ * iterate ($index, $currentElement) and $_error after an error link or a catch.
+ */
+public final class ProcessState {
+    private final ObjectNode variables = TibValue.object();
+    private MessageBus.Message message;
+    private RuntimeException lastError;
+    private ProcessResult result;
+
+    /** A run started with one variable (the starter output, or $Start of a sub-process). */
+    public static ProcessState of(String name, JsonNode value) {
+        return new ProcessState().set(name, value);
+    }
+
+    /** The variable, or a missing node when it was never set. */
+    public JsonNode get(String name) {
+        JsonNode value = variables.get(name);
+        return value == null ? TibValue.missing() : value;
+    }
+
+    public ProcessState set(String name, JsonNode value) {
+        variables.set(name, value == null || value.isMissingNode() ? NullNode.getInstance() : value);
+        return this;
+    }
+
+    /** The message a JMS starter received (for a JMS reply). */
+    public MessageBus.Message message() {
+        return message;
+    }
+
+    public ProcessState message(MessageBus.Message received) {
+        this.message = received;
+        return this;
+    }
+
+    /** Records a reply that does not end the run (TIBCO carries on after it); the first one counts. */
+    public void reply(ProcessResult reply) {
+        if (result == null) {
+            result = reply;
+        }
+    }
+
+    /** The reply recorded so far, or null. */
+    public ProcessResult result() {
+        return result;
+    }
+
+    /** What the run returns: the recorded reply, or COMPLETED. */
+    public ProcessResult finish() {
+        return result != null ? result : ProcessResult.COMPLETED;
+    }
+
+    /** The exception that sent the run down an error link or into a catch, if any. */
+    public RuntimeException lastError() {
+        return lastError;
+    }
+
+    /** Records the error and exposes it as $_error (class, msg, and the fault name and data of a fault). */
+    public void lastError(RuntimeException error) {
+        this.lastError = error;
+        ObjectNode value = TibValue.object();
+        value.put("class", error.getClass().getSimpleName());
+        value.put("msg", String.valueOf(error.getMessage()));
+        if (error instanceof ProcessFault fault) {
+            value.put("faultName", fault.faultName());
+            value.set("data", fault.faultData());
+        }
+        variables.set("_error", value);
+    }
+}

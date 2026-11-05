@@ -78,7 +78,7 @@ async def engine_rules(session: AsyncSession, process_id: str) -> list[EngineRul
     for r in await gate_svc.load_rules(session, process_id):
         out.append(EngineRule(id=r.rule_key, text=r.text, citations=_citations(r.citations),
                               confidence=float(r.confidence or 0.0), status=r.status, owner=r.owner,
-                              memory_refs=list(r.memory_refs or [])))
+                              memory_refs=list(r.memory_refs or []), source=r.source))
     return out
 
 

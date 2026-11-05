@@ -95,14 +95,14 @@ def test_every_canonical_type_has_pattern():
 
 
 def test_pascal_names():
-    assert design.pascal("gmf.credit") == "GmfCredit"
-    assert design.pascal("LegacyAddress") == "LegacyAddress"
-    assert design.pascal("Standardize Address") == "StandardizeAddress"
-    assert design.pascal("get") == "Get"
-    assert design.pascal("HTTP Receiver") == "HttpReceiver"
-    assert design.pascal("GMF.DB.URL") == "GmfDbUrl"
-    assert design.pascal("GMFFundingDB") == "GMFFundingDB"
-    assert design.pascal("parallel:RenderBureauRequest") == "ParallelRenderBureauRequest"
+    assert csharp_contracts.pascal("gmf.credit") == "GmfCredit"
+    assert csharp_contracts.pascal("LegacyAddress") == "LegacyAddress"
+    assert csharp_contracts.pascal("Standardize Address") == "StandardizeAddress"
+    assert csharp_contracts.pascal("get") == "Get"
+    assert csharp_contracts.pascal("HTTP Receiver") == "HttpReceiver"
+    assert csharp_contracts.pascal("GMF.DB.URL") == "GmfDbUrl"
+    assert csharp_contracts.pascal("GMFFundingDB") == "GMFFundingDB"
+    assert csharp_contracts.pascal("parallel:RenderBureauRequest") == "ParallelRenderBureauRequest"
 
 
 # -------------------------------------------------------------------- design

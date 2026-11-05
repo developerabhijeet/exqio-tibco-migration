@@ -1,16 +1,16 @@
-# TIBCO BusinessWorks to .NET migration patterns authored by R Systems International.
+# TIBCO BusinessWorks to .NET migration patterns shipped with the platform.
 #
-# These are curated seed patterns: guidance written by RSI engineers from migration practice,
+# These are curated seed patterns: guidance written from migration practice,
 # loaded into a project's migration memory so the analyst and designer agents can retrieve them
 # next to SME decisions. They are retrieved by search and shown to the model as hints. They are
 # not training data, and no model is fine-tuned on them.
 #
-# Each pattern: id, kind (pattern), source (rsi-seed), title, when (the TIBCO situation),
+# Each pattern: id, kind (pattern), source (seed), title, when (the TIBCO situation),
 # then (the recommended .NET treatment), plus short tibco / dotnet labels.
 patterns:
   - id: jdbc-query-to-dapper
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: JDBC Query activity becomes a Dapper repository method
     tibco: JDBC Query
     dotnet: Dapper repository
@@ -26,7 +26,7 @@ patterns:
 
   - id: jms-receive-to-message-bus
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: JMS Queue Receiver becomes an IMessageBus consumer
     tibco: JMS Queue Receiver / Wait for JMS Queue Message
     dotnet: IMessageBus consumer
@@ -42,7 +42,7 @@ patterns:
 
   - id: transaction-group-to-npgsql-transaction
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Transaction group becomes an Npgsql transaction scope
     tibco: Group of kind transaction
     dotnet: NpgsqlTransaction
@@ -57,7 +57,7 @@ patterns:
 
   - id: parallel-flow-to-task-whenall
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Parallel transitions become Task.WhenAll
     tibco: Parallel branches (multiple unconditional outgoing transitions)
     dotnet: Task.WhenAll
@@ -71,7 +71,7 @@ patterns:
 
   - id: http-client-to-httpclientfactory
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: HTTP Client resource becomes IHttpClientFactory with resilience
     tibco: HTTP Client shared resource / Send HTTP Request
     dotnet: IHttpClientFactory with a resilience pipeline
@@ -86,7 +86,7 @@ patterns:
 
   - id: timer-to-backgroundservice
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Timer starter becomes a BackgroundService
     tibco: Timer
     dotnet: BackgroundService with PeriodicTimer
@@ -100,7 +100,7 @@ patterns:
 
   - id: call-process-to-service-method
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Call Process becomes a service method call
     tibco: Call Process
     dotnet: Injected service method
@@ -114,7 +114,7 @@ patterns:
 
   - id: throw-to-typed-exception
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Throw activity becomes a typed exception
     tibco: Throw / Catch and fault handlers
     dotnet: Typed exception with ProblemDetails mapping
@@ -128,7 +128,7 @@ patterns:
 
   - id: xslt-mapping-to-generated-csharp
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Mapper and XSLT input bindings become generated C# with the expression kept in a comment
     tibco: Mapper input binding / XSLT
     dotnet: Generated C# mapping method
@@ -143,7 +143,7 @@ patterns:
 
   - id: substvar-to-configuration
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Global variables and substvars become appsettings and Key Vault
     tibco: Global Variables / substitution variables (substvar)
     dotnet: IOptions configuration with Key Vault for secrets
@@ -158,7 +158,7 @@ patterns:
 
   - id: iterate-group-to-foreach
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Iterate group becomes foreach, with a chunking decision
     tibco: Group of kind iterate
     dotnet: foreach with optional batching
@@ -172,7 +172,7 @@ patterns:
 
   - id: critical-section-lock-decision
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: Critical section needs an explicit locking decision
     tibco: Group of kind critical section
     dotnet: Lock chosen by deployment topology
@@ -187,7 +187,7 @@ patterns:
 
   - id: rest-starter-to-minimal-api
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: REST or SOAP service starter becomes a minimal API endpoint
     tibco: HTTP Receiver / SOAP Event Source / REST binding
     dotnet: ASP.NET Core minimal API endpoint
@@ -201,7 +201,7 @@ patterns:
 
   - id: file-poller-to-hosted-service
     kind: pattern
-    source: rsi-seed
+    source: seed
     title: File Poller becomes a hosted service with an idempotency key
     tibco: File Poller / Wait for File Change
     dotnet: BackgroundService with a processed-file ledger

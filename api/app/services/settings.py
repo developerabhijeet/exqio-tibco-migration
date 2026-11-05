@@ -1,10 +1,25 @@
 """Settings screen: providers (presence, never values), models per tier and stage, routing bands,
-toolchains, Langfuse. Edits are stored in ``settings`` and applied to the running API's ``Settings``
-(the next job reads them); keys and tokens stay in the environment.
+toolchains, Langfuse. Edits are stored in the ``settings`` table; keys and tokens otherwise stay in
+the environment.
+
+Stored edits reach every process through the table, not through memory: there are several API
+replicas and separate worker pods, and the PATCH lands on one API pod only.
+
+- A worker re-reads the table at the start of every job and gives that job its own copy of
+  ``Settings`` with the edits applied (:func:`with_stored`), so a job started after a PATCH uses it
+  and a job already running keeps the values it started with.
+- An API process applies the table to its live ``Settings`` at start, after its own PATCH, and
+  again when a request reads settings more than :data:`STORED_TTL_SECONDS` after the last load
+  (:func:`refresh_stale`), so another replica's edit shows within that time. ``apply_stored`` is
+  synchronous, so no request on the loop sees a half-applied set.
 """
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
+import threading
+import time
 from typing import Any
 
 from cryptography.fernet import InvalidToken
@@ -15,8 +30,11 @@ from api.app.config import Settings
 from api.app.models import Setting
 from api.app.services.infra import make_fernet
 from engine.agents.routing import TASK_WEIGHTS, RoutingTable
+from engine.stacks import STACK_KEYS
 
 log = logging.getLogger(__name__)
+
+STORED_TTL_SECONDS = 10.0  # how stale an API replica's view of another replica's edit may be
 
 TIERS = ("strong", "standard", "efficient")
 # Pipeline stage -> (engine task kind, how its tier is chosen)
@@ -36,10 +54,33 @@ FALLBACK_NOTE = ("Auto mode: Claude first; on an error or a rate limit the call 
                  "it is configured, and the switch is recorded on the model call (fallback_from).")
 
 
-def detect_toolchains() -> dict[str, Any]:
+TOOLCHAIN_TTL_SECONDS = 30.0  # how long one detection (a subprocess per tool) is reused
+_toolchain_lock = threading.Lock()
+_toolchain_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def detect_toolchains(max_age_s: float = TOOLCHAIN_TTL_SECONDS) -> dict[str, Any]:
+    """``scripts/toolchain.detect()``, reused for ``max_age_s``: the one detection path of the API
+    and the worker (Settings, ``/stacks``, the build, Verify, the plan). It runs a subprocess per
+    tool, so callers on the event loop go through ``asyncio.to_thread``. A copy is returned."""
+    global _toolchain_cache
     from engine.dotnet_gen.runner import _toolchain_detect
 
-    return _toolchain_detect()
+    with _toolchain_lock:
+        now = time.monotonic()
+        if _toolchain_cache is None or now - _toolchain_cache[0] > max_age_s:
+            _toolchain_cache = (now, _toolchain_detect())
+        return copy.deepcopy(_toolchain_cache[1])
+
+
+def tool_path(name: str) -> str | None:
+    """Where ``name`` was detected (``detect_toolchains``), or ``None``, also when the detection
+    itself fails (``scripts/toolchain.py`` missing or unloadable). Blocking."""
+    try:
+        return (detect_toolchains().get(name) or {}).get("path")
+    except (OSError, ImportError) as exc:
+        log.warning("toolchain detection failed: %s", exc)
+        return None
 
 
 async def load_stored(session: AsyncSession) -> dict[str, Any]:
@@ -48,6 +89,7 @@ async def load_stored(session: AsyncSession) -> dict[str, Any]:
 
 
 AZURE_KEY = "azure_openai"
+DEFAULT_STACK_KEY = "default_stack"
 
 
 def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
@@ -67,6 +109,13 @@ def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
         settings.routing_bands = {k: (int(v[0]), int(v[1])) for k, v in bands.items()}
     if "langfuse_enabled" in stored:
         settings.langfuse_enabled = bool(stored["langfuse_enabled"])
+    if stored.get(DEFAULT_STACK_KEY):
+        key = str(stored[DEFAULT_STACK_KEY])
+        if key in STACK_KEYS:
+            settings.default_stack = key
+        else:
+            log.warning("the stored default stack %r is not a known stack; using dotnet", key)
+            settings.default_stack = "dotnet"
     azure = stored.get(AZURE_KEY) or {}
     # A stored block is authoritative for the fields it carries, empty ones included: clearing the
     # key in the screen has to take it out of the live settings too, not just out of the row.
@@ -89,6 +138,40 @@ def apply_stored(settings: Settings, stored: dict[str, Any]) -> None:
                 log.warning("the stored Azure OpenAI key cannot be decrypted with this APP_SECRET")
 
 
+def with_stored(base: Settings, stored: dict[str, Any]) -> Settings:
+    """A copy of ``base`` with the stored edits applied; ``base`` is left as it was."""
+    fresh = base.model_copy()
+    apply_stored(fresh, stored)
+    return fresh
+
+
+async def refresh_stale(state: Any, ttl: float | None = None) -> None:
+    """Re-apply the stored edits to ``state.settings`` (an API app's state) when the last load is
+    older than ``ttl`` seconds. A database error keeps the current values: a settings read never
+    fails because of this refresh."""
+    ttl = STORED_TTL_SECONDS if ttl is None else ttl
+    sessionmaker = getattr(state, "sessionmaker", None)
+    loaded = getattr(state, "settings_loaded_at", None)
+    if sessionmaker is None or (loaded is not None and time.monotonic() - loaded < ttl):
+        return
+    lock: asyncio.Lock | None = getattr(state, "settings_lock", None)
+    if lock is None:
+        lock = state.settings_lock = asyncio.Lock()
+    async with lock:  # one reload at a time; the requests that waited use its result
+        loaded = getattr(state, "settings_loaded_at", None)
+        if loaded is not None and time.monotonic() - loaded < ttl:
+            return
+        try:
+            async with sessionmaker() as s:
+                stored = await load_stored(s)
+        except Exception as exc:  # noqa: BLE001  keep serving the values already loaded
+            log.warning("could not reload the stored settings: %s", exc)
+            state.settings_loaded_at = time.monotonic()
+            return
+        apply_stored(state.settings, stored)
+        state.settings_loaded_at = time.monotonic()
+
+
 def validate_bands(bands: dict[str, Any]) -> dict[str, tuple[int, int]]:
     out: dict[str, tuple[int, int]] = {}
     for tier in TIERS:
@@ -106,7 +189,11 @@ def validate_bands(bands: dict[str, Any]) -> dict[str, tuple[int, int]]:
 
 def settings_view(settings: Settings, toolchains: dict[str, Any],
                   stored_azure: dict[str, Any] | None = None) -> dict[str, Any]:
-    azure = bool(settings.azure_openai_endpoint and settings.azure_openai_api_key)
+    from api.app.routers.stacks import (
+        stack_views,  # deferred: the router imports deps, which imports this
+    )
+
+    azure = settings.azure_openai_configured()
     bands = settings.routing_bands or RoutingTable().bands
     return {
         "provider": {"choice": settings.provider, "active": settings.resolved_provider()},
@@ -143,6 +230,8 @@ def settings_view(settings: Settings, toolchains: dict[str, Any],
             "app_secret_configured": bool(settings.app_secret),
         },
         "toolchains": toolchains,
+        "stacks": stack_views(settings, toolchains),
+        "default_stack": settings.default_stack,
         "langfuse": {"enabled": settings.langfuse_enabled, "host": settings.langfuse_host or None,
                      "keys_configured": bool(settings.langfuse_public_key and settings.langfuse_secret_key)},
         "app_secret_configured": bool(settings.app_secret),
@@ -190,6 +279,8 @@ async def update(session: AsyncSession, settings: Settings, body: dict[str, Any]
         changes["routing_bands"] = {k: list(v) for k, v in validate_bands(body["routing_bands"]).items()}
     if body.get("langfuse_enabled") is not None:
         changes["langfuse_enabled"] = bool(body["langfuse_enabled"])
+    if body.get("default_stack") is not None:
+        changes[DEFAULT_STACK_KEY] = str(body["default_stack"])
     if body.get("azure") is not None:
         changes[AZURE_KEY] = _azure_change(session, settings, body["azure"])
     for key, value in changes.items():

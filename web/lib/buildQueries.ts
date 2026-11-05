@@ -88,6 +88,9 @@ export const useTestData = (processId: string | null) =>
 export const useAzure = (projectId: string | null) =>
   useQuery({ queryKey: ["azure", projectId], queryFn: () => api.azure(projectId!), enabled: !!projectId });
 
+export const useDeployEnvironments = (enabled: boolean) =>
+  useQuery({ queryKey: ["deploy-environments"], queryFn: api.deployEnvironments, enabled });
+
 export const usePlan = (buildId: string | null) =>
   useQuery({ queryKey: ["plan", buildId], queryFn: () => api.plan(buildId!), enabled: !!buildId, retry: false });
 

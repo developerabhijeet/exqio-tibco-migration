@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
+from api.app.jobs.locks import advisory_lock
 from api.app.models import AuditLog, Job, Process, Project
 from api.app.schemas.analysis import AnalysisOut, AuditOut, FindingPatch, RulePatch
 from api.app.schemas.job import JobCreated
@@ -26,7 +27,7 @@ async def analyse(process_id: str, request: Request, session: SessionDep, runner
                   settings: SettingsDep) -> JobCreated:
     """Queue the analysis job; 409 while one for this process is queued or running."""
     proc = await _process(session, process_id)
-    async with request.app.state.analyse_lock:
+    async with advisory_lock(request.app.state.sessionmaker, f"analyse:{process_id}"):
         active = await session.scalar(select(Job.id).where(
             Job.process_id == process_id, Job.kind == "analyse", Job.status.in_(("queued", "running")))
             .limit(1))
@@ -35,7 +36,6 @@ async def analyse(process_id: str, request: Request, session: SessionDep, runner
                                                         f"progress: {active}")
         job_id = await runner.submit(
             "analyse", {"process_id": process_id, "provider": settings.resolved_provider()},
-            svc.analyse_job(process_id, settings, request.app.state.knowledge),
             project_id=proc.project_id, process_id=process_id)
     return JobCreated(job_id=job_id)
 

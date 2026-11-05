@@ -5,8 +5,15 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from .secrets import FileSecretsSource
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -14,8 +21,38 @@ ProviderChoice = Literal["auto", "fake", "claude", "azure"]
 ResolvedProvider = Literal["fake", "claude", "azure", "none"]
 
 
+class DeployEnvironment(BaseModel):
+    """One Azure target the Deploy step may reach (no secret value: only where it lives)."""
+
+    name: str
+    tenant: str
+    subscription: str
+    client_id: str
+    auth: Literal["workload_identity", "keyvault_sp"]
+    key_vault_uri: str = ""
+    secret_name: str = ""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # ``<NAME>_FILE`` (a mounted secret) beats every other source for the secret fields.
+        return (
+            FileSecretsSource(settings_cls),
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # LLM provider: auto picks Claude when its token is present, else Azure, else none (NullProvider)
     provider: ProviderChoice = "auto"
@@ -36,6 +73,7 @@ class Settings(BaseSettings):
 
     # Storage and secrets
     data_dir: Path = Path("./data")
+    iteration_artefact_ttl_hours: int = 24  # grace before an unreferenced clone or edit tree is swept
     app_secret: str = ""  # Fernet key for stored Azure credentials
     # Parity scenario database. Unset: one database per project, ``exiqo_scn_<project>_test`` on the
     # DATABASE_URL server (created when missing). Set: every project uses this one (its name must
@@ -52,12 +90,80 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
+    # Install: which process this is, how callers sign in, and where jobs and the graph live.
+    # The defaults are local development: one process, dev personas, local credentials.
+    exiqo_role: Literal["api", "worker", "all"] = "all"
+    auth_mode: Literal["dev", "oidc"] = "dev"
+    deploy_credential_mode: Literal["workload_identity", "local"] = "local"
+    api_base_path: str = ""
+    nuget_source: str = ""  # GMF NuGet mirror URL for generated solutions; empty = NuGet's own configuration
+    # GMF package mirrors of the other stacks (MAVEN_MIRROR_URL, GOPROXY, UV_INDEX_URL); empty = that stack's restore refuses (X26)
+    maven_mirror_url: str = ""
+    goproxy: str = ""
+    uv_index_url: str = ""
+    # Target stacks this install may build (comma separated; the chart's stacks.enabled, default dotnet)
+    enabled_stacks: str = "dotnet,java,go,python"
+    default_stack: str = "dotnet"  # new projects' target stack; Settings can override it
+    tf_cli_config_file: str = ""  # Terraform CLI config (provider network mirror) for the validators
+    # terraform init in the infra validation downloads providers. False skips init and module validate
+    # (recorded as skipped, never as passed): for e2e and machines with no registry or mirror.
+    infra_validate_init: bool = True
+    terraform_init_timeout_s: int = 300
+    internal_token: str = ""  # bearer for the worker's cluster-internal listener
+    internal_port: int = 9100
+    worker_host: str = ""  # pod IP the worker advertises; empty means 127.0.0.1
+    job_stale_seconds: int = 90
+    job_heartbeat_seconds: int = 10
+    job_max_attempts: int = 2
+    job_drain_seconds: int = 570  # on SIGTERM; inside the worker's 600 s termination grace period
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+    neo4j_ready_grace_seconds: int = 900
+    neo4j_gates_readiness: bool = True
+    memory_ingest_max_attempts: int = 10
+    memory_exact_scan_max: int = 50000
+    brand_name: str = "ExiQO"
+    support_contact: str = ""
+    azure_openai_auth: Literal["key", "managed_identity"] = "key"
+    oidc_tenant_id: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    session_secret: str = ""
+    # role key -> Entra group object ids and/or app role values (JSON); see api/app/auth/roles.py
+    role_groups: dict[str, list[str]] = Field(default_factory=dict)
+    deploy_environments: list[DeployEnvironment] = Field(default_factory=list)  # JSON
+    image_digests: dict[str, str] = Field(default_factory=dict)
+    egress_allowlist: list[str] = Field(default_factory=list)
+    # Field names masked wherever the API shows text or values to a client (cited text, parity
+    # values, Deploy evidence lines), on top of ssn and account and card numbers: JSON list, e.g.
+    # SENSITIVE_FIELDS='["dealer_pin"]'. A name matches as whole words in any key style
+    # (dealer_pin, dealerPin, x.dealer-pin).
+    sensitive_fields: list[str] = Field(default_factory=list)
+
     # Build toolchain. Off skips restore, build, format and test, and with them the compile repair
     # loop: the solution is still generated, filled, reviewed and stored, and the three toolchain
     # steps are reported as not run with that reason. For iterating on the generator or on the
     # screens without paying for a repair loop on every run. G4 still refuses a build whose compile
     # was never verified, because it was never verified.
     build_toolchain: bool = True
+
+    # Connectors (GitHub, Atlassian, Figma): the install layer, set by the chart. ``CONNECTORS`` is the
+    # JSON of the non-secret fields per connector (``api/app/connectors/config.py``); empty means
+    # every connector is off. ``CONNECTOR_SECRET_NAMES`` names each connector secret's Key Vault
+    # object, for the Settings screen. The tokens are read from ``<NAME>_FILE`` on every call
+    # (``connectors.config.secret``); the fields below are only the plain-variable fallback.
+    connectors: str = ""
+    connector_secret_names: str = ""
+    connectors_allow_insecure_loopback: bool = False  # tests and local fakes only: http://127.0.0.1
+    # PEM bundle the connectors verify TLS against (GMF's private CA); empty: SSL_CERT_FILE, else certifi
+    connectors_ca_bundle: str = ""
+    github_token: str = ""
+    atlassian_token: str = ""
+    atlassian_user: str = ""
+    figma_token: str = ""
 
     # Runtime
     job_workers: int = 2
@@ -88,6 +194,10 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def enabled_stack_list(self) -> list[str]:
+        return [k.strip() for k in self.enabled_stacks.split(",") if k.strip()]
+
+    @property
     def uploads_dir(self) -> Path:
         return self.data_dir.resolve() / "uploads"
 
@@ -104,6 +214,11 @@ class Settings(BaseSettings):
             return self.provider
         if self.claude_code_oauth_token:
             return "claude"
-        if self.azure_openai_endpoint and self.azure_openai_api_key:
+        if self.azure_openai_configured():
             return "azure"
         return "none"
+
+    def azure_openai_configured(self) -> bool:
+        """An endpoint and a way to sign in: the key, or the pod's managed identity."""
+        return bool(self.azure_openai_endpoint
+                    and (self.azure_openai_api_key or self.azure_openai_auth == "managed_identity"))

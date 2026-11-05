@@ -9,11 +9,12 @@ export function ProcessPicker() {
   const processes = useProcesses(projectId);
   const list = [...(processes.data ?? [])].sort((a, b) => a.name.localeCompare(b.name));
   return (
-    <label className="flex items-center gap-2 text-[13.5px] text-slate">
+    // It shrinks to the column on a phone: the longest name would otherwise size the select.
+    <label className="flex min-w-0 max-w-full items-center gap-2 text-md text-slate">
       Process
       <select
         data-testid="process-picker"
-        className="select"
+        className="select min-w-0 max-w-full flex-1 truncate"
         value={processId ?? ""}
         onChange={(e) => openProcess(e.target.value || null)}
       >

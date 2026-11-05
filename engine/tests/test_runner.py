@@ -259,3 +259,127 @@ def test_core_runtime_masking_flow_and_values(tmp_path, apps):
     assert out["diamond"] == "A,B,D"
     assert out["join"] == "A,B,C,D"
     assert out["tib"] == "12.50|True|31500.00"
+
+
+# ------------------------------------------------------- NuGet probe: the configured source only
+LIST_SOURCE = """Registered Sources:
+
+  1.  nuget.org [Enabled]
+      https://api.nuget.org/v3/index.json
+  2.  gmf [Enabled]
+      https://pkgs.gmf.example/nuget/v3/index.json
+"""
+
+
+def test_nuget_probe_url_is_the_configured_mirror_without_asking_dotnet(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("dotnet must not be run when a mirror is configured")
+
+    monkeypatch.setattr(runner.subprocess, "run", boom)
+    assert runner.nuget_index_url(" https://mirror.gmf.example/v3/index.json ") == \
+        "https://mirror.gmf.example/v3/index.json"
+
+
+def test_nuget_probe_url_without_mirror_comes_from_dotnet_sources(monkeypatch):
+    class Done:
+        returncode, stdout = 0, LIST_SOURCE
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Done())
+    assert runner.nuget_index_url("", dotnet="dotnet").endswith("/v3/index.json")
+
+
+def test_nuget_probe_url_none_when_dotnet_lists_no_source(monkeypatch):
+    class Done:
+        returncode, stdout = 0, "Registered Sources:\n\n  No sources found.\n"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: Done())
+    assert runner.nuget_index_url("", dotnet="dotnet") is None
+
+
+def test_nuget_available_probes_only_the_mirror(monkeypatch):
+    seen = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    monkeypatch.setattr(runner.urllib.request, "urlopen",
+                        lambda url, timeout: seen.append(url) or Resp())
+    assert runner.nuget_available(source="https://mirror.gmf.example/v3/index.json")
+    assert seen == ["https://mirror.gmf.example/v3/index.json"]
+
+
+def test_nuget_available_accepts_a_local_folder_source(monkeypatch, tmp_path):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    monkeypatch.setattr(runner.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP for a folder")))
+    assert runner.nuget_available(source=str(tmp_path))
+
+
+def test_nuget_available_false_not_a_crash_for_a_non_url_source(monkeypatch):
+    monkeypatch.delenv("EXIQO_NUGET_CACHE", raising=False)
+    monkeypatch.setattr(runner, "NUGET_CACHE", Path("/nonexistent-cache"))
+    assert runner.nuget_available(source="/no/such/folder/feed") is False
+
+
+# ------------------------------------------------- child processes (Task 8 review, both stacks)
+def test_run_captured_timeout_keeps_the_partial_log_and_kills_the_group(tmp_path):
+    import os
+    import sys
+    import time
+
+    from engine.child_env import run_captured
+
+    marker = tmp_path / "grandchild.pid"
+    script = ("import subprocess, sys, time\n"
+              "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+              f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+              "print('partial output https://user:secret@mirror.gmf.example/repo', flush=True)\n"
+              "time.sleep(60)\n")
+    started = time.monotonic()
+    code, out, timed_out = run_captured([sys.executable, "-c", script], cwd=tmp_path, env=dict(os.environ),
+                                        timeout_s=3)
+    assert timed_out and code == 124 and time.monotonic() - started < 30
+    assert "partial output https://***@mirror.gmf.example/repo" in out and "secret" not in out
+    grandchild = int(marker.read_text())
+    for _ in range(50):  # the forked child went with the group
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("the grandchild survived the timeout")
+
+
+def test_scrub_urls_redacts_userinfo_only():
+    from engine.child_env import scrub_urls
+
+    assert scrub_urls("GET https://u:p@h.example/x and http://h.example/y user@mail") == \
+        "GET https://***@h.example/x and http://h.example/y user@mail"
+
+
+@pytest.mark.parametrize("which", ["dotnet", "mvn"])
+def test_runner_logs_are_scrubbed(tmp_path, which):
+    import stat as st
+
+    tool = tmp_path / which
+    tool.write_text("#!/bin/sh\necho 'restore from https://bob:hunter2@nuget.gmf.example/v3'\nexit 1\n")
+    tool.chmod(tool.stat().st_mode | st.S_IEXEC)
+    if which == "dotnet":
+        (tmp_path / "A.sln").write_text("")
+        log = runner.DotnetRunner(tmp_path, dotnet=str(tool)).restore().log
+    else:
+        from engine.stacks.java.runner import MavenRunner
+        (tmp_path / ".exiqo").mkdir()  # a mirror is configured, so the restore runs
+        (tmp_path / ".exiqo" / "maven-settings.xml").write_text("<settings><mirror>x</mirror></settings>")
+        log = MavenRunner(tmp_path, java="java", mvn=str(tool)).restore().log
+    assert "https://***@nuget.gmf.example/v3" in log and "hunter2" not in log

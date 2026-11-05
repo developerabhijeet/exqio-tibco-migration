@@ -1,0 +1,17 @@
+{{- /* DATA_DIR, shared by api and worker pods. Kept on uninstall: it holds uploads and builds. */ -}}
+{{- if not .Values.data.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: exiqo-data
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.data.accessMode }}]
+  storageClassName: {{ required "data.storageClass.name is required" .Values.data.storageClass.name }}
+  resources:
+    requests:
+      storage: {{ .Values.data.size }}
+{{- end }}

@@ -16,7 +16,7 @@ export interface JobOutcomeOverride {
 const STAGE_TONE: Record<"passed" | "failed" | "skipped", string> = {
   passed: "bg-gate-bg text-gate",
   failed: "bg-error-bg text-error",
-  skipped: "bg-warm text-slate",
+  skipped: "bg-sunken text-slate",
 };
 
 /** A job's streamed log: stage chips, then one line per event tagged `code` or `ai`. */
@@ -46,9 +46,9 @@ export function JobLog({
   const lines = (stream?.events ?? []).filter((e) => e.event === "log" || e.event === "error");
   const over = stream && stream.status !== "running" ? (outcome ?? null) : null;
   return (
-    <section className="card p-4" data-testid={testId} aria-live="polite">
+    <section className="card card-compact" data-testid={testId} aria-live="polite">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-[16px] font-semibold text-plum">{title}</h3>
+        <h3 className="text-lg font-semibold text-heading">{title}</h3>
         {stream ? (
           over?.pill ? (
             <Pill tone={over.pill.tone} testId={`${testId}-outcome`}>
@@ -71,7 +71,7 @@ export function JobLog({
         ) : null}
       </div>
       {stream ? (
-        <ol className="mt-2 flex flex-wrap gap-1.5 text-[12px]">
+        <ol className="mt-2 flex flex-wrap gap-1.5 text-xs">
           {stages.map((s, i) => {
             const done = stream.status === "done" || i < reached;
             const current = stream.status === "running" && i === reached;
@@ -87,8 +87,8 @@ export function JobLog({
                     : done
                       ? "bg-gate-bg text-gate"
                       : current
-                        ? "bg-purple-lt text-purple-dk"
-                        : "bg-warm text-slate"
+                        ? "bg-accent-soft text-accent-ink"
+                        : "bg-sunken text-slate"
                 }`}
               >
                 {s}
@@ -97,11 +97,11 @@ export function JobLog({
           })}
         </ol>
       ) : null}
-      <ol ref={logRef} className="mt-3 max-h-72 overflow-y-auto rounded-btn bg-page p-3 font-mono text-[12px] leading-5">
+      <ol ref={logRef} className="mt-3 max-h-72 overflow-y-auto rounded-btn bg-page p-3 font-mono text-xs leading-5">
         {lines.map((e, i) => (
           <li key={`${e.seq}-${i}`} className="flex gap-2 py-0.5">
             <span
-              className={`h-fit shrink-0 rounded px-1.5 text-[10.5px] font-semibold uppercase ${
+              className={`h-fit shrink-0 rounded px-1.5 text-2xs font-semibold uppercase ${
                 e.event === "error" ? "bg-error-bg text-error" : e.tag === "ai" ? "bg-ai-bg text-ai" : "bg-det-bg text-det"
               }`}
             >
@@ -112,11 +112,11 @@ export function JobLog({
         ))}
         {stream?.status === "failed" && stream.error && !lines.some((e) => e.event === "error") ? (
           <li className="flex gap-2 py-0.5">
-            <span className="h-fit shrink-0 rounded bg-error-bg px-1.5 text-[10.5px] font-semibold uppercase text-error">error</span>
+            <span className="h-fit shrink-0 rounded bg-error-bg px-1.5 text-2xs font-semibold uppercase text-error">error</span>
             <span className="text-error">{stream.error}</span>
           </li>
         ) : null}
-        {!stream ? <li className="font-sans text-[13px] text-slate">{idle}</li> : null}
+        {!stream ? <li className="font-sans text-sm text-slate">{idle}</li> : null}
         {stream && lines.length === 0 ? <li className="text-slate">Waiting for the job to start.</li> : null}
       </ol>
     </section>

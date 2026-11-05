@@ -7,6 +7,9 @@
 #      in azureServiceConnection below.
 #   3. A variable group "[[ app_slug ]]-infra" holding PG_ADMIN_PASSWORD (secret) and optionally
 #      TF_STATE_RESOURCE_GROUP / TF_STATE_STORAGE_ACCOUNT.
+[% if build_args %]
+#      Image build arguments, optional: [[ build_args | join(', ') ]].
+[% endif %]
 #   4. Azure DevOps environments ([[ envs | map(attribute='name') | join(', ') ]]) with approvals on "[[ envs[-1].name ]]".
 trigger:
   branches:
@@ -53,6 +56,7 @@ export ARM_OIDC_TOKEN="$idToken"
 export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 [% endmacro %]
 stages:
+[% if stack == "dotnet" %]
   - stage: Build
     jobs:
       - job: build_test
@@ -90,6 +94,99 @@ stages:
               testResultsFiles: "**/*.trx"
               searchFolder: $(Agent.TempDirectory)/TestResults
 
+[% elif stack == "go" %]
+  - stage: Build
+    jobs:
+      - job: build_test
+        variables:
+          # the committed go.sum is the only source of checksums; no toolchain download
+          GOFLAGS: -mod=readonly
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
+          GOTELEMETRY: "off"
+        steps:
+          - task: GoTool@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              version: "[[ ci.go_version ]]"
+          - script: |
+              # an empty GOPROXY is Go's public default, and direct fetches from the VCS hosts; an
+              # unset variable arrives as its own macro text, which counts as empty
+              case "$GOPROXY" in '$('*) GOPROXY="" ;; esac
+              test -n "$GOPROXY" || { echo "##vso[task.logissue type=error]set the GOPROXY variable to GMF's Go module mirror"; exit 1; }
+              case "$GOPROXY" in *direct*) echo "##vso[task.logissue type=error]GOPROXY must name only the module mirror, not direct"; exit 1 ;; esac
+            displayName: Check the module proxy
+            env:
+              GOPROXY: $(GOPROXY)
+          - script: [[ ci.restore ]]
+            displayName: Restore
+            env:
+              GOPROXY: $(GOPROXY)
+          - script: [[ ci.build ]]
+            displayName: Build
+          - script: [[ ci.test ]]
+            displayName: Test
+          - task: PublishPipelineArtifact@1
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: .exiqo-bin
+              artifact: test-results
+
+[% else %]
+  - stage: Build
+    jobs:
+      - job: build_test
+        steps:
+[% if stack == "python" %]
+          - task: UsePythonVersion@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              versionSpec: "[[ ci.python_version ]]"
+          - script: [[ ci.install_uv ]]
+            displayName: Install uv (by hash)
+[% else %]
+          - task: JavaToolInstaller@0
+            displayName: Use [[ ci.label ]]
+            inputs:
+              versionSpec: "[[ ci.java_version ]]"
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+[% endif %]
+[% if stack == "python" %]
+          - script: |
+              case "${UV_INDEX_URL:-}" in '$('*) UV_INDEX_URL="" ;; esac
+              test -n "${UV_INDEX_URL:-}" || { echo "##vso[task.logissue type=error]set the UV_INDEX_URL variable to GMF's PyPI mirror (never the public index)"; exit 1; }
+              [[ ci.restore ]]
+            displayName: Restore
+            env:
+              UV_INDEX_URL: $(UV_INDEX_URL)
+[% elif stack == "java" %]
+          - script: |
+              grep -q '<mirror>' .exiqo/maven-settings.xml || { echo "##vso[task.logissue type=error]no Maven mirror in .exiqo/maven-settings.xml: set MAVEN_MIRROR_URL and generate again (never Maven Central)"; exit 1; }
+              [[ ci.restore ]]
+            displayName: Restore (GMF's Maven mirror only)
+[% else %]
+          - script: [[ ci.restore ]]
+            displayName: Restore
+[% endif %]
+          - script: [[ ci.build ]]
+            displayName: Build
+          - script: [[ ci.test ]]
+            displayName: Test
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "[[ ci.results ]]"
+          - task: PublishCodeCoverageResults@2
+            displayName: Publish [[ "Cobertura" if stack == "python" else "JaCoCo" ]] coverage
+            condition: succeededOrFailed()
+            inputs:
+              summaryFileLocation: "[[ ci.coverage ]]"
+
+[% endif %]
   - stage: ValidateInfra
     dependsOn: []
     jobs:
@@ -144,13 +241,39 @@ stages:
               scriptType: bash
               scriptLocation: inlineScript
               addSpnToEnvironment: true
+[% if build_args %]
+              env:
+[% for arg in build_args %]
+                [[ arg ]]: $([[ arg ]])
+[% endfor %]
+[% endif %]
               inlineScript: |
                 [[ azure_env() | trim | indent(16) ]]
                 for unit in resource_group container_registry; do
                   (cd "infra/live/[[ envs[0].name ]]/$(appDir)/$unit" && terragrunt run --non-interactive -- apply -auto-approve)
                 done
                 az acr login --name [[ envs[0].acr ]]
+[% if build_args %]
+                # image build arguments from the variable group (empty ones are not passed). The
+                # env: block below maps them explicitly: secret variables are never exposed to the
+                # script as environment variables otherwise. An unset variable arrives as the
+                # literal "$(NAME)", which counts as empty.
+                args=()
+                for name in [[ build_args | join(' ') ]]; do
+                  value="${!name:-}"
+                  case "$value" in '$('*) value="" ;; esac
+                  if [ -n "$value" ]; then args+=(--build-arg "${name}=${value}"); fi
+                done
+[% if required_build_args %]
+                for name in [[ required_build_args | join(' ') ]]; do
+                  value="${!name:-}"
+                  case "$value" in ''|'$('*) echo "##vso[task.logissue type=error]$name is empty: set it in the variable group to an image in your registry (the Dockerfile has no default)"; exit 1 ;; esac
+                done
+[% endif %]
+                docker build "${args[@]}" --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
+[% else %]
                 docker build --tag "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)" .
+[% endif %]
                 docker push "[[ envs[0].acr ]].azurecr.io/$(imageName):$(Build.SourceVersion)"
 [% for env in envs %]
 

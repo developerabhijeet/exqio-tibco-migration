@@ -1,0 +1,211 @@
+# ExiQO Migrate release for GitHub Actions: build -> scan -> sign -> deploy (approval), the same
+# flow as azure-pipelines.yml; both call deploy/pipelines/release.sh. A template: copy it to
+# .github/workflows/release.yml in GMF's repository.
+#
+# Runs after CI (unit tests, make chart-check), on a v* tag or by hand. The tests are not rerun
+# here: this pipeline releases the commit CI already passed.
+#
+# Three identities, one per privilege, so the approval and the sign-after-scan order rest on what
+# each job can do, not only on job order. Azure sign-in is OpenID Connect (azure/login), no stored
+# secret. Every job runs in a GitHub environment, so each subject is exact; Entra federated
+# credentials match subjects exactly (no wildcards), one credential per environment per identity:
+#
+#   environment     jobs          identity (AZURE_CLIENT_ID, an environment variable)   subject
+#   release-build   build, scan   build: AcrPush on the registry only
+#                                 repo:<org>/<repo>:environment:release-build
+#   release-sign    sign          signer: AcrPush + Key Vault Crypto User on the signing key
+#                                 repo:<org>/<repo>:environment:release-sign
+#   production      deploy        deployer: AcrPull + its AKS role (deploy/azure README.md)
+#                                 repo:<org>/<repo>:environment:production
+#
+# deploy/azure grants these from build_principal_id, signer_principal_id and deployer_principal_id
+# (the deployer's AKS role only if deployer_aks_role opts in). Environment settings (repository
+# Settings > Environments):
+#   release-sign   deployment branches and tags: selected, tag pattern v* only; so only a release
+#                  tag can obtain the signer's token.
+#   production     required reviewers (the approval), deployment tags v*; one environment and one
+#                  federated credential per further target environment. The workflow_dispatch
+#                  input lists deploy environments only (add each to its options), so a run can
+#                  never deploy with the release-build or release-sign identity.
+#
+# Trust in the signing key does not rest on the repository: deploy verifies with the committed
+# COSIGN_PUBLIC_KEY_FILE only if its sha256 equals production's COSIGN_PUBLIC_KEY_SHA256 (an
+# environment variable, set by the platform team from deploy/azure's cosign_public_key_sha256),
+# and refuses when it is unset or differs. Also set up:
+#   - a tag ruleset on v*: only release managers may create, update or delete those tags (the
+#     tag is what reaches release-sign);
+#   - CODEOWNERS for deploy/gmf/cosign.pub and deploy/pipelines/ (release managers), with
+#     required code-owner review on the default branch.
+#
+# Variables (vars.*), no secrets. Per environment: AZURE_CLIENT_ID (that environment's identity),
+# plus for production AKS_RESOURCE_GROUP, AKS_NAME, NAMESPACE, HELM_VALUES_FILES and
+# COSIGN_PUBLIC_KEY_SHA256. Repository-wide:
+#   AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   ACR_NAME, REGISTRY                    GMF's registry and its login server (gmfacr.azurecr.io)
+#   PLATFORM_REPOSITORY, WEB_REPOSITORY   default exiqo/exiqo-platform, exiqo/exiqo-web
+#   TOOL_REGISTRY                         GMF's mirror of Docker Hub/ghcr/gcr images (tool images)
+#   BASE_IMAGE_DOTNET, BASE_IMAGE_UV, BASE_IMAGE_NODE_BUILD, BASE_IMAGE_NODE_RUNTIME
+#                                         the mirrored base images, by digest
+#   PIP_INDEX_URL, HF_ENDPOINT, NPM_CONFIG_REGISTRY, TERRAFORM_BASE_URL, TERRAGRUNT_BASE_URL
+#                                         package and download mirrors for the image builds
+#   TRIVY_DB_REPOSITORY, TRIVY_JAVA_DB_REPOSITORY   mirrored Trivy databases (OCI references)
+#   COSIGN_KEY                            azurekms://<vault>.vault.azure.net/<key> (deploy/azure output)
+#   COSIGN_PUBLIC_KEY_FILE                the committed public key, e.g. deploy/gmf/cosign.pub
+#                                         (terraform output -raw cosign_public_key_pem)
+#   HELM_VALUES_FILES                     space-separated, e.g. "deploy/gmf/values.gmf.yaml
+#                                         deploy/gmf/values.azure.json"
+#   NEO4J_CHART_REPOSITORY                GMF's mirror of https://helm.neo4j.com/neo4j
+#   RUNNER                                runs-on label, default ubuntu-24.04 (linux/amd64)
+#
+# Third-party actions are pinned by commit; the tag is in the comment.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deploy environment (required reviewers, its own deployer identity)
+        type: choice
+        options: [production]
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exiqo-release
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ vars.REGISTRY }}
+  ACR_NAME: ${{ vars.ACR_NAME }}
+  PLATFORM_REPOSITORY: ${{ vars.PLATFORM_REPOSITORY || 'exiqo/exiqo-platform' }}
+  WEB_REPOSITORY: ${{ vars.WEB_REPOSITORY || 'exiqo/exiqo-web' }}
+  TOOL_REGISTRY: ${{ vars.TOOL_REGISTRY }}
+
+jobs:
+  build:
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    environment: release-build
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      platform_digest: ${{ steps.build.outputs.platform_digest }}
+      web_digest: ${{ steps.build.outputs.web_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: hadolint, build linux/amd64 and push the candidates
+        id: build
+        env:
+          BASE_IMAGE_DOTNET: ${{ vars.BASE_IMAGE_DOTNET }}
+          BASE_IMAGE_UV: ${{ vars.BASE_IMAGE_UV }}
+          BASE_IMAGE_NODE_BUILD: ${{ vars.BASE_IMAGE_NODE_BUILD }}
+          BASE_IMAGE_NODE_RUNTIME: ${{ vars.BASE_IMAGE_NODE_RUNTIME }}
+          PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+          HF_ENDPOINT: ${{ vars.HF_ENDPOINT }}
+          NPM_CONFIG_REGISTRY: ${{ vars.NPM_CONFIG_REGISTRY }}
+          TERRAFORM_BASE_URL: ${{ vars.TERRAFORM_BASE_URL }}
+          TERRAGRUNT_BASE_URL: ${{ vars.TERRAGRUNT_BASE_URL }}
+        run: deploy/pipelines/release.sh build >>"$GITHUB_OUTPUT"
+
+  scan:
+    needs: build
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    environment: release-build
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PLATFORM_DIGEST: ${{ needs.build.outputs.platform_digest }}
+      WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Egress audit and Trivy (fails on CRITICAL, .trivyignore applies)
+        env:
+          TRIVY_DB_REPOSITORY: ${{ vars.TRIVY_DB_REPOSITORY }}
+          TRIVY_JAVA_DB_REPOSITORY: ${{ vars.TRIVY_JAVA_DB_REPOSITORY }}
+        run: deploy/pipelines/release.sh scan
+
+  sign:
+    needs: [build, scan]
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    environment: release-sign
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PLATFORM_DIGEST: ${{ needs.build.outputs.platform_digest }}
+      WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
+      COSIGN_KEY: ${{ vars.COSIGN_KEY }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Federated token for cosign's Key Vault signer
+        run: |
+          token_file="$RUNNER_TEMP/azure-federated-token"
+          curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"], end="")' >"$token_file"
+          chmod 600 "$token_file"
+          echo "AZURE_FEDERATED_TOKEN_FILE=$token_file" >>"$GITHUB_ENV"
+      - name: SBOM attestation, signature and release tag
+        run: deploy/pipelines/release.sh sign
+
+  deploy:
+    needs: [build, sign]
+    runs-on: ${{ vars.RUNNER || 'ubuntu-24.04' }}
+    environment: ${{ inputs.environment || 'production' }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PLATFORM_DIGEST: ${{ needs.build.outputs.platform_digest }}
+      WEB_DIGEST: ${{ needs.build.outputs.web_digest }}
+      COSIGN_PUBLIC_KEY_FILE: ${{ vars.COSIGN_PUBLIC_KEY_FILE }}
+      COSIGN_PUBLIC_KEY_SHA256: ${{ vars.COSIGN_PUBLIC_KEY_SHA256 }}
+      AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
+      AKS_NAME: ${{ vars.AKS_NAME }}
+      NAMESPACE: ${{ vars.NAMESPACE || 'exiqo' }}
+      HELM_VALUES_FILES: ${{ vars.HELM_VALUES_FILES }}
+      NEO4J_CHART_REPOSITORY: ${{ vars.NEO4J_CHART_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify the signatures, then helm upgrade --install --atomic
+        run: deploy/pipelines/release.sh deploy

@@ -219,17 +219,32 @@ def ask_reply(user: str) -> dict:
     return {"answer": answer, "citation_ids": [hid for hid, _, _ in top]}
 
 
-def designer_reply(process: Process | None) -> dict:
+def exiqoian_reply(user: str) -> dict:
+    sources = re.findall(r'<source id="(S\d+)"[^>]*>(.*?)</source>', user, flags=re.DOTALL)
+    if not sources:
+        return {"verdict": "not_covered", "answer": ""}
+    parts = [f"{' '.join(text.split())[:160].rstrip('.!? ')} [{sid}]." for sid, text in sources[:2]]
+    return {"verdict": "answer", "answer": "From the project memory: " + " ".join(parts)}
+
+
+def designer_reply(process: Process | None, user: str = "") -> dict:
+    """The narrative names the process's first named step and the decision its first approved rule, as a
+    real designer's prose does, so the design's inline citations have something to link."""
     name = process.name if process is not None else "the process"
+    first = next((a.name for a in (process.activities if process is not None else [])
+                  if re.search(r"_|\d|.[A-Z]", a.name or "")), None)  # a name, not "Start"
+    rule = re.search(r"^- id=(\S+) status=approved:", user, flags=re.MULTILINE)
     return {
         "narrative": (f"{name} becomes one ASP.NET Core service. Each TIBCO step is a method named in "
                       "the mapping table; SQL is carried verbatim into Dapper repositories, so the parity "
-                      "evaluator can compare the two implementations field by field."),
+                      "evaluator can compare the two implementations field by field."
+                      + (f" {first} becomes one of its methods." if first else "")),
         "decisions": [{
             "title": "Data access",
             "choice": "Dapper repositories with the TIBCO SQL kept verbatim",
             "alternatives": ["Entity Framework Core with generated queries"],
-            "reason": "Verbatim SQL keeps behavior identical and reviewable against the TIBCO source.",
+            "reason": "Verbatim SQL keeps behavior identical and reviewable against the TIBCO source."
+                      + (f" Rule {rule.group(1)} is tested against the same statement." if rule else ""),
         }],
         "open_questions": [{
             "question": "Should the migrated service keep the TIBCO fault names in its error responses?",
@@ -270,6 +285,8 @@ def reply_for(req: LLMRequest, process: Process | None) -> str:
     stage = req.tags.get("stage")
     if req.tags.get("feature") == "ask":
         data = ask_reply(user)
+    elif req.tags.get("feature") == "exiqoian":
+        data = exiqoian_reply(user)
     elif stage == "analyse" and process is not None:
         data = analyst_reply(process)
     elif stage == "risk":
@@ -279,7 +296,7 @@ def reply_for(req: LLMRequest, process: Process | None) -> str:
     elif stage == "name":
         data = namer_reply(user)
     elif stage == "design":
-        data = designer_reply(process)
+        data = designer_reply(process, user)
     elif stage == "build":
         data = {"files": []}
     elif stage == "review":

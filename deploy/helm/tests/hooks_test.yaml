@@ -1,0 +1,49 @@
+# The migration Job runs before any release resource exists (pre-install), so its service account
+# and SecretProviderClass are hooks too, with lower weights: Helm creates hooks in weight order.
+suite: migration hook ordering
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/migrate-job.yaml
+tests:
+  - it: the service account is created first
+    documentSelector: {path: kind, value: ServiceAccount}
+    asserts:
+      - equal: {path: metadata.name, value: exiqo-migrate}
+      - equal: {path: 'metadata.annotations["helm.sh/hook"]', value: "pre-install,pre-upgrade"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-weight"]', value: "-20"}
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook-delete-policy"]'
+          value: before-hook-creation,hook-succeeded
+      - equal: {path: automountServiceAccountToken, value: false}
+  - it: the provider class second
+    documentSelector: {path: kind, value: SecretProviderClass}
+    asserts:
+      - equal: {path: metadata.name, value: exiqo-migrate}
+      - equal: {path: 'metadata.annotations["helm.sh/hook"]', value: "pre-install,pre-upgrade"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-weight"]', value: "-10"}
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook-delete-policy"]'
+          value: before-hook-creation,hook-succeeded
+  - it: then the Job, kept until the next run for its logs
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - equal: {path: 'metadata.annotations["helm.sh/hook"]', value: "pre-install,pre-upgrade"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-weight"]', value: "0"}
+      - equal: {path: 'metadata.annotations["helm.sh/hook-delete-policy"]', value: before-hook-creation}
+      - equal: {path: spec.backoffLimit, value: 1}
+      - equal: {path: spec.activeDeadlineSeconds, value: 900}
+      - equal: {path: spec.template.spec.restartPolicy, value: Never}
+      - equal: {path: spec.template.spec.serviceAccountName, value: exiqo-migrate}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: EXIQO_ROLE, value: migrate}
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: migrate
+  - it: with the CI secret source the Job mounts the Kubernetes Secret and no provider class exists
+    values:
+      - ../exiqo/values.gmf.example.yaml
+      - ../exiqo/ci/values.kind.yaml
+    asserts:
+      - hasDocuments: {count: 2}

@@ -48,7 +48,7 @@ export function FailedBuildStrip({
     <section
       role="status"
       data-testid="failed-build-strip"
-      className="rounded-card border border-error/30 bg-error-bg px-5 py-3 text-[13.5px] text-error"
+      className="rounded-card border border-error/30 bg-error-bg px-5 py-3 text-md text-error"
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         <span className="flex items-center gap-1.5 font-semibold">
@@ -60,7 +60,7 @@ export function FailedBuildStrip({
           {processName ? <span>of {processName}</span> : null}
           <OutcomePill outcome={build.status} />
         </span>
-        <button type="button" className="btn-secondary ml-auto px-3 py-1 text-[13px]" onClick={() => setStep("build")}>
+        <button type="button" className="btn-secondary ml-auto px-3 py-1 text-sm" onClick={() => setStep("build")}>
           <Hammer size={14} aria-hidden /> Open Build
         </button>
       </div>
@@ -68,20 +68,20 @@ export function FailedBuildStrip({
         {consequence}
       </p>
       {restore ? (
-        <p className="mt-1 text-[13px]" data-testid="failed-build-reason">
+        <p className="mt-1 text-sm" data-testid="failed-build-reason">
           Restore failed: <Remedy text={restore.reason} />
         </p>
       ) : failedStep ? (
-        <p className="mt-1 text-[13px]" data-testid="failed-build-reason">
+        <p className="mt-1 text-sm" data-testid="failed-build-reason">
           {failedStep.name} failed: {failedStep.log.split("\n").find((l) => l.trim()) ?? "see the Build tab"}
         </p>
       ) : build.error ? (
-        <p className="mt-1 text-[13px]" data-testid="failed-build-reason">
+        <p className="mt-1 text-sm" data-testid="failed-build-reason">
           {build.error}
         </p>
       ) : null}
       {restore?.remedy ? (
-        <p className="mt-1 text-[13px] text-ink" data-testid="failed-build-remedy">
+        <p className="mt-1 text-sm text-ink" data-testid="failed-build-remedy">
           <span className="label mr-1.5">Remedy</span>
           <Remedy text={restore.remedy} />
         </p>
@@ -96,7 +96,7 @@ export function Remedy({ text }: { text: string }) {
     <>
       {text.split(/(`[^`]+`)/).map((part, i) =>
         part.startsWith("`") ? (
-          <code key={i} className="rounded bg-white px-1 font-mono text-[12px]">
+          <code key={i} className="rounded bg-surface px-1 font-mono text-xs">
             {part.slice(1, -1)}
           </code>
         ) : (

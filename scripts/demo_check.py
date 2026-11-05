@@ -17,24 +17,52 @@ Two modes, because two parts of the run need the internet:
   restore failed with the NuGet reason and the ``make nuget-cache`` remedy, build and test
   skipped, G4 not enabled, the service not running and verify refused, the infrastructure
   validation reporting the unreachable registry. The plan still runs in connect-later mode.
+* ``toolchain-off``: the workers run with ``BUILD_TOOLCHAIN=false`` (the kind end to end,
+  ``make kind-e2e``). The solution is generated, filled and reviewed; restore, build, format and
+  test are skipped with the switched-off reason, G4 is not enabled, the service cannot start and
+  verify is refused. The infrastructure validation may pass or report the unreachable registry,
+  whichever the cluster's egress allows; either must be reported honestly.
 
 Without ``--mode`` the probes decide. The script starts nothing: ``make demo-check`` starts an API
 when none answers. It never prints key values.
 
-    python scripts/demo_check.py [--api URL] [--mode full|offline] [--zip PATH]
+    python scripts/demo_check.py [--api URL | --base-url URL] [--token TOKEN]
+                                 [--mode full|offline|toolchain-off]
+                                 [--stack dotnet|java|go|python] [--zip PATH]
+
+``--stack`` (default dotnet) creates the project on that target stack and runs the same seven steps:
+the build must report the stack, the metrics keys must be present, parity must have no unexplained
+difference, and (when memory is configured) the lineage must reach ``method:<stack>:`` Method nodes
+through MIGRATED_TO. For a stack other than dotnet the NuGet probe is not used (its packages come from
+GMF's mirrors) and the offline mode asserts a failed restore with its reason. Through make:
+``make demo-check DEMO_ARGS="--stack java"``.
+
+The ``connectors`` step (also ``--only connectors``) runs each enabled connector's connection test,
+which needs the ``admin`` role: ``ops.sam`` locally, and with ``--token`` a user who holds ``admin``.
+``--publish --github-repo OWNER/NAME`` also pushes one build, publishes one page and creates one issue.
 
 Without ``--api`` the API URL comes from API_URL, else from API_PORT in the environment or .env
 (the same key the Makefile and the web read), so this never probes a port the API has moved off.
+
+Against an installed platform (the GMF smoke test, docs/deploy/GMF-INSTALL.md) pass the public
+address instead: ``--base-url https://<host>`` talks to the API the ingress serves under ``/api``.
+An ``AUTH_MODE=oidc`` install ignores the ``X-User`` persona header, so the run signs in with
+``--token`` (or EXIQO_TOKEN), an Entra access token that holds the sme, architect, engineer and ops
+roles; the gate and audit checks then expect that one user's name. The token is sent as a bearer
+and never printed. The local probes (NuGet, the provider registry) say nothing about the cluster's
+mirrors, so a remote run is ``full`` unless ``--mode offline`` is given.
 """
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
 import sys
 import time
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,12 +86,33 @@ def default_api_url() -> str:
                 if key.strip() == "API_PORT" and value.strip():
                     port = value.strip()
     return f"http://localhost:{port or '9000'}"
+
+
+def api_url_from_base(base_url: str) -> str:
+    """The API of an installed platform: the ingress serves it under ``/api`` of the public host."""
+    return base_url.rstrip("/") + "/api"
+
+
 TARGETS = ("DealerFundingRequest", "CreditApplicationIntake")
+CONNECTOR_KINDS = ("github", "atlassian", "figma")
+ONLY_STEPS = ("connectors",)
+MODES = ("full", "offline", "toolchain-off")
+STACKS = ("dotnet", "java", "go", "python")
+METRIC_KEYS = ("rule_carry_forward", "test_pass_rate", "code_coverage", "standards_adherence", "compile_ok",
+               "infra_ok", "conversion_accuracy")  # the fixed formulas of spec 2.5, the same for every stack
+TOOLCHAIN_OFF_MARKER = "BUILD_TOOLCHAIN=false"
 SME, ARCHITECT, ENGINEER, OPS = "sme.vicky", "architect.lee", "engineer.ravi", "ops.sam"
 NUGET_INDEX = "https://api.nuget.org/v3/index.json"
 REGISTRIES = {"opentofu": "https://registry.opentofu.org/.well-known/terraform.json",
               "terraform": "https://registry.terraform.io/.well-known/terraform.json"}
 JOB_TIMEOUT = {"scan": 300, "discover": 300, "analyse": 600, "design": 600, "build": 1500, "verify": 900}
+ITERATION_REQUIREMENT = "Funding over 50k needs a second approver before it is booked."
+HAND_EDIT = "\n// acceptance run: a hand edit\n"
+#: Per stack: the source suffix the iteration step edits and the comment it appends.
+EDIT_TARGET = {"dotnet": (".cs", HAND_EDIT), "java": (".java", HAND_EDIT), "go": (".go", HAND_EDIT),
+               "python": (".py", "\n# acceptance run: a hand edit\n")}
+#: Iteration statuses at or after its design job started.
+DESIGNING_OR_LATER = ("designing", "building", "verifying", "deploying", "closed")
 MASKED_SSN = re.compile(r"^(\*{3}-\*{2}-\d{4}|\*+)$")  # last four kept, or fully masked
 RAW_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 
@@ -84,6 +133,7 @@ class Row:
 class Run:
     api: str
     rows: list[Row] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # one line each, printed under the table
 
     def check(self, step: str, name: str, ok: bool, detail: Any = "", *, fatal: bool = False) -> bool:
         self.rows.append(Row(step, name, bool(ok), _short(detail)))
@@ -124,9 +174,16 @@ def registry_probe(terraform_version: str | None) -> tuple[bool, str]:
 
 # ------------------------------------------------------------------ the flow
 class Flow:
-    def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path) -> None:
+    def __init__(self, run: Run, client: httpx.Client, mode: str, zip_path: Path,
+                 token: bool = False, publish: bool = False, github_repo: str = "",
+                 stack: str = "dotnet") -> None:
         self.run, self.c, self.mode, self.zip = run, client, mode, zip_path
+        self.publish, self.github_repo = publish, github_repo  # connectors step: --publish, --github-repo
+        self.stack = stack  # the project's target stack: its build, parity and memory lineage are checked
+        self.token = token  # a bearer token signs in (oidc install): X-User is ignored
+        self.actor = ""  # the token's user, as the audit trail names them
         self.full = mode == "full"
+        self.toolchain_off = mode == "toolchain-off"
         self.project_id = ""
         self.process_ids: dict[str, str] = {}
         self.builds: dict[str, str] = {}
@@ -161,11 +218,31 @@ class Flow:
         for name in ("dotnet", "terraform", "terragrunt"):
             t = tools.get(name) or {}
             self.run.check(s, f"{name} present", t.get("present") is True, t.get("version") or "missing")
+        if self.stack != "dotnet":
+            listing = self.get("/stacks")
+            row = next((x for x in (listing.json().get("stacks") or [] if listing.status_code == 200 else [])
+                        if x.get("key") == self.stack), {})
+            self.run.check(s, f"{self.stack} stack selectable", row.get("selectable") is True,
+                           f"{row.get('label')}" if row.get("selectable") else
+                           f"HTTP {listing.status_code}: {row.get('reason') or 'not listed'}", fatal=True)
+            missing = row.get("toolchain_missing") or []
+            self.run.check(s, f"{self.stack} toolchain present", not missing,
+                           "found" if not missing else f"missing {', '.join(missing)}")
+        if self.token:
+            me = self.get("/auth/me")
+            who = me.json() if me.status_code == 200 else {}
+            self.actor = who.get("upn") or who.get("oid") or ""
+            self.run.check(s, "token accepted", bool(self.actor), f"HTTP {me.status_code}", fatal=True)
+            missing = sorted({"sme", "architect", "engineer", "ops"} - set(who.get("roles") or []))
+            self.run.check(s, "token holds the gate roles", not missing,
+                           f"roles {', '.join(who.get('roles') or [])}" + (f"; missing {missing}" if missing else ""),
+                           fatal=True)
         self.run.check(s, "synthetic zip on disk", self.zip.is_file(), str(self.zip), fatal=True)
 
     def upload(self) -> None:
         s = "upload"
-        project = self.post("/projects", json={"name": f"acceptance {time.strftime('%Y-%m-%d %H:%M:%S')}"})
+        project = self.post("/projects", json={"name": f"acceptance {self.stack} {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                                               "target_stack": self.stack})
         self.run.check(s, "project created", project.status_code == 201, project.status_code, fatal=True)
         self.project_id = project.json()["id"]
         with self.zip.open("rb") as fh:
@@ -255,8 +332,9 @@ class Flow:
         r = self.post(f"/gates/{pid}/{gate}", json={"state": "approved", "note": "acceptance run"},
                       headers={"X-User": user})
         body = r.json()
-        ok = r.status_code == 200 and body.get("state") == "approved" and body.get("decided_by") == user
-        self.run.check(step, f"{gate} approved by {user}", ok,
+        who = self.actor or user  # a bearer token signs in as one user, whatever persona is asked for
+        ok = r.status_code == 200 and body.get("state") == "approved" and body.get("decided_by") == who
+        self.run.check(step, f"{gate} approved by {who}", ok,
                        f"decided_by {body.get('decided_by')}" if r.status_code == 200 else body.get("detail"),
                        fatal=True)
 
@@ -270,6 +348,7 @@ class Flow:
         self.builds[name] = build_id
         self.job_ok(s, self.wait_job(r.json()["job_id"], "build"))
         b = self.get(f"/builds/{build_id}").json()
+        self.run.check(s, "build stack", (b.get("stack") or "dotnet") == self.stack, b.get("stack"))
         steps = {st["name"]: st for st in b["steps"]}
         tests = self.get(f"/builds/{build_id}/tests").json()["summary"]
         files = self.get(f"/builds/{build_id}/files").json()["counts"]
@@ -280,11 +359,28 @@ class Flow:
                        f"{len(te['filled'])} filled, {len(te['rejections'])} rejected, "
                        f"{len(te['warnings'])} warnings; review findings "
                        f"{sum(len(v) for v in (b.get('review_findings') or {}).values())}" if te else "missing")
-        self.run.check(s, "format check", steps.get("format", {}).get("ok") is True,
-                       _first_line(steps.get("format", {}).get("log")))
         g4 = b.get("g4") or {}
         restore = steps.get("restore", {})
-        if self.full:
+        if not self.toolchain_off:
+            self.run.check(s, "format check", steps.get("format", {}).get("ok") is True,
+                           _first_line(steps.get("format", {}).get("log")))
+        if self.toolchain_off:
+            names = ("restore", "build", "format", "test")
+            off = [n for n in names if steps.get(n, {}).get("skipped") is True and steps[n].get("ok") is False
+                   and TOOLCHAIN_OFF_MARKER in (steps[n].get("log") or "")]
+            self.run.check(s, "restore, build, format and test skipped", off == list(names),
+                           _first_line(restore.get("log")) if off == list(names)
+                           else f"skipped with the switched-off reason: {off or 'none'}")
+            # nothing ran: every runnable test is not run (the rest have no body or are blocked)
+            self.run.check(s, "tests listed, none run",
+                           tests["total"] > 0 and tests["passed"] == 0 and tests["failed"] == 0,
+                           f"{tests['total']} tests: {tests['not_run']} not run, {tests.get('no_body', 0)} "
+                           f"without a body, {tests.get('blocked', 0)} blocked, {tests['passed']} passed")
+            self.run.check(s, "build status failed", b["status"] == "failed", b["status"])
+            self.run.check(s, "G4 not enabled, reason given",
+                           g4.get("enabled") is False and "compile did not pass" in (g4.get("reason") or ""),
+                           g4.get("reason"))
+        elif self.full:
             self.run.check(s, "restore passed", restore.get("ok") is True,
                            _tail_line(restore.get("log") or "", "NuGet unreachable"))
             self.run.check(s, "compile passed", steps.get("build", {}).get("ok") is True,
@@ -295,11 +391,20 @@ class Flow:
                            f"{tests['not_run']} not run")
             self.run.check(s, "build status passed", b["status"] == "passed", b["status"])
             self.run.check(s, "G4 enabled", g4.get("enabled") is True, g4.get("reason") or "enabled")
+            m = self.get(f"/builds/{build_id}/metrics")
+            metrics = m.json() if m.status_code == 200 else {}
+            absent = [k for k in METRIC_KEYS if k not in metrics]
+            self.run.check(s, "metrics keys", m.status_code == 200 and not absent,
+                           f"{len(METRIC_KEYS)} keys" if not absent else f"HTTP {m.status_code}, missing {absent}")
         else:
             log = restore.get("log") or ""
-            self.run.check(s, "restore failed honestly", restore.get("ok") is False and "NuGet unreachable" in log,
-                           _tail_line(log, "NuGet unreachable"))
-            self.run.check(s, "remedy named", "make nuget-cache" in log, "restore log names `make nuget-cache`")
+            if self.stack == "dotnet":
+                self.run.check(s, "restore failed honestly", restore.get("ok") is False and "NuGet unreachable" in log,
+                               _tail_line(log, "NuGet unreachable"))
+                self.run.check(s, "remedy named", "make nuget-cache" in log, "restore log names `make nuget-cache`")
+            else:  # the package mirror is GMF's: the honest state is a failed restore with its reason
+                self.run.check(s, "restore failed honestly", restore.get("ok") is False and bool(log.strip()),
+                               _first_line(log))
             skipped = [n for n in ("build", "test") if steps.get(n, {}).get("skipped") is True]
             self.run.check(s, "build and test skipped", skipped == ["build", "test"],
                            "; ".join(_first_line(steps.get(n, {}).get("log")) for n in ("build", "test")))
@@ -322,12 +427,18 @@ class Flow:
         self.run.check(s, "terraform fmt and terragrunt hclfmt", v.get("fmt_ok") is True and v.get("hclfmt_ok") is True,
                        f"fmt {v.get('fmt_ok')}, hclfmt {v.get('hclfmt_ok')}")
         modules = v.get("modules") or []
-        if self.full:
+        unreachable = v.get("registry_unreachable") is True and all(m.get("registry_unreachable") for m in modules)
+        if self.toolchain_off:
+            # the cluster's egress decides: validated, or the unreachable registry said plainly
+            self.run.check(s, "infra validated or registry unreachable reported",
+                           v.get("ok") is True or (unreachable and v.get("ok") is False),
+                           f"{len(modules)} modules validated" if v.get("ok")
+                           else (v.get("notes") or ["no note"])[0])
+        elif self.full:
             bad = [m["name"] for m in modules if not (m.get("init_ok") and m.get("validate_ok"))]
             self.run.check(s, "infra validated", v.get("ok") is True and not bad,
                            f"{len(modules)} modules validated" if not bad else f"not validated: {bad}")
         else:
-            unreachable = v.get("registry_unreachable") is True and all(m.get("registry_unreachable") for m in modules)
             self.run.check(s, "registry unreachable reported", unreachable and v.get("ok") is False,
                            (v.get("notes") or ["no note"])[0])
 
@@ -348,7 +459,8 @@ class Flow:
                            fatal=True)
             try:
                 swagger = run.json().get("swagger_url")
-                if swagger:
+                # The proxied Swagger UI is for browsers: it reads the session cookie, never a bearer.
+                if swagger and not self.token:
                     sw = httpx.get(swagger, timeout=30)
                     self.run.check(s, "Swagger answers", sw.status_code == 200, f"HTTP {sw.status_code}")
                 job_id = self.post(f"/builds/{build_id}/verify").json()["job_id"]
@@ -369,10 +481,16 @@ class Flow:
             self.run.check(s, "service not running", state.get("running") is False, f"running {state.get('running')}")
             start = self.post(f"/builds/{build_id}/run")
             detail = start.json().get("detail") or ""
-            nu = re.search(r"NU1301[^.]*\.", detail)
-            self.run.check(s, "start refused with the NuGet reason",
-                           start.status_code == 409 and "nuget" in detail.lower(),
-                           f"HTTP {start.status_code}: {detail.split(':')[0]}: {nu.group(0) if nu else _first_line(detail)}")
+            if self.toolchain_off:  # nothing was compiled, so there is nothing to start
+                self.run.check(s, "start refused", start.status_code == 409,
+                               f"HTTP {start.status_code}: {_first_line(detail)}")
+            else:
+                nu = re.search(r"NU1301[^.]*\.", detail)
+                reason = start.status_code == 409 and (self.stack != "dotnet" or "nuget" in detail.lower())
+                self.run.check(s, "start refused with the restore reason" if self.stack != "dotnet"
+                               else "start refused with the NuGet reason", reason,
+                               f"HTTP {start.status_code}: {detail.split(':')[0]}: "
+                               f"{nu.group(0) if nu else _first_line(detail)}")
             ver = self.post(f"/builds/{build_id}/verify")
             self.run.check(s, "verify refused", ver.status_code == 409, f"HTTP {ver.status_code}: "
                            f"{ver.json().get('detail')}")
@@ -388,7 +506,11 @@ class Flow:
         self.run.check(s, "connect-later plan", r.status_code == 200 and body.get("connected") is False
                        and plan.get("status") == "connect_later", body.get("reason") or body, fatal=True)
         last = body.get("last_validation") or {}
-        if self.full:
+        if self.toolchain_off:
+            self.run.check(s, "plan carries the validation outcome",
+                           last.get("ok") is True or last.get("registry_unreachable") is True,
+                           f"ok {last.get('ok')}" if last.get("ok") else (last.get("notes") or ["no note"])[0])
+        elif self.full:
             self.run.check(s, "plan carries a passing validation", last.get("ok") is True, f"ok {last.get('ok')}")
         else:
             self.run.check(s, "plan carries the registry reason", last.get("registry_unreachable") is True,
@@ -398,8 +520,9 @@ class Flow:
         ack = self.post(f"/builds/{build_id}/plan/acknowledge", headers={"X-User": OPS},
                         json={"note": "Subscription access is pending with the platform team."})
         a = ack.json()
-        self.run.check(s, f"acknowledged by {OPS}", ack.status_code == 200 and a.get("status") == "acknowledged"
-                       and a.get("decided_by") == OPS, f"status {a.get('status')}, decided_by {a.get('decided_by')}")
+        who = self.actor or OPS
+        self.run.check(s, f"acknowledged by {who}", ack.status_code == 200 and a.get("status") == "acknowledged"
+                       and a.get("decided_by") == who, f"status {a.get('status')}, decided_by {a.get('decided_by')}")
 
     def evidence(self) -> None:
         s = "evidence"
@@ -422,8 +545,242 @@ class Flow:
                        rows.get("synthetic_estate", {}).get("status"))
         audit = self.get(f"/projects/{self.project_id}/audit").json()
         actors = sorted({a["actor"] for a in audit if a.get("gate")})
-        self.run.check(s, "gate decisions audited by named users", {SME, ARCHITECT} <= set(actors),
+        named = {self.actor} if self.actor else {SME, ARCHITECT}
+        self.run.check(s, "gate decisions audited by named users", named <= set(actors),
                        f"{len(audit)} audit lines; gate actors {actors}")
+
+    def memory(self) -> None:
+        s = "memory"
+        base = f"/memory/{self.project_id}"
+        st = self.get(f"{base}/status")
+        info = st.json() if st.status_code == 200 else {}
+        self.run.check(s, "memory available", info.get("available") is True,
+                       f"revision {info.get('revision')}, {sum((info.get('counts') or {}).values())} nodes"
+                       if info.get("available") else f"HTTP {st.status_code}: {info or st.text}", fatal=True)
+        revs = self.get(f"{base}/revisions", params={"limit": 200}).json().get("revisions") or []
+        per_phase: dict[str, int] = {}
+        for r in revs:
+            per_phase[r["phase"]] = per_phase.get(r["phase"], 0) + 1
+        # a revision per phase that projects content (estate/discover, each analysis, design, build);
+        # verify and deploy only when they produced deltas, so they are not demanded
+        short = [p for p in ("discover", "design", "build") if per_phase.get(p, 0) < 1]
+        if per_phase.get("analysis", 0) < len(TARGETS):
+            short.append(f"analysis ({per_phase.get('analysis', 0)} of {len(TARGETS)})")
+        self.run.check(s, "revisions per phase", not short,
+                       ", ".join(f"{k} {v}" for k, v in sorted(per_phase.items())) + (f"; missing {short}" if short else ""))
+        procs = {p["name"]: p for p in self.get(f"/projects/{self.project_id}/processes").json()}
+        for t in TARGETS:
+            uid = f"process:{procs[t]['ir_id']}"
+            node = self.get(f"{base}/node", params={"uid": uid})
+            lineage = (node.json().get("lineage") or []) if node.status_code == 200 else []
+            migrated = [x for x in lineage if x["edge"]["type"] == "MIGRATED_TO"]
+            methods = sorted({u for x in migrated for u in _lineage_uids(x) if u.startswith(f"method:{self.stack}:")})
+            self.run.check(s, f"lineage {t}", len(migrated) > 0,
+                           f"{len(migrated)} MIGRATED_TO from {uid}" if migrated else f"HTTP {node.status_code}, no MIGRATED_TO")
+            self.run.check(s, f"lineage {t} to {self.stack}", len(methods) > 0,
+                           f"MIGRATED_TO {methods[0]} (+{len(methods) - 1})" if methods
+                           else f"no MIGRATED_TO to a method:{self.stack}: uid")
+            hits = self.get(f"{base}/search", params={"q": t, "labels": "Process", "k": 8})
+            found = [h for h in (hits.json().get("hits") or []) if h["label"] == "Process"
+                     and (h.get("props") or {}).get("name", t) == t] if hits.status_code == 200 else []
+            self.run.check(s, f"search {t}", len(found) > 0, f"{len(found)} Process hits" if found else f"HTTP {hits.status_code}")
+        latest = max((r["n"] for r in revs), default=0)
+        diff = self.get(f"{base}/revisions/{latest}/diff") if latest else None
+        d = diff.json() if diff is not None and diff.status_code == 200 else {}
+        sizes = {k: sum(len(d.get(k, {}).get(x, [])) for x in ("added", "changed", "removed"))
+                 for k in ("nodes", "relationships")}
+        self.run.check(s, "latest diff", sum(sizes.values()) > 0, f"revision {latest}: {sizes}")
+        first = f"process:{procs[TARGETS[0]]['ir_id']}"
+        cur = self.post(f"{base}/curations", headers={"X-User": SME},
+                        json={"action": "note", "target_uid": first, "reason": "acceptance run",
+                              "text": "Acceptance run note: confirmed by the business owner."})
+        applied, detail = False, f"HTTP {cur.status_code}"
+        if cur.status_code == 202:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and not applied:
+                now = self.get(f"{base}/revisions", params={"limit": 20}).json().get("revisions") or []
+                applied = any(r["phase"] == "curation" and r["n"] > latest for r in now)
+                if not applied:
+                    time.sleep(1.5)
+            detail = "curation revision appeared" if applied else "no curation revision within 60 s"
+        self.run.check(s, "curation applied", cur.status_code == 202 and applied, detail)
+        ask = self.post("/ask", json={"project_id": self.project_id,
+                                      "question": f"What does {TARGETS[0]} do?"})
+        cites = [c["citation"]["uid"] for c in (ask.json().get("citations") or [])
+                 if c.get("citation")] if ask.status_code == 200 else []
+        self.run.check(s, "ask cites memory", len(cites) > 0, cites[0] if cites else f"HTTP {ask.status_code}")
+
+    def iteration(self) -> None:
+        """Re-enter Design on the first target with a requirement, then bring one hand edit back:
+        G3 pending again, the iteration designing or later, the edit set lists exactly the edited
+        file, and (memory configured) a revision of iteration 2 or later."""
+        s = "iteration"
+        name = TARGETS[0]
+        pid = self.process_ids[name]
+        r = self.post(f"/processes/{pid}/iterations", json={"requirements": ITERATION_REQUIREMENT},
+                      headers={"X-User": ARCHITECT})
+        it = r.json() if r.status_code == 201 else {}
+        self.run.check(s, f"iteration opened by {self.actor or ARCHITECT}", r.status_code == 201 and it.get("n", 0) >= 2,
+                       f"iteration {it.get('n')}" if r.status_code == 201 else f"HTTP {r.status_code}: {_first_line(r.text)}",
+                       fatal=True)
+        n = it["n"]
+        if it.get("job_id"):
+            self.job_ok(s, self.wait_job(it["job_id"], "design"))
+        gates = {g["gate"]: g["state"] for g in self.get(f"/processes/{pid}/gates").json()}
+        self.run.check(s, "G3 pending again", gates.get("G3") == "pending", f"G3 {gates.get('G3')}")
+        detail = self.get(f"/iterations/{it['id']}").json()
+        self.run.check(s, "iteration designing or later", detail.get("status") in DESIGNING_OR_LATER,
+                       f"status {detail.get('status')}, {len(detail.get('inputs') or [])} input(s)")
+        build_id = self.builds.get(name)
+        self.run.check(s, "a build to edit", bool(build_id), build_id or "no build of the first target", fatal=True)
+        dl = self.get(f"/builds/{build_id}/download")
+        self.run.check(s, "build downloaded", dl.status_code == 200, f"HTTP {dl.status_code}, {len(dl.content)} bytes",
+                       fatal=True)
+        agent = {f["path"] for f in self.get(f"/builds/{build_id}/files", params={"origin": "agent,ai"}).json()["files"]}
+        edited, path = _edit_one(dl.content, agent, *EDIT_TARGET.get(self.stack, EDIT_TARGET["dotnet"]))
+        self.run.check(s, "one agent file edited", path is not None, path or "no agent file in the download",
+                       fatal=True)
+        up = self.post(f"/builds/{build_id}/edits", headers={"X-User": ENGINEER},
+                       files={"file": ("edited.zip", edited, "application/zip")})
+        es = up.json() if up.status_code == 201 else {}
+        paths = [f["path"] for f in es.get("files") or []]
+        self.run.check(s, "preview lists exactly that file", up.status_code == 201 and paths == [path],
+                       f"{paths}, resume from {es.get('resume_phase')}" if up.status_code == 201
+                       else f"HTTP {up.status_code}: {_first_line(up.text)}")
+        st = self.get(f"/memory/{self.project_id}/status")
+        if st.status_code != 200 or not st.json().get("available"):
+            self.run.notes.append("iteration: memory not configured, the iteration revision is not checked")
+            return
+        found, deadline = [], time.monotonic() + 120
+        while time.monotonic() < deadline and not found:
+            revs = self.get(f"/memory/{self.project_id}/revisions", params={"iteration": n}).json().get("revisions")
+            found = [r for r in revs or [] if r.get("iteration") == n]
+            if not found:
+                time.sleep(1.5)
+        self.run.check(s, f"memory revision of iteration {n}", bool(found),
+                       ", ".join(f"{r['n']} {r['phase']}" for r in found[:4]) or "none within 120 s")
+
+    def connectors(self) -> None:
+        """Connection tests for the enabled connectors; with ``--publish`` one push, one page and
+        one issue. Off by default on an install, which is a pass, not a failure."""
+        s = "connectors"
+        flags_r = self.get("/connectors")
+        flags = flags_r.json() if flags_r.status_code == 200 else {}
+        enabled = [k for k in CONNECTOR_KINDS if (flags.get(k) or {}).get("enabled")]
+        if not enabled:
+            self.run.check(s, "none enabled", True, "SKIP (none enabled)")
+            self.run.notes.append("connectors: SKIP (none enabled)")
+            return
+        for kind in enabled:
+            r = self.post(f"/connectors/{kind}/test", headers={"X-User": OPS})  # admin only
+            body = r.json() if r.status_code == 200 else {}
+            ok = r.status_code == 200 and body.get("ok") is True
+            who = body.get("account") or body.get("site") or ""
+            if ok:
+                detail = f"ok ({who})" if who else "ok"
+            else:
+                try:
+                    msg = body.get("message") or r.json().get("detail")
+                except ValueError:
+                    msg = None
+                detail = f"HTTP {r.status_code}: {msg or _first_line(r.text)}" if r.status_code != 200 else (msg or "failed")
+            self.run.check(s, f"{kind} test", ok, detail)
+            self.run.notes.append(f"connectors: {kind} test {detail if ok else 'FAILED: ' + detail}")
+        if not self.publish:
+            return
+        target = TARGETS[0]
+        pid, build_id = self.process_ids.get(target), self.builds.get(target)
+        if (flags.get("github") or {}).get("enabled"):
+            if self.github_repo and build_id:
+                r = self.post(f"/builds/{build_id}/github/push", headers={"X-User": ENGINEER},
+                              json={"repo": self.github_repo, "open_pr": True})
+                self._connector_job(s, "github push", r)
+            else:
+                self.run.notes.append("connectors: github push skipped (needs a build and --github-repo)")
+        atl = flags.get("atlassian") or {}
+        if atl.get("confluence") and pid:
+            self._connector_job(s, "confluence page", self.post(f"/processes/{pid}/confluence/publish",
+                                                                headers={"X-User": ARCHITECT}))
+        if atl.get("jira") and pid:
+            findings = self.get(f"/processes/{pid}/analysis").json().get("findings") or []
+            open_ones = [f for f in findings if f.get("decision") in (None, "fix")]
+            if open_ones:
+                self._connector_job(s, "jira issue", self.post(
+                    f"/processes/{pid}/jira/issues", headers={"X-User": ARCHITECT},
+                    json={"items": [{"type": "finding", "ref": open_ones[0]["finding_key"]}]}))
+            else:
+                self.run.notes.append("connectors: jira issue skipped (no open finding)")
+
+    def _connector_job(self, step: str, name: str, r: httpx.Response) -> None:
+        if r.status_code != 202:
+            ok, detail = False, f"HTTP {r.status_code}: {_first_line(r.text)}"
+        else:
+            job = self.wait_job(r.json()["job_id"], "connector")
+            ok = job["status"] == "done"
+            detail = "job done" if ok else (job.get("error") or f"job {job['status']}")
+        self.run.check(step, name, ok, detail)
+        self.run.notes.append(f"connectors: {name} {'ok' if ok else 'FAILED: ' + detail}")
+
+    def exiqoian(self) -> None:
+        s = "exiqoian"
+        base = f"/exiqoian/{self.project_id}"
+        made = self.post(f"{base}/conversations", headers={"X-User": SME}, json={})
+        cid = made.json().get("id") if made.status_code == 201 else None
+        self.run.check(s, "conversation created", bool(cid), f"HTTP {made.status_code}", fatal=True)
+
+        def ask(question: str) -> dict:
+            r = self.post(f"{base}/conversations/{cid}/messages", headers={"X-User": SME}, json={"text": question})
+            return _done_message(r.text) if r.status_code == 200 else {}
+
+        answer = ask("What does DealerFundingRequest do?")
+        refs = ((answer.get("cited") or {}).get("refs")) or []
+        self.run.check(s, "answers with a citation", answer.get("verdict") == "answer" and len(refs) > 0,
+                       f"verdict {answer.get('verdict')}, {len(refs)} citation(s)" if answer else "no answer")
+        declined = ask("what is 2+2")
+        self.run.check(s, "declines off-topic", declined.get("verdict") == "off_topic",
+                       f"verdict {declined.get('verdict')}" if declined else "no answer")
+
+
+def _done_message(stream: str) -> dict:
+    """The ``message`` of the ``done`` event of a text/event-stream body ({} when there is none)."""
+    for frame in stream.replace("\r\n", "\n").split("\n\n"):
+        event, data = None, []
+        for line in frame.split("\n"):
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].lstrip())
+        if event == "done" and data:
+            try:
+                return json.loads("\n".join(data)).get("message") or {}
+            except ValueError:
+                return {}
+    return {}
+
+def _lineage_uids(entry: dict[str, Any]) -> list[str]:
+    """The node uids a lineage entry reaches: the edge's ends and the other node."""
+    edge = entry.get("edge") or {}
+    other = entry.get("other") or entry.get("node") or {}
+    return [u for u in (edge.get("dst"), edge.get("src"), other.get("uid")) if isinstance(u, str)]
+
+
+def _edit_one(data: bytes, agent: set[str], suffix: str = ".cs",
+              comment: str = HAND_EDIT) -> tuple[bytes, str | None]:
+    """The download with a comment appended to its first agent-written source file (the zip's own
+    folder prefix, if any, kept) and that file's build path."""
+    src = zipfile.ZipFile(io.BytesIO(data))
+    names = src.namelist()
+    target = next((n for n in sorted(names) if n.endswith(suffix) and any(n == p or n.endswith("/" + p)
+                                                                        for p in agent)), None)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            body = src.read(info)
+            if info.filename == target:
+                body = body + comment.encode()
+            dst.writestr(info, body)
+    path = next((p for p in agent if target == p or (target or "").endswith("/" + p)), None) if target else None
+    return out.getvalue(), path
 
 
 def _first_line(text: str | None) -> str:
@@ -468,38 +825,9 @@ def print_table(run: Run, header: list[str]) -> None:
     print(f"{len(run.rows) - failed} passed, {failed} failed")
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--api", default=default_api_url(), help="API base URL (default %(default)s)")
-    ap.add_argument("--mode", choices=("full", "offline"), help="force a mode (default: decided by the probes)")
-    ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
-                    help="the synthetic estate zip (make samples-zip)")
-    args = ap.parse_args(argv)
-
-    client = httpx.Client(base_url=args.api.rstrip("/"), timeout=httpx.Timeout(180.0, connect=10.0))
-    run = Run(args.api)
-    started = time.monotonic()
-    try:
-        tools = client.get("/settings").json().get("toolchains") or {}
-    except httpx.HTTPError as exc:
-        print(f"API not reachable at {args.api}: {exc}. Start it (make api, or make demo-check starts one).")
-        return 2
-    nuget_ok, nuget_why = nuget_probe()
-    registry_ok, registry_why = registry_probe((tools.get("terraform") or {}).get("version"))
-    probes_pass = nuget_ok and registry_ok
-    if args.mode:
-        mode, why = args.mode, "selected with --mode"
-    else:
-        mode = "full" if probes_pass else "offline"
-        why = "both probes passed" if probes_pass else "a probe failed"
-    header = [f"ExiQO Migrate acceptance run against {args.api}",
-              f"mode: {mode} ({why})",
-              f"  NuGet probe:    {'pass' if nuget_ok else 'fail'}: {nuget_why}",
-              f"  registry probe: {'pass' if registry_ok else 'fail'}: {registry_why}"]
-
-    flow = Flow(run, client, mode, args.zip)
-    # (name, function, later steps depend on it): a failure in a step others depend on stops the
-    # run; infra, verify, plan and evidence only end their own step.
+def build_steps(flow: Flow) -> list[tuple[str, Callable[[], None], bool]]:
+    """(name, function, later steps depend on it): a failure in a step others depend on stops the
+    run; infra, verify, plan, evidence, memory, exiqoian, iteration and connectors only end their own step."""
     steps: list[tuple[str, Callable[[], None], bool]] = [
         ("preflight", flow.preflight, True), ("upload", flow.upload, True), ("scan", flow.scan, True),
         ("discover", flow.discover, False)]
@@ -511,6 +839,88 @@ def main(argv: list[str] | None = None) -> int:
                   (f"verify {t}", lambda t=t: flow.verify(t), False),
                   (f"plan {t}", lambda t=t: flow.plan(t), False)]
     steps.append(("evidence", flow.evidence, False))
+    steps.append(("memory", flow.memory, False))
+    steps.append(("exiqoian", flow.exiqoian, False))
+    steps.append(("iteration", flow.iteration, False))  # after memory: it re-enters the first target
+    steps.append(("connectors", flow.connectors, False))
+    return steps
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--api", default=default_api_url(), help="API base URL (default %(default)s)")
+    ap.add_argument("--base-url", help="an installed platform's public address, https://<host>: the API "
+                    "is at <host>/api (overrides --api; the run is full unless --mode offline)")
+    ap.add_argument("--token", default=os.environ.get("EXIQO_TOKEN", ""),
+                    help="Entra access token for an AUTH_MODE=oidc install (default: EXIQO_TOKEN)")
+    ap.add_argument("--mode", choices=MODES, help="force a mode (default: decided by the probes; "
+                    "toolchain-off for workers with BUILD_TOOLCHAIN=false)")
+    ap.add_argument("--stack", choices=STACKS, default="dotnet",
+                    help="the project's target stack (default %(default)s): its build, metrics, parity and "
+                    "memory lineage are checked")
+    ap.add_argument("--zip", type=Path, default=REPO / "samples" / "synthetic-gmf.zip",
+                    help="the synthetic estate zip (make samples-zip)")
+    ap.add_argument("--only", choices=ONLY_STEPS, help="run just this step (connectors: the connection "
+                    "tests, no project needed; --publish then needs a full run)")
+    ap.add_argument("--publish", action="store_true", help="connectors step: also push one build to "
+                    "--github-repo, publish one Confluence page and create one Jira issue")
+    ap.add_argument("--github-repo", default="", help="owner/name for the --publish push")
+    args = ap.parse_args(argv)
+
+    if args.base_url:
+        args.api = api_url_from_base(args.base_url)
+    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    client = httpx.Client(base_url=args.api.rstrip("/"), headers=headers,
+                          timeout=httpx.Timeout(180.0, connect=10.0))
+    run = Run(args.api)
+    started = time.monotonic()
+    try:
+        response = client.get("/settings")
+        tools = (response.json().get("toolchains") or {}) if response.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError) as exc:
+        hint = ("Check --base-url." if args.base_url
+                else "Start it (make api, or make demo-check starts one).")
+        print(f"API not reachable at {args.api}: {exc}. {hint}")
+        return 2
+    if response.status_code in (401, 403):
+        print(f"{args.api} refused the call (HTTP {response.status_code}): this install signs in with "
+              "Entra ID, so pass an access token with --token (or EXIQO_TOKEN) for a user holding the "
+              "sme, architect, engineer and ops roles.")
+        return 2
+    if args.only:
+        run.rows.clear()
+        flow = Flow(run, client, "full", args.zip, token=bool(args.token), publish=args.publish,
+                    github_repo=args.github_repo)
+        try:
+            flow.connectors()
+        except StepFailed:
+            pass
+        except (httpx.HTTPError, KeyError, ValueError, TypeError) as exc:
+            run.check("connectors", "unexpected error", False, f"{type(exc).__name__}: {exc}")
+        print_table(run, [f"ExiQO Migrate {args.only} check against {args.api}"])
+        for note in run.notes:
+            print(note)
+        return 1 if any(not r.ok for r in run.rows) else 0
+    nuget_ok, nuget_why = nuget_probe()
+    registry_ok, registry_why = registry_probe((tools.get("terraform") or {}).get("version"))
+    # NuGet is the .NET stack's feed: another stack's packages come from GMF's mirrors (not probed here)
+    probes_pass = (nuget_ok if args.stack == "dotnet" else True) and registry_ok
+    if args.mode:
+        mode, why = args.mode, "selected with --mode"
+    elif args.base_url:
+        mode, why = "full", "an installed platform: its workers use GMF's mirrors, not this machine's network"
+    else:
+        mode = "full" if probes_pass else "offline"
+        why = "both probes passed" if probes_pass else "a probe failed"
+    header = [f"ExiQO Migrate acceptance run against {args.api}",
+              f"mode: {mode} ({why})",
+              f"target stack: {args.stack}",
+              f"  NuGet probe:    {'pass' if nuget_ok else 'fail'}: {nuget_why}",
+              f"  registry probe: {'pass' if registry_ok else 'fail'}: {registry_why}"]
+
+    flow = Flow(run, client, mode, args.zip, token=bool(args.token), publish=args.publish,
+                github_repo=args.github_repo, stack=args.stack)
+    steps = build_steps(flow)
 
     stopped_at: str | None = None
     for name, fn, blocking in steps:
@@ -529,6 +939,8 @@ def main(argv: list[str] | None = None) -> int:
     if flow.project_id:
         header.append(f"project: {flow.project_id}")
     print_table(run, header)
+    for note in run.notes:
+        print(note)
     print(f"elapsed {time.monotonic() - started:.0f} s")
     return 1 if any(not r.ok for r in run.rows) else 0
 

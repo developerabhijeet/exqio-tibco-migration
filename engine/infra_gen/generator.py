@@ -26,6 +26,20 @@ Design record to infrastructure:
     (selects the user-assigned identity), plus design config keys present in the app's appsettings.json;
   * ingress is enabled when the application has a REST, HTTP or SOAP starter;
   * Postgres databases come from the JDBC resources the design uses (``ConnectionStrings:<Resource>`` of a JDBC resource; ``ConnectionStrings:ServiceBus`` is not a database).
+
+Other target stacks (``stack="java"``, target-stacks Task 9): the service reads the same environment
+names (the runtime contract), so the Terraform, Terragrunt and Service Bus parts are the same. What
+differs comes from the stack:
+  * the Dockerfile is ``engine/stacks/<stack>/templates/Dockerfile.j2`` rendered with the layout's
+    ``dockerfile_context``: base images and the package mirror are build arguments
+    (``BASE_IMAGE_BUILD``, ``BASE_IMAGE_RUNTIME``, ``MAVEN_MIRROR_URL``), the user is 10001, port 8080;
+  * the Key Vault secret names are the ``secrets`` of the project's ``.exiqo/service-contract.json``
+    (the generator writes it; without it generation is refused rather than guessing names). Plain
+    design keys are not repeated in the container environment: the service's own configuration file
+    carries the same values;
+  * the pipelines build and test with the stack's tool, and pass the build arguments that are set;
+  * the local run is the compose file; ``run-local.sh``/``.ps1`` drive the .NET SDK and are written for
+    .NET only, other stacks get a ``RUN_LOCALLY.md`` for the compose file and the stack's own commands.
 """
 from __future__ import annotations
 
@@ -43,6 +57,7 @@ from engine.dotnet_gen.generator import GenFile, solution_layout
 from engine.dotnet_gen.models import DesignRecord
 from engine.infra_gen import hcl
 from engine.ir.models import Application
+from engine.stacks import get_stack
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 MODULES = (
@@ -261,12 +276,23 @@ def _flatten(node: Any, prefix: str = "") -> dict[str, str]:
     return {prefix: json.dumps(node) if not isinstance(node, str) else node}
 
 
-def _app_contract(root: Path, solution: str) -> tuple[list[str] | None, dict[str, str] | None]:
+def _app_contract(root: Path, solution: str,
+                  stack: str = "dotnet") -> tuple[list[str] | None, dict[str, str] | None]:
     """What the generated app reads, when the solution is already in ``root``.
 
     Returns (Key Vault secret names listed in Program.cs, flattened appsettings.json); ``None`` for
-    a part that is not there, in which case the design record is the source.
+    a part that is not there, in which case the design record is the source. A stack with a
+    ``contract_file`` (``.exiqo/service-contract.json``) answers from it: its ``secrets`` names and no
+    plain settings; ``FileNotFoundError`` when it is missing.
     """
+    contract_file = get_stack(stack).layout(solution).contract_file
+    if contract_file is not None:
+        path = root / contract_file
+        if not path.is_file():
+            raise FileNotFoundError(f"{contract_file} is missing under {root}: generate the {stack} project "
+                                    "before its infrastructure")
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        return [str(s["name"]) for s in contract.get("secrets") or []], None
     api = root / solution_layout(solution)["projects"]["api"]["folder"]
     secrets: list[str] | None = None
     settings: dict[str, str] | None = None
@@ -286,7 +312,8 @@ def _alnum(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def _facts(app: Application, designs: list[DesignRecord], solution: str, root: Path) -> _Facts:
+def _facts(app: Application, designs: list[DesignRecord], solution: str, root: Path,
+           stack: str = "dotnet") -> _Facts:
     queues: list[str] = []
     topics: list[str] = []
     subs: list[tuple[str, str]] = []
@@ -303,7 +330,7 @@ def _facts(app: Application, designs: list[DesignRecord], solution: str, root: P
                 topic, _, sub = e.name.rpartition("/")
                 topics.append(topic)
                 subs.append((topic, _sub_name(sub)))
-    app_secrets, app_settings = _app_contract(root, solution)
+    app_secrets, app_settings = _app_contract(root, solution, stack)
     # Secrets: the app's own list when generated, else the design's. Service Bus is reached with the
     # managed identity, so a ConnectionStrings:ServiceBus entry is never a secret to provision.
     design_secrets: dict[str, str] = {}  # key -> kv name
@@ -488,6 +515,86 @@ def _prune_stale(root: Path, app_slug: str, keep: set[str]) -> None:
                 parent.rmdir()
 
 
+# ------------------------------------------------------------- other stacks
+#: Build and test steps of the pipelines per non-.NET stack (the .NET steps are in the templates).
+#: Maven runs with the project's settings (the GMF mirror) and, after the dependency step, offline.
+_MVN = "mvn -B -ntp -s .exiqo/maven-settings.xml"
+def _ci(stack: str) -> dict[str, str]:
+    """The pipeline steps of ``stack`` (empty for .NET, whose steps are in the templates). Built on
+    demand: the stack registry is not touched when this module is imported."""
+    if stack == "java":
+        return {
+            "label": "Java 21",
+            "java_version": "21",
+            # MavenRunner's restore (the layout's): also the formatter and Surefire's provider, so the
+            # steps after it run offline
+            "restore": f"{_MVN} {get_stack('java').layout('app').dockerfile_context['restore_goals']}",
+            "build": f"{_MVN} -o -DskipTests package",
+            "test": f"{_MVN} -o test",
+            "results": "target/surefire-reports/*.xml",
+            "coverage": "target/site/jacoco/jacoco.xml",
+        }
+    if stack == "python":
+        from engine.stacks.python.runner import LINT_RULES
+
+        return {
+            "label": "Python 3.12",
+            "python_version": "3.12",
+            # UvRunner's steps: the locked files from the mirror (UV_INDEX_URL), hash-checked, then offline
+            "restore": "uv venv .venv --python 3.12 && uv pip install --require-hashes --no-build "
+                       "-r requirements.lock --python .venv/bin/python",
+            # the pipelines' uv, from uv-tool.lock (every platform's wheel hash)
+            "install_uv": "python -m pip install --require-hashes --no-deps --only-binary=uv -r uv-tool.lock",
+            "build": f".venv/bin/python -m compileall -q src && .venv/bin/ruff check --select {LINT_RULES} src tests",
+            "test": ".venv/bin/python -m pytest --junitxml=.exiqo-bin/junit.xml --cov=src "
+                    "--cov-report=xml:.exiqo-bin/coverage.xml",
+            "results": ".exiqo-bin/junit.xml",
+            "coverage": ".exiqo-bin/coverage.xml",
+        }
+    if stack == "go":
+        from engine.stacks.go import versions as go_versions
+        return {
+            "label": f"Go {go_versions.GO_VERSION}",
+            "go_version": go_versions.GO_VERSION,
+            # GoRunner's steps: GOFLAGS=-mod=readonly and GOSUMDB=off come from the pipeline env
+            "restore": "go mod download",
+            "build": "go build -o .exiqo-bin/server ./cmd/server && go vet ./...",
+            "test": ("go test -json -coverpkg=./internal/... -coverprofile=.exiqo-bin/cover.out ./... "
+                     "> .exiqo-bin/test.json"),
+            "results": ".exiqo-bin/test.json",
+            "coverage": ".exiqo-bin/cover.out",
+        }
+    return {}
+
+
+def _stack_layout(stack: str, solution_name: str) -> dict[str, Any]:
+    """``layout(solution_name)`` of a non-.NET stack, with the keys the pipelines read."""
+    lay = get_stack(stack).layout(solution_name)
+    return {"solution": lay.solution_file or "", "dockerfile_context": dict(lay.dockerfile_context)}
+
+
+def _stack_dockerfile(stack: str, context: dict[str, Any]) -> str:
+    """``engine/stacks/<stack>/templates/Dockerfile.j2`` with the layout's ``dockerfile_context``."""
+    folder = Path(__file__).resolve().parents[1] / "stacks" / stack / "templates"
+    env = Environment(loader=FileSystemLoader(str(folder)), trim_blocks=True, lstrip_blocks=True,
+                      keep_trailing_newline=True, undefined=StrictUndefined, autoescape=False)
+    return env.get_template("Dockerfile.j2").render(**context)
+
+
+def _stack_dockerignore(stack: str) -> str:
+    """The .NET ignore list with the stack's build output in place of its ``bin``/``obj`` lines.
+    ``.exiqo`` (the Maven settings the image build reads) is not ignored."""
+    # a plain name is ignored anywhere; an entry with a slash (``target/``) only at the root
+    output = [d.rstrip("/") if "/" in d else f"**/{d}" for d in sorted(get_stack(stack).download_excluded - {".exiqo"})]
+    lines: list[str] = []
+    for line in (TEMPLATES / "dockerignore").read_text(encoding="utf-8").splitlines():
+        if line == "**/bin":
+            lines += output  # the stack's output folders take the place of bin and obj
+        elif line != "**/obj":
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 def generate_infra(
     app: Application,
     design: DesignRecord | Sequence[DesignRecord],
@@ -497,6 +604,7 @@ def generate_infra(
     runtime: Literal["container_app", "aks"] = "container_app",
     *,
     location: str = DEFAULT_LOCATION,
+    stack: str = "dotnet",
 ) -> list[GenFile]:
     """Generate and write the infrastructure assets under ``solution_root``.
 
@@ -507,13 +615,18 @@ def generate_infra(
     already in ``solution_root`` its Program.cs and appsettings.json decide which secrets and plain
     keys the deployment carries. Returns the files written, sorted by path; units of this application
     that an earlier run wrote for other environments or the other runtime are removed.
+
+    ``stack`` is the target stack of the project in ``solution_root`` (``"dotnet"``: the output is
+    the .NET one, byte for byte); another stack's Dockerfile, secrets and pipeline steps follow
+    its layout and ``.exiqo/service-contract.json`` (module docstring).
     """
     if runtime not in _RUNTIME_MODULE:
         raise ValueError(f"unknown runtime {runtime!r}")
     root = Path(solution_root)
     designs = _as_list(design)
-    facts = _facts(app, designs, solution_name, root)
-    layout = solution_layout(solution_name)
+    facts = _facts(app, designs, solution_name, root, stack)
+    is_dotnet = stack == "dotnet"
+    layout = solution_layout(solution_name) if is_dotnet else _stack_layout(stack, solution_name)
     jenv = _jinja()
     files: dict[str, str] = {}
 
@@ -552,26 +665,38 @@ def generate_infra(
     )
 
     # Container image and local run.
-    projects = layout["projects"]
-    restore = [projects[k] for k in ("core", "infrastructure", "api")]
-    files["Dockerfile"] = jenv.get_template("Dockerfile.j2").render(
-        solution=solution_name, sln=layout["solution"], restore_projects=restore,
-        api_csproj=layout["api_project"], api_dll=layout["api_dll"])
-    files[".dockerignore"] = (TEMPLATES / "dockerignore").read_text(encoding="utf-8")
+    if is_dotnet:
+        projects = layout["projects"]
+        restore = [projects[k] for k in ("core", "infrastructure", "api")]
+        files["Dockerfile"] = jenv.get_template("Dockerfile.j2").render(
+            solution=solution_name, sln=layout["solution"], restore_projects=restore,
+            api_csproj=layout["api_project"], api_dll=layout["api_dll"])
+        files[".dockerignore"] = (TEMPLATES / "dockerignore").read_text(encoding="utf-8")
+    else:
+        files["Dockerfile"] = _stack_dockerfile(stack, layout["dockerfile_context"])
+        files[".dockerignore"] = _stack_dockerignore(stack)
     files["docker-compose.override.yml"] = jenv.get_template("compose.override.yml.j2").render(
-        solution=solution_name, databases=facts.databases, connection_strings=facts.connection_strings)
+        solution=solution_name, databases=facts.databases, connection_strings=facts.connection_strings,
+        stack=stack)
     # Exported and run on someone else's machine, the folder has to say how: the two scripts start the
     # same stack the compose file describes, wait for /health and print the token Swagger asks for, so
     # the reviewer who downloads the bundle reaches a working Swagger UI without reading the solution.
-    local = {
-        "solution": solution_name, "app_id": app.id, "sln": layout["solution"],
-        "api_project": layout["api_project"], "api_dll": layout["api_dll"], "port": TARGET_PORT,
-        "dotnet_version": DOTNET_VERSION, "databases": facts.databases,
-        "connection_strings": facts.connection_strings,
-    }
-    files["run-local.sh"] = jenv.get_template("run-local.sh.j2").render(**local)
-    files["run-local.ps1"] = jenv.get_template("run-local.ps1.j2").render(**local)
-    files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.md.j2").render(**local)
+    if is_dotnet:  # the scripts' second path is the .NET SDK; other stacks run with the compose file
+        local = {
+            "solution": solution_name, "app_id": app.id, "sln": layout["solution"],
+            "api_project": layout["api_project"], "api_dll": layout["api_dll"], "port": TARGET_PORT,
+            "dotnet_version": DOTNET_VERSION, "databases": facts.databases,
+            "connection_strings": facts.connection_strings,
+        }
+        files["run-local.sh"] = jenv.get_template("run-local.sh.j2").render(**local)
+        files["run-local.ps1"] = jenv.get_template("run-local.ps1.j2").render(**local)
+        files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.md.j2").render(**local)
+    else:  # the compose file is the local run; the .NET scripts have no equivalent
+        ci = _ci(stack)
+        files["RUN_LOCALLY.md"] = jenv.get_template("RUN_LOCALLY.stack.md.j2").render(
+            solution=solution_name, app_id=app.id, label=ci["label"], port=TARGET_PORT,
+            build_args=layout["dockerfile_context"].get("build_args", []), databases=facts.databases,
+            tools=get_stack(stack).required_tools, restore=ci["restore"], build=ci["build"], test=ci["test"])
     if len(facts.databases) > 1:
         files["infra/local/initdb/01-databases.sql"] = "".join(
             f"CREATE DATABASE {db};\n" for db in facts.databases[1:])
@@ -586,11 +711,16 @@ def generate_infra(
             "needs_gh": f"[apply-{prev}]" if prev else "[image]",
             "needs_ado": f"Apply_{prev}" if prev else "Image",
         })
+    build_args = layout.get("dockerfile_context", {}).get("build_args", [])
     ctx = {
         "app_id": app.id, "app_slug": facts.app_slug, "sln": layout["solution"],
         "image_name": facts.app_slug, "envs": pipeline_envs,
         "terraform_version": TERRAFORM_VERSION, "terragrunt_version": TERRAGRUNT_VERSION,
         "tfstate_script": "infra/bootstrap/tfstate.sh",
+        "stack": stack, "build_args": build_args,
+        "ci": _ci(stack),
+        # Build arguments that name base images have no default: the pipeline stops when one is empty
+        "required_build_args": [a for a in build_args if a.startswith("BASE_IMAGE_")],
     }
     files[f".github/workflows/{facts.app_slug}.yml"] = jenv.get_template(
         "github_workflow.yml.j2").render(**ctx)

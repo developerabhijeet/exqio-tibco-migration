@@ -1,7 +1,12 @@
-// Typed client over the ExiQO Migrate API. Every request carries the chosen user as X-User.
+// Typed client over the ExiQO Migrate API. AUTH_MODE=dev: every request carries the chosen persona
+// as X-User. AUTH_MODE=oidc (lib/auth.ts found a signed-in user at /auth/me): requests carry the
+// session cookie instead, and a 401 sends the browser to the API's sign-in, which comes back here.
 import type {
   AnalysisView,
-  AskAnswer,
+  ConnectorLinkView,
+  FigmaFrame,
+  FigmaFrameLink,
+  JiraItem,
   AuditEntry,
   DesignRecord,
   Domain,
@@ -15,15 +20,33 @@ import type {
   Project,
   ScanReport,
   ScenarioSet,
+  StackStatus,
   UploadResult,
+  EditDiff,
+  EditResumed,
+  EditSetView,
+  FailureItem,
+  IterationDetail,
+  IterationOpenBody,
+  IterationView,
+  RepoPull,
+  RepoPush,
+  RepoView,
 } from "./types";
+import type { Brand } from "./brand";
 import type {
   AzureConnectBody,
   AzureConnection,
   BuildFileContent,
+  DeployEnvironments,
   BuildFiles,
   BuildSummary,
   BuildView,
+  ConnectionTest,
+  ConnectorFlags,
+  ConnectorKind,
+  ConnectorSettingsPatch,
+  ConnectorSettingsView,
   EvalView,
   HistoryView,
   InfraView,
@@ -41,7 +64,9 @@ import type {
   TestReport,
 } from "./buildTypes";
 
-// next.config.ts bakes this in from the environment or the repo-root .env (scripts/root-env.ts),
+// next.config.ts bakes this in from the environment or the repo-root .env (scripts/root-env.ts);
+// "/api" when the build is same-origin (NEXT_PUBLIC_SAME_ORIGIN=1, the image: the ingress routes
+// /api to the API),
 // so there is no port literal here to drift out of step with the API the Makefile starts. Empty
 // means the build was made without it: every call then fails with that name rather than quietly
 // going to the web origin or to whatever else is listening on a guessed port.
@@ -55,10 +80,54 @@ export function requireApiUrl(): string {
   return API_URL;
 }
 
+export interface SystemStatus {
+  version: string;
+  role: string;
+  auth_mode: string;
+  deploy_credential_mode: string;
+  image_digests: Record<string, string>;
+  egress_allowlist: string[];
+  brand_name: string;
+  support_contact: string;
+  /** postgres, neo4j, secrets: "ok", "disabled" or "down: <Class>". */
+  checks: Record<string, string>;
+}
+
 let currentUser = "sme.vicky";
 
 export function setApiUser(user: string): void {
   currentUser = user;
+}
+
+export type AuthMode = "dev" | "oidc";
+let authMode: AuthMode = "dev";
+
+export function setAuthMode(mode: AuthMode): void {
+  authMode = mode;
+}
+
+export function isOidc(): boolean {
+  return authMode === "oidc";
+}
+
+/** The API's sign-in, returning to `returnTo` (a path on this origin) once Entra is done. */
+export function loginUrl(returnTo: string): string {
+  return `${requireApiUrl()}/auth/login?return=${encodeURIComponent(returnTo)}`;
+}
+
+let redirectedAt = 0;
+
+/**
+ * Off to the sign-in, back to this page afterwards. Not from the sign-in screen itself: that is
+ * where a signed-out user lands, and its button starts the sign-in when they choose to. A burst of
+ * 401s navigates once; one a second later tries again, in case that navigation was cancelled.
+ */
+export function redirectToLogin(): void {
+  if (typeof window === "undefined" || Date.now() - redirectedAt < 1000) return;
+  const { pathname, search } = window.location;
+  if (pathname.startsWith("/signin")) return;
+  redirectedAt = Date.now();
+  window.location.assign(loginUrl(`${pathname}${search}`));
 }
 
 export class ApiError extends Error {
@@ -70,19 +139,22 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+export async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("X-User", currentUser);
+  const oidc = isOidc();
+  if (!oidc) headers.set("X-User", currentUser);
   if (init.body && typeof init.body === "string" && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
   const base = requireApiUrl();
   let res: Response;
   try {
-    res = await fetch(`${base}${path}`, { ...init, headers });
-  } catch {
+    res = await fetch(`${base}${path}`, oidc ? { ...init, headers, credentials: "include" } : { ...init, headers });
+  } catch (e) {
+    if (init.signal?.aborted) throw e; // the caller cancelled: not an unreachable API
     throw new ApiError(0, `The API at ${base} is not reachable`);
   }
+  if (res.status === 401 && isOidc()) redirectToLogin();
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -96,7 +168,8 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   return res;
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
+/** A GET (or the given request) read as JSON; the base of every typed call, here and in lib/memory.ts. */
+export async function json<T>(path: string, init?: RequestInit): Promise<T> {
   return (await request(path, init)).json() as Promise<T>;
 }
 
@@ -113,10 +186,18 @@ async function optional<T>(path: string): Promise<T | null> {
 const post = (body?: unknown): RequestInit => ({ method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
 export const api = {
+  brand: () => json<Brand>("/system/brand"),
+  /** The About panel's data; 403 (or 401) for anyone but an admin. */
+  systemStatus: () => json<SystemStatus>("/system/status"),
   health: () => json<{ status: string; provider: string }>("/health"),
 
   listProjects: () => json<Project[]>("/projects"),
-  createProject: (name: string) => json<Project>("/projects", post({ name })),
+  createProject: (name: string, targetStack?: string) =>
+    json<Project>("/projects", post(targetStack ? { name, target_stack: targetStack } : { name })),
+  patchProject: (projectId: string, body: { target_stack: string }) =>
+    json<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  stacks: () =>
+    json<{ default: string; stacks: StackStatus[]; can_change_stack: boolean; can_set_default: boolean }>("/stacks"),
 
   uploadZip: (projectId: string, file: Blob, filename: string) => {
     const form = new FormData();
@@ -160,7 +241,6 @@ export const api = {
   decideGate: (processId: string, gate: string, state: "approved" | "rejected", note?: string) =>
     json<Gate>(`/gates/${processId}/${gate}`, post({ state, note: note ?? null })),
   audit: (processId: string) => json<AuditEntry[]>(`/processes/${processId}/audit`),
-  ask: (projectId: string, question: string) => json<AskAnswer>("/ask", post({ project_id: projectId, question })),
 
   // Task 19
   generateDesign: (processId: string) => json<{ job_id: string }>(`/processes/${processId}/design`, post()),
@@ -193,7 +273,7 @@ export const api = {
   /**
    * The build's whole folder as a zip: the solution, its tests, the infrastructure and the
    * local-run scripts. Read as a blob through the same authenticated request as every other call,
-   * rather than as a plain link, because a link carries no X-User header. The filename is the
+   * rather than as a plain link, because a link carries no X-User header (dev mode). The filename is the
    * server's own (Content-Disposition), so the file on disk names the process and the build.
    */
   downloadBuild: async (buildId: string): Promise<{ blob: Blob; filename: string }> => {
@@ -231,6 +311,10 @@ export const api = {
   azure: (projectId: string) => json<AzureConnection>(`/projects/${projectId}/azure`),
   connectAzure: (projectId: string, body: AzureConnectBody) =>
     json<AzureConnection>(`/projects/${projectId}/azure`, post(body)),
+  /** Workload Identity install: connect a declared environment; the server copies its ids. */
+  connectAzureEnvironment: (projectId: string, environment: string) =>
+    json<AzureConnection>(`/projects/${projectId}/azure`, { method: "PUT", body: JSON.stringify({ environment }) }),
+  deployEnvironments: () => json<DeployEnvironments>("/deploy/environments"),
   disconnectAzure: (projectId: string) =>
     json<AzureConnection>(`/projects/${projectId}/azure`, { method: "DELETE" }),
   startPlan: (buildId: string) => json<PlanStart>(`/builds/${buildId}/plan`, post()),
@@ -239,6 +323,12 @@ export const api = {
 
   settingsView: () => json<SettingsView>("/settings"),
   putSettings: (body: SettingsPatch) => json<SettingsView>("/settings", { method: "PUT", body: JSON.stringify(body) }),
+  /** Settings → Connectors; what comes back depends on whether the caller is an admin. */
+  connectorSettings: () => json<ConnectorSettingsView>("/settings/connectors"),
+  putConnectorSettings: (body: ConnectorSettingsPatch) =>
+    json<ConnectorSettingsView>("/settings/connectors", { method: "PUT", body: JSON.stringify(body) }),
+  connectors: () => json<ConnectorFlags>("/connectors"),
+  testConnector: (kind: ConnectorKind) => json<ConnectionTest>(`/connectors/${kind}/test`, post()),
   startEval: (processIds: string[]) =>
     json<{ job_id: string; eval_id: string }>("/providers/eval", post({ process_ids: processIds })),
   evalView: (evalId: string) => json<EvalView>(`/providers/eval/${evalId}`),
@@ -249,6 +339,56 @@ export const api = {
       { method: "DELETE" },
     ),
   readiness: (projectId: string) => json<ReadinessView>(`/projects/${projectId}/readiness`),
+
+  // Connector publish actions: each answers 202 with the job that does the work.
+  links: (processId: string) => json<ConnectorLinkView[]>(`/processes/${processId}/links`),
+  pushToGithub: (buildId: string, body: { repo: string; branch?: string; open_pr: boolean; base?: string }) =>
+    json<{ job_id: string }>(`/builds/${buildId}/github/push`, post(body)),
+  publishConfluence: (processId: string, createAgain = false) =>
+    json<{ job_id: string }>(`/processes/${processId}/confluence/publish`, post({ create_again: createAgain })),
+  jiraIssues: (processId: string, items: JiraItem[], createAgain = false) =>
+    json<{ job_id: string }>(`/processes/${processId}/jira/issues`, post({ items, create_again: createAgain })),
+  figmaFileFrames: (fileKey: string) => json<FigmaFrame[]>(`/figma/files/${encodeURIComponent(fileKey)}/frames`),
+  attachFigmaFrames: (processId: string, fileKey: string, nodeIds: string[]) =>
+    json<{ job_id: string }>(`/processes/${processId}/figma/frames`, post({ file_key: fileKey, node_ids: nodeIds })),
+  figmaFrames: (processId: string) => json<FigmaFrameLink[]>(`/processes/${processId}/figma/frames`),
+  /** A stored frame thumbnail, as a blob (the request carries the caller like every other). */
+  figmaFrameImage: async (linkId: string) => (await request(`/figma/frames/${linkId}/image`)).blob(),
+
+  // Sub-project 6: iterations (re-enter Design), hand edits, repositories as a source.
+  iterations: (projectId: string) => json<IterationView[]>(`/projects/${projectId}/iterations`),
+  iteration: (iterationId: string) => json<IterationDetail>(`/iterations/${iterationId}`),
+  iterationInput: (iterationId: string, inputId: string) =>
+    json<{ text: string }>(`/iterations/${iterationId}/inputs/${inputId}`),
+  iterationPreview: (processId: string) => json<{ items: FailureItem[] }>(`/processes/${processId}/iterations/preview`),
+  /**
+   * Re-enter Design. JSON without logs (the only form an SME may send: the API refuses an SME's
+   * multipart request), multipart `body` + `logs` with them.
+   */
+  openIteration: (processId: string, body: IterationOpenBody, logs: File[] = []) => {
+    if (logs.length === 0) return json<IterationView>(`/processes/${processId}/iterations`, post(body));
+    const form = new FormData();
+    form.append("body", JSON.stringify(body));
+    for (const f of logs) form.append("logs", f, f.name);
+    return json<IterationView>(`/processes/${processId}/iterations`, { method: "POST", body: form });
+  },
+  uploadEdits: (buildId: string, file: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("file", file, filename);
+    return json<EditSetView>(`/builds/${buildId}/edits`, { method: "POST", body: form });
+  },
+  editSet: (editSetId: string) => json<EditSetView>(`/edit-sets/${editSetId}`),
+  editDiff: (editSetId: string, path: string) =>
+    json<EditDiff>(`/edit-sets/${editSetId}/diff/${path.split("/").map(encodeURIComponent).join("/")}`),
+  resumeEditSet: (editSetId: string) => json<EditResumed>(`/edit-sets/${editSetId}/resume`, post()),
+  /** null when this API has no repository routes (before sub-project 6 Task 9). */
+  repos: (projectId: string) => optional<RepoView[]>(`/projects/${projectId}/repos`),
+  connectRepo: (projectId: string, body: { repo: string; branch: string; purpose: "estate" | "build"; process_id?: string }) =>
+    json<RepoView>(`/projects/${projectId}/repos`, post(body)),
+  repoBranches: (repoId: string) => json<{ branches: string[] }>(`/repos/${repoId}/branches`),
+  pullRepo: (repoId: string, branch?: string) => json<RepoPull>(`/repos/${repoId}/pull`, post(branch ? { branch } : {})),
+  pushRepo: (repoId: string, buildId: string, openPr = true) =>
+    json<RepoPush>(`/repos/${repoId}/push`, post({ build_id: buildId, open_pr: openPr })),
 };
 
 export interface DesignView {
@@ -280,6 +420,7 @@ function toDesignView(body: Record<string, unknown>): DesignView {
     expected_differences: raw.expected_differences ?? [],
     narrative: raw.narrative ?? null,
     design_hash: raw.design_hash ?? "",
+    stack: typeof raw.stack === "string" ? raw.stack : undefined,
   };
   return {
     record,

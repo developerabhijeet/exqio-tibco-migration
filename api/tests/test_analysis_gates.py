@@ -1,7 +1,8 @@
 """Domains, the analysis job, rule and finding decisions, gates G1 to G6, audit, memory, Ask (Task 18).
 
-Real Postgres (schema ``api`` reset per test; schema ``knowledge`` shared, rows scoped by the
-project id) and ``PROVIDER=fake`` from the conftest settings unless a test switches it off.
+Real Postgres (schema ``api`` reset per test) and ``PROVIDER=fake`` from the conftest settings
+unless a test switches it off. Memory and Ask tests use the test Neo4j (``memory_client``; they
+skip without ``NEO4J_TEST_URI``).
 """
 from __future__ import annotations
 
@@ -9,12 +10,26 @@ import asyncio
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import func, select
 
-from api.app.models import AnalysisRun, AuditLog, Gate, JobEvent, ModelCall, Process, Rule
+from api.app.models import (
+    AnalysisRun,
+    AuditLog,
+    Gate,
+    Job,
+    JobEvent,
+    MemoryEvent,
+    ModelCall,
+    Process,
+    Rule,
+)
 from api.app.services import analysis as analysis_svc
+from api.tests.test_memory_ingest import jobs_of_kind, wait_kind
 from engine.agents.provider import ProviderError
+from engine.knowledge.memory import load_seed_patterns
 
 # Do not spend 30 s on a blocked embedding-model download; fall back to the hash backend sooner.
 os.environ.setdefault("EMBEDDINGS_LOAD_TIMEOUT", "8")
@@ -28,6 +43,37 @@ STAGES = ["static rules", "analyst", "verifier", "coverage", "risk reviewer", "c
 
 
 # ------------------------------------------------------------------ helpers
+async def decide_finding(client, finding: dict, decision: str, *, note: str | None = None) -> dict:
+    r = await client.patch(f"/findings/{finding['id']}", json={"decision": decision, "note": note},
+                           headers=SME)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _job(app, job_id: str) -> Job:
+    async with app.state.sessionmaker() as s:
+        return await s.get(Job, job_id)
+
+
+async def _knowledge_row(client, pid: str) -> dict:
+    r = await client.get(f"/projects/{pid}/readiness")
+    assert r.status_code == 200, r.text
+    rows = r.json()["rows"] if isinstance(r.json(), dict) else r.json()
+    return next(x for x in rows if x["key"] == "knowledge_layer")
+
+
+@pytest.fixture
+async def analysed(memory_client):
+    """A scanned estate with DealerFundingRequest analysed and its analysis in memory:
+    ``(project id, the process, its finding S2-DealerFundingRequest-1)``."""
+    pid, procs = await _scanned(memory_client)
+    proc = procs[DFR]
+    view = await _analyse(memory_client, proc["id"])
+    await wait_kind(memory_client.app, pid, "memory.ingest", status="done", phase="analysis")
+    finding = next(f for f in view["findings"] if f["finding_key"] == "S2-DealerFundingRequest-1")
+    return pid, SimpleNamespace(id=proc["id"], name=proc["name"], ir_id=proc["ir_id"]), finding
+
+
 async def _wait_job(client, job_id: str, timeout: float = 120.0) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -128,7 +174,7 @@ async def test_analyse_without_provider_uses_static_only_and_says_so(client, app
     keys = [f["finding_key"] for f in view["findings"]]
     assert "S1-DealerFundingRequest-1" in keys and "S2-DealerFundingRequest-1" in keys
     assert all(f["source"] == "static" and f["business_impact"] is None for f in view["findings"])
-    assert view["verification"] == {"verified": 0, "total": 0, "failures": [], "passed": True}
+    assert view["verification"] == {"verified": 0, "total": 0, "requirement_backed": 0, "failures": [], "passed": True}
     cov = view["coverage"]
     assert cov["total"] > 0 and cov["covered"] == 0 and cov["complete"] is False
     assert view["summary"]  # a code-generated summary, never empty
@@ -311,21 +357,21 @@ async def test_decisions_recorded_in_memory(client, app):
     r = await client.patch(f"/domains/{domain['id']}", json={"name": "Dealer Funding Desk"}, headers=SME)
     assert r.status_code == 200 and r.json()["renamed_by"] == "sme.vicky"
 
-    rows = await asyncio.to_thread(app.state.knowledge.query,
-                                   "SELECT kind, text, context, created_by, source FROM "
-                                   "knowledge.memory_items WHERE project_id = %s AND source <> "
-                                   "'rsi-seed' ORDER BY created_at",
-                                   [pid])
-    assert [r["kind"] for r in rows] == ["decision"] * 3
+    async with app.state.sessionmaker() as s:  # stored without Neo4j (memory not configured)
+        rows = list((await s.execute(select(MemoryEvent).where(MemoryEvent.project_id == pid)
+                                     .order_by(MemoryEvent.created_at, MemoryEvent.id))).scalars())
+    assert [r.kind for r in rows] == ["decision"] * 3
     edit, keep, rename = rows
-    assert edit["context"]["process_id"] == proc_id and edit["context"]["user"] == "sme.vicky"
-    assert edit["context"]["old_text"] == rule["text"] and edit["context"]["new_text"] == new_text
-    assert edit["context"]["rule_key"] == rule["rule_key"] and edit["created_by"] == "sme.vicky"
-    assert keep["context"]["decision"] == "keep" and keep["context"]["note"] == "dealer ids are always exact"
-    assert keep["context"]["finding_key"] == "S2-DealerFundingRequest-1" and keep["created_by"] == "arch.sam"
-    assert rename["context"]["new_name"] == "Dealer Funding Desk"
-    assert rename["context"]["old_name"] == domain["name"]
-    assert all(r["source"] == "sme" for r in rows)
+    assert edit.context["process_id"] == proc_id and edit.context["user"] == "sme.vicky"
+    assert edit.context["old_text"] == rule["text"] and edit.context["new_text"] == new_text
+    assert edit.context["rule_key"] == rule["rule_key"] and edit.actor == "sme.vicky"
+    assert edit.context["about_uid"] == f"process:{DFR}"
+    assert keep.context["decision"] == "keep" and keep.context["note"] == "dealer ids are always exact"
+    assert keep.context["finding_key"] == "S2-DealerFundingRequest-1" and keep.actor == "arch.sam"
+    assert rename.context["new_name"] == "Dealer Funding Desk"
+    assert rename.context["old_name"] == domain["name"]
+    assert rename.context["about_uid"] == f"domain:{domain['key']}"
+    assert await jobs_of_kind(app, pid, "memory.ingest") == []  # nothing queued without Neo4j
 
 
 # ------------------------------------------------------------------ further tests
@@ -444,16 +490,62 @@ async def test_domains_rename_merge_graph_and_naming(client, app):
     assert "domain merged" in actions
 
 
-async def test_ask_answers_from_the_knowledge_base(client):
-    pid, procs = await _scanned(client)
-    await _analyse(client, procs[DFR]["id"])
-    r = await client.post("/ask", json={"project_id": pid, "question": "When is a dealer allowed funding?"})
+async def test_ask_answers_from_memory_with_citations(memory_client, analysed):
+    pid, proc, _ = analysed
+    r = await memory_client.post("/ask", json={"project_id": pid, "question": f"rules of {proc.name}"})
     assert r.status_code == 200, r.text
-    answer = r.json()
-    assert answer["used_model"] is True and answer["text"] and answer["citations"]
-    assert all(c["process_id"] == procs[DFR]["id"] for c in answer["citations"] if c["process_id"])
+    c = r.json()["citations"][0]
+    assert r.status_code == 200 and c["citation"]["revision"] >= 1 and c["id"] == c["citation"]["uid"]
+    assert r.json()["used_model"] is True
+    assert all(c["process_id"] == proc.id for c in r.json()["citations"] if c["process_id"])
+
+
+async def test_ask_without_memory_is_503_not_configured(client, project_id):
+    r = await client.post("/ask", json={"project_id": project_id, "question": "anything"})
+    assert r.status_code == 503 and r.json()["detail"] == "memory not configured"
     r = await client.post("/ask", json={"project_id": "nope", "question": "x"})
     assert r.status_code == 404
+
+
+async def test_ask_while_neo4j_is_down_is_503_memory_unavailable(memory_client, neo4j_down):
+    pid = (await memory_client.post("/projects", json={"name": "down"})).json()["id"]
+    r = await memory_client.post("/ask", json={"project_id": pid, "question": "anything"})
+    assert r.status_code == 503 and r.json()["detail"] == "memory unavailable: ServiceUnavailable"
+    row = await _knowledge_row(memory_client, pid)
+    assert row["status"] == "missing" and row["gap"] == "memory unavailable: ServiceUnavailable"
+    seed = (await jobs_of_kind(memory_client.app, pid, "memory.ingest"))[0]
+    async with asyncio.timeout(60):  # its attempt on the down driver is over before teardown
+        while (await _job(memory_client.app, seed.id)).attempts < 1 or \
+                (await _job(memory_client.app, seed.id)).status != "queued":
+            await asyncio.sleep(0.1)
+
+
+async def test_finding_decision_reaches_agent_retrieval(memory_client, analysed):
+    pid, proc, finding = analysed
+    await decide_finding(memory_client, finding, "keep", note="known rounding")
+    await wait_kind(memory_client.app, pid, "memory.ingest", status="done", phase="decision")
+    items = await memory_client.app.state.knowledge.retrieve_memory(pid, f"{proc.name} finding rounding")
+    assert any(i.kind == "decision" and "known rounding" in i.text for i in items)
+    item = next(i for i in items if i.kind == "decision")
+    assert item.source == "sme" and item.created_by == SME["X-User"] and item.created_at is not None
+    assert item.context["finding_key"] == finding["finding_key"] and item.id.startswith("mem_")
+
+
+async def test_seed_patterns_are_in_memory_after_project_creation(memory_client):
+    pid = (await memory_client.post("/projects", json={"name": "s"})).json()["id"]
+    await wait_kind(memory_client.app, pid, "memory.ingest", status="done", phase="seed")
+    assert (await memory_client.app.state.memory.counts(pid))["Memory"] == len(load_seed_patterns())
+    items = await memory_client.app.state.knowledge.retrieve_memory(pid, "JDBC query SQL Dapper repository")
+    assert items[0].source == "seed" and items[0].kind == "pattern" and items[0].context == {}
+    row = await _knowledge_row(memory_client, pid)
+    assert row["status"] == "partial" and row["gap"] == "no analyzed process indexed yet"
+    assert f"0 indexed chunk(s), {len(load_seed_patterns())} migration memory item(s)" in \
+        row["evidence"][0]["label"]
+
+
+async def test_knowledge_row_without_memory_says_not_configured(client, project_id):
+    row = await _knowledge_row(client, project_id)
+    assert row["status"] == "missing" and row["gap"] == "memory not configured"
 
 
 # ------------------------------------------------------------------ review round 1
@@ -610,18 +702,6 @@ async def test_owner_may_reject_a_gate_that_is_not_enabled(client):
     assert r.status_code == 403
 
 
-async def test_project_creation_seeds_rsi_patterns(client, app):
-    r = await client.post("/projects", json={"name": "seeded"})
-    pid = r.json()["id"]
-    sql = "SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s AND source = 'rsi-seed'"
-    for _ in range(150):
-        rows = await asyncio.to_thread(app.state.knowledge.query, sql, [pid])
-        if rows[0]["n"]:
-            break
-        await asyncio.sleep(0.2)
-    assert rows[0]["n"] > 0
-
-
 # ------------------------------------------------------------------ follow-up (partial first run, ir_hash)
 PARTIAL_RISK = "analysis is partial (risk reviewer failed); re-run analysis before approving G1"
 
@@ -707,3 +787,47 @@ async def test_analysis_stores_the_hash_of_the_ir_it_analyzed(client, app, monke
     assert view["ir_changed"] is True
     gates = {g["gate"]: g for g in (await client.get(f"/processes/{proc_id}/gates")).json()}
     assert gate_svc.IR_CHANGED in gates["G1"]["reason"]
+
+
+class _BrokenMemory:
+    """A memory graph whose search fails the way a broken embedding backend does."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    async def retrieve(self, *args, **kwargs):
+        raise self.exc
+
+
+async def test_any_memory_read_failure_is_knowledge_unavailable(app):
+    from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
+
+    knowledge = Knowledge(_BrokenMemory(RuntimeError("model failed to load")),  # type: ignore[arg-type]
+                          app.state.sessionmaker, app.state.settings)
+    with pytest.raises(KnowledgeUnavailable, match="^memory unavailable: RuntimeError$"):
+        await knowledge.retrieve_memory("p", "dealer funding")
+    with pytest.raises(KnowledgeUnavailable, match="^memory unavailable: RuntimeError$"):
+        await knowledge.ask("p", "what funds dealers?")
+    provider_down = Knowledge(_BrokenMemory(ProviderError("model down")),  # type: ignore[arg-type]
+                              app.state.sessionmaker, app.state.settings)
+    with pytest.raises(ProviderError):  # Ask retries without a model on these
+        await provider_down.ask("p", "what funds dealers?")
+
+
+async def test_decision_stored_but_ingest_not_queued_says_so(app, project_id, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from api.app.services import memory_ingest
+    from api.app.services.knowledge import KnowledgeUnavailable
+
+    async def fail(*args, **kwargs):
+        raise OperationalError("INSERT INTO jobs", {}, Exception("connection lost"))
+
+    monkeypatch.setattr(memory_ingest, "enqueue_ingest", fail)
+    with pytest.raises(KnowledgeUnavailable) as caught:
+        await app.state.knowledge.record_decision(project_id, "keep the dealer cap", {}, "sme.vicky")
+    async with app.state.sessionmaker() as s:
+        row = await s.scalar(select(MemoryEvent).where(MemoryEvent.project_id == project_id))
+    assert row is not None and row.text == "keep the dealer cap"
+    assert str(caught.value) == f"decision {row.id} stored; memory ingest not queued: OperationalError"
+    assert "not stored" not in str(caught.value)

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3">
+  <testcase classname="tests.test_rules" name="test_r1_ok" time="0.001"/>
+  <testcase classname="tests.test_rules" name="test_r2_bad" time="0.002"><failure message="assert False">tb</failure></testcase>
+  <testcase classname="tests.test_rules" name="test_r3_todo" time="0.000"><skipped type="pytest.skip" message="no test body"/></testcase>
+</testsuite></testsuites>

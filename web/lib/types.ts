@@ -1,5 +1,7 @@
 // Shapes returned by the ExiQO Migrate API (api/app/schemas, Tasks 17 to 19).
 
+import type { CitedText } from "./citations-model";
+
 export const INSPECTOR_TABS = ["Config", "SQL", "Mappings", "Rules", "Findings", "XML"] as const;
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
@@ -19,9 +21,22 @@ export interface StepState {
   evidence: EvidenceRef[];
 }
 
+export interface StackStatus {
+  key: string;
+  label: string;
+  available: boolean;
+  reason: string | null;
+  required_tools: string[];
+  /** Implemented and enabled: what the API accepts (toolchains are informational, X14). */
+  selectable: boolean;
+  toolchain_missing: string[];
+  default: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;
+  target_stack: string;
   created_at: string;
 }
 
@@ -115,6 +130,8 @@ export interface Domain {
   ir_process_ids?: string[];
   evidence: DomainEvidence[];
   renamed_by: string | null;
+  /** The evidence as rationale sentences with a chip per item; `cited.text` is masked. */
+  cited?: CitedText | null;
 }
 
 export interface GraphNode {
@@ -246,6 +263,8 @@ export interface RuleView {
   rule_key?: string;
   text: string;
   original_text?: string;
+  /** `original_text` MASKED like `cited.text`: render this as "Drafted as", not `original_text`. */
+  original_text_masked?: string | null;
   status?: RuleStatus | string;
   confidence?: number | null;
   citations?: Citation[];
@@ -254,6 +273,10 @@ export interface RuleView {
   challenge?: Challenge | null;
   updated_by?: string | null;
   updated_at?: string | null;
+  /** The rule text with its citations inline. `cited.text` is the MASKED text: render it, not `text`. */
+  cited?: CitedText | null;
+  /** "iteration <n>" for a rule an iteration proposed (requirement-backed, not TIBCO evidence). */
+  source?: string | null;
 }
 
 export type FindingDecision = "keep" | "fix" | "ask";
@@ -270,6 +293,8 @@ export interface FindingView {
   note?: string | null;
   decided_by?: string | null;
   decided_at?: string | null;
+  /** The finding text with its citations inline. `cited.text` is the MASKED text: render it, not `text`. */
+  cited?: CitedText | null;
 }
 
 export interface VerificationFailure {
@@ -332,20 +357,6 @@ export interface AuditEntry {
   detail: Record<string, unknown>;
 }
 
-export interface AskCitation {
-  id: string;
-  kind: string;
-  process_id: string | null;
-  text: string;
-  score?: number;
-}
-
-export interface AskAnswer {
-  text: string;
-  used_model: boolean;
-  citations: AskCitation[];
-}
-
 // Design record (engine/dotnet_gen/models.py DesignRecord, served by GET /processes/{id}/design).
 export interface DesignMappingRow {
   activity_id: string;
@@ -368,6 +379,8 @@ export interface DesignProject {
 }
 
 export interface DesignRecord {
+  /** The target stack the record is for (engine DesignRecord.stack). */
+  stack?: string;
   process_id?: string;
   spec_hash?: string;
   solution: { name?: string; projects: DesignProject[] };
@@ -378,7 +391,15 @@ export interface DesignRecord {
   messaging: { kind: string; name: string; direction: string }[];
   resilience: { resource_id: string; timeout_ms?: number | null; retry?: unknown; breaker?: unknown }[];
   sequence: { from_?: string; from?: string; to: string; label: string }[];
-  decisions: { title: string; choice: string; alternatives: string[]; reason: string }[];
+  decisions: {
+    title: string;
+    choice: string;
+    alternatives: string[];
+    reason: string;
+    /** "<choice>. <reason>" with a chip for each activity, rule, finding, table or queue it names.
+     * MASKED, and what is rendered when present. */
+    cited?: CitedText | null;
+  }[];
   /** Diagrams derived by code from the record and the process; never drawn by a model. */
   views?: {
     classes: {
@@ -409,6 +430,8 @@ export interface DesignRecord {
   open_questions: {
     question: string;
     recommendation: string;
+    /** The question's stable identity (16 hex): a Jira issue names it by this, never by its position. */
+    question_id?: string;
     /** The architect's verdict. Answering never moves the design hash, so G3 stays approved. */
     decision?: "answered" | "rejected" | null;
     answer?: string;
@@ -417,6 +440,8 @@ export interface DesignRecord {
   }[];
   expected_differences: { finding_id: string; description: string }[];
   narrative: string | null;
+  /** The narrative with chips for what it names; MASKED, rendered when present. */
+  narrative_cited?: CitedText | null;
   design_hash: string;
 }
 
@@ -451,5 +476,182 @@ export interface ScenarioSet {
   scenarios: ScenarioView[];
 }
 
-export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam"] as const;
+export const USERS = ["sme.vicky", "architect.lee", "engineer.ravi", "qa.priya", "ops.sam", "viewer.val"] as const;
 export type UserName = (typeof USERS)[number];
+
+// ---- Connector publish actions (api/app/routers/connectors.py)
+
+/** One row of GET /processes/{id}/links: something this process published to a connector. */
+export interface ConnectorLinkView {
+  id: string;
+  project_id: string;
+  process_id: string;
+  kind: "github" | "atlassian" | "figma" | string;
+  object_type: "branch" | "pull_request" | "confluence_page" | "jira_issue" | "figma_frame" | string;
+  /** What was published: a build id (GitHub), "architecture" (Confluence), `<type>:<ref>` (Jira). */
+  local_ref: string;
+  remote_id: string;
+  remote_url: string;
+  remote_version: number | null;
+  /** The remote object is gone (deleted in Jira or Confluence). */
+  stale: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type JiraItemType = "finding" | "question" | "parity";
+
+/** An item a Jira issue is filed for, by its stable identity (ruling X17). */
+export interface JiraItem {
+  type: JiraItemType;
+  ref: string;
+}
+
+/** A frame of a Figma file, to choose from (GET /figma/files/{key}/frames). */
+export interface FigmaFrame {
+  node_id: string;
+  name: string;
+  page: string;
+  width: number;
+  height: number;
+}
+
+/** A frame attached to a process as a design reference (GET /processes/{id}/figma/frames). */
+export interface FigmaFrameLink {
+  id: string;
+  file_key: string;
+  node_id: string;
+  name: string;
+  page: string;
+  text: string;
+  /** Empty when the install has no Figma web URL. */
+  url: string;
+  has_image: boolean;
+  image_note?: string | null;
+  stale: boolean;
+  updated_at: string;
+}
+
+// ------------------------------------------------------------------ iterations (sub-project 6)
+
+export type IterationKind = "initial" | "reentry" | "edits" | "repo" | string;
+export type IterationStatus =
+  | "open" | "designing" | "building" | "verifying" | "deploying" | "closed" | "abandoned" | "superseded" | string;
+
+/** GET /projects/{id}/iterations, GET /iterations/{id} (api/app/schemas/iteration.py). */
+export interface IterationView {
+  id: string;
+  project_id: string;
+  n: number;
+  process_ids: string[];
+  kind: IterationKind;
+  status: IterationStatus;
+  resume_phase: string;
+  requirements: string | null;
+  baseline_build_id: string | null;
+  source: Record<string, unknown> | null;
+  opened_by: string;
+  opened_at: string;
+  closed_at: string | null;
+  note: string | null;
+  /** The design job an opened iteration queued. */
+  job_id?: string | null;
+}
+
+export interface IterationInputView {
+  id: string;
+  kind: string;
+  process_id: string | null;
+  ref: string | null;
+  title: string;
+  sha256: string | null;
+  created_at: string;
+}
+
+export interface IterationTimelineEntry {
+  kind: "design" | "build" | "gate" | string;
+  at: string | null;
+  process_id: string | null;
+  id: string;
+  iteration?: number | null;
+  summary: string;
+  /** A design record's decision titles. */
+  decisions?: string[];
+}
+
+export interface IterationDetail extends IterationView {
+  inputs: IterationInputView[];
+  timeline: IterationTimelineEntry[];
+}
+
+/** What failed in the process's latest build, verify or plan (GET /processes/{id}/iterations/preview). */
+export interface FailureItem {
+  kind: "build_failure" | "test_failure" | "parity_defect" | "plan_error" | "uploaded_log" | string;
+  ref: string;
+  title: string;
+  text: string;
+  process_id: string;
+  sha256: string | null;
+  key: string;
+}
+
+/** POST /processes/{id}/iterations; `include` null keeps every collected failure, [] none. */
+export interface IterationOpenBody {
+  requirements?: string;
+  include?: string[];
+  note?: string;
+}
+
+export interface FileChange {
+  path: string;
+  change: "modified" | "added" | "deleted";
+  origin: string;
+  sha256: string | null;
+}
+
+export interface EditSetView {
+  id: string;
+  iteration: number;
+  iteration_id: string;
+  baseline_build_id: string | null;
+  resume_phase: "build" | "design" | "infra" | string;
+  status: "previewed" | "designing" | "resumed" | string;
+  files: FileChange[];
+  counts: Record<string, number>;
+}
+
+export interface EditDiff {
+  baseline: string;
+  edited: string;
+}
+
+export interface EditResumed {
+  job_id: string;
+  kind: "build" | "design" | string;
+  edit_set_id: string;
+  build_id: string | null;
+}
+
+/** A connected GitHub repository (Task 9 RepoOut). */
+export interface RepoView {
+  id: string;
+  project_id: string;
+  repo: string;
+  branch: string;
+  purpose: "estate" | "build" | string;
+  process_id: string | null;
+  last_commit: string | null;
+  connected_by: string;
+  connected_at: string;
+  job_id?: string | null;
+}
+
+export type RepoPull = { changed: false } | { changed: true; job_id: string; commit: string };
+
+/** Task 10: POST /repos/{id}/push. */
+export interface RepoPush {
+  branch: string;
+  commit: string;
+  pull_request: { number: number; url: string } | null;
+}

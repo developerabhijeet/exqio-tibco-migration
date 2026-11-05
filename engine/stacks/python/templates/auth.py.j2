@@ -1,0 +1,82 @@
+"""Bearer tokens: every route needs one except GET /health and, in development, POST /auth/dev-token.
+
+AUTH_MODE=Development (Auth__Mode) accepts the HS256 development token of ``devtoken`` and is
+refused outside development (ASPNETCORE_ENVIRONMENT=Development); any other mode validates Microsoft
+Entra ID tokens (AUTH_ENTRA_ID_INSTANCE, AUTH_ENTRA_ID_TENANT_ID and AUTH_ENTRA_ID_AUDIENCE), their
+signing keys read from the tenant's JWKS.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import Any
+
+import jwt
+from fastapi import HTTPException, Request
+
+from {{ pkg }}.config import Settings
+
+
+@dataclass(frozen=True)
+class DevTokenSettings:
+    """The development token settings: issuer, audience and the HS256 key."""
+
+    issuer: str
+    audience: str
+    key: bytes
+
+
+def dev_token_settings(settings: Settings) -> DevTokenSettings:
+    """The settings from AUTH_DEV_TOKEN_*; the key must be at least 32 bytes."""
+    key = settings.text("AUTH_DEV_TOKEN_SIGNING_KEY").encode("utf-8")
+    if len(key) < 32:
+        raise RuntimeError("AUTH_DEV_TOKEN_SIGNING_KEY (Auth__DevToken__SigningKey) must be at least 32 bytes.")
+    return DevTokenSettings(settings.text("AUTH_DEV_TOKEN_ISSUER", "exiqo-dev"),
+                            settings.text("AUTH_DEV_TOKEN_AUDIENCE", "exiqo-api"), key)
+
+
+def development_auth(settings: Settings) -> bool:
+    """Whether development tokens are accepted; RuntimeError for AUTH_MODE=Development outside development."""
+    dev = settings.text("AUTH_MODE", "Production").lower() == "development"
+    if dev and not settings.development:
+        raise RuntimeError("AUTH_MODE=Development is allowed only with ASPNETCORE_ENVIRONMENT=Development.")
+    return dev
+
+
+class TokenValidator:
+    """Validates a bearer token for the configured mode."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.dev = development_auth(settings)
+        if self.dev:
+            self.dev_settings = dev_token_settings(settings)
+        else:
+            instance = settings.text("AUTH_ENTRA_ID_INSTANCE", "https://login.microsoftonline.com/")
+            tenant = settings.text("AUTH_ENTRA_ID_TENANT_ID")
+            self.issuer = f"{instance.rstrip('/')}/{tenant}/v2.0"
+            self.audience = settings.text("AUTH_ENTRA_ID_AUDIENCE")
+            self.jwks = jwt.PyJWKClient(f"{instance.rstrip('/')}/{tenant}/discovery/v2.0/keys")
+
+    async def validate(self, token: str) -> dict[str, Any]:
+        if self.dev:
+            s = self.dev_settings
+            return jwt.decode(token, s.key, algorithms=["HS256"], audience=s.audience, issuer=s.issuer)
+        # the JWKS fetch is blocking HTTP: it runs off the event loop
+        key = (await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)).key
+        return jwt.decode(token, key, algorithms=["RS256"], audience=self.audience, issuer=self.issuer)
+
+
+async def require_user(request: Request) -> dict[str, Any]:
+    """The FastAPI dependency of every protected route: the token's claims, or 401."""
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="a bearer token is required",
+                            headers={"WWW-Authenticate": "Bearer"})
+    validator: TokenValidator = request.app.state.tokens
+    try:
+        return await validator.validate(token.strip())
+    except (jwt.PyJWTError, jwt.PyJWKClientError) as ex:
+        raise HTTPException(status_code=401, detail="the bearer token is not valid",
+                            headers={"WWW-Authenticate": "Bearer"}) from ex

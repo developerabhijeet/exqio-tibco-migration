@@ -1,0 +1,5 @@
+# An external Neo4j with no addresses for the NetworkPolicy.
+neo4j:
+  enabled: false
+  uri: bolt+s://neo4j.gmf.example:7687
+  externalCidrs: []

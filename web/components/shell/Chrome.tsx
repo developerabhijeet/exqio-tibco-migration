@@ -2,6 +2,8 @@
 
 import { usePathname } from "next/navigation";
 import { TopBar } from "./TopBar";
+import { ExiQoianPanel } from "@/components/exiqoian/ExiQoianPanel";
+import { useAppState } from "@/lib/state";
 import { Footer } from "./Footer";
 
 /**
@@ -17,6 +19,7 @@ const BARE = ["/signin"];
  */
 export function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  const { projectId } = useAppState();
   if (BARE.some((p) => path === p || path.startsWith(`${p}/`))) {
     return <main className="flex-1 overflow-y-auto">{children}</main>;
   }
@@ -24,9 +27,14 @@ export function Chrome({ children }: { children: React.ReactNode }) {
     <>
       <TopBar />
       <main className="flex-1 overflow-y-auto print:overflow-visible">
-        <div className="w-full px-6 py-6">{children}</div>
+        {/* One centred column up to 1600 px with the gutter tokens (16 / 24 / 40 px); the bar above
+            spans the window. Sticky bars inside pull out by the same gutter (-mx-[var(--gutter)]).
+            It is at least as tall as the content area, so a page can fill it (flex-1), as the memory
+            explorer does, without measuring the bars around it. */}
+        <div className="mx-auto flex min-h-full w-full max-w-content flex-col px-[var(--gutter)] py-8 print:block">{children}</div>
       </main>
       <Footer />
+      {projectId ? <ExiQoianPanel key={projectId} /> : null}
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
-import { actAs, newProjectAndScan, openDealerProcess } from "./helpers";
+import { expect, test, type Route } from "@playwright/test";
+import { actAs, approveG1toG3, gate, newProjectAndScan, openDealerProcess } from "./helpers";
 import { apiUrl } from "../scripts/root-env";
 
 // The API runs with PROVIDER=fake. Whether `dotnet restore` can reach NuGet depends on the machine,
@@ -20,47 +20,6 @@ const PARITY = readFileSync(join(__dirname, "fixtures", "parity.json"), "utf8");
 
 /** The routed build the fixture test shows; no request for it reaches the API. */
 const FIXTURE_BUILD = "fixture-build";
-
-async function gate(page: Page, name: string): Promise<Locator> {
-  const g = page.getByTestId(`gate-${name}`);
-  await expect(g).toBeVisible();
-  return g;
-}
-
-async function approveG1toG3(page: Page): Promise<void> {
-  await page.getByTestId("step-validate").click();
-  await page.getByRole("button", { name: "Run analysis" }).click();
-  await expect(page.getByTestId("analysis-log")).toContainText("citations verified", { timeout: 60_000 });
-  const rules = page.getByTestId("rule-card");
-  await expect(rules.first()).toBeVisible();
-  const count = await rules.count();
-  for (let i = 0; i < count; i++) {
-    const card = rules.nth(i);
-    await card.getByRole("button", { name: "Approve", exact: true }).click();
-    await expect(card).toHaveAttribute("data-status", "approved");
-  }
-  const g1 = await gate(page, "G1");
-  await g1.getByRole("button", { name: "Approve G1" }).click();
-  await expect(g1).toHaveAttribute("data-state", "approved");
-  const findings = page.getByTestId("finding-card");
-  const total = await findings.count();
-  for (let i = 0; i < total; i++) {
-    const card = findings.nth(i);
-    await card.getByRole("button", { name: "Ask business" }).click();
-    await expect(card).toHaveAttribute("data-decision", "ask");
-  }
-  const g2 = await gate(page, "G2");
-  await g2.getByRole("button", { name: "Approve G2" }).click();
-  await expect(g2).toHaveAttribute("data-state", "approved");
-
-  await actAs(page, "architect.lee");
-  await page.getByTestId("step-design").click();
-  await page.getByRole("button", { name: "Generate design" }).click();
-  await expect(page.getByTestId("design-hash")).toContainText(/[0-9a-f]{12}/, { timeout: 60_000 });
-  const g3 = await gate(page, "G3");
-  await g3.getByRole("button", { name: "Approve G3" }).click();
-  await expect(g3).toHaveAttribute("data-state", "approved");
-}
 
 test("FundingStatusLookup as far as this machine allows, branching on the restore probe", async ({ page }) => {
   test.setTimeout(480_000);
@@ -216,7 +175,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
     await expect(g4.getByRole("button", { name: "Approve G4" })).toBeDisabled();
     await expect(g4).toContainText("restore failed");
     // The stepper reads the failed build, not "not started".
-    await expect(page.getByTestId("step-build")).toContainText("failed");
+    await expect(page.getByTestId("step-build")).toHaveAttribute("data-status", "failed");
   }
 
   // -------------------------------------------------------------- Verify
@@ -237,7 +196,8 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
     await startService.click();
     await expect(service).toHaveAttribute("data-state", "running", { timeout: 120_000 });
     const frame = page.getByTestId("swagger-frame");
-    await expect(frame).toHaveAttribute("src", /\/swagger$/);
+    // through the API's proxy: the worker that runs the service is never reached directly
+    await expect(frame).toHaveAttribute("src", /\/builds\/[^/]+\/run\/proxy\/swagger\/index\.html$/);
     const swagger = await page.request.get((await frame.getAttribute("src"))!);
     expect(swagger.status()).toBe(200);
     await page.getByRole("button", { name: "Get dev token" }).click();
@@ -298,7 +258,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await expect(plan).toHaveAttribute("data-status", "acknowledged");
   await expect(plan).toContainText("ops.sam");
   // An acknowledged connect-later with G6 pending needs review.
-  await expect(page.getByTestId("step-deploy")).toContainText("needs review");
+  await expect(page.getByTestId("step-deploy")).toHaveAttribute("data-status", "needs_review");
   const apply = plan.getByRole("button", { name: "Apply" });
   await expect(apply).toBeDisabled();
   await expect(plan).toContainText("Apply is not part of this build");
@@ -318,7 +278,7 @@ test("FundingStatusLookup as far as this machine allows, branching on the restor
   await expect(rows).toHaveCount(13);
   await expect(rows.filter({ hasText: "Compilable .NET" })).toHaveAttribute("data-status", restoreOk ? /^(met|partial)$/ : "partial");
   await expect(rows.filter({ hasText: "Reference estate" })).toHaveAttribute("data-status", "met");
-  await expect(rows.first().getByTestId("evidence-link").first()).toBeVisible();
+  await expect(rows.first().getByTestId("cite-chip").first()).toBeVisible();
 
   await page.getByRole("link", { name: "History" }).click();
   await expect(page.getByTestId("history-timeline")).toContainText("build");
@@ -401,17 +361,21 @@ test("the parity table shows a committed fixture: 70 %, one defect, one control-
   await expect(defects).toHaveCount(2);
   const defect = defects.filter({ hasText: "output.body.status" });
   await expect(defect).toHaveCount(1);
+  // The note is the cited difference sentence: a chip for the scenario run, and one for the finding
+  // when a finding explains it (no separate finding link).
+  const finding = '[data-testid="cite-chip"][data-phase="validate"]';
   await expect(defect.getByTestId("finding-pill")).toHaveCount(0);
+  await expect(defect.locator(finding)).toHaveCount(0);
+  await expect(defect.getByTestId("parity-note").locator('[data-testid="cite-chip"][data-phase="verify"]')).toHaveCount(1);
   const controlOnly = defects.filter({ hasText: "output.body.dealerRegion" });
-  await expect(controlOnly.getByTestId("finding-pill")).toHaveText("S2");
-  await expect(controlOnly.getByTestId("finding-pill")).toHaveAttribute(
-    "title",
-    "touched only through a branch decision by this finding; not accepted as intended without a TIBCO sandbox run",
-  );
+  await expect(controlOnly.getByTestId("finding-pill")).toHaveCount(0);
+  await expect(controlOnly.locator(finding)).toHaveAttribute("aria-label", /S2-trim-dealer/);
   const intended = rows.and(page.locator('[data-status="intended"]'));
   await expect(intended).toHaveCount(1);
   await expect(intended.getByTestId("unconfirmed-pill")).toHaveText("not confirmed");
   await expect(intended).toContainText("d10021");
-  await expect(intended).toContainText("S2");
+  await expect(intended.locator(finding)).toHaveAttribute("aria-label", /S2-trim-dealer/);
+  // A match no finding explains carries no citation.
+  await expect(rows.and(page.locator('[data-status="match"]')).getByTestId("cite-chip")).toHaveCount(0);
   await expect(rows.and(page.locator('[data-status="noise"]'))).toHaveCount(1);
 });

@@ -1,0 +1,298 @@
+"""A build from an edit set (sub-project 6, Task 8): the fresh generation, the hand edits merged in
+(stage ``hand edits``), ``origin = hand`` in ``build_files``, agents that leave hand files alone,
+and the infrastructure-only resume."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+
+from api.app.models import Build, EditSet, JobEvent
+from api.app.services import build as build_svc
+from api.app.services import fake_responses
+from api.tests import test_build_verify as build_tests
+from api.tests.test_edit_sets import AGENT_FILE, ENGINEER, TEST_FILE, download, edit, post_edits
+from engine.agents.reviewers import REVIEWERS
+
+scenario_db = build_tests.scenario_db
+DFR = "dealerfunding.DealerFundingRequest"
+EDIT_LINE = "\n// hand edit: the engineer's body\n"
+
+
+@pytest.fixture
+def engineer() -> dict[str, str]:
+    return ENGINEER
+
+
+@pytest.fixture
+def recording_provider(monkeypatch):
+    """The fake provider, recording each prompt per agent (builder, test_engineer, repair, ...)."""
+    names = {"build": "builder", "test": "test_engineer"}
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.prompts: dict[str, list[str]] = {}
+
+        def files_sent_to(self, agent: str) -> str:
+            return "\n".join(self.prompts.get(agent, []))
+
+        def clear(self) -> None:
+            self.prompts.clear()
+
+    rec = Recorder()
+    original = fake_responses.reply_for
+
+    def reply_for(req, process):
+        user = "".join(str(m.get("content", "")) for m in req.messages if m.get("role") == "user")
+        stage = str(req.tags.get("stage"))
+        rec.prompts.setdefault(names.get(stage, stage), []).append(user)
+        return original(req, process)
+
+    monkeypatch.setattr(fake_responses, "reply_for", reply_for)
+    return rec
+
+
+@pytest.fixture
+async def baseline_build(client, monkeypatch) -> str:
+    _, _, build_id, _ = await build_tests._built(client, monkeypatch, DFR)
+    return build_id
+
+
+@pytest.fixture
+async def edit_set_two_files(client, baseline_build) -> str:
+    z = edit(await download(client, baseline_build),
+             {AGENT_FILE: lambda t: t + EDIT_LINE, TEST_FILE: lambda t: t + "\n// hand edit: the engineer's test\n"})
+    r = await post_edits(client, baseline_build, z)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pytest.fixture
+def wait_terminal():
+    async def run(client, job_id: str) -> dict:
+        job = await build_tests._wait_job(client, job_id, timeout=900)
+        assert job["status"] == "done", job
+        return job["result"]
+
+    return run
+
+
+async def file_text(client, build_id: str, path: str) -> str:
+    r = await client.get(f"/builds/{build_id}/files/{path}")
+    assert r.status_code == 200, r.text
+    return r.json()["content"]
+
+
+async def baseline_text(client, edit_set_id: str, path: str) -> str:
+    return (await client.get(f"/edit-sets/{edit_set_id}/diff/{path}")).json()["baseline"]
+
+
+# ------------------------------------------------------------------ the brief's tests
+async def test_resume_builds_with_hand_files(client, edit_set_two_files, engineer, wait_terminal):
+    EDITED_AGENT_TEXT = (await baseline_text(client, edit_set_two_files, AGENT_FILE)) + EDIT_LINE
+    job = (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()
+    build = await wait_terminal(client, job["job_id"])
+    files = {f["path"]: f["origin"] for f in (await client.get(f"/builds/{build['build_id']}/files")).json()["files"]}
+    assert files[AGENT_FILE] == "hand" and files[TEST_FILE] == "hand"
+    assert (await file_text(client, build["build_id"], AGENT_FILE)) == EDITED_AGENT_TEXT
+
+
+async def test_builder_does_not_fill_a_hand_file(client, recording_provider, edit_set_two_files, engineer, wait_terminal):
+    assert AGENT_FILE in recording_provider.files_sent_to("builder")  # the baseline build asked for it
+    recording_provider.clear()
+    await wait_terminal(client, (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()["job_id"])
+    assert AGENT_FILE not in recording_provider.files_sent_to("builder")
+    assert TEST_FILE not in recording_provider.files_sent_to("test_engineer")
+
+
+# ------------------------------------------------------------------ the build record
+async def stages(client, job_id: str) -> list[str]:
+    async with client._transport.app.state.sessionmaker() as s:
+        rows = (await s.scalars(select(JobEvent).where(JobEvent.job_id == job_id).order_by(JobEvent.seq))).all()
+    return [e.text for e in rows if e.event == "stage"]
+
+
+async def test_hand_edits_stage_and_record(client, edit_set_two_files, engineer, wait_terminal):
+    job = (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()
+    result = await wait_terminal(client, job["job_id"])
+    names = await stages(client, job["job_id"])
+    assert names[:3] == ["design check", "generate", "hand edits"]
+    view = (await client.get(f"/builds/{result['build_id']}")).json()
+    assert {(h["path"], h["outcome"]) for h in view["builder"]["hand_edits"]} == {(AGENT_FILE, "kept"), (TEST_FILE, "kept")}
+    assert view["iteration"] == (await client.get(f"/edit-sets/{edit_set_two_files}")).json()["iteration"]
+    assert set(REVIEWERS) <= set(view["builder"]["reviewers"])  # the panel still reviews the hand file
+
+
+async def test_a_normal_build_has_no_hand_edits_stage(client, baseline_build):
+    async with client._transport.app.state.sessionmaker() as s:
+        job_id = (await s.get(Build, baseline_build)).job_id
+    assert "hand edits" not in await stages(client, job_id)
+    assert "hand_edits" not in ((await client.get(f"/builds/{baseline_build}")).json()["builder"] or {})
+
+
+async def test_an_infra_edit_survives_the_infrastructure_generation(client, baseline_build, engineer, wait_terminal):
+    """Infra-only: the baseline tree is copied, the code stages are carried from the baseline build
+    (X23: its test results and G4 evidence), and the hand Dockerfile wins."""
+    z = edit(await download(client, baseline_build), {"Dockerfile": lambda t: t + "\n# hand note\n"})
+    es = (await post_edits(client, baseline_build, z)).json()
+    assert es["resume_phase"] == "infra"
+    job = (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).json()
+    result = await wait_terminal(client, job["job_id"])
+    build_id = result["build_id"]
+    assert (await file_text(client, build_id, "Dockerfile")).endswith("\n# hand note\n")
+    files = {f["path"]: f["origin"] for f in (await client.get(f"/builds/{build_id}/files")).json()["files"]}
+    base = {f["path"]: f for f in (await client.get(f"/builds/{baseline_build}/files")).json()["files"]}
+    assert files["Dockerfile"] == "hand" and files[TEST_FILE] == base[TEST_FILE]["origin"] == "ai"
+    assert set(files) == set(base)
+    assert (await file_text(client, build_id, TEST_FILE)) == (await file_text(client, baseline_build, TEST_FILE))
+    view = (await client.get(f"/builds/{build_id}")).json()
+    baseline_view = (await client.get(f"/builds/{baseline_build}")).json()
+    assert view["status"] == baseline_view["status"] and view["builder"]["carried_from"] == baseline_build
+    steps = {s["name"]: s for s in view["steps"]}
+    for n in ("restore", "build", "format", "test"):
+        before = next(s for s in baseline_view["steps"] if s["name"] == n)
+        assert (steps[n]["ok"], steps[n]["skipped"]) == (before["ok"], before["skipped"])
+        assert steps[n]["log"].startswith(f"carried from build {baseline_build}")
+    carried = (await client.get(f"/builds/{build_id}/tests")).json()
+    original = (await client.get(f"/builds/{baseline_build}/tests")).json()
+    assert carried["cases"] == original["cases"] and carried["summary"] == original["summary"]
+    assert view["metrics"]["test_pass_rate"] == baseline_view["metrics"]["test_pass_rate"]
+    names = await stages(client, job["job_id"])
+    assert names.index("infra") > names.index("repair") and "infra validate" in names
+
+
+async def test_infra_only_without_an_identical_code_tree_carries_nothing(client, app, baseline_build, engineer,
+                                                                         wait_terminal):
+    z = edit(await download(client, baseline_build), {"Dockerfile": lambda t: t + "\n# hand note\n"})
+    es = (await post_edits(client, baseline_build, z)).json()
+    async with app.state.sessionmaker() as s:
+        root = (await s.get(Build, baseline_build)).output_dir
+    (Path(root) / AGENT_FILE).write_text("// changed on disk after the build\n", encoding="utf-8")
+    job = (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).json()
+    view = (await client.get(f"/builds/{(await wait_terminal(client, job['job_id']))['build_id']}")).json()
+    assert view["status"] == "failed" and "carried_from" not in view["builder"]
+    steps = {s["name"]: s for s in view["steps"]}
+    assert all(steps[n]["skipped"] and "infrastructure-only edits" in steps[n]["log"]
+               for n in ("restore", "build", "format", "test"))
+
+
+async def test_a_model_written_file_under_a_new_design_is_a_conflict(client, app, edit_set_two_files, engineer,
+                                                                     wait_terminal, baseline_build):
+    """X23: the design moved since the baseline (resume after re-design): the ai file is flagged."""
+    async with app.state.sessionmaker() as s:
+        (await s.get(Build, baseline_build)).design_hash = "f" * 64
+        (await s.get(EditSet, edit_set_two_files)).status = "designing"  # G3 approved again on the new design
+        await s.commit()
+    job = (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()
+    result = await wait_terminal(client, job["job_id"])
+    by_path = {h["path"]: h for h in (await client.get(f"/builds/{result['build_id']}")).json()["builder"]["hand_edits"]}
+    assert by_path[TEST_FILE]["outcome"] == "conflict"
+    assert by_path[TEST_FILE]["detail"] == f".exiqo/conflicts/{TEST_FILE}.merge"
+    assert by_path[AGENT_FILE]["outcome"] == "kept"  # agent files merge against the generator's scaffold
+
+
+async def test_infra_edit_in_a_code_build_is_merged_after_the_infrastructure(client, baseline_build, engineer,
+                                                                             wait_terminal):
+    z = edit(await download(client, baseline_build), {"Dockerfile": lambda t: t + "\n# hand note\n",
+                                                       AGENT_FILE: lambda t: t + EDIT_LINE})
+    es = (await post_edits(client, baseline_build, z)).json()
+    assert es["resume_phase"] == "build"
+    job = (await client.post(f"/edit-sets/{es['id']}/resume", headers=engineer)).json()
+    build_id = (await wait_terminal(client, job["job_id"]))["build_id"]
+    assert (await file_text(client, build_id, "Dockerfile")).endswith("\n# hand note\n")
+    files = {f["path"]: f["origin"] for f in (await client.get(f"/builds/{build_id}/files")).json()["files"]}
+    assert files["Dockerfile"] == "hand" and files[AGENT_FILE] == "hand"
+    assert any(o == "infra" for p, o in files.items() if p.startswith("infra/"))
+
+
+async def test_resume_without_the_baseline_folder_keeps_the_edits(client, app, edit_set_two_files, engineer,
+                                                                  wait_terminal, baseline_build):
+    async with app.state.sessionmaker() as s:
+        (await s.get(Build, baseline_build)).output_dir = None
+        await s.commit()
+    job = (await client.post(f"/edit-sets/{edit_set_two_files}/resume", headers=engineer)).json()
+    result = await wait_terminal(client, job["job_id"])
+    view = (await client.get(f"/builds/{result['build_id']}")).json()
+    by_path = {h["path"]: h for h in view["builder"]["hand_edits"]}
+    assert by_path[AGENT_FILE]["detail"] == "baseline folder missing: edit kept as uploaded"
+
+
+def test_stages_for_a_normal_build_are_unchanged():
+    assert build_svc.STAGES == ["design check", "generate", "tests", "test engineer", "builder", "review", "restore",
+                                "build", "format", "test", "repair", "infra", "infra validate", "metrics", "persist"]
+    assert build_svc.EDIT_STAGES == [*build_svc.STAGES[:2], "hand edits", *build_svc.STAGES[2:]]
+
+
+# ------------------------------------------------------------------ review fix round 1
+async def test_an_earlier_edit_build_keeps_its_hand_files(client, edit_set_two_files, engineer, wait_terminal,
+                                                          recording_provider):                     # I1, I2
+    """A baseline that is itself an edit build: its hand files the engineer did not touch again are
+    carried verbatim and stay protected (the Dockerfile through the infrastructure generation too)."""
+    async with client._transport.app.state.sessionmaker() as s:
+        es1 = await s.get(EditSet, edit_set_two_files)
+        base_id = es1.baseline_build_id
+    z1 = edit(await download(client, base_id), {AGENT_FILE: lambda t: t + EDIT_LINE,
+                                                "Dockerfile": lambda t: t + "\n# hand note\n"})
+    first = (await post_edits(client, base_id, z1)).json()
+    b1 = (await wait_terminal(client, (await client.post(f"/edit-sets/{first['id']}/resume",
+                                                         headers=engineer)).json()["job_id"]))["build_id"]
+    agent_text = await file_text(client, b1, AGENT_FILE)
+    z2 = edit(await download(client, b1), {TEST_FILE: lambda t: t + "\n// second pass\n"})
+    second = (await post_edits(client, b1, z2)).json()
+    assert [f["path"] for f in second["files"]] == [TEST_FILE]
+    recording_provider.clear()
+    b2 = (await wait_terminal(client, (await client.post(f"/edit-sets/{second['id']}/resume",
+                                                         headers=engineer)).json()["job_id"]))["build_id"]
+    files = {f["path"]: f["origin"] for f in (await client.get(f"/builds/{b2}/files")).json()["files"]}
+    assert files[AGENT_FILE] == files["Dockerfile"] == files[TEST_FILE] == "hand"
+    assert await file_text(client, b2, AGENT_FILE) == agent_text
+    assert (await file_text(client, b2, "Dockerfile")).endswith("\n# hand note\n")
+    assert AGENT_FILE not in recording_provider.files_sent_to("builder")
+    hand = {h["path"]: h for h in (await client.get(f"/builds/{b2}")).json()["builder"]["hand_edits"]}
+    assert hand[AGENT_FILE]["detail"] == "hand-edited in the baseline build: edit kept as uploaded"
+
+
+def test_infra_change_follows_the_path_whatever_the_origin():                                     # I1
+    from api.app.services.edits import FileChange, infra_change
+
+    assert infra_change(FileChange(path="Dockerfile", change="modified", origin="hand", sha256="0"))
+    assert infra_change(FileChange(path="RUN_LOCALLY.md", change="modified", origin="hand", sha256="0"),
+                        frozenset({"RUN_LOCALLY.md"}))
+    assert not infra_change(FileChange(path=AGENT_FILE, change="modified", origin="hand", sha256="0"))
+
+
+@pytest.mark.parametrize("redesigned", [False, True])
+def test_a_hand_edited_infra_file_after_a_redesign_is_a_conflict(tmp_path, redesigned):     # X23, infra
+    """An infra file a person already edited in the baseline (origin ``hand``) sits on the fresh
+    infrastructure generation: after a redesign it is kept and flagged, as the code files are."""
+    from api.app.services.edits import EditBuild, FileChange
+    from engine.dotnet_gen.generator import GenFile
+
+    baseline, edited, out = tmp_path / "base", tmp_path / "edited", tmp_path / "out"
+    for root, text in ((baseline, "FROM a\n# old hand\n"), (edited, "FROM a\n# old hand\n# again\n"),
+                       (out, "FROM b\n")):
+        root.mkdir()
+        (root / "Dockerfile").write_text(text)
+    edit = EditBuild(edit_set_id="e" * 12, baseline_build_id="b", baseline_root=baseline, edited_root=edited,
+                     infra_only=False, baseline_design_hash="d1", baseline_spec_hash="s",
+                     changes=[FileChange(path="Dockerfile", change="modified", origin="hand", sha256="0")])
+    _, results = build_svc.apply_infra_edits(edit, out, "Gmf", [GenFile(path="Dockerfile", content="FROM b\n",
+                                                                            origin="code")], "git",
+                                                 scaffold_changed=edit.scaffold_changed("d2" if redesigned else "d1", "s"))
+    assert [r.outcome for r in results] == (["conflict"] if redesigned else ["kept"])
+    assert (out / "Dockerfile").read_text() == "FROM a\n# old hand\n# again\n"
+
+
+def test_hand_files_the_panel_cannot_read_are_named():
+    from engine.agents.reviewers import hand_review_suffixes, unreviewed_hand_files
+    from engine.dotnet_gen.generator import GeneratedSolution, GenFile
+
+    sol = GeneratedSolution(root=Path("/nonexistent"), name="Gmf", build_hash="", files=[
+        GenFile(path="src/A.cs", content="class A {}", origin="hand"),
+        GenFile(path="src/A.csproj", content="<Project/>", origin="hand"),
+        GenFile(path="src/logo.png", content="\x00png", origin="hand"),
+        GenFile(path="tests/T.cs", content="class T {}", origin="hand")])
+    assert hand_review_suffixes() == (".cs",)
+    assert hand_review_suffixes("java") == (".java",)
+    assert unreviewed_hand_files(sol) == ["src/A.csproj", "src/logo.png"]

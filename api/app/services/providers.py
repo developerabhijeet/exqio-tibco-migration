@@ -5,7 +5,8 @@
 * ``fake``: :class:`ScriptedFakeProvider`, replies derived from the IR (tests, offline demos);
 * ``claude``: ``ClaudeCodeProvider`` (``CLAUDE_CODE_OAUTH_TOKEN``), with Azure OpenAI as the
   fallback when Azure is configured;
-* ``azure``: ``AzureOpenAIProvider``;
+* ``azure``: ``AzureOpenAIProvider``, signed in with ``AZURE_OPENAI_API_KEY`` or, with
+  ``AZURE_OPENAI_AUTH=managed_identity``, an Entra token from the pod's managed identity (no key);
 * ``auto``: Claude when its token is set, else Azure when configured, else no provider.
 
 With no provider the analysis runs code only (static rules, verifier, coverage) and says so:
@@ -20,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api.app.config import Settings
@@ -28,6 +30,7 @@ from api.app.services.fake_responses import ScriptedFakeProvider
 from engine.agents.routing import ModelCallRecord, RoutedProvider, RoutingTable
 from engine.ir.models import Process
 
+AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default"
 CODE_ONLY_NOTICE = "code-only analysis: no model configured"
 NO_MODEL_REASON = ("no model configured: set CLAUDE_CODE_OAUTH_TOKEN, or AZURE_OPENAI_ENDPOINT and "
                    "AZURE_OPENAI_API_KEY with deployments, or PROVIDER=fake")
@@ -52,14 +55,30 @@ class ProviderChoice:
 
 
 def _azure_configured(settings: Settings) -> bool:
-    return bool(settings.azure_openai_endpoint and settings.azure_openai_api_key)
+    return settings.azure_openai_configured()
+
+
+class ManagedIdentityToken:
+    """An Entra token for Azure OpenAI from the pod's managed identity (``AZURE_OPENAI_AUTH=
+    managed_identity``). The credential is made on the first request, so building a provider never
+    reaches IMDS or the token endpoint; the bearer provider then caches and refreshes the token."""
+
+    def __init__(self) -> None:
+        self._provider: Callable[[], str] | None = None
+
+    def __call__(self) -> str:
+        if self._provider is None:
+            self._provider = get_bearer_token_provider(DefaultAzureCredential(), AZURE_OPENAI_SCOPE)
+        return self._provider()
 
 
 def _azure(settings: Settings):
     from engine.agents.azure_openai import AzureOpenAIProvider
 
+    managed = settings.azure_openai_auth == "managed_identity"
     return AzureOpenAIProvider(
-        endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
+        endpoint=settings.azure_openai_endpoint, api_key=None if managed else settings.azure_openai_api_key,
+        ad_token_provider=ManagedIdentityToken() if managed else None,
         deployments={"strong": settings.azure_openai_deployment_strong,
                      "standard": settings.azure_openai_deployment_standard,
                      "efficient": settings.azure_openai_deployment_efficient},

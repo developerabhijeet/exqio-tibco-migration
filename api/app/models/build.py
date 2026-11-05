@@ -17,8 +17,13 @@ class Build(IdMixin, CreatedMixin, Base):
     process_id: Mapped[str] = mapped_column(fk("processes.id"), index=True)
     design_id: Mapped[str | None] = mapped_column(fk("design_records.id", ondelete="SET NULL"))
     job_id: Mapped[str | None]
+    iteration: Mapped[int] = mapped_column(default=1, server_default="1")  # Iteration.n of the job
+    # the edit set this build applied (use_alter: edit_sets refers to builds too)
+    edit_set_id: Mapped[str | None] = mapped_column(fk("edit_sets.id", ondelete="SET NULL", use_alter=True),
+                                                    index=True)
     # must be one of engine.infra_gen.generator's runtimes; "container_apps" (plural) is rejected
     runtime: Mapped[str] = mapped_column(default="container_app")
+    stack: Mapped[str] = mapped_column(server_default="dotnet")  # the target stack this build generated
     status: Mapped[str] = mapped_column(default="queued")  # queued|running|passed|failed
     spec_hash: Mapped[str | None]
     design_hash: Mapped[str | None]
@@ -27,8 +32,12 @@ class Build(IdMixin, CreatedMixin, Base):
     steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)  # [{name, ok, log}]
     repair: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     reviews: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    # the running generated service (Verify): its loopback port and pid on the worker that hosts it,
+    # that worker's internal listener (host:port) and its name (the Verify job's affinity)
     run_port: Mapped[int | None]
     run_pid: Mapped[int | None]
+    run_host: Mapped[str | None] = mapped_column(Text)
+    run_owner: Mapped[str | None] = mapped_column(Text)
     infra_validation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # engine InfraValidation
     builder: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # {filled: [path], rejections: [...]}
     error: Mapped[str | None] = mapped_column(Text)
@@ -41,7 +50,7 @@ class BuildFile(IdMixin, Base):
 
     build_id: Mapped[str] = mapped_column(fk("builds.id"), index=True)
     path: Mapped[str]
-    origin: Mapped[str]  # code|agent|ai|infra (agent: a body left for a model; ai: filled by one)
+    origin: Mapped[str]  # code|agent|ai|infra|hand (agent: a body left for a model; ai: filled by one; hand: a person's edit, sub-project 6)
     process_id: Mapped[str | None]  # IR process id of a per-process file; None for shared files
     tibco_ref: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     sha256: Mapped[str]

@@ -1,0 +1,58 @@
+[
+  {
+    "reviewer": "security",
+    "file": "src/GmfCredit.Core/Services/FundingStatusLookupService.cs",
+    "line": 12,
+    "text": "FundingStatusLookupService.cs logs the dealer id unmasked. Mask it before it is written.",
+    "triage": "patch",
+    "decision": null,
+    "cited": {
+      "text": "FundingStatusLookupService.cs logs the dealer id unmasked. Mask it before it is written.",
+      "spans": [
+        {
+          "start": 0,
+          "end": 57,
+          "refs": [
+            "c1"
+          ]
+        }
+      ],
+      "refs": [
+        {
+          "id": "c1",
+          "phase": "build",
+          "kind": "code",
+          "label": "FundingStatusLookupService.cs:12",
+          "preview": "security finding in src/GmfCredit.Core/Services/FundingStatusLookupService.cs at line 12",
+          "memory_uid": null,
+          "revision": null,
+          "verified": null,
+          "reason": null,
+          "target": {
+            "kind": "file",
+            "step": "build",
+            "process_id": "__PROCESS__",
+            "activity_id": null,
+            "path": "src/GmfCredit.Core/Services/FundingStatusLookupService.cs",
+            "line": 12,
+            "uid": null,
+            "hash": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "reviewer": "standards",
+    "file": null,
+    "line": 0,
+    "text": "Name the options classes after their configuration sections.",
+    "triage": "defer",
+    "decision": null,
+    "cited": {
+      "text": "Name the options classes after their configuration sections.",
+      "spans": [],
+      "refs": []
+    }
+  }
+]

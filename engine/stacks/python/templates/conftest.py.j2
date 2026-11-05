@@ -1,0 +1,53 @@
+"""Fixtures of the generated tests: the service in a FastAPI TestClient (development settings, in-memory
+bus, timers off) pointed at the test database, and the scenario support every test stands on.
+
+The database is the PostgreSQL database at TEST_DATABASE_URL (for example
+postgresql://exiqo:exiqo@localhost:5432/exiqo_test); a test that needs it is skipped when it is not
+set, and a database whose name does not end with _test is never reset.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+from {{ pkg }}.config import Settings
+from {{ pkg }}.main import create_app
+from tests.scenario_support import ScenarioSupport, TestDatabase
+
+# The connection settings the generated service reads; all point at the test database.
+CONNECTION_KEYS: tuple[str, ...] = ({% for c in connections %}{{ c | py_string }}, {% endfor %})
+
+
+def service_settings() -> Settings:
+    """The development settings of the service under test."""
+    env = dict(os.environ)
+    env.update({"ASPNETCORE_ENVIRONMENT": "Development", "AUTH_MODE": "Development", "MESSAGING_MODE": "InMemory",
+                "JOBS_ENABLED": "false", "KEY_VAULT_URI": ""})
+    url = os.environ.get("TEST_DATABASE_URL", "").strip()
+    if url:
+        for key in CONNECTION_KEYS:
+            env[key] = url
+    return Settings.load(env, key_vault=False)
+
+
+@pytest.fixture(scope="session")
+def client() -> Iterator[TestClient]:
+    """The service, started once for the session (its lifespan runs: consumers subscribe)."""
+    with TestClient(create_app(service_settings())) as running:
+        yield running
+
+
+@pytest.fixture
+def support(client: TestClient) -> ScenarioSupport:
+    """Drivers, the database, the bus and field-by-field comparison with a fixture."""
+    return ScenarioSupport(client)
+
+
+@pytest.fixture
+def database() -> TestDatabase:
+    """The test database; the test is skipped when TEST_DATABASE_URL is not set."""
+    return TestDatabase.get()

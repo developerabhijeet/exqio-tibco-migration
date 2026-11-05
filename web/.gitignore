@@ -5,3 +5,4 @@ public/monaco/
 test-results/
 playwright-report/
 *.tsbuildinfo
+content/help/

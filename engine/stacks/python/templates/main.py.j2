@@ -1,0 +1,83 @@
+"""The {{ app }} service (migrated from TIBCO BusinessWorks application {{ app_id }}): the FastAPI app.
+
+Run it with ``uvicorn --factory {{ pkg }}.main:create_app`` (``--app-dir src``); PORT is the port the
+host gives it. The runtime contract: GET /health (anonymous), POST /auth/dev-token (development
+only), the /_bus endpoints (development, in-memory bus), the TIBCO starter routes behind a bearer
+token, faults as application/problem+json. JMS starters subscribe and timer starters (JOBS_ENABLED)
+start with the app, and stop with it.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from {{ pkg }}.api import bus_dev, devtoken
+from {{ pkg }}.api.auth import TokenValidator, development_auth, require_user
+from {{ pkg }}.api.fault import fault_handler, http_error_handler
+from {{ pkg }}.config import Settings
+from {{ pkg }}.container import Container
+from {{ pkg }}.core.exceptions import ProcessFault
+
+LOG = logging.getLogger("{{ pkg }}")
+router = APIRouter()  # the anonymous routes
+
+
+@router.get("/health")
+async def healthy() -> dict[str, str]:
+    """Anonymous liveness: the process is up."""
+    return {"status": "Healthy"}
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """The app for ``settings`` (the environment's when omitted)."""
+    settings = settings or Settings.load()
+    container = Container(settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await container.start()
+        try:
+            yield
+        finally:
+            await container.stop()
+
+    app = FastAPI(title="{{ app }}", lifespan=lifespan, docs_url="/docs" if settings.development else None,
+                  redoc_url=None, openapi_url="/openapi.json" if settings.development else None)
+    app.state.settings = settings
+    app.state.container = container
+    app.state.bus = container.bus
+    app.state.tokens = TokenValidator(settings)
+    app.add_exception_handler(ProcessFault, fault_handler)
+    app.add_exception_handler(StarletteHTTPException, http_error_handler)  # 401, 404, 405 as problem+json
+
+    app.include_router(router)
+    protected = [Depends(require_user)]
+    if settings.development and development_auth(settings):
+        app.include_router(devtoken.router)
+    if settings.development and container.in_memory_bus:
+        app.include_router(bus_dev.router, dependencies=protected)
+    for routes in container.routes():
+        routes.register(app, protected)
+    if settings.development:
+        origins = settings.items("CORS_ORIGINS") or ["http://localhost:3000"]
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+    return app
+
+
+def serve() -> None:
+    """``python -m {{ pkg }}.main`` (the container's entrypoint): uvicorn on 0.0.0.0:$PORT (8080)."""
+    import os
+
+    import uvicorn
+
+    uvicorn.run(create_app(), host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+
+
+if __name__ == "__main__":
+    serve()

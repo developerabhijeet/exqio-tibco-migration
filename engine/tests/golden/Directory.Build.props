@@ -13,10 +13,11 @@
   </PropertyGroup>
 
   <!--
-    Offline package cache. Where api.nuget.org is unreachable, run `make nuget-cache` on a machine
+    Offline package cache. Where the package source is unreachable, run `make nuget-cache` on a machine
     with NuGet access and copy .tools/nuget-cache across; set EXIQO_NUGET_CACHE (or the MSBuild
     property ExiqoNuGetCache) to that folder. It is then added as a restore source and the
-    unreachable nuget.org source is tolerated. Without it, restore uses nuget.config only.
+    unreachable package source is tolerated. Without it, restore uses NuGet's own configuration
+    (nuget.config) only.
   -->
   <PropertyGroup>
     <ExiqoNuGetCache Condition="'$(ExiqoNuGetCache)' == ''">$(EXIQO_NUGET_CACHE)</ExiqoNuGetCache>

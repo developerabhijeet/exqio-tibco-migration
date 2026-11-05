@@ -1,0 +1,33 @@
+{{- /*
+Azure Files Premium for DATA_DIR, mounted as UID/GID 10001 so the platform pods own what they
+write (the built-in classes mount root-owned 0777, and fsGroup does not apply to SMB). file_mode
+keeps the exec bit: Verify runs the generated service's apphost from the share. Retain: deleting
+the claim keeps the share. Cluster-scoped, so one install creates it (data.storageClass.create).
+With storageAccount (and shareName) the claim binds to a share created beforehand, e.g. by
+deploy/azure; otherwise the driver creates an account in the node resource group.
+*/ -}}
+{{- if and .Values.data.storageClass.create (not .Values.data.existingClaim) }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.data.storageClass.name }}
+  labels:
+    {{- include "exiqo.labels" . | nindent 4 }}
+provisioner: file.csi.azure.com
+parameters:
+  skuName: {{ .Values.data.storageClass.skuName }}
+  {{- with .Values.data.storageClass.storageAccount }}
+  storageAccount: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.data.storageClass.resourceGroup }}
+  resourceGroup: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.data.storageClass.shareName }}
+  shareName: {{ . | quote }}
+  {{- end }}
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  {{- toYaml .Values.data.storageClass.mountOptions | nindent 2 }}
+{{- end }}

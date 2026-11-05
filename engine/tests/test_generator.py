@@ -7,121 +7,58 @@ and review the diff.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
-import warnings
 from pathlib import Path
 
 import pytest
 
-from engine.analysis.models import Citation, Rule
 from engine.analysis.static_rules import run_static_rules
 from engine.domains import graph as graph_mod
 from engine.dotnet_gen import coverage, generator, metrics, tests_gen, trx
 from engine.dotnet_gen.design import build_design_skeleton
 from engine.dotnet_gen.runner import BuildResult, TestRun
 from engine.dotnet_gen.trx import TestCase
-from engine.tibco_parser.scanner import scan_folder
+from engine.tests.conftest import DFR, FSL, PROCESS_IDS, hand_rules
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-GMF = REPO_ROOT / "samples" / "synthetic-gmf"
 GOLDEN = Path(__file__).resolve().parent / "golden"
-DSN = os.environ.get("TEST_DATABASE_URL", "postgresql://exiqo:exiqo@localhost:5432/exiqo_test")
-PROCESS_IDS = ["dealerfunding.FundingStatusLookup", "dealerfunding.DealerFundingRequest"]
-DFR = "dealerfunding.DealerFundingRequest"
-FSL = "dealerfunding.FundingStatusLookup"
 UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
 
 
-def _cit(activity: str, kind: str, text: str) -> Citation:
-    return Citation(activity_id=activity, kind=kind, text=text)
-
-
-def hand_rules() -> dict[str, list[Rule]]:
-    """Approved rules written by hand so the ids and texts are stable for the golden files."""
-    dfr = [
-        Rule(id="R1", text="A dealer must be ACTIVE to receive funding.", confidence=0.95,
-             status="approved",
-             citations=[_cit("LookupDealer", "condition", "$LookupDealer/Record[1]/status = 'ACTIVE'")]),
-        Rule(id="R2", text="The funding amount must be within 2% of the approved deal amount.",
-             confidence=0.9, status="approved",
-             citations=[_cit("LookupDeal", "condition", "number($LookupDeal/Record[1]/approved_amount) * 0.02")]),
-        Rule(id="R3", text="A deal is funded at most once; a repeat request is logged as DF-409.",
-             confidence=0.85, status="edited",
-             citations=[_cit("CheckExistingFunding", "sql", "select funding_id, status"),
-                        _cit("InsertFunding", "sql", "insert into gmf.funding")]),
-        Rule(id="R4", text="Draft rule that is not approved and gets no test.", confidence=0.4,
-             status="draft", citations=[_cit("LookupDeal", "sql", "from gmf.deal")]),
-    ]
-    fsl = [
-        Rule(id="R5", text="Funding status is looked up by deal id.", confidence=0.9, status="approved",
-             citations=[_cit("QueryFundingStatus", "sql", "where f.deal_id = ?")]),
-        Rule(id="R6", text="An unknown deal returns 404 \"No funding for deal\".", confidence=0.9,
-             status="approved",
-             citations=[_cit("ReplyNotFound", "expression", 'concat("No funding for deal ", $get.parameters/tns:dealId)')]),
-    ]
-    return {DFR: dfr, FSL: fsl}
+@pytest.fixture(scope="module")
+def apps(gmf_apps):
+    return gmf_apps
 
 
 @pytest.fixture(scope="module")
-def apps():
-    return {a.id: a for a in scan_folder(GMF).applications}
+def app(gmf_app):
+    return gmf_app
 
 
 @pytest.fixture(scope="module")
-def app(apps):
-    return apps["gmf.credit"]
+def processes(gmf_processes):
+    return gmf_processes
 
 
 @pytest.fixture(scope="module")
-def processes(app):
-    return {p.id: p for p in app.processes}
+def findings(gmf_findings):
+    return gmf_findings
 
 
 @pytest.fixture(scope="module")
-def findings(app, processes):
-    out = {}
-    for pid in PROCESS_IDS:
-        found = run_static_rules(processes[pid], app.contracts, app.substvars)
-        out[pid] = [f.model_copy(update={"decision": "keep"}) for f in found]
-    return out
+def rules(gmf_rules):
+    return gmf_rules
 
 
 @pytest.fixture(scope="module")
-def rules():
-    return hand_rules()
+def designs(gmf_designs):
+    return gmf_designs
 
 
 @pytest.fixture(scope="module")
-def designs(apps, app, processes, rules, findings):
-    graph = graph_mod.build_graph(list(apps.values()))
-    return {pid: build_design_skeleton(processes[pid], app, rules[pid], findings[pid],
-                                       graph_mod.io_card(processes[pid], app, graph))
-            for pid in PROCESS_IDS}
-
-
-@pytest.fixture(scope="module")
-def scenarios(app, processes):
-    from engine.parity.db import ScenarioDB
-    from engine.parity.evaluator import Evaluator
-    from engine.parity.scenarios import fill_expected, generate_scenarios
-    from engine.parity.stubs import WireMockStubs
-
-    db = ScenarioDB(DSN)
-    db.reset(GMF / "Database" / "schema.sql", GMF / "Database" / "seed.sql")
-    evaluator = Evaluator(app, db, WireMockStubs.from_folder(GMF / "Stubs"))
-    out = []
-    try:
-        for pid in PROCESS_IDS:
-            static = generate_scenarios(processes[pid], app.contracts, app)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                out += asyncio.run(fill_expected(static, evaluator))
-    finally:
-        db.close()
-    return out
+def scenarios(gmf_scenarios):
+    return gmf_scenarios
 
 
 @pytest.fixture(scope="module")
@@ -297,6 +234,22 @@ def test_dev_token_endpoint_only_in_development(solution):
     assert dev["Auth"]["Mode"] == "Development" and len(dev["Auth"]["DevToken"]["SigningKey"]) >= 32
     assert dev["Messaging"]["Mode"] == "InMemory" and prod["Messaging"]["Mode"] == "ServiceBus"
     assert dev["Cors"]["Origins"] == ["http://localhost:3000"] and "Cors" not in prod
+
+
+def test_development_honours_the_verify_proxy_headers(solution):
+    """Verify reaches the service through the platform API at ``.../builds/{id}/run/proxy/``. In
+    Development the service takes the host, scheme and path base from the proxy's X-Forwarded-*
+    headers, so Swagger's OpenAPI ``servers`` entry is that prefix and "Try it out" calls go back
+    through the proxy, not to the bare origin."""
+    program = _file(solution, "src/GmfCredit.Api/Program.cs").content
+    assert "using Microsoft.AspNetCore.HttpOverrides;" in program
+    forwarded = ("if (app.Environment.IsDevelopment())\n{\n    app.UseForwardedHeaders(new ForwardedHeadersOptions\n"
+                 "    {\n        ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto"
+                 " | ForwardedHeaders.XForwardedPrefix,\n    });\n}")
+    assert forwarded in program
+    # first in the pipeline: everything after it (Swagger, the exception handler) sees the path base
+    assert program.index("app.UseForwardedHeaders(") < program.index("app.UseExceptionHandler();")
+    assert program.index("app.UseForwardedHeaders(") < program.index("app.UseSwagger();")
 
 
 def test_configuration_contract_key_vault_and_service_bus(solution):
@@ -688,3 +641,16 @@ def test_a_build_with_nothing_measured_has_no_accuracy_rather_than_zero():
     assert score is None and "nothing to average" in detail
     # standards_adherence is never None in a real build, so compute_metrics still returns a number
     assert metrics.compute_metrics([], 0, run, build, True, None).conversion_accuracy is not None
+
+
+def test_nuget_config_uses_mirror(solution, app, designs, rules, findings, scenarios, tmp_path):
+    url = "https://nuget.gmf.example/v3/index.json"
+    mirrored = generator.generate_solution(app, PROCESS_IDS, designs, rules, findings, scenarios,
+                                           tmp_path / "GmfCredit", nuget_source=url)
+    cfg = _file(mirrored, "nuget.config").content
+    assert "<clear />" in cfg and f'<add key="gmf" value="{url}"' in cfg
+    assert "nuget.org" not in cfg.split("<packageSources>")[1]  # the mirror is the only source
+    # unset: names no source (the generated file never hard-codes a public feed); NuGet's own
+    # configuration applies
+    plain = _file(solution, "nuget.config").content
+    assert "<add " not in plain and "<clear" not in plain and "api.nuget.org" not in plain

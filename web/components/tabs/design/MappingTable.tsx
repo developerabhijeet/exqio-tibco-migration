@@ -22,8 +22,8 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[960px] text-[13.5px]" data-testid="mapping-table">
+    <div className="table-scroll">
+      <table className="table min-w-[960px]" data-testid="mapping-table">
         <thead>
           <tr className="table-head">
             <th className="px-3 py-2">TIBCO step</th>
@@ -41,7 +41,7 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
               <td className="px-3 py-2">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 text-left font-semibold text-plum hover:text-purple"
+                  className="inline-flex items-center gap-1 text-left font-semibold text-heading hover:text-accent-ink"
                   title="Open on the canvas"
                   onClick={() => jumpToStep(m.activity_id)}
                 >
@@ -49,25 +49,25 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
                   {m.activity_name}
                 </button>
                 {m.activity_name !== m.activity_id ? (
-                  <span className="block font-mono text-[11.5px] text-slate">{m.activity_id}</span>
+                  <span className="block font-mono text-xs text-slate">{m.activity_id}</span>
                 ) : null}
               </td>
               <td className="px-3 py-2">
-                <span className="block font-mono text-[12px] text-slate">{m.canonical_type}</span>
-                <span className="block font-mono text-[12px] text-ink">{m.pattern}</span>
+                <span className="block font-mono text-xs text-slate">{m.canonical_type}</span>
+                <span className="block font-mono text-xs text-ink">{m.pattern}</span>
               </td>
               <td className="px-3 py-2">
-                <span className="block text-[12.5px] text-slate">{m.project}</span>
-                <span className="block break-all font-mono text-[12px]">{m.file}</span>
+                <span className="block text-sm text-slate">{m.project}</span>
+                <span className="block break-all font-mono text-xs">{m.file}</span>
               </td>
               <td className="px-3 py-2">
-                <span className="block font-mono text-[12.5px] font-semibold text-plum">{m.class_name}</span>
-                <span className="block break-all font-mono text-[12px] text-ink">{m.method}</span>
+                <span className="block font-mono text-sm font-semibold text-heading">{m.class_name}</span>
+                <span className="block break-all font-mono text-xs text-ink">{m.method}</span>
               </td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-1">
                   {m.rule_ids.map((r) => (
-                    <span key={r} data-testid="rule-badge" className="rounded bg-plum px-1.5 font-mono text-[11.5px] font-semibold text-white">
+                    <span key={r} data-testid="rule-badge" className="rounded bg-heading px-1.5 font-mono text-xs font-semibold text-page">
                       {ruleKey.get(r) ?? r}
                     </span>
                   ))}
@@ -83,7 +83,7 @@ export function MappingTable({ mapping, analysis }: { mapping: DesignRecord["map
                         key={fid}
                         data-testid="finding-badge"
                         title={`${key}${f?.decision ? `: ${f.decision}` : ""}`}
-                        className={`rounded px-1.5 font-mono text-[11.5px] font-semibold ${
+                        className={`rounded px-1.5 font-mono text-xs font-semibold ${
                           f?.severity === "high" ? "bg-error-bg text-error" : "bg-decision-bg text-decision"
                         }`}
                       >

@@ -1,0 +1,14 @@
+{{- range $component := list "api" "web" "worker" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: exiqo-{{ $component }}
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" $ "component" $component) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" $ "component" $component) | nindent 6 }}
+{{- end }}

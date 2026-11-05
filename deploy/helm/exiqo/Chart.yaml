@@ -1,0 +1,11 @@
+apiVersion: v2
+name: exiqo
+description: ExiQO Migrate (TIBCO BusinessWorks to .NET) for AKS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: neo4j
+    version: 5.26.32
+    repository: https://helm.neo4j.com/neo4j
+    condition: neo4j.enabled

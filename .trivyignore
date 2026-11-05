@@ -1,0 +1,8 @@
+# Trivy findings accepted for `make image-scan`, each with a reason and an expiry; an expired entry
+# stops matching and the finding fails the scan again. Review before extending.
+
+# libssl3 in gcr.io/distroless/nodejs22-debian12 (exiqo-web base). Heap buffer overflow that only
+# affects 32-bit builds of OpenSSL; both image architectures (amd64, arm64) are 64-bit. The pinned
+# digest is the newest :nonroot as of 2026-10-24; the fix is 3.0.19-1~deb12u2. Re-pin and delete
+# this entry once distroless publishes it.
+CVE-2026-31789 exp:2027-01-22

@@ -24,9 +24,39 @@ permissions:
   contents: read
 
 env:
+[% if stack == "dotnet" %]
   DOTNET_VERSION: 10.0.x
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   SOLUTION: [[ sln ]]
+[% elif stack == "go" %]
+  GO_VERSION: "[[ ci.go_version ]]"
+  # the committed go.sum is the only source of checksums; no toolchain download
+  GOFLAGS: -mod=readonly
+  GOSUMDB: "off"
+  GOTOOLCHAIN: local
+  GOTELEMETRY: "off"
+  # Image build arguments, set as repository variables (empty ones are not passed):
+  # [[ build_args | join(', ') ]]
+[% for arg in build_args %]
+  [[ arg ]]: ${{ vars.[[ arg ]] }}
+[% endfor %]
+[% elif stack == "python" %]
+  PYTHON_VERSION: "[[ ci.python_version ]]"
+  # Image build arguments, set as repository variables (empty ones are not passed); UV_INDEX_URL is
+  # the PyPI mirror the restore step installs the locked files from.
+  # [[ build_args | join(', ') ]]
+[% for arg in build_args %]
+  [[ arg ]]: ${{ vars.[[ arg ]] }}
+[% endfor %]
+  UV_INDEX_URL: ${{ vars.UV_INDEX_URL }}
+[% else %]
+  JAVA_VERSION: "[[ ci.java_version ]]"
+  # Image build arguments, set as repository variables (empty ones are not passed):
+  # [[ build_args | join(', ') ]]
+[% for arg in build_args %]
+  [[ arg ]]: ${{ vars.[[ arg ]] }}
+[% endfor %]
+[% endif %]
   IMAGE_NAME: [[ image_name ]]
   TERRAFORM_VERSION: "[[ terraform_version ]]"
   TERRAGRUNT_VERSION: [[ terragrunt_version ]]
@@ -50,6 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+[% if stack == "dotnet" %]
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
@@ -69,6 +100,72 @@ jobs:
           name: test-results
           path: TestResults/**
           if-no-files-found: warn
+[% elif stack == "go" %]
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Check the module proxy
+        run: |
+          # an empty GOPROXY is Go's public default, and direct fetches from the VCS hosts
+          test -n "$GOPROXY" || { echo "set the GOPROXY repository variable to GMF's Go module mirror"; exit 1; }
+          case "$GOPROXY" in *direct*) echo "GOPROXY must name only the module mirror, not direct"; exit 1 ;; esac
+      - name: Restore
+        run: [[ ci.restore ]]
+      - name: Build
+        run: [[ ci.build ]]
+      - name: Test
+        run: [[ ci.test ]]
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            [[ ci.results ]]
+            [[ ci.coverage ]]
+          if-no-files-found: warn
+[% else %]
+[% if stack == "python" %]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv (by hash)
+        run: [[ ci.install_uv ]]
+[% else %]
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+[% endif %]
+[% if stack == "python" %]
+      - name: Restore
+        run: |
+          test -n "${UV_INDEX_URL:-}" || { echo "set the UV_INDEX_URL repository variable to GMF's PyPI mirror (never the public index)"; exit 1; }
+          [[ ci.restore ]]
+[% elif stack == "java" %]
+      - name: Restore (GMF's Maven mirror only)
+        run: |
+          grep -q '<mirror>' .exiqo/maven-settings.xml || { echo "no Maven mirror in .exiqo/maven-settings.xml: set MAVEN_MIRROR_URL and generate again (never Maven Central)"; exit 1; }
+          [[ ci.restore ]]
+[% else %]
+      - name: Restore
+        run: [[ ci.restore ]]
+[% endif %]
+      - name: Build
+        run: [[ ci.build ]]
+      - name: Test
+        run: [[ ci.test ]]
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            [[ ci.results ]]
+            [[ ci.coverage ]]
+          if-no-files-found: warn
+[% endif %]
 
   validate-infra:
     runs-on: ubuntu-latest
@@ -148,7 +245,20 @@ jobs:
       - name: Build and push the image
         run: |
           az acr login --name "$ACR_NAME"
+[% if build_args %]
+[% if required_build_args %]
+          for name in [[ required_build_args | join(' ') ]]; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name is empty: set it to an image in your registry (the Dockerfile has no default)"; exit 1; fi
+          done
+[% endif %]
+          args=()
+          for name in [[ build_args | join(' ') ]]; do
+            if [ -n "${!name:-}" ]; then args+=(--build-arg "${name}=${!name}"); fi
+          done
+          docker build "${args[@]}" --tag "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}" .
+[% else %]
           docker build --tag "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}" .
+[% endif %]
           docker push "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${GITHUB_SHA}"
 [% for env in envs %]
 

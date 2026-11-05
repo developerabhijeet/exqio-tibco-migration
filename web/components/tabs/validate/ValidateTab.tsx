@@ -16,6 +16,7 @@ import { JobLog } from "@/components/jobs/JobLog";
 import { GateButton } from "@/components/gates/GateButton";
 import { AuditDrawer } from "@/components/gates/AuditDrawer";
 import { ProcessPicker } from "@/components/tabs/ProcessPicker";
+import { findingCandidates, JiraIssues } from "@/components/connectors/JiraIssues";
 import { AiBanner, CitationsBanner, CoverageBanner, NoticeBanner } from "./Banners";
 import { RuleCard } from "./RuleCard";
 import { FindingCard } from "./FindingCard";
@@ -28,7 +29,7 @@ function Count({ n, label, tone }: { n: number; label: string; tone: "gate" | "d
 
 export function ValidateTab() {
   const qc = useQueryClient();
-  const { processId, setAskOpen } = useAppState();
+  const { processId, setChatOpen } = useAppState();
   const { projectId } = useAppState();
   const may = usePermission("validate");
   const processes = useProcesses(projectId);
@@ -69,19 +70,19 @@ export function ValidateTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 3</p>
           <h2 className="panel-title">Validate</h2>
-          <p className="mt-1 max-w-[720px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[720px] text-md text-slate">
             The model drafts rules and findings from the parsed process. Code verifies every citation and checks coverage. A
             business SME approves the rules (G1) and decides each finding (G2).
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <ProcessPicker />
-          <button type="button" className="btn-secondary" onClick={() => setAskOpen(true)}>
-            <MessageSquare size={16} aria-hidden /> Ask AI
+          <button type="button" className="btn-secondary" onClick={() => setChatOpen(true)}>
+            <MessageSquare size={16} aria-hidden /> Ask ExiQoian
           </button>
           <button type="button" className="btn-secondary" disabled={!processId} onClick={() => setAuditOpen(true)}>
             <History size={16} aria-hidden /> Audit trail
@@ -119,11 +120,11 @@ export function ValidateTab() {
               }
             />
             {a?.analysed ? (
-              <section className="card p-4" data-testid="analysis-summary">
+              <section className="card card-compact" data-testid="analysis-summary">
                 <p className="label">Summary</p>
-                <h3 className="mt-0.5 text-[16px] font-semibold text-plum">{proc?.name}</h3>
-                <p className="mt-2 text-[14.5px] leading-relaxed text-ink">{a.summary}</p>
-                <dl className="mt-3 grid grid-cols-[110px_1fr] gap-y-1 text-[13px]">
+                <h3 className="mt-0.5 text-lg font-semibold text-heading">{proc?.name}</h3>
+                <p className="mt-2 text-base leading-relaxed text-ink">{a.summary}</p>
+                <dl className="mt-3 grid grid-cols-[110px_1fr] gap-y-1 text-sm">
                   <dt className="text-slate">Rules</dt>
                   <dd>{rules.length}</dd>
                   <dt className="text-slate">Findings</dt>
@@ -131,7 +132,7 @@ export function ValidateTab() {
                   <dt className="text-slate">Provider</dt>
                   <dd>{a.provider ?? "none"}</dd>
                   <dt className="text-slate">Spec hash</dt>
-                  <dd className="truncate font-mono text-[12px]" title={a.spec_hash}>
+                  <dd className="truncate font-mono text-xs" title={a.spec_hash}>
                     {a.spec_hash?.slice(0, 16)}
                   </dd>
                 </dl>
@@ -174,7 +175,7 @@ export function ValidateTab() {
 
                 <section aria-labelledby="rules-title" className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2 pt-2">
-                    <h3 id="rules-title" className="text-[18px] font-semibold text-plum">
+                    <h3 id="rules-title" className="text-xl font-semibold text-heading">
                       Rules
                     </h3>
                     <Count n={rules.filter((r) => r.status === "approved" || r.status === "edited").length} label="approved" tone="gate" />
@@ -192,13 +193,20 @@ export function ValidateTab() {
 
                 <section aria-labelledby="findings-title" className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2 pt-2">
-                    <h3 id="findings-title" className="text-[18px] font-semibold text-plum">
+                    <h3 id="findings-title" className="text-xl font-semibold text-heading">
                       Findings
                     </h3>
                     <Count n={findings.length - undecidedFindings} label="decided" tone="gate" />
                     <Count n={undecidedFindings} label="to decide" tone="decision" />
                   </div>
                   {findings.length === 0 ? <Empty title="No findings">Code and the risk reviewer raised nothing.</Empty> : null}
+                  <JiraIssues
+                    processId={processId}
+                    scope="validate"
+                    title="Jira issues for findings"
+                    candidates={findingCandidates(findings)}
+                    empty="No finding to track: each is decided keep or ask."
+                  />
                   {findings.map((f) => (
                     <FindingCard
                       key={`${f.id}:${f.decision ?? ""}:${f.note ?? ""}`}

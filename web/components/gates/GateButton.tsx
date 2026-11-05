@@ -6,8 +6,7 @@ import { Loader2, ShieldCheck, ShieldX } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Pill } from "@/components/ui/Pill";
 import { RoleLock } from "@/components/shell/RoleNotice";
-import { ownerOfGate, personaOf } from "@/lib/personas";
-import { useAppState } from "@/lib/state";
+import { ownerOfGate, useActingPersona } from "@/lib/personas";
 import type { Gate } from "@/lib/types";
 
 export const GATE_TITLES: Record<string, string> = {
@@ -46,7 +45,7 @@ function Hashes({ gate }: { gate: Gate }) {
   ].filter(([, h]) => !!h) as [string, string][];
   if (rows.length === 0) return null;
   return (
-    <span className="mt-1 flex flex-wrap gap-x-3 font-mono text-[11.5px] text-slate">
+    <span className="mt-1 flex flex-wrap gap-x-3 font-mono text-xs text-slate">
       {rows.map(([label, h]) => (
         <span key={label} title={`${label} hash ${h}`} data-testid={`gate-${gate.gate}-${label}-hash`}>
           {label} {h.slice(0, 12)}
@@ -83,8 +82,7 @@ export function GateButton({
   const label = LABEL[state] ?? LABEL.pending;
   // Only the gate's owner decides it, so a G4 approval in the audit trail is always an engineer's.
   // Everyone else reads the evidence and the decision; the buttons are not offered to them.
-  const { user } = useAppState();
-  const me = personaOf(user);
+  const me = useActingPersona();
   const owner = ownerOfGate(name);
   const mine = me.gates.includes(name);
   const notMine = mine
@@ -115,7 +113,7 @@ export function GateButton({
   };
 
   const tone =
-    state === "approved" ? "border-gate/40 bg-gate-bg/50" : state === "rejected" ? "border-error/40 bg-error-bg/50" : "border-line bg-white";
+    state === "approved" ? "border-gate/40 bg-gate-bg/50" : state === "rejected" ? "border-error/40 bg-error-bg/50" : "border-line bg-surface";
   return (
     <div data-testid={`gate-${name}`} data-state={state} className={`rounded-card border p-4 ${tone}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -124,7 +122,7 @@ export function GateButton({
         ) : (
           <ShieldCheck size={18} className={state === "approved" ? "text-gate" : "text-slate"} aria-hidden />
         )}
-        <span className="font-semibold text-plum">{GATE_TITLES[name] ?? name}</span>
+        <span className="font-semibold text-heading">{GATE_TITLES[name] ?? name}</span>
         <Pill tone={label.tone} testId={`gate-${name}-state`}>
           {label.text}
         </Pill>
@@ -135,7 +133,7 @@ export function GateButton({
                 type="button"
                 disabled={!!busy || !mine}
                 onClick={() => setRejecting(true)}
-                className="btn border border-line bg-white px-3 text-error hover:bg-error-bg"
+                className="btn border border-line bg-surface px-3 text-error hover:bg-error-bg"
               >
                 <RoleLock reason={notMine ?? undefined} />
                 Reject {name}
@@ -148,7 +146,7 @@ export function GateButton({
                 type="button"
                 disabled={!enabled || !!busy}
                 onClick={() => decide("approved")}
-                className="btn bg-gate text-white hover:bg-gate/90"
+                className="btn bg-gate text-surface hover:bg-gate/90"
               >
                 {busy === "approve" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : null}
                 <RoleLock reason={notMine ?? undefined} />
@@ -158,19 +156,19 @@ export function GateButton({
           )}
         </span>
       </div>
-      {hint ? <p className="mt-1 text-[13px] text-slate">{hint}</p> : null}
+      {hint ? <p className="mt-1 text-sm text-slate">{hint}</p> : null}
       {state === "approved" && gate ? (
-        <div className="mt-2 text-[13px] text-gate">
+        <div className="mt-2 text-sm text-gate">
           Approved by <span className="font-semibold">{gate.decided_by}</span> on {when(gate.decided_at)}
           {gate.note ? <span className="text-ink">: {gate.note}</span> : null}
           <Hashes gate={gate} />
         </div>
       ) : null}
       {state === "rejected" && gate ? (
-        <div className="mt-2 text-[13px] text-error" data-testid={`gate-${name}-rejection`}>
+        <div className="mt-2 text-sm text-error" data-testid={`gate-${name}-rejection`}>
           Rejected by <span className="font-semibold">{gate.decided_by}</span> on {when(gate.decided_at)}
           {gate.note ? (
-            <p className="mt-1 rounded-btn bg-white/70 px-2.5 py-1.5 text-ink">
+            <p className="mt-1 rounded-btn bg-surface/70 px-2.5 py-1.5 text-ink">
               <span className="label mr-1.5">Reason</span>
               {gate.note}
             </p>
@@ -179,16 +177,18 @@ export function GateButton({
         </div>
       ) : null}
       {state !== "approved" && state !== "rejected" && gate?.reset_reason ? (
-        <p className="mt-2 text-[13px] text-decision">Reopened: {gate.reset_reason}</p>
+        <p className="mt-2 text-sm text-decision" data-testid={`gate-${name}-reset`}>
+          Reopened, pending again: {gate.reset_reason}
+        </p>
       ) : null}
       {notMine && state !== "approved" && state !== "rejected" ? (
-        <p className="mt-1 text-[13px] text-slate" data-testid={`gate-${name}-not-mine`}>
-          <span className="font-medium text-plum">{owner ? `${owner.role}'s decision:` : "No owner:"}</span> {notMine}
+        <p className="mt-1 text-sm text-slate" data-testid={`gate-${name}-not-mine`}>
+          <span className="font-medium text-heading">{owner ? `${owner.role}'s decision:` : "No owner:"}</span> {notMine}
         </p>
       ) : null}
       {blocked && mine && state !== "approved" ? (
-        <p className="mt-1 text-[13px] text-slate">
-          <span className="font-medium text-plum">Not enabled:</span> {blocked}
+        <p className="mt-1 text-sm text-slate">
+          <span className="font-medium text-heading">Not enabled:</span> {blocked}
         </p>
       ) : null}
       {rejecting ? (
@@ -204,14 +204,14 @@ export function GateButton({
           </label>
           <textarea
             id={`reject-${name}`}
-            className="input min-h-[60px] text-[14px]"
+            className="input min-h-[60px] text-md"
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="What must change before this gate can be approved"
           />
-          <p className="text-[12.5px] text-slate">Rejecting {name} also reopens every later gate that was decided.</p>
+          <p className="text-sm text-slate">Rejecting {name} also reopens every later gate that was decided.</p>
           <div className="flex gap-2">
-            <button type="submit" className="btn bg-error px-3 text-white hover:bg-error/90" disabled={!note.trim() || !!busy}>
+            <button type="submit" className="btn bg-error px-3 text-surface hover:bg-error/90" disabled={!note.trim() || !!busy}>
               {busy === "reject" ? <Loader2 size={15} className="animate-spin" aria-hidden /> : null}
               Confirm rejection
             </button>
@@ -229,7 +229,7 @@ export function GateButton({
         </form>
       ) : null}
       {error ? (
-        <p role="alert" className="mt-1 text-[13px] text-error">
+        <p role="alert" className="mt-1 text-sm text-error">
           {error}
         </p>
       ) : null}

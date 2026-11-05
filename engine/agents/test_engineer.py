@@ -6,6 +6,12 @@ no body could be generated. The model writes those bodies; plain code checks eac
 (:func:`check_test_body`), splices it into its method and nothing else, retries a rejected body
 once, and leaves a body still rejected as ``Assert.Fail("no test body for <id>: <reason>")`` so gate
 G4 stays blocked for an honest reason.
+
+That is the .NET path. Another stack (``stack`` argument) finds its rule and branch tests through
+the generated test index (``.exiqo/test-index.json``), its placeholder through
+``get_stack(stack).language.test_placeholder``, checks each body with that language's
+``check_test_body`` and splices it by indentation; the C# specifics (``async`` signatures,
+``using`` lines, the JSON read check, the expected-value warning) stay .NET only.
 """
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ import json
 import logging
 import re
 import textwrap
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -24,6 +31,9 @@ from engine.dotnet_gen.generator import GeneratedSolution, GenFile, cs_string, i
 from engine.dotnet_gen.models import DesignRecord
 from engine.ir.models import Process
 from engine.parity.models import Scenario
+from engine.stacks import get_stack
+from engine.stacks.base import SourceLanguage
+from engine.stacks.testindex import INDEX_PATH, IndexEntry
 
 from .builder import (
     _OUTSIDE,
@@ -34,7 +44,7 @@ from .builder import (
     is_test_path,
     strip_comments,
 )
-from .designer import rules_block
+from .designer import IterationContext, build_iteration_block, rules_block
 from .jsonout import JsonOutputError
 from .prompting import ask_json, memory_block, render_process, render_prompt, wrap_source
 from .provider import MemoryItem, mask_sensitive
@@ -62,6 +72,7 @@ TEST_SCHEMA: dict = {
 TEST_FILE_KINDS = ("RulesTests", "BranchTests")
 DRIVEN_SUFFIXES = ("Service", "Controller", "Consumer", "Job")
 FIXTURE_TEXT_LIMIT = 3000
+CONTRACTS_TEXT_LIMIT = 12000  # all contract files shown to a non-.NET test writer, together
 REASON_LIMIT = 160
 
 _PLACEHOLDER = re.compile(r'Assert\.Fail\(\s*"no test body for ([^"]*)"\s*\)')
@@ -119,10 +130,24 @@ class TestMethod:
     label: str  # what the placeholder names: "<rule id>" or "branch <transition id>"
     start: int  # index of the signature line
     end: int  # index of the closing brace line
+    # Other stacks: the body lines are ``lines[body_start:body_end]`` (-1 on the .NET path, where
+    # the body is always ``lines[start + 2:end]``).
+    body_start: int = -1
+    body_end: int = -1
 
 
-def placeholder_methods(text: str) -> list[TestMethod]:
-    """Test methods whose body is still the ``no test body`` placeholder."""
+def placeholder_methods(text: str, stack: str = "dotnet",
+                        entries: list[IndexEntry] | None = None) -> list[TestMethod]:
+    """Test methods whose body is still the ``no test body`` placeholder.
+
+    For a stack other than .NET the candidates are the rule and branch tests of ``entries`` (the
+    test index entries of this file), found by their method name."""
+    if stack == "dotnet":
+        return _dotnet_placeholder_methods(text)
+    return _indexed_placeholder_methods(text, get_stack(stack).language, entries or [])
+
+
+def _dotnet_placeholder_methods(text: str) -> list[TestMethod]:
     lines = text.split("\n")
     out: list[TestMethod] = []
     for i, line in enumerate(lines):
@@ -147,17 +172,117 @@ def placeholder_methods(text: str) -> list[TestMethod]:
     return out
 
 
-def _test_files(solution: GeneratedSolution, process: Process) -> list[GenFile]:
+# ------------------------------------------------------------ other stacks: index and indentation
+_SENTINEL = "XQEXIQOIDX"
+
+
+def test_placeholder_pattern(lang: SourceLanguage) -> re.Pattern[str]:
+    """The language's ``no test body`` placeholder as a pattern; group 1 is what it names."""
+    pre, _, post = lang.test_placeholder(_SENTINEL).partition(_SENTINEL)
+    return re.compile(re.escape(pre).replace(r"\(", r"\(\s*") + r"([^\"'\n]*)" + re.escape(post))
+
+
+def index_entries(solution: GeneratedSolution) -> list[IndexEntry]:
+    """The generated test index carried in ``solution.files`` (empty on the .NET path)."""
+    for f in solution.files:
+        if f.path == INDEX_PATH:
+            return [IndexEntry.model_validate(d) for d in json.loads(f.content)]
+    return []
+
+
+def _width(line: str) -> int:
+    return len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip())
+
+
+def _body_range(lines: list[str], sig: int) -> tuple[int, int]:
+    """``(first, end)`` of the body of the declaration at ``sig``: the lines after it (a lone
+    ``{`` skipped) up to the first non-blank line indented no deeper than the declaration, which
+    is the closing brace (Java, Go) or the next member (Python); trailing blank lines excluded."""
+    first = sig + 1
+    if first < len(lines) and lines[first].strip() == "{":
+        first += 1
+    end = next((k for k in range(first, len(lines))
+                if lines[k].strip() and _width(lines[k]) <= _width(lines[sig])), len(lines))
+    while end > first and not lines[end - 1].strip():
+        end -= 1
+    return first, end
+
+
+def _method_name(entry: IndexEntry) -> str:
+    return re.split(r"[.:/]", entry.name)[-1]
+
+
+def _signature_line(lines: list[str], lang: SourceLanguage, name: str) -> int | None:
+    word = re.compile(rf"\b{re.escape(name)}\s*\(")
+    return next((i for i, ln in enumerate(lines) if word.search(ln) and lang.declarations(ln)), None)
+
+
+def _declared(text: str, lang: SourceLanguage, entries: list[IndexEntry]) -> set[str]:
+    """The indexed test methods ``text`` declares."""
+    lines = text.split("\n")
+    return {n for n in {_method_name(e) for e in entries} if _signature_line(lines, lang, n) is not None}
+
+
+def _indexed_placeholder_methods(text: str, lang: SourceLanguage,
+                                 entries: list[IndexEntry]) -> list[TestMethod]:
+    pattern = test_placeholder_pattern(lang)
+    lines = text.split("\n")
+    out: list[TestMethod] = []
+    for e in entries:
+        if e.kind not in ("rule", "branch"):
+            continue
+        name = _method_name(e)
+        sig = _signature_line(lines, lang, name)
+        if sig is None:
+            continue
+        first, end = _body_range(lines, sig)
+        ph = pattern.search("\n".join(lines[first:end]))
+        if not ph:
+            continue
+        label = ph.group(1).split(": ", 1)[0]
+        ref = (e.rule_id if e.kind == "rule" else e.branch_id) or label
+        out.append(TestMethod(name=name, kind=e.kind, ref=ref, label=label, start=sig, end=end,
+                              body_start=first, body_end=end))
+    return sorted(out, key=lambda m: m.start)
+
+
+def _indexed_test_files(solution: GeneratedSolution, process: Process | None,
+                        lang: SourceLanguage) -> dict[str, list[IndexEntry]]:
+    """``{path: entries}`` of the rule and branch tests the index lists (for ``process``)."""
+    by_path: dict[str, list[IndexEntry]] = {}
+    for e in index_entries(solution):
+        if e.kind not in ("rule", "branch") or not e.path or not lang.is_test_path(e.path):
+            continue
+        if process is not None and e.process_id not in (None, process.id):
+            continue
+        by_path.setdefault(e.path, []).append(e)
+    return by_path
+
+
+def test_files_with_entries(solution: GeneratedSolution, process: Process | None,
+                            stack: str) -> list[tuple[GenFile, list[IndexEntry]]]:
+    """The rule and branch test files of a stack other than .NET with their index entries."""
+    by_path = _indexed_test_files(solution, process, get_stack(stack).language)
+    return [(f, by_path[f.path]) for f in solution.files if f.path in by_path]
+
+
+def _test_files(solution: GeneratedSolution, process: Process,
+                stack: str = "dotnet",
+                hand_paths: Collection[str] = frozenset()) -> list[tuple[GenFile, list[IndexEntry]]]:
+    """The process's rule and branch test files with a placeholder; a hand-edited one is left alone."""
+    if stack != "dotnet":
+        return [(f, entries) for f, entries in test_files_with_entries(solution, process, stack)
+                if f.path not in hand_paths and placeholder_methods(f.content, stack, entries)]
     stem = ident(process.name, "Process")
     names = {f"{stem}{k}.cs" for k in TEST_FILE_KINDS}
-    out: list[GenFile] = []
+    out: list[tuple[GenFile, list[IndexEntry]]] = []
     for f in solution.files:
-        if not is_test_path(f.path) or PurePosixPath(f.path).name not in names:
+        if f.path in hand_paths or not is_test_path(f.path) or PurePosixPath(f.path).name not in names:
             continue
         if f.process_id not in (None, process.id):
             continue
         if placeholder_methods(f.content):
-            out.append(f)
+            out.append((f, []))
     return out
 
 
@@ -721,12 +846,36 @@ def _splice(lines: list[str], m: TestMethod, body: str, placeholder: bool = Fals
     lines[m.start + 2:m.end] = new
 
 
-def _unfilled(m: TestMethod, reason: str) -> str:
+_UNSAFE = re.compile(r"[\"'`\\\r\n]+")
+
+
+def placeholder_safe(text: str) -> str:
+    """``text`` without quotes, backticks, backslashes and line breaks, so any stack's
+    ``test_placeholder`` can hold it in one plain string literal (and its pattern matches it)."""
+    return " ".join(_UNSAFE.sub(" ", text).split())
+
+
+def _reason_text(reason: str) -> str:
     why = one_line(reason)
     if len(why) > REASON_LIMIT:
         why = why[:REASON_LIMIT - 3].rstrip() + "..."
+    return why
+
+
+def _unfilled(m: TestMethod, reason: str) -> str:
+    why = _reason_text(reason)
     return (f"Assert.Fail({cs_string(f'no test body for {m.label}: {why}')});\n"
             "return Task.CompletedTask;")
+
+
+def _splice_indented(lines: list[str], m: TestMethod, body: str) -> None:
+    """Replace the body of ``m`` (another stack) in place, indented as its first body line was;
+    the declaration and everything around it are left alone (the stack's formatter runs later)."""
+    first = next((ln for ln in lines[m.body_start:m.body_end] if ln.strip()), "")
+    sig = lines[m.start]
+    pad = first[:len(first) - len(first.lstrip())] or (sig[:len(sig) - len(sig.lstrip())] + "    ")
+    text = textwrap.dedent(body.replace("\r\n", "\n")).strip("\n")
+    lines[m.body_start:m.body_end] = [(pad + ln) if ln.strip() else "" for ln in text.split("\n")]
 
 
 def _type_index(solution: GeneratedSolution) -> dict[str, set[str]]:
@@ -829,11 +978,28 @@ def json_kind(cs_type: str) -> str | None:
     return None
 
 
-def _contracts_block(solution: GeneratedSolution, process: Process) -> tuple[str, dict[str, str]]:
+def _contracts_block(solution: GeneratedSolution, process: Process,
+                     stack: str = "dotnet") -> tuple[str, dict[str, str]]:
     """The contract records this process uses as JSON, and ``{json field: json type}``.
 
     A field whose name is used with two different JSON types is left out of the map: the writer
-    still sees both records, but the check cannot say which one a body means."""
+    still sees both records, but the check cannot say which one a body means. Another stack: the
+    contract source files as they are (bounded), and no map."""
+    if stack != "dotnet":
+        st = get_stack(stack)
+        shown: list[str] = []
+        size = 0
+        for f in sorted(solution.files, key=lambda x: x.path):
+            if ("contracts" not in f.path.lower() or not f.path.endswith(st.source_suffixes)
+                    or st.language.is_test_path(f.path) or f.process_id not in (None, process.id)):
+                continue
+            block = f"=== {f.path}\n{f.content[:FIXTURE_TEXT_LIMIT]}"
+            if size + len(block) > CONTRACTS_TEXT_LIMIT:
+                shown.append(f"(further contract files left out: over {CONTRACTS_TEXT_LIMIT} characters)")
+                break
+            shown.append(block)
+            size += len(block)
+        return "\n".join(shown) or "(none)", {}
     used: set[str] = set()
     for f in solution.files:
         if not is_test_path(f.path) and f.path.endswith(".cs") and f.process_id == process.id:
@@ -873,9 +1039,25 @@ def _records(text: str) -> list[tuple[str, str]]:
             for i, (name, at) in enumerate(starts)]
 
 
-def _signatures(solution: GeneratedSolution, process: Process) -> str:
+def _signatures(solution: GeneratedSolution, process: Process, stack: str = "dotnet",
+                tests: set[str] | frozenset[str] = frozenset()) -> str:
     """Public declarations of the process's service, controller and consumer, and of the test
-    helpers (TestDatabase, Support)."""
+    helpers (TestDatabase, Support). Another stack: the declarations of the process's production
+    files and of the test helpers (test files that are not rule or branch tests, ``tests``)."""
+    if stack != "dotnet":
+        st = get_stack(stack)
+        lang = st.language
+        out: list[str] = []
+        for f in solution.files:
+            if not f.path.endswith(st.source_suffixes) or f.path in tests:
+                continue
+            mine = not lang.is_test_path(f.path) and f.process_id == process.id
+            if not (mine or lang.is_test_path(f.path)):
+                continue
+            decls = lang.declarations(f.content)
+            if decls:
+                out += [f"=== {f.path}", *("  " + d for d in decls)]
+        return "\n".join(out) or "(none)"
     stem = ident(process.name, "Process")
     # ProcessResult is what every ExecuteAsync returns, so every test body asserts on it; it was
     # not in this list, and a test that guesses at a member of it ("result.Result") does not
@@ -901,19 +1083,19 @@ def _signatures(solution: GeneratedSolution, process: Process) -> str:
 
 
 def _scenarios_block(solution: GeneratedSolution, process: Process,
-                     scenarios: list[Scenario]) -> str:
+                     scenarios: list[Scenario], stack: str = "dotnet") -> str:
     stem = ident(process.name, "Process")
     files = {f.path: f.content for f in solution.files}
     out: list[str] = []
     for s in scenarios:
         if s.process_id != process.id:
             continue
-        rel = tests_gen.fixture_path(process, s)
-        fixture = next((c for p, c in files.items() if p.endswith("/" + rel)), None)
-        out.append(
-            f"- scenario {s.id} ({s.kind}): {s.name}; load with "
-            f'ScenarioFixture.Load("{stem}", "{tests_gen.scenario_stem(process, s)}") from {rel}'
-        )
+        rel = get_stack(stack).fixture_path(process, s)
+        hit = next(((p, c) for p, c in files.items() if p == rel or p.endswith("/" + rel)), None)
+        fixture = hit[1] if hit else None
+        how = (f'ScenarioFixture.Load("{stem}", "{tests_gen.scenario_stem(process, s)}") from {rel}'
+               if stack == "dotnet" else f"the generated fixture helper, file {hit[0] if hit else rel}")
+        out.append(f"- scenario {s.id} ({s.kind}): {s.name}; load with {how}")
         if fixture:
             out.append(fixture[:FIXTURE_TEXT_LIMIT])
         else:
@@ -964,23 +1146,30 @@ async def _fill_file(
     provider: Any,
     rejections: list[BuildRejection] | None,
     warnings: list[dict[str, str]] | None,
+    stack: str = "dotnet",
+    entries: list[IndexEntry] | None = None,
+    test_paths: set[str] | None = None,
+    iteration: IterationContext | None = None,
 ) -> GenFile | None:
+    dotnet = stack == "dotnet"
+    lang = get_stack(stack).language
     stem = ident(process.name, "Process")
-    methods = placeholder_methods(f.content)
+    methods = placeholder_methods(f.content, stack, entries)
     targeted = _rule_targets(rules, methods)
-    fixtures = _scenarios_block(solution, process, scenarios)
-    contracts, json_kinds = _contracts_block(solution, process)
+    fixtures = _scenarios_block(solution, process, scenarios, stack)
+    contracts, json_kinds = _contracts_block(solution, process, stack)
     system, user = render_prompt(
-        "test_engineer",
+        "test_engineer", stack,
         process_name=process.name,
         source=render_process(focused_process(process, _activities(process, targeted, methods)),
                               []),
         rules=rules_block(targeted),
         targets=_targets_block(f, methods, process, rules),
         files=fixtures,
-        design=_signatures(solution, process),
+        design=_signatures(solution, process, stack, frozenset(test_paths or ())),
         contracts=contracts,
         memory=memory_block(memory_items),
+        iteration=build_iteration_block(iteration),
     )
     accepted: dict[str, str] = {}
     reasons: dict[str, str] = {}
@@ -1015,7 +1204,7 @@ async def _fill_file(
                 reasons[n] = f"the reply was not valid JSON ({exc})"
         else:
             for n in pending:
-                problem = (check_test_body(bodies[n], stem, json_kinds, by_name[n].kind)
+                problem = (lang.check_test_body(bodies[n], stem, by_name[n].kind, json_kinds)
                            if n in bodies else "no body was returned for this method")
                 last[n] = bodies.get(n, "")
                 if problem:
@@ -1035,7 +1224,7 @@ async def _fill_file(
         if not pending:
             break
 
-    if warnings is not None:
+    if warnings is not None and dotnet:  # the expected-value analysis reads C# Asserts
         for m in methods:
             if m.name not in accepted:
                 continue
@@ -1048,14 +1237,21 @@ async def _fill_file(
 
     lines = f.content.split("\n")
     for m in sorted(methods, key=lambda x: x.start, reverse=True):  # bottom up keeps indices
-        if m.name in accepted:
+        if not dotnet:
+            _splice_indented(lines, m, accepted.get(m.name) or lang.test_placeholder(placeholder_safe(
+                f"{m.label}: {_reason_text(reasons.get(m.name, 'rejected'))}")))
+        elif m.name in accepted:
             _splice(lines, m, accepted[m.name])
         else:
             _splice(lines, m, _unfilled(m, reasons.get(m.name, "rejected")), placeholder=True)
     text = "\n".join(lines)
-    if accepted:
+    if accepted and dotnet:
         text = _add_usings(text, list(accepted.values()), _type_index(solution))
-    if len(_TEST_ATTR.findall(code_only(text))) != len(_TEST_ATTR.findall(code_only(f.content))):
+    if dotnet:
+        changed_count = len(_TEST_ATTR.findall(code_only(text))) != len(_TEST_ATTR.findall(code_only(f.content)))
+    else:  # every indexed test of the file is still declared (nested defs and lambdas do not count)
+        changed_count = _declared(text, lang, entries or []) != _declared(f.content, lang, entries or [])
+    if changed_count:
         log.warning("test engineer dropped %s: the number of tests changed", f.path)
         return None
     if text == f.content:
@@ -1073,8 +1269,12 @@ async def fill_test_bodies(
     provider: Any,
     rejections: list[BuildRejection] | None = None,
     warnings: list[dict[str, str]] | None = None,
+    stack: str = "dotnet",
+    iteration: IterationContext | None = None,
+    hand_paths: Collection[str] = frozenset(),
 ) -> list[GenFile]:
-    """Write the placeholder bodies of ``<Process>RulesTests.cs`` and ``<Process>BranchTests.cs``.
+    """Write the placeholder bodies of ``<Process>RulesTests.cs`` and ``<Process>BranchTests.cs``
+    (another ``stack``: of the rule and branch tests its test index lists).
 
     One model call per file (task kind ``test``) and one retry for the bodies code rejected.
     Accepted bodies replace their placeholder and nothing else changes except ``async`` on a
@@ -1088,9 +1288,11 @@ async def fill_test_bodies(
     branch expression or fixtures (:func:`expected_value_warning`), for a person to check."""
     del design  # the test classes and their ids come from the files themselves
     out: list[GenFile] = []
-    for f in _test_files(solution, process):
+    targets = _test_files(solution, process, stack, hand_paths)
+    test_paths = {f.path for f, _ in targets}
+    for f, entries in targets:
         changed = await _fill_file(f, solution, process, rules, scenarios, memory_items, provider,
-                                   rejections, warnings)
+                                   rejections, warnings, stack, entries, test_paths, iteration)
         if changed is not None:
             out.append(changed)
     return out

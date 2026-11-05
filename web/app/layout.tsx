@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import "@/lib/theme.css";
 import { Providers } from "./providers";
 import { Chrome } from "@/components/shell/Chrome";
+import { NO_FLASH_SCRIPT } from "@/lib/theme";
 
 // Both faces come from @fontsource packages: the build machine cannot reach Google Fonts, and a
 // local copy keeps the app self-contained.
@@ -36,12 +37,18 @@ const inter = localFont({
 
 export const metadata: Metadata = {
   title: "ExiQO Migrate",
-  description: "TIBCO BusinessWorks to .NET migration",
+  description: "TIBCO BusinessWorks migration",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${poppins.variable}`}>
+    // suppressHydrationWarning: NO_FLASH_SCRIPT sets data-theme on <html> before React hydrates.
+    <html lang="en" className={`${inter.variable} ${poppins.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Applies a stored Light or Dark choice before first paint, so the page never flashes the
+            other theme; System is handled by the stylesheet's prefers-color-scheme block. */}
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
+      </head>
       {/* The window itself never scrolls: the top bar and the footer are always on screen and the
           content area is the only scroller, so the stepper can pin itself to the top of it. Print
           undoes this, where a page is as tall as it needs to be. */}

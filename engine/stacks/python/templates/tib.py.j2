@@ -1,0 +1,497 @@
+"""TIBCO values as JSON, and the state, result and link flow of one process run.
+
+Every process variable ($LookupDealer, $ReceiveFundingRequest) is a JSON tree (dict, list, str, int,
+Decimal, bool, None), read and written with XPath semantics: a path step selects a child by its local
+name (an exact match first, then ignoring case), an index is 1-based, a step over a list reads its
+first item, and an absent value is None. Values convert like XSLT value-of: the string value first,
+then the number or boolean a comparison needs. Numbers are Decimal (never float) so amounts compare
+and print exactly.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+from collections import deque
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from typing import Annotated, Any
+
+from pydantic import BeforeValidator
+
+
+# ------------------------------------------------------------------ JSON text
+def loads(text: str | bytes | None) -> Any:
+    """Parses JSON text (a request or message body), numbers with a fraction as Decimal; None for
+    an empty body; ValueError when it is not JSON."""
+    if text is None:
+        return None
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    if not text.strip():
+        return None
+    try:
+        return json.loads(text, parse_float=Decimal)
+    except json.JSONDecodeError as ex:
+        raise ValueError(f"not JSON: {ex.msg} at line {ex.lineno} column {ex.colno}") from ex
+
+
+def plain(number: Decimal) -> str:
+    """A Decimal in plain notation without trailing zeros (XPath string value of a number)."""
+    if number == 0:
+        return "0"
+    text = format(number.normalize(), "f")
+    return text
+
+
+def _write(value: Any, out: list[str]) -> None:
+    if value is None:
+        out.append("null")
+    elif value is True:
+        out.append("true")
+    elif value is False:
+        out.append("false")
+    elif isinstance(value, str):
+        out.append(json.dumps(value, ensure_ascii=False))
+    elif isinstance(value, Decimal):
+        out.append(format(value, "f") if value.is_finite() else "null")
+    elif isinstance(value, int):
+        out.append(str(value))
+    elif isinstance(value, float):
+        out.append(repr(value) if value == value and abs(value) != float("inf") else "null")
+    elif isinstance(value, dict):
+        out.append("{")
+        for i, (k, v) in enumerate(value.items()):
+            if i:
+                out.append(",")
+            out.append(json.dumps(str(k), ensure_ascii=False))
+            out.append(":")
+            _write(v, out)
+        out.append("}")
+    elif isinstance(value, list | tuple):
+        out.append("[")
+        for i, v in enumerate(value):
+            if i:
+                out.append(",")
+            _write(v, out)
+        out.append("]")
+    else:
+        _write(of(value), out)
+
+
+def dumps(value: Any, drop_nulls: bool = False) -> str:
+    """The JSON text of a value; Decimal numbers exactly, dates in ISO form. ``drop_nulls`` leaves
+    out null fields (message bodies)."""
+    out: list[str] = []
+    _write(without_nulls(value) if drop_nulls else value, out)
+    return "".join(out)
+
+
+def without_nulls(value: Any) -> Any:
+    """A deep copy without null fields."""
+    if isinstance(value, dict):
+        return {k: without_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [without_nulls(v) for v in value]
+    return value
+
+
+def problem(status: int, title: str, detail: str) -> dict[str, Any]:
+    """An application/problem+json body."""
+    return {"type": "about:blank", "title": title, "status": status, "detail": detail}
+
+
+def scalar_text(value: Any) -> Any:
+    """A JSON scalar read into a string field as Jackson's default coercion reads it: a number as its
+    text, a boolean as ``true``/``false``; anything else is left to pydantic."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | Decimal | float):
+        return text(value) if not isinstance(value, Decimal) else str(value)
+    return value
+
+
+# The string type of the contract models: a number or a boolean sent for a string element is accepted
+# (as TIBCO and the Java stack accept it), anything that is not a scalar is still refused.
+Text = Annotated[str, BeforeValidator(scalar_text)]
+
+
+def invalid(body: Any, model: type) -> str | None:
+    """Why ``body`` is not a ``model`` (a field of the wrong type, a malformed date), or None when it
+    reads as one; an absent body is not checked, nor is a missing field (as Jackson reads a record).
+    Fields the contract does not name are ignored. The process still runs on the JSON tree."""
+    from pydantic import ValidationError
+
+    if body is None:
+        return None
+    try:
+        model.model_validate(body)
+        return None
+    except ValidationError as ex:
+        errors = [e for e in ex.errors() if e.get("type") != "missing"]
+        if not errors:
+            return None
+        first = errors[0]
+        where = ".".join(str(p) for p in first.get("loc", ()))
+        return f"{where}: {first.get('msg')}" if where else str(first.get("msg"))
+
+
+# ------------------------------------------------------------------ values
+def of(value: Any) -> Any:
+    """A Python value (a database column, a literal) as a JSON value: dates and times as ISO text
+    (UTC instants with Z), float as Decimal, bytes as base64, mappings and sequences recursively."""
+    if value is None or isinstance(value, bool | int | str | Decimal):
+        return value
+    if isinstance(value, float):
+        return Decimal(repr(value)) if value == value and value not in (float("inf"), float("-inf")) else None
+    if isinstance(value, _dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=_dt.UTC)
+        return date_time(value)
+    if isinstance(value, _dt.date | _dt.time):
+        return value.isoformat()
+    if isinstance(value, bytes | bytearray | memoryview):
+        import base64
+
+        return base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, dict):
+        return {str(k): of(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [of(v) for v in value]
+    return str(value)
+
+
+def date_time(value: _dt.datetime) -> str:
+    """XSD dateTime text: ISO-8601 with the offset, UTC written as Z."""
+    text = value.isoformat()
+    return text[:-6] + "Z" if text.endswith("+00:00") else text
+
+
+def path(root: Any, *steps: str | int) -> Any:
+    """The value a TIBCO path selects: names are local names, an int is a 1-based index."""
+    current = root
+    for step in steps:
+        if current is None:
+            return None
+        current = _index(current, step) if isinstance(step, int) else _child(current, str(step))
+    return current
+
+
+def _child(node: Any, name: str) -> Any:
+    item = (node[0] if node else None) if isinstance(node, list) else node
+    if not isinstance(item, dict):
+        return None
+    if name in item:
+        return item[name]
+    lower = name.lower()
+    for key, value in item.items():
+        if str(key).lower() == lower:
+            return value
+    return None
+
+
+def _index(node: Any, index: int) -> Any:
+    if isinstance(node, list):
+        return node[index - 1] if 1 <= index <= len(node) else None
+    return node if index == 1 else None
+
+
+def absent(value: Any) -> bool:
+    """True when the path selected nothing (XPath: an empty node-set)."""
+    return value is None
+
+
+def text(value: Any) -> str:
+    """The XPath string value: "" for nothing, numbers without trailing zeros."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Decimal):
+        return plain(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return plain(Decimal(repr(value)))
+    if isinstance(value, list):
+        return text(value[0]) if value else ""
+    if isinstance(value, dict):
+        return "".join(text(v) for v in value.values())
+    return str(of(value))
+
+
+def number(value: Any) -> Decimal | None:
+    """The XPath number value, or None where XPath has NaN."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return Decimal(1) if value else Decimal(0)
+    if isinstance(value, int | Decimal):
+        return Decimal(value)
+    if isinstance(value, float):
+        return Decimal(repr(value))
+    if isinstance(value, list):
+        return number(value[0]) if value else None
+    try:
+        result = Decimal(text(value).strip())
+    except InvalidOperation:
+        return None
+    return result if result.is_finite() else None
+
+
+def boolean(value: Any) -> bool:
+    """The XPath boolean value."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | Decimal | float):
+        return value != 0
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, list):
+        return len(value) > 0
+    return True
+
+
+def count(value: Any) -> int:
+    """count(): how many nodes the path selected."""
+    if value is None:
+        return 0
+    return len(value) if isinstance(value, list) else 1
+
+
+def integer(value: Any, fallback: int) -> int:
+    """The number as an int (a loop counter's start or end), or ``fallback`` when it is not a number."""
+    n = number(value)
+    return fallback if n is None else int(n)
+
+
+def items(value: Any) -> list[Any]:
+    """The items an iterate group walks: a list's elements, one value, or nothing."""
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def compare(left: Any, op: str, right: Any) -> bool:
+    """An XPath general comparison (``==`` for ``=``): False when either side selected nothing; True
+    when any item of a list side compares true; numbers compare by value, booleans as booleans,
+    anything else by string value. Order operators always compare numbers."""
+    if left is None or right is None:
+        return False
+    if isinstance(left, list):
+        return any(compare(item, op, right) for item in left)
+    if isinstance(right, list):
+        return any(compare(left, op, item) for item in right)
+    equality = op in ("==", "!=")
+    if equality and (isinstance(left, bool) or isinstance(right, bool)):
+        return (boolean(left) == boolean(right)) == (op == "==")
+    numeric = (int, Decimal, float)
+    left_num = isinstance(left, numeric) and not isinstance(left, bool)
+    right_num = isinstance(right, numeric) and not isinstance(right, bool)
+    if equality and not left_num and not right_num:
+        return (text(left) == text(right)) == (op == "==")
+    a, b = number(left), number(right)
+    if a is None or b is None:
+        return op == "!="
+    if op == "==":
+        return a == b
+    if op == "!=":
+        return a != b
+    if op == "<":
+        return a < b
+    if op == "<=":
+        return a <= b
+    if op == ">":
+        return a > b
+    if op == ">=":
+        return a >= b
+    raise ValueError(f"unknown comparison {op}")
+
+
+def put(target: dict[str, Any], value: Any, *segments: str) -> dict[str, Any]:
+    """Sets ``value`` at the element path ``segments`` under ``target``, creating the parents."""
+    current = target
+    for segment in segments[:-1]:
+        nxt = current.get(segment)
+        if not isinstance(nxt, dict):
+            nxt = current[segment] = {}
+        current = nxt
+    current[segments[-1]] = value
+    return target
+
+
+def jdbc(value: Any, kind: str) -> Any:
+    """A database parameter from a mapped value, typed like the TIBCO parameter declaration: string,
+    int, long, decimal, double, bool, datetime, date or time; None when nothing was mapped."""
+    if value is None:
+        return None
+    if kind in ("int", "long"):
+        n = number(value)
+        return None if n is None else int(n)
+    if kind == "decimal":
+        return number(value)
+    if kind == "double":
+        n = number(value)
+        return None if n is None else float(n)
+    if kind == "bool":
+        return boolean(value)
+    if kind == "datetime":
+        raw = text(value).replace("Z", "+00:00")
+        try:
+            return _dt.datetime.fromisoformat(raw)
+        except ValueError:
+            return _dt.date.fromisoformat(raw[:10])
+    if kind == "date":
+        return _dt.date.fromisoformat(text(value)[:10])
+    if kind == "time":
+        return _dt.time.fromisoformat(text(value))
+    return text(value)
+
+
+def records(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """The output of a JDBC query activity: ``{"Record": [{column: value}]}``."""
+    return {"Record": [of(dict(row)) for row in rows]}
+
+
+def updated(count_: int) -> dict[str, Any]:
+    """The output of a JDBC update activity: ``{"noOfUpdates": n}``."""
+    return {"noOfUpdates": count_}
+
+
+# ------------------------------------------------------------------ one run
+@dataclass(frozen=True)
+class ProcessResult:
+    """What a process run returns to its starter: the HTTP status and the reply body, if any."""
+
+    status_code: int
+    body: Any = None
+
+    @staticmethod
+    def ok(body: Any) -> ProcessResult:
+        """A reply (or the end mapping of a sub-process) with status 200."""
+        return ProcessResult(200, body)
+
+    @staticmethod
+    def error(reply: Any) -> ProcessResult:
+        """A REST client or server error reply (TIBCO client4XXError or server5XXError): its
+        statusCode is the status."""
+        status = number(path(reply, "statusCode"))
+        return ProcessResult(500 if status is None else int(status), reply)
+
+
+ProcessResult.COMPLETED = ProcessResult(204, None)  # type: ignore[attr-defined]  # a run without a reply
+
+
+@dataclass
+class ProcessState:
+    """The variables of one process run, by their TIBCO names: the starter's ($ReceiveFundingRequest,
+    $get.parameters, $Start), each activity's output ($LookupDealer), the group variables of an
+    iterate ($index, $currentElement) and $_error after an error link or a catch."""
+
+    variables: dict[str, Any] = field(default_factory=dict)
+    message: Any = None  # the bus message a JMS starter received (for a JMS reply)
+    last_error: BaseException | None = None
+    result: ProcessResult | None = None
+
+    @classmethod
+    def of(cls, name: str, value: Any) -> ProcessState:
+        """A run started with one variable (the starter output, or $Start of a sub-process)."""
+        return cls().set(name, value)
+
+    def get(self, name: str) -> Any:
+        """The variable, or None when it was never set."""
+        return self.variables.get(name)
+
+    def set(self, name: str, value: Any) -> ProcessState:
+        self.variables[name] = value
+        return self
+
+    def with_message(self, message: Any) -> ProcessState:
+        self.message = message
+        return self
+
+    def reply(self, result: ProcessResult) -> None:
+        """Records a reply that does not end the run (TIBCO carries on after it); the first one counts."""
+        if self.result is None:
+            self.result = result
+
+    def finish(self) -> ProcessResult:
+        """What the run returns: the recorded reply, or COMPLETED."""
+        return self.result if self.result is not None else ProcessResult.COMPLETED  # type: ignore[attr-defined]
+
+    def record_error(self, error: BaseException) -> None:
+        """Records the error and exposes it as $_error (class, msg, and the fault name and data of a fault)."""
+        self.last_error = error
+        value: dict[str, Any] = {"class": type(error).__name__, "msg": str(error)}
+        name = getattr(error, "fault_name", None)
+        if name is not None:
+            value["faultName"] = name
+            value["data"] = getattr(error, "fault_data", None)
+        self.variables["_error"] = value
+
+
+@dataclass(frozen=True)
+class Link:
+    """A TIBCO link: its id and the steps it connects."""
+
+    id: str
+    from_id: str
+    to_id: str
+
+
+class ProcessFlow:
+    """TIBCO link semantics for processes that are not straight-line (parallel links, several
+    conditional links on one step, error links, joins): a step runs once, when every incoming link is
+    decided and at least one was taken; a step whose incoming links were all not taken is skipped and
+    its outgoing links are not taken either (dead path elimination), so a join waits for every live
+    predecessor."""
+
+    def __init__(self, links: list[Link]) -> None:
+        self._incoming: dict[str, list[Link]] = {}
+        self._outgoing: dict[str, list[Link]] = {}
+        for link in links:
+            self._outgoing.setdefault(link.from_id, []).append(link)
+            self._incoming.setdefault(link.to_id, []).append(link)
+        self._taken: dict[str, bool] = {}
+        self._finished: set[str] = set()
+        self._queued: set[str] = set()
+        self._ready: deque[str] = deque()
+
+    def start(self, step: str) -> None:
+        """Queues a step that has no incoming link (the starter)."""
+        if step not in self._queued:
+            self._queued.add(step)
+            self._ready.append(step)
+
+    def next(self) -> str | None:
+        """The next step whose incoming links are all decided, or None when the run is done."""
+        return self._ready.popleft() if self._ready else None
+
+    def complete(self, step: str, taken: Iterable[str]) -> None:
+        """Records that ``step`` ran and which of its outgoing links it took."""
+        self._finish(step, set(taken))
+
+    def _finish(self, step: str, taken: set[str]) -> None:
+        if step in self._finished:
+            return
+        self._finished.add(step)
+        for link in self._outgoing.get(step, []):
+            self._taken[link.id] = link.id in taken
+            self._evaluate(link.to_id)
+
+    def _evaluate(self, step: str) -> None:
+        if step in self._queued or step in self._finished:
+            return
+        links = self._incoming.get(step, [])
+        if any(link.id not in self._taken for link in links):
+            return  # a predecessor has not run yet
+        if any(self._taken[link.id] for link in links):
+            self._queued.add(step)
+            self._ready.append(step)
+        else:
+            self._finish(step, set())  # dead path: no incoming link was taken

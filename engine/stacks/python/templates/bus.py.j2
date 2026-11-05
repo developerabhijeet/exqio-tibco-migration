@@ -1,0 +1,101 @@
+"""Messaging port for the JMS steps: Azure Service Bus in production, an in-memory bus for tests and
+local runs (MESSAGING_MODE, Messaging__Mode). Entities are the TIBCO queue and topic names,
+verbatim; message bodies are JSON."""
+
+from __future__ import annotations
+
+import datetime as _dt
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+# Property names the bus uses for request and reply.
+REPLY_TO = "ReplyTo"
+CORRELATION_ID = "CorrelationId"
+# Property names a bus stamps on a received message: its id and when it was enqueued (ISO-8601).
+MESSAGE_ID = "MessageId"
+ENQUEUED_TIME = "EnqueuedTime"
+# The bus's own properties; every other property is an application (JMS) property.
+SYSTEM_PROPERTIES = frozenset({REPLY_TO, CORRELATION_ID, MESSAGE_ID, ENQUEUED_TIME})
+
+COMPLETE = "complete"  # processed: remove the message
+DEAD_LETTER = "dead_letter"  # not processable as is (fault, selector mismatch, invalid body)
+
+
+@dataclass(frozen=True)
+class Message:
+    """A message as received from the bus: entity, JSON body text and properties."""
+
+    entity: str
+    body: str
+    properties: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How a consumer settles one message."""
+
+    disposition: str
+    reason: str | None = None
+    description: str | None = None
+
+    @staticmethod
+    def dead_letter(reason: str, description: str | None) -> Outcome:
+        return Outcome(DEAD_LETTER, reason, description)
+
+
+Outcome.COMPLETED = Outcome(COMPLETE)  # type: ignore[attr-defined]
+
+Handler = Callable[[Message], Awaitable[Outcome]]
+
+
+def application_properties(message: Message) -> dict[str, str]:
+    """The application properties of a message ($Start/JMSProperties)."""
+    return {k: v for k, v in message.properties.items() if k not in SYSTEM_PROPERTIES}
+
+
+def jms_headers(message: Message) -> dict[str, Any]:
+    """The JMS headers of a received message as TIBCO reads them ($Start/JMSHeaders): JMSDestination,
+    JMSMessageID, JMSCorrelationID, JMSReplyTo and JMSTimestamp (milliseconds since the epoch); a
+    header the bus did not carry is absent."""
+    p = message.properties
+    headers: dict[str, Any] = {"JMSDestination": message.entity.split("/", 1)[0]}  # a topic, not its subscription
+    if p.get(MESSAGE_ID) is not None:
+        headers["JMSMessageID"] = p[MESSAGE_ID]
+    if p.get(CORRELATION_ID) is not None:
+        headers["JMSCorrelationID"] = p[CORRELATION_ID]
+    if p.get(REPLY_TO) is not None:
+        headers["JMSReplyTo"] = p[REPLY_TO]
+    if p.get(ENQUEUED_TIME) is not None:
+        try:
+            when = _dt.datetime.fromisoformat(p[ENQUEUED_TIME].replace("Z", "+00:00"))
+            headers["JMSTimestamp"] = int(when.timestamp() * 1000)
+        except ValueError:
+            pass  # a timestamp the bus wrote in another form is left out
+    return headers
+
+
+class MessageBus:
+    """The bus a process publishes to and its starters receive from."""
+
+    async def publish(self, entity: str, message: Any, properties: dict[str, str] | None = None) -> None:
+        """JMS Send or Publish: sends ``message`` (JSON) to a queue or topic."""
+        raise NotImplementedError
+
+    def subscribe(self, entity: str, handler: Handler) -> Callable[[], None]:
+        """JMS receive on a queue, or on a topic as ``topic/subscription``. The handler settles each
+        message: it returns COMPLETED or a dead-letter outcome; an exception means a transient
+        failure, and the message is abandoned so the bus redelivers it. The returned function stops
+        receiving."""
+        raise NotImplementedError
+
+    async def request(self, entity: str, message: Any, timeout_s: float) -> Message:
+        """JMS Request Reply: sends with a reply-to entity and waits for the correlated reply."""
+        raise NotImplementedError
+
+    async def reply(self, request: Message, message: Any) -> None:
+        """JMS Reply: answers ``request`` on its reply-to entity with the same correlation id."""
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        """Releases the bus's connections."""

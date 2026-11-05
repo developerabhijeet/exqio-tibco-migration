@@ -20,7 +20,13 @@ TOOLS: dict[str, list[str]] = {
     "terragrunt": ["--version"],
     "docker": ["--version"],
     "az": ["version", "--output", "tsv"],
+    "git": ["--version"],  # git merge-file: hand edits into a fresh generation (sub-project 6)
     "node": ["--version"],
+    "java": ["-version"],
+    "mvn": ["-v"],
+    "go": ["version"],
+    "python3": ["--version"],
+    "uv": ["--version"],
 }
 
 
@@ -31,7 +37,9 @@ class ToolInfo(TypedDict):
 
 
 def _local_dirs() -> list[str]:
-    return [str(REPO_ROOT / ".tools" / "bin"), str(REPO_ROOT / ".tools" / "dotnet")]
+    tools = REPO_ROOT / ".tools"
+    return [str(tools / "bin"), str(tools / "dotnet"), str(tools / "java" / "bin"),
+            str(tools / "maven" / "bin"), str(tools / "go" / "bin")]
 
 
 def _find(name: str) -> str | None:

@@ -1,0 +1,52 @@
+# DATA_DIR on Azure Files: the built-in classes mount root-owned 0777 and fsGroup does not apply to
+# SMB, so UID 10001 cannot chmod/utime (copystat, tar -p, the dotnet apphost's exec bit, git). The
+# chart's class mounts the share as 10001.
+suite: data storage
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/storageclass.yaml
+  - templates/data-pvc.yaml
+tests:
+  - it: renders a StorageClass that mounts the share as UID/GID 10001
+    template: templates/storageclass.yaml
+    asserts:
+      - equal: {path: metadata.name, value: exiqo-azurefile-premium}
+      - equal: {path: provisioner, value: file.csi.azure.com}
+      - equal: {path: parameters.skuName, value: Premium_LRS}
+      - equal: {path: reclaimPolicy, value: Retain}
+      - equal: {path: allowVolumeExpansion, value: true}
+      - equal:
+          path: mountOptions
+          value: [uid=10001, gid=10001, dir_mode=0770, file_mode=0770, mfsymlinks, cache=strict,
+                  nosharesock, actimeo=30]
+  - it: the claim uses it
+    template: templates/data-pvc.yaml
+    asserts:
+      - equal: {path: spec.storageClassName, value: exiqo-azurefile-premium}
+  - it: an existing class can be named instead
+    set:
+      data.storageClass.create: false
+      data.storageClass.name: gmf-azurefile-10001
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/storageclass.yaml
+      - equal: {path: spec.storageClassName, value: gmf-azurefile-10001}
+        template: templates/data-pvc.yaml
+  - it: binds to a share created beforehand (deploy/azure) when its account is named
+    template: templates/storageclass.yaml
+    set:
+      data.storageClass.storageAccount: stgmfexiqodata
+      data.storageClass.resourceGroup: rg-gmf-exiqo
+      data.storageClass.shareName: exiqo-data
+    asserts:
+      - equal: {path: parameters.storageAccount, value: stgmfexiqodata}
+      - equal: {path: parameters.resourceGroup, value: rg-gmf-exiqo}
+      - equal: {path: parameters.shareName, value: exiqo-data}
+      - equal: {path: parameters.skuName, value: Premium_LRS}
+  - it: leaves the account to the driver by default
+    template: templates/storageclass.yaml
+    asserts:
+      - notExists: {path: parameters.storageAccount}
+      - notExists: {path: parameters.resourceGroup}
+      - notExists: {path: parameters.shareName}

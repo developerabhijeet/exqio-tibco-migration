@@ -20,15 +20,15 @@ import asyncio
 import inspect
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
-from engine.agents.builder import check_filled_file, focused_process, is_test_path
-from engine.agents.designer import rules_block
+from engine.agents.builder import check_filled_file, focused_process, language
+from engine.agents.designer import IterationContext, build_iteration_block, rules_block
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.prompting import ask_json, render_process, render_prompt
 from engine.agents.provider import mask_sensitive
@@ -201,7 +201,8 @@ def apply_unified_diff(files: dict[str, str], diff: str) -> dict[str, str]:
 
 
 def _path_problem(path: str, root: Path, agent_paths: set[str], known: set[str],
-                  allow_tests: bool = False) -> str | None:
+                  allow_tests: bool = False, stack: str = "dotnet",
+                  protected: Collection[str] = frozenset()) -> str | None:
     p = PurePosixPath(path.replace("\\", "/"))
     if p.is_absolute() or ".." in p.parts or re.match(r"^[A-Za-z]:", path):
         return f"{path} is outside the solution root"
@@ -209,11 +210,14 @@ def _path_problem(path: str, root: Path, agent_paths: set[str], known: set[str],
         (root / p).resolve().relative_to(root.resolve())
     except ValueError:
         return f"{path} is outside the solution root"
+    # A file a person edited (sub-project 6) is theirs: no loop rewrites it, like a failing test.
+    if path in protected or p.as_posix() in protected:
+        return f"{path} is a hand edit; the repair may not change it"
     # A test that fails is evidence and is never edited to make it pass. A test that does not
     # compile is not evidence of anything: it stops the whole solution building, so no test runs at
     # all and the test repair loop never starts. The compile loop is therefore allowed to fix one,
     # and only it: ``allow_tests`` is set by compile_repair_loop and by nothing else.
-    if is_test_path(path) and not allow_tests:
+    if language(stack).is_test_path(path) and not allow_tests:
         return f"{path} is a test file; repairs fix the code, never the tests"
     if path not in known:
         return f"{path} is not a file of the solution"
@@ -223,11 +227,14 @@ def _path_problem(path: str, root: Path, agent_paths: set[str], known: set[str],
 
 
 def check_diff(diff: str, solution: GeneratedSolution,
-               allow_tests: bool = False) -> tuple[dict[str, str], str]:
+               allow_tests: bool = False, stack: str = "dotnet",
+               protected: Collection[str] = frozenset()) -> tuple[dict[str, str], str]:
     """``(patched files, "")`` when the diff may be applied, else ``({}, reason)``.
 
     ``allow_tests`` lets a diff touch an agent-written test file. Only the compile loop sets it,
-    for the one case where a test is the thing that will not build.
+    for the one case where a test is the thing that will not build. ``stack`` picks the language
+    checks (test paths, placeholder, declarations, TIBCO comments). A diff touching a path in
+    ``protected`` (the build's hand edits) is refused in every loop.
     """
     if not diff.strip():
         return {}, "the reply contained no diff"
@@ -239,7 +246,7 @@ def check_diff(diff: str, solution: GeneratedSolution,
     agent = {f.path for f in solution.files if f.origin == "agent"}
     for patch in patches:
         for path in {patch.old, patch.new} - {None}:
-            problem = _path_problem(str(path), solution.root, agent, known, allow_tests)
+            problem = _path_problem(str(path), solution.root, agent, known, allow_tests, stack, protected)
             if problem:
                 return {}, problem
     current = {f.path: f.content for f in solution.files}
@@ -250,7 +257,7 @@ def check_diff(diff: str, solution: GeneratedSolution,
         return {}, str(exc)
     for path, text in patched.items():
         problem = check_filled_file(path, current[path], text, require_filled=False,
-                                    allow_tests=allow_tests, scaffold=scaffolds.get(path))
+                                    allow_tests=allow_tests, scaffold=scaffolds.get(path), stack=stack)
         if problem:
             return {}, f"{path}: {problem}"
     return patched, ""
@@ -269,6 +276,11 @@ COMPILE_RULE = (
     "assertion, deletes a test or changes an expected value is rejected.\n"
     "- Prefer fixing production code. Edit a test only when the compiler error is in the test itself."
 )
+
+
+def compile_rule(stack: str = "dotnet") -> str:
+    """``COMPILE_RULE`` in the stack's words: "a missing using" is C#; Java says "import"."""
+    return COMPILE_RULE.replace("a missing using", f"a missing {language(stack).import_word}")
 
 
 # ------------------------------------------------------------ prompt context
@@ -316,10 +328,11 @@ NOTHING_TO_EDIT = (
 )
 
 
-def _files_block(solution: GeneratedSolution, include_tests: bool = False) -> str:
+def _files_block(solution: GeneratedSolution, include_tests: bool = False, stack: str = "dotnet") -> str:
+    lang = language(stack)
     out: list[str] = []
     for f in solution.files:
-        if f.origin == "agent" and (include_tests or not is_test_path(f.path)):
+        if f.origin == "agent" and (include_tests or not lang.is_test_path(f.path)):
             out += [f"=== {f.path}", f.content]
     return "\n".join(out) or NO_EDITABLE_FILES
 
@@ -359,6 +372,9 @@ async def repair_loop(
     provider: Any,
     max_attempts: int = MAX_ATTEMPTS,
     recorder: AttemptRecorder | None = None,
+    stack: str = "dotnet",
+    iteration: IterationContext | None = None,
+    protected: Collection[str] = frozenset(),
 ) -> RepairResult:
     """Test, and while tests fail ask for a diff, gate it, apply it, rebuild and retest.
 
@@ -375,7 +391,7 @@ async def repair_loop(
         # attempts: a test project that will not build is a generator problem, not a repair one.
         log.warning("repair loop for %s has no test results to work from", process.id)
         return RepairResult(attempts=[], final=run)
-    editable = _files_block(solution)
+    editable = _files_block(solution, stack=stack)
     if not run.ok and editable == NO_EDITABLE_FILES:
         # Every production file of this process is generated by code, so the gate would reject any
         # diff the model could return and it would rightly return none. Asking five times produced
@@ -390,7 +406,7 @@ async def repair_loop(
         failing = _failing(run)
         picked, steps = _rules_and_steps(run, process, rules)
         system, user = render_prompt(
-            "repair",
+            "repair", stack,
             attempt=str(n),
             process_name=process.name,
             source=render_process(steps, []),
@@ -398,6 +414,7 @@ async def repair_loop(
             files=editable,
             rules=rules_block(picked),
             test_rule=TEST_FAILURE_RULE,
+            iteration=build_iteration_block(iteration),
         )
         diff, reason, applied = "", "", False
         try:
@@ -406,7 +423,7 @@ async def repair_loop(
                 tags={"stage": "repair", "process": process.id, "attempt": str(n)},
             )
             diff = str(data.get("diff") or "")
-            patched, reason = check_diff(diff, solution)
+            patched, reason = check_diff(diff, solution, stack=stack, protected=protected)
         except JsonOutputError as exc:
             patched, reason = {}, f"the reply was not valid JSON ({exc})"
         if reason:
@@ -490,6 +507,9 @@ async def compile_repair_loop(
     provider: Any,
     max_attempts: int = MAX_ATTEMPTS,
     recorder: AttemptRecorder | None = None,
+    stack: str = "dotnet",
+    iteration: IterationContext | None = None,
+    protected: Collection[str] = frozenset(),
 ) -> CompileRepairResult:
     """Build, and while it fails ask for a diff, gate it, apply it and rebuild.
 
@@ -505,14 +525,15 @@ async def compile_repair_loop(
         if build.ok:
             break
         system, user = render_prompt(
-            "repair",
+            "repair", stack,
             attempt=str(n),
             process_name=process.name,
             source=render_process(process, []),
             failures=_compile_failures_block(build, previous),
-            files=_files_block(solution, include_tests=True),
+            files=_files_block(solution, include_tests=True, stack=stack),
             rules=rules_block(rules),
-            test_rule=COMPILE_RULE,
+            test_rule=compile_rule(stack),
+            iteration=build_iteration_block(iteration),
         )
         diff, reason, applied = "", "", False
         try:
@@ -521,7 +542,7 @@ async def compile_repair_loop(
                 tags={"stage": "repair", "process": process.id, "attempt": str(n), "phase": "compile"},
             )
             diff = str(data.get("diff") or "")
-            patched, reason = check_diff(diff, solution, allow_tests=True)
+            patched, reason = check_diff(diff, solution, allow_tests=True, stack=stack, protected=protected)
         except JsonOutputError as exc:
             patched, reason = {}, f"the reply was not valid JSON ({exc})"
         if reason:
@@ -601,6 +622,8 @@ async def apply_review_findings(
     provider: Any,
     max_attempts: int = 2,
     recorder: AttemptRecorder | None = None,
+    stack: str = "dotnet",
+    protected: Collection[str] = frozenset(),
 ) -> ReviewApplyResult:
     """Ask for one diff that applies the kept findings, gate it, and keep it only if nothing broke.
 
@@ -614,7 +637,7 @@ async def apply_review_findings(
     previous: RepairAttempt | None = None
     if not findings:
         return ReviewApplyResult(attempts=[], final=run, applied=0)
-    if _files_block(solution) == NO_EDITABLE_FILES:
+    if _files_block(solution, stack=stack) == NO_EDITABLE_FILES:
         attempt = RepairAttempt(n=1, failing=[_finding_line(f)[:120] for f in findings[:5]],
                                 reason=NOTHING_TO_EDIT)
         await _record(recorder, attempt)
@@ -622,12 +645,12 @@ async def apply_review_findings(
     before_passing = _passing(run)
     for n in range(1, max_attempts + 1):
         system, user = render_prompt(
-            "review_apply",
+            "review_apply", stack,
             attempt=str(n),
             process_name=process.name,
             source=render_process(process, []),
             failures=_findings_block(findings, previous),
-            files=_files_block(solution),
+            files=_files_block(solution, stack=stack),
             rules=rules_block(rules),
         )
         diff, reason, applied = "", "", False
@@ -637,7 +660,7 @@ async def apply_review_findings(
                 tags={"stage": "repair", "process": process.id, "attempt": str(n), "phase": "review"},
             )
             diff = str(data.get("diff") or "")
-            patched, reason = check_diff(diff, solution)
+            patched, reason = check_diff(diff, solution, stack=stack, protected=protected)
         except JsonOutputError as exc:
             patched, reason = {}, f"the reply was not valid JSON ({exc})"
         if reason:

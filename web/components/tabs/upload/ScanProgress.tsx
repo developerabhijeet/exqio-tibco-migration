@@ -15,7 +15,7 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
 
   const reached = STAGES.indexOf(scan.stage ?? "");
   return (
-    <section className="card p-5" data-testid="scan-progress" aria-live="polite">
+    <section className="card" data-testid="scan-progress" aria-live="polite">
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="panel-title">Scan</h3>
         {scan.status === "running" ? (
@@ -31,7 +31,7 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
             <Pill tone="decision">
               <Unplug size={12} aria-hidden /> connection lost
             </Pill>
-            <button type="button" className="btn-secondary px-3 py-1 text-[13px]" onClick={onReconnect}>
+            <button type="button" className="btn-secondary px-3 py-1 text-sm" onClick={onReconnect}>
               <RefreshCw size={14} aria-hidden /> Reconnect
             </button>
           </>
@@ -40,7 +40,7 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
             <XCircle size={12} aria-hidden /> failed
           </Pill>
         )}
-        <ol className="ml-auto flex items-center gap-2 text-[13px]">
+        <ol className="ml-auto flex items-center gap-2 text-sm">
           {STAGES.map((s, i) => {
             const done = scan.status === "done" || i < reached;
             const current = scan.status === "running" && i === reached;
@@ -48,7 +48,7 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
               <li
                 key={s}
                 className={`rounded-full px-2.5 py-0.5 ${
-                  done ? "bg-gate-bg text-gate" : current ? "bg-purple-lt text-purple-dk" : "bg-warm text-slate"
+                  done ? "bg-gate-bg text-gate" : current ? "bg-accent-soft text-accent-ink" : "bg-sunken text-slate"
                 }`}
               >
                 {s}
@@ -57,13 +57,13 @@ export function ScanProgress({ scan, onReconnect }: { scan: ScanState; onReconne
           })}
         </ol>
       </div>
-      <ol ref={logRef} className="mt-3 max-h-56 overflow-y-auto rounded-btn bg-page p-3 font-mono text-[12.5px]">
+      <ol ref={logRef} className="mt-3 max-h-56 overflow-y-auto rounded-btn bg-page p-3 font-mono text-sm">
         {scan.events
           .filter((e) => e.event === "log" || e.event === "error")
           .map((e, i) => (
             <li key={`${e.seq}-${i}`} className="flex gap-2 py-0.5">
               <span
-                className={`shrink-0 rounded px-1.5 text-[11px] font-semibold uppercase ${
+                className={`shrink-0 rounded px-1.5 text-2xs font-semibold uppercase ${
                   e.event === "error" ? "bg-error-bg text-error" : e.tag === "ai" ? "bg-ai-bg text-ai" : "bg-det-bg text-det"
                 }`}
               >

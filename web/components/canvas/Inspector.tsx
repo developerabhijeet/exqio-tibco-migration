@@ -9,7 +9,7 @@ import { Pill } from "@/components/ui/Pill";
 
 const CodeView = dynamic(() => import("./CodeView"), {
   ssr: false,
-  loading: () => <div className="p-4 text-[13px] text-slate">Loading editor</div>,
+  loading: () => <div className="p-4 text-sm text-slate">Loading editor</div>,
 });
 
 const TABS = INSPECTOR_TABS;
@@ -39,25 +39,27 @@ function KeyValues({ title, rows, empty }: { title: string; rows: [string, unkno
     <div>
       <p className="label">{title}</p>
       {rows.length === 0 ? (
-        <p className="mt-1 text-[14px] text-slate">{empty}</p>
+        <p className="mt-1 text-md text-slate">{empty}</p>
       ) : (
-        <table className="mt-1 w-full text-[13px]">
-          <tbody className="divide-y divide-line">
-            {rows.map(([k, v]) => (
-              <tr key={k}>
-                <td className="w-[38%] py-1.5 pr-3 align-top font-medium text-plum">{k}</td>
-                <td className="whitespace-pre-wrap break-all py-1.5 font-mono text-[12px] text-ink">{scalar(v)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-scroll mt-1">
+          <table className="table table-dense text-sm">
+            <tbody className="divide-y divide-line">
+              {rows.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="w-[38%] py-1.5 pr-3 align-top font-medium text-heading">{k}</td>
+                  <td className="whitespace-pre-wrap break-all py-1.5 font-mono text-xs text-ink">{scalar(v)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
 function Hint({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-btn bg-warm px-4 py-6 text-center text-[14px] text-slate">{children}</p>;
+  return <p className="rounded-btn bg-sunken px-4 py-6 text-center text-md text-slate">{children}</p>;
 }
 
 export function Inspector({
@@ -97,12 +99,12 @@ export function Inspector({
   );
 
   return (
-    <section className="card flex h-[620px] flex-col overflow-hidden" data-testid="inspector">
+    <section className="card flex p-0 h-[620px] flex-col overflow-hidden" data-testid="inspector">
       <div className="border-b border-line px-4 pt-3">
         <p className="label">Inspector</p>
-        <p className="truncate font-semibold text-plum">{node ? node.data.name : "Select a step on the canvas"}</p>
+        <p className="truncate font-semibold text-heading">{node ? node.data.name : "Select a step on the canvas"}</p>
         {node ? (
-          <p className="truncate font-mono text-[11.5px] text-slate">
+          <p className="truncate font-mono text-xs text-slate">
             {node.data.native_type} · {node.data.canonical_type}
             {span ? ` · lines ${span.start} to ${span.end}` : ""}
           </p>
@@ -115,8 +117,8 @@ export function Inspector({
               type="button"
               aria-selected={tab === t}
               onClick={() => setTab(t)}
-              className={`border-b-2 px-2.5 pb-2 pt-1 text-[14px] font-medium ${
-                tab === t ? "border-purple text-purple" : "border-transparent text-slate hover:text-plum"
+              className={`border-b-2 px-2.5 pb-2 pt-1 text-md font-medium ${
+                tab === t ? "border-accent text-accent-ink" : "border-transparent text-slate hover:text-heading"
               }`}
             >
               {t}
@@ -131,7 +133,7 @@ export function Inspector({
           node ? <ConfigTable config={node.data.config} /> : <Hint>Select a step to see its configuration.</Hint>
         ) : tab === "SQL" ? (
           sql ? (
-            <pre className="whitespace-pre-wrap rounded-btn bg-page p-3 font-mono text-[12.5px] text-ink">{sql}</pre>
+            <pre className="whitespace-pre-wrap rounded-btn bg-page p-3 font-mono text-sm text-ink">{sql}</pre>
           ) : (
             <Hint>{node ? "This step runs no SQL." : "Select a JDBC step to see its statement."}</Hint>
           )
@@ -149,9 +151,9 @@ export function Inspector({
           rules.length > 0 ? (
             <ul className="space-y-2">
               {rules.map((r) => (
-                <li key={r.id} className="rounded-btn border border-line p-3 text-[14px]">
+                <li key={r.id} className="rounded-btn border border-line p-3 text-md">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] font-semibold text-ai">{r.rule_key ?? r.id}</span>
+                    <span className="font-mono text-xs font-semibold text-ai">{r.rule_key ?? r.id}</span>
                     {r.status ? <Pill tone="det">{r.status}</Pill> : null}
                   </div>
                   <p className="mt-1">{r.text}</p>
@@ -169,9 +171,9 @@ export function Inspector({
           findings.length > 0 ? (
             <ul className="space-y-2">
               {findings.map((f) => (
-                <li key={f.id} className="rounded-btn border border-line p-3 text-[14px]">
+                <li key={f.id} className="rounded-btn border border-line p-3 text-md">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] font-semibold text-decision">{f.finding_key ?? f.id}</span>
+                    <span className="font-mono text-xs font-semibold text-decision">{f.finding_key ?? f.id}</span>
                     {f.severity ? <Pill tone="decision">{f.severity}</Pill> : null}
                     {f.decision ? <Pill tone="det">{f.decision}</Pill> : null}
                   </div>
@@ -188,7 +190,7 @@ export function Inspector({
           )
         ) : xml.data ? (
           <div className="space-y-2">
-            <p className="text-[13px] text-slate">
+            <p className="text-sm text-slate">
               {span
                 ? `Lines ${span.start} to ${span.end} hold ${node?.data.name}${
                     span.focus !== span.start ? `; line ${span.focus} holds its statement` : ""

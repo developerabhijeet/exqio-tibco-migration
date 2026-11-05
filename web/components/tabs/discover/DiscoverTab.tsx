@@ -9,10 +9,11 @@ import { useAppState } from "@/lib/state";
 import { STEP_LABELS } from "@/lib/steps";
 import { BandPill, Pill } from "@/components/ui/Pill";
 import { Empty } from "@/components/ui/Empty";
+import { CitedText } from "@/components/citations/CitedText";
 import { ProcessCanvas } from "@/components/canvas/ProcessCanvas";
 import { Inspector } from "@/components/canvas/Inspector";
 import { ALL, DomainSelect } from "./DomainSelect";
-import { graphElements, type GraphFilters } from "./DomainGraph";
+import { DomainLegend, graphElements, type GraphFilters } from "./DomainGraph";
 import { IOCard } from "./IOCard";
 
 const DomainGraph = dynamic(() => import("./DomainGraph"), { ssr: false });
@@ -24,8 +25,8 @@ function statusLabel(s: string): string {
 
 function ViewToggle() {
   return (
-    <div className="inline-flex rounded-btn border border-line bg-white p-0.5 text-[13.5px]" role="group" aria-label="View">
-      <button type="button" aria-pressed="true" className="rounded-[5px] bg-plum px-3 py-1 font-medium text-white">
+    <div className="inline-flex rounded-btn border border-line bg-surface p-0.5 text-md" role="group" aria-label="View">
+      <button type="button" aria-pressed="true" className="rounded-[5px] bg-heading px-3 py-1 font-medium text-page">
         TIBCO view
       </button>
       <span title="Available after code generation">
@@ -56,7 +57,6 @@ export function DiscoverTab() {
   const graph = useGraph(projectId);
   const { domains, editable } = useDomainList(projectId);
   const [filters, setFilters] = useState<GraphFilters>({ band: "all", status: "all" });
-  const [allEvidence, setAllEvidence] = useState(false);
   const canvas = useCanvas(processId);
 
   const all = useMemo(() => processes.data ?? [], [processes.data]);
@@ -90,12 +90,12 @@ export function DiscoverTab() {
 
   return (
     <div className="space-y-5">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 2</p>
           <h2 className="panel-title">Discover</h2>
         </div>
-        <p className="flex items-center gap-1.5 text-[13px] text-slate">
+        <p className="flex items-center gap-1.5 text-sm text-slate">
           <Info size={14} aria-hidden /> Domains are grouped by code from modules, shared tables and queues, calls and
           names.
         </p>
@@ -110,29 +110,20 @@ export function DiscoverTab() {
           editable={editable}
         />
       ) : null}
-      {current && current.evidence.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5" aria-label="Domain evidence">
-          {(allEvidence ? current.evidence : current.evidence.slice(0, 3)).map((e, i) => (
-            <span key={i} className="rounded-btn border border-line bg-white px-2 py-0.5 text-[12.5px] text-slate">
-              <span className="font-semibold uppercase tracking-wide text-[10.5px] text-coral">{e.kind}</span> {e.text}
-            </span>
-          ))}
-          {current.evidence.length > 3 ? (
-            <button type="button" className="text-[12.5px] font-medium text-purple" onClick={() => setAllEvidence((v) => !v)}>
-              {allEvidence ? "Show less" : `${current.evidence.length - 3} more`}
-            </button>
-          ) : null}
-        </div>
+      {current?.cited?.text ? (
+        <p className="max-w-[80ch] text-md leading-relaxed text-ink" data-testid="domain-rationale">
+          <CitedText value={current.cited} />
+        </p>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-        <section className="card flex h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[540px] flex-col overflow-hidden">
           <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
-            <h3 className="text-[16px] font-semibold text-plum">Domain graph</h3>
-            <label className="ml-auto flex items-center gap-1.5 text-[13px] text-slate">
+            <h3 className="text-lg font-semibold text-heading">Domain graph</h3>
+            <label className="ml-auto flex items-center gap-1.5 text-sm text-slate">
               Complexity
               <select
-                className="select py-1 text-[13px]"
+                className="select py-1 text-sm"
                 value={filters.band}
                 onChange={(e) => setFilters((f) => ({ ...f, band: e.target.value }))}
               >
@@ -141,10 +132,10 @@ export function DiscoverTab() {
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-1.5 text-[13px] text-slate">
+            <label className="flex items-center gap-1.5 text-sm text-slate">
               Status
               <select
-                className="select py-1 text-[13px]"
+                className="select py-1 text-sm"
                 value={filters.status}
                 onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
               >
@@ -158,27 +149,16 @@ export function DiscoverTab() {
           </div>
           <div className="relative min-h-0 flex-1 bg-page">
             {graph.data === null ? (
-              <p className="p-4 text-[14px] text-slate">The estate graph is not available from this API build.</p>
+              <p className="p-4 text-md text-slate">The estate graph is not available from this API build.</p>
             ) : (
               <DomainGraph elements={elements} selectedProcessId={processId} onOpen={(id) => openProcess(id)} />
             )}
-            <div className="pointer-events-none absolute bottom-2 left-3 flex gap-3 text-[11px] text-slate">
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-4 rounded bg-purple" /> process
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-2.5 w-4 rounded border border-purple bg-purple-lt" /> other domain
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="h-3 w-2.5 rounded-sm border border-slate/40 bg-warm" /> table
-              </span>
-              <span>queue, topic, endpoint: small gray</span>
-            </div>
+            {graph.data === null ? null : <DomainLegend />}
           </div>
         </section>
-        <section className="card flex h-[440px] flex-col overflow-hidden">
+        <section className="card flex p-0 h-[540px] flex-col overflow-hidden">
           <div className="border-b border-line px-4 py-2.5">
-            <h3 className="text-[16px] font-semibold text-plum">Processes</h3>
+            <h3 className="text-lg font-semibold text-heading">Processes</h3>
           </div>
           <ul className="min-h-0 flex-1 overflow-y-auto p-2" data-testid="process-list">
             {inDomain.map((p) => (
@@ -187,12 +167,12 @@ export function DiscoverTab() {
                   type="button"
                   onClick={() => openProcess(p.id)}
                   aria-current={p.id === processId ? "true" : undefined}
-                  className={`w-full rounded-btn px-3 py-2 text-left ${p.id === processId ? "bg-purple-lt" : "hover:bg-warm"}`}
+                  className={`w-full rounded-btn px-3 py-2 text-left ${p.id === processId ? "bg-accent-soft" : "hover:bg-sunken"}`}
                 >
-                  <span className={`block truncate text-[14.5px] font-semibold ${p.id === processId ? "text-purple" : "text-plum"}`}>
+                  <span className={`block truncate text-base font-semibold ${p.id === processId ? "text-accent-ink" : "text-heading"}`}>
                     {p.name}
                   </span>
-                  <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-slate">
+                  <span className="mt-0.5 flex items-center gap-1.5 text-xs text-slate">
                     <Pill tone="det">{p.starter_kind ?? "no starter"}</Pill>
                     <BandPill band={p.complexity_band} />
                     <span>{p.activity_count} steps</span>
@@ -214,11 +194,11 @@ export function DiscoverTab() {
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0">
               <p className="label">{proc.application} · {proc.module} · {proc.dialect}</p>
-              <h3 className="truncate text-[22px] font-semibold text-plum">{proc.name}</h3>
+              <h3 className="truncate text-2xl font-semibold text-heading">{proc.name}</h3>
             </div>
             <Pill tone="det">{proc.starter_kind ?? "no starter"}</Pill>
             <BandPill band={proc.complexity_band} />
-            <span className="font-mono text-[12px] text-slate" title="Spec hash">
+            <span className="font-mono text-xs text-slate" title="Spec hash">
               {proc.spec_hash.slice(0, 12)}
             </span>
             <div className="ml-auto">

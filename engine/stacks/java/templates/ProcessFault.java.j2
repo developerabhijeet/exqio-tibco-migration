@@ -1,0 +1,41 @@
+package {{ pkg }}.core.exceptions;
+
+import {{ pkg }}.core.tibco.TibValue;
+import com.fasterxml.jackson.databind.JsonNode;
+
+/**
+ * A TIBCO fault: the fault name and its data (the fault element as JSON). Every throw activity
+ * has a subclass; FaultHandler turns an uncaught one into application/problem+json with the fault
+ * name as title and the masked data as "fault", and a JMS consumer dead-letters the message with
+ * the fault name as reason.
+ */
+public class ProcessFault extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    private final String faultName;
+    private final transient JsonNode faultData;
+
+    public ProcessFault(String faultName, JsonNode faultData) {
+        super(message(faultName, faultData));
+        this.faultName = faultName;
+        this.faultData = faultData == null ? TibValue.object() : faultData;
+    }
+
+    private static String message(String faultName, JsonNode faultData) {
+        String text = TibValue.text(TibValue.path(faultData, "message"));
+        return text.isEmpty() ? faultName : faultName + ": " + text;
+    }
+
+    /** True when {@code error} is the TIBCO fault {@code name} (a catch of that fault handles it). */
+    public static boolean named(Throwable error, String name) {
+        return error instanceof ProcessFault fault && name.equals(fault.faultName());
+    }
+
+    public String faultName() {
+        return faultName;
+    }
+
+    public JsonNode faultData() {
+        return faultData;
+    }
+}

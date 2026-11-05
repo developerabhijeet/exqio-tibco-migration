@@ -1,0 +1,169 @@
+package tib
+
+import (
+	"math/big"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+// The XPath functions the generator translates, over JSON values and with XPath 1.0 semantics
+// (1-based positions with rounding, characters rather than bytes, the empty string for nothing).
+// Each returns a value so calls nest like the TIBCO expression they come from.
+
+// Concat is concat().
+func Concat(parts ...Value) Value {
+	var out strings.Builder
+	for _, part := range parts {
+		out.WriteString(Text(part))
+	}
+	return out.String()
+}
+
+// StringOf is string().
+func StringOf(v Value) Value {
+	return Text(v)
+}
+
+// NumberOf is number(); null where XPath has NaN.
+func NumberOf(v Value) Value {
+	r, ok := Number(v)
+	if !ok {
+		return nil
+	}
+	return Of(r)
+}
+
+// UpperCase is upper-case().
+func UpperCase(v Value) Value {
+	return strings.ToUpper(Text(v))
+}
+
+// LowerCase is lower-case().
+func LowerCase(v Value) Value {
+	return strings.ToLower(Text(v))
+}
+
+// NormalizeSpace is normalize-space().
+func NormalizeSpace(v Value) Value {
+	return strings.Join(strings.Fields(Text(v)), " ")
+}
+
+// StringLength is string-length(), in characters.
+func StringLength(v Value) Value {
+	return Of(utf8.RuneCountInString(Text(v)))
+}
+
+// Substring is substring(): the characters at positions p with
+// round(start) <= p < round(start) + round(length).
+func Substring(v Value, start Value, length ...Value) Value {
+	chars := []rune(Text(v))
+	first, ok := Number(start)
+	if !ok {
+		return ""
+	}
+	from := round(first)
+	var to *big.Rat
+	if len(length) > 0 {
+		size, ok := Number(length[0])
+		if !ok {
+			return ""
+		}
+		to = new(big.Rat).Add(from, round(size))
+	}
+	var out strings.Builder
+	for i, c := range chars {
+		position := big.NewRat(int64(i+1), 1)
+		if position.Cmp(from) >= 0 && (to == nil || position.Cmp(to) < 0) {
+			out.WriteRune(c)
+		}
+	}
+	return out.String()
+}
+
+// SubstringBefore is substring-before().
+func SubstringBefore(v Value, separator Value) Value {
+	s, sep := Text(v), Text(separator)
+	at := strings.Index(s, sep)
+	if sep == "" || at < 0 {
+		return ""
+	}
+	return s[:at]
+}
+
+// SubstringAfter is substring-after().
+func SubstringAfter(v Value, separator Value) Value {
+	s, sep := Text(v), Text(separator)
+	at := strings.Index(s, sep)
+	if at < 0 {
+		return ""
+	}
+	return s[at+len(sep):]
+}
+
+// Translate is translate().
+func Translate(v Value, from Value, to Value) Value {
+	source, target := []rune(Text(from)), []rune(Text(to))
+	var out strings.Builder
+	for _, c := range Text(v) {
+		at := -1
+		for i, s := range source {
+			if s == c {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			out.WriteRune(c)
+		} else if at < len(target) {
+			out.WriteRune(target[at])
+		}
+	}
+	return out.String()
+}
+
+// Round is round(): half way rounds towards positive infinity.
+func Round(v Value) Value {
+	r, ok := Number(v)
+	if !ok {
+		return nil
+	}
+	return Of(round(r))
+}
+
+// Floor is floor().
+func Floor(v Value) Value {
+	r, ok := Number(v)
+	if !ok {
+		return nil
+	}
+	return Of(floor(r))
+}
+
+// Ceiling is ceiling().
+func Ceiling(v Value) Value {
+	r, ok := Number(v)
+	if !ok {
+		return nil
+	}
+	return Of(new(big.Rat).Neg(floor(new(big.Rat).Neg(r))))
+}
+
+// CurrentDateTime is current-dateTime().
+func CurrentDateTime() Value {
+	return DateTime(time.Now())
+}
+
+// CurrentDate is current-date().
+func CurrentDate() Value {
+	return time.Now().Format("2006-01-02")
+}
+
+func round(r *big.Rat) *big.Rat {
+	return floor(new(big.Rat).Add(r, big.NewRat(1, 2)))
+}
+
+func floor(r *big.Rat) *big.Rat {
+	// Euclidean division by the (positive) denominator rounds towards negative infinity.
+	return new(big.Rat).SetInt(new(big.Int).Div(r.Num(), r.Denom()))
+}

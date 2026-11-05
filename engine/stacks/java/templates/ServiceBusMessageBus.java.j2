@@ -1,0 +1,174 @@
+package {{ pkg }}.infrastructure.messaging;
+
+import {{ pkg }}.core.messaging.MessageBus;
+import {{ pkg }}.core.tibco.TibValue;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.messaging.servicebus.ServiceBusClientBuilder;
+import com.azure.messaging.servicebus.ServiceBusMessage;
+import com.azure.messaging.servicebus.ServiceBusProcessorClient;
+import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
+import com.azure.messaging.servicebus.ServiceBusReceivedMessageContext;
+import com.azure.messaging.servicebus.ServiceBusReceiverClient;
+import com.azure.messaging.servicebus.ServiceBusSenderClient;
+import com.azure.messaging.servicebus.models.DeadLetterOptions;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+/**
+ * Azure Service Bus (messaging.mode=ServiceBus), reached at
+ * messaging.service-bus.fully-qualified-namespace with DefaultAzureCredential (the workload's
+ * managed identity; no connection strings). A handler's dead-letter outcome dead-letters the
+ * message with its reason; an exception abandons it so Service Bus redelivers it.
+ */
+@Component
+@ConditionalOnProperty(name = "messaging.mode", havingValue = "ServiceBus")
+public class ServiceBusMessageBus implements MessageBus, DisposableBean {
+    private static final Logger LOG = LoggerFactory.getLogger(ServiceBusMessageBus.class);
+
+    /** The entities the design names as topics; every other entity is a queue. */
+    private static final Set<String> TOPICS = Set.of({% for t in topics %}{{ t | java_string }}{{ ", " if not loop.last else "" }}{% endfor %});
+
+    private final ServiceBusClientBuilder builder;
+    private final Map<String, ServiceBusSenderClient> senders = new ConcurrentHashMap<>();
+    private final List<AutoCloseable> closeables = new CopyOnWriteArrayList<>();
+
+    public ServiceBusMessageBus(@Value("${messaging.service-bus.fully-qualified-namespace}") String namespace) {
+        this.builder = new ServiceBusClientBuilder()
+                .fullyQualifiedNamespace(namespace)
+                .credential(new DefaultAzureCredentialBuilder().build());
+    }
+
+    @Override
+    public void publish(String entity, JsonNode message, Map<String, String> properties) {
+        ServiceBusMessage out = new ServiceBusMessage(TibValue.json(message));
+        out.setContentType("application/json");
+        Map<String, String> props = properties == null ? Map.of() : properties;
+        props.forEach((k, v) -> out.getApplicationProperties().put(k, v));
+        if (props.containsKey(CORRELATION_ID)) {
+            out.setCorrelationId(props.get(CORRELATION_ID));
+        }
+        if (props.containsKey(REPLY_TO)) {
+            out.setReplyTo(props.get(REPLY_TO));
+        }
+        sender(entity).sendMessage(out);
+    }
+
+    private ServiceBusSenderClient sender(String entity) {
+        return senders.computeIfAbsent(entity, e -> TOPICS.contains(e)
+                ? builder.sender().topicName(e).buildClient()
+                : builder.sender().queueName(e).buildClient());
+    }
+
+    @Override
+    public AutoCloseable subscribe(String entity, Function<Message, Outcome> handler) {
+        ServiceBusClientBuilder.ServiceBusProcessorClientBuilder processor = builder.processor().disableAutoComplete();
+        String[] parts = entity.split("/", 2);
+        if (parts.length == 2) {
+            processor.topicName(parts[0]).subscriptionName(parts[1]);
+        } else {
+            processor.queueName(entity);
+        }
+        ServiceBusProcessorClient client = processor
+                .processMessage(context -> settle(context, entity, handler))
+                .processError(error -> LOG.warn("Service Bus error on {}: {}", entity, error.getException().getMessage()))
+                .buildProcessorClient();
+        client.start();
+        closeables.add(client);
+        return client::close;
+    }
+
+    private static void settle(ServiceBusReceivedMessageContext context, String entity, Function<Message, Outcome> handler) {
+        Outcome outcome;
+        try {
+            outcome = handler.apply(received(entity, context.getMessage()));
+        } catch (RuntimeException ex) {
+            LOG.warn("message on {} abandoned: {}", entity, ex.getClass().getSimpleName());
+            context.abandon();
+            return;
+        }
+        if (outcome.disposition() == Disposition.DEAD_LETTER) {
+            context.deadLetter(new DeadLetterOptions()
+                    .setDeadLetterReason(outcome.reason())
+                    .setDeadLetterErrorDescription(outcome.description()));
+        } else {
+            context.complete();
+        }
+    }
+
+    private static Message received(String entity, ServiceBusReceivedMessage message) {
+        Map<String, String> properties = new HashMap<>();
+        message.getApplicationProperties().forEach((k, v) -> properties.put(k, String.valueOf(v)));
+        if (message.getCorrelationId() != null) {
+            properties.putIfAbsent(CORRELATION_ID, message.getCorrelationId());
+        }
+        if (message.getReplyTo() != null) {
+            properties.putIfAbsent(REPLY_TO, message.getReplyTo());
+        }
+        if (message.getMessageId() != null) {
+            properties.putIfAbsent(MESSAGE_ID, message.getMessageId());
+        }
+        if (message.getEnqueuedTime() != null) {
+            properties.putIfAbsent(ENQUEUED_TIME, message.getEnqueuedTime().toString());
+        }
+        return new Message(entity, message.getBody().toString(), Map.copyOf(properties));
+    }
+
+    @Override
+    public Message request(String entity, JsonNode message, Duration timeout) {
+        String correlationId = UUID.randomUUID().toString().replace("-", "");
+        String replyTo = entity + ".reply";
+        publish(entity, message, Map.of(REPLY_TO, replyTo, CORRELATION_ID, correlationId));
+        Instant deadline = Instant.now().plus(timeout);
+        try (ServiceBusReceiverClient receiver = builder.receiver().queueName(replyTo).buildClient()) {
+            while (Instant.now().isBefore(deadline)) {
+                Duration wait = Duration.between(Instant.now(), deadline);
+                if (wait.isNegative() || wait.isZero()) {
+                    break;
+                }
+                for (ServiceBusReceivedMessage reply : receiver.receiveMessages(10, wait)) {
+                    if (correlationId.equals(reply.getCorrelationId())) {
+                        receiver.complete(reply);
+                        return received(replyTo, reply);
+                    }
+                    receiver.abandon(reply);
+                }
+            }
+        }
+        throw new IllegalStateException("no reply on " + replyTo + " within " + timeout);
+    }
+
+    @Override
+    public void reply(Message request, JsonNode message) {
+        String replyTo = request.properties().get(REPLY_TO);
+        if (replyTo == null) {
+            throw new IllegalStateException("message on " + request.entity() + " has no " + REPLY_TO + " property");
+        }
+        String correlationId = request.properties().get(CORRELATION_ID);
+        publish(replyTo, message, correlationId == null ? Map.of() : Map.of(CORRELATION_ID, correlationId));
+    }
+
+    @Override
+    public void destroy() throws Exception {
+        for (AutoCloseable closeable : closeables) {
+            closeable.close();
+        }
+        for (ServiceBusSenderClient sender : senders.values()) {
+            sender.close();
+        }
+    }
+}

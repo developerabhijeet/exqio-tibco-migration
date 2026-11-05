@@ -11,14 +11,14 @@ const PURPOSE: Record<string, string> = {
 
 export function LaterStep({ step }: { step: StepState }) {
   return (
-    <section className="card p-8">
+    <section className="card">
       <p className="eyebrow">Step</p>
       <div className="mt-1 flex items-center gap-3">
         <h2 className="panel-title">{step.label}</h2>
         <StatusPill status={step.status} />
       </div>
       <p className="mt-3 max-w-[720px] text-slate">{PURPOSE[step.key]}</p>
-      <p className="mt-4 text-[14px] text-slate">This tab is not available in this build yet.</p>
+      <p className="mt-4 text-md text-slate">This tab is not available in this build yet.</p>
     </section>
   );
 }

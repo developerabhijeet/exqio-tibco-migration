@@ -26,6 +26,10 @@ class UploadError(ValueError):
     """A client error in the upload (bad archive, missing path, too large)."""
 
 
+class UploadTooLarge(UploadError):
+    """The archive holds more bytes than the configured limit."""
+
+
 class UnsafePath(UploadError):
     def __init__(self, entry: str) -> None:
         super().__init__(f"unsafe path: {entry}")
@@ -53,7 +57,7 @@ def _copy_stream(src, dst_path: Path, budget: list[int]) -> None:
         while chunk := src.read(_CHUNK):
             budget[0] -= len(chunk)
             if budget[0] < 0:
-                raise UploadError("upload is larger than the configured limit")
+                raise UploadTooLarge("upload is larger than the configured limit")
             dst.write(chunk)
 
 
@@ -82,8 +86,10 @@ def extract_zip(archive: Path, dest: Path, max_bytes: int) -> None:
             raise UploadError(f"cannot extract archive: {exc}") from exc
 
 
-def copy_folder(src: Path, dest: Path, max_bytes: int) -> None:
-    """Copy a server folder (regular files only, symlinks skipped) under ``dest``."""
+def copy_folder(src: Path, dest: Path, max_bytes: int, skip: frozenset[str] | set[str] = frozenset()) -> None:
+    """Copy a server folder (regular files only, symlinks skipped) under ``dest``; folders named in
+    ``skip`` (a clone's ``.git``) are left out like ``SKIP_DIRS``."""
+    skipped = SKIP_DIRS | frozenset(skip)
     if dest.resolve().is_relative_to(src.resolve()):
         raise UploadError("path contains the upload store")
     budget = [max_bytes]
@@ -91,7 +97,7 @@ def copy_folder(src: Path, dest: Path, max_bytes: int) -> None:
     for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
         here = Path(dirpath)
         dirnames[:] = sorted(d for d in dirnames
-                             if d not in SKIP_DIRS and not (here / d).is_symlink())
+                             if d not in skipped and not (here / d).is_symlink())
         out = dest / here.relative_to(src)
         out.mkdir(parents=True, exist_ok=True)
         for fn in sorted(filenames):

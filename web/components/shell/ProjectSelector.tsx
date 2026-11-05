@@ -61,28 +61,28 @@ export function ProjectSelector() {
   });
 
   return (
-    <div className="relative flex items-center gap-2" ref={boxRef}>
+    <div className="relative flex min-w-0 items-center gap-2 max-md:flex-1" ref={boxRef}>
       <label className="sr-only" htmlFor="project-select">
         Project
       </label>
       {/* A real select, so the keyboard and the tests keep working; the native chrome is off because
           the platform draws it on a light background that reads as broken on the plum bar. The
           options themselves stay on white, which is where the browser draws them. */}
-      <div className="relative">
+      <div className="relative min-w-0 max-md:flex-1">
         <select
           id="project-select"
           data-testid="project-select"
-          className="w-[220px] max-w-[260px] cursor-pointer appearance-none truncate rounded-btn border border-white/20 bg-white/10 py-1.5 pl-3 pr-9 text-[13.5px] font-medium text-white outline-none transition-colors hover:bg-white/15 focus:border-lilac"
+          className="w-[220px] max-w-[260px] cursor-pointer max-md:w-full max-md:max-w-none appearance-none truncate rounded-btn border border-white/20 bg-white/10 py-1.5 pl-3 pr-9 text-md font-medium text-white outline-none transition-colors hover:bg-white/15 focus:border-lilac"
           value={projectId ?? ""}
           onChange={(e) => setProjectId(e.target.value || null)}
         >
           {(projects.data ?? []).length === 0 ? (
-            <option value="" className="bg-white text-ink">
+            <option value="" className="bg-surface text-ink">
               No projects yet
             </option>
           ) : null}
           {(projects.data ?? []).map((p) => (
-            <option key={p.id} value={p.id} className="bg-white text-ink">
+            <option key={p.id} value={p.id} className="bg-surface text-ink">
               {p.name}
             </option>
           ))}
@@ -95,15 +95,16 @@ export function ProjectSelector() {
       </div>
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 rounded-btn border border-white/20 px-3 py-1.5 text-[13.5px] font-medium text-white transition-colors hover:bg-white/10"
+        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-btn border border-white/20 px-3 py-1.5 text-md font-medium text-white transition-colors duration-fast hover:bg-white/10"
         onClick={() => setCreating((v) => !v)}
+        aria-expanded={creating}
       >
         <FolderPlus size={16} aria-hidden />
-        New project
+        <span className="max-sm:sr-only">New project</span>
       </button>
       {creating ? (
         <form
-          className="card absolute left-0 top-11 z-50 w-[320px] p-4 shadow-lg"
+          className="card absolute left-0 top-11 z-50 w-[340px] max-w-[calc(100vw-2*var(--gutter))] shadow-e2"
           onSubmit={(e) => {
             e.preventDefault();
             if (name.trim()) create.mutate(name.trim());
@@ -120,7 +121,7 @@ export function ProjectSelector() {
             onChange={(e) => setName(e.target.value)}
             placeholder="GMF credit estate"
           />
-          {create.error ? <p className="mt-2 text-[13px] text-error">{(create.error as Error).message}</p> : null}
+          {create.error ? <p className="mt-2 text-sm text-error">{(create.error as Error).message}</p> : null}
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => setCreating(false)}>
               Cancel

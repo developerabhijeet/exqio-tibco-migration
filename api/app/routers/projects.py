@@ -15,22 +15,24 @@ from starlette.datastructures import UploadFile
 
 from api.app.config import Settings
 from api.app.db import new_id
-from api.app.deps import RunnerDep, SessionDep, SettingsDep
+from api.app.deps import PrincipalDep, RunnerDep, SessionDep, SettingsDep
+from api.app.jobs.locks import advisory_lock
 from api.app.models import Application, Domain, File, Job, Process, Project, ScanReport, Upload
+from api.app.routers.stacks import STACK_CHANGERS, effective_default, require_available
 from api.app.schemas.job import JobCreated
 from api.app.schemas.process import ProcessSummary
 from api.app.schemas.project import (
     FileEntryOut,
     ProjectCreate,
     ProjectOut,
+    ProjectPatch,
     ReportOut,
     ScanIn,
     UploadOut,
     UploadPathIn,
 )
-from api.app.services import uploads
-from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
-from api.app.services.scan import scan_job
+from api.app.services import gates, uploads
+from api.app.services.memory_ingest import enqueue_ingest, seed_ingest_key
 
 router = APIRouter(tags=["projects"])
 log = logging.getLogger(__name__)
@@ -44,25 +46,38 @@ async def _project(session: AsyncSession, project_id: str) -> Project:
 
 
 @router.post("/projects", status_code=201, response_model=ProjectOut)
-async def create_project(body: ProjectCreate, request: Request, session: SessionDep) -> Project:
-    """Create a project and, in the background, seed its migration memory with the R Systems
-    TIBCO-to-.NET patterns (``source: rsi-seed``). Seeding failures are logged, never fatal."""
-    project = Project(name=body.name.strip())
+async def create_project(body: ProjectCreate, request: Request, session: SessionDep,
+                         settings: SettingsDep) -> Project:
+    """Create a project and seed its migration memory with the TIBCO-to-.NET seed patterns
+    (``source: seed``): a ``memory.ingest`` of phase ``seed`` is queued (nothing without
+    ``NEO4J_URI``)."""
+    stack = body.target_stack or effective_default(settings)
+    require_available(stack, settings)
+    project = Project(name=body.name.strip(), target_stack=stack)
     session.add(project)
     await session.commit()
     await session.refresh(project)
-    task = asyncio.create_task(_seed(request.app.state.knowledge, project.id))
-    request.app.state.background.add(task)
-    task.add_done_callback(request.app.state.background.discard)
+    await enqueue_ingest(request.app.state.sessionmaker, settings, project_id=project.id,
+                         phase="seed", scope="seed", source={}, actor="system",
+                         ingest_key=seed_ingest_key())
     return project
 
 
-async def _seed(knowledge: Knowledge, project_id: str) -> None:
-    try:
-        n = await knowledge.seed_patterns(project_id)
-        log.info("project %s: %d RSI seed patterns loaded into migration memory", project_id, n)
-    except KnowledgeUnavailable as exc:
-        log.warning("project %s: RSI seed patterns not loaded: %s", project_id, exc)
+@router.patch("/projects/{project_id}", response_model=ProjectOut)
+async def patch_project(project_id: str, body: ProjectPatch, principal: PrincipalDep, session: SessionDep,
+                        settings: SettingsDep) -> Project:
+    """Change the target stack; the SME, architect or admin decides, in every auth mode."""
+    if not principal.roles & STACK_CHANGERS:
+        raise HTTPException(status_code=403, detail="changing the target stack needs the SME, architect or admin role")
+    project = await _project(session, project_id)
+    if body.target_stack != project.target_stack:
+        require_available(body.target_stack, settings)
+        gates.audit(session, None, principal.actor, "project stack changed", project_id=project.id,
+                    detail={"old": project.target_stack, "new": body.target_stack})
+        project.target_stack = body.target_stack
+        await session.commit()
+        await session.refresh(project)
+    return project
 
 
 @router.get("/projects", response_model=list[ProjectOut])
@@ -193,13 +208,12 @@ async def scan(project_id: str, request: Request, session: SessionDep, runner: R
         upload_row = await _latest_upload(session, project_id)
         if upload_row is None:
             raise HTTPException(status_code=409, detail="nothing uploaded yet")
-    async with request.app.state.scan_lock:  # the check and the submit are one step
+    async with advisory_lock(request.app.state.sessionmaker, "scan"):  # the check and the submit are one step
         active = await session.scalar(select(Job.id).where(
             Job.project_id == project_id, Job.kind == "scan", Job.status.in_(("queued", "running"))).limit(1))
         if active is not None:
             raise HTTPException(status_code=409, detail=f"a scan of this project is already in progress: {active}")
         job_id = await runner.submit("scan", {"project_id": project_id, "upload_id": upload_row.id},
-                                     scan_job(project_id, upload_row.id, request.app.state.knowledge),
                                      project_id=project_id)
     return JobCreated(job_id=job_id)
 

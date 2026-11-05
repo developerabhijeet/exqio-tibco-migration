@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { actAs } from "./helpers";
+import { actAs, newProjectAndScan } from "./helpers";
 
 // The persona model on the stepper. No project is needed: the bar renders for every persona, and
 // what changes with the persona is which steps are theirs to act in. Each persona joins the
@@ -36,6 +36,17 @@ test.describe("personas", () => {
     });
   }
 
+  test("viewer.val reads every step and may act in none", async ({ page }) => {
+    await page.goto("/");
+    await actAs(page, "viewer.val");
+    for (const key of STEPS) {
+      await expect(page.getByTestId(`step-${key}`), `${key} should be view only`).toHaveAttribute("data-view-only", "true");
+    }
+    await page.getByTestId("user-menu").click();
+    await expect(page.getByTestId("persona-viewer.val")).toContainText("read only");
+    await expect(page.getByRole("group", { name: "Act as" }).getByRole("menuitemradio")).toHaveCount(6);
+  });
+
   test("the menu says what each persona owns, and switching changes what is view only", async ({ page }) => {
     await page.goto("/");
 
@@ -60,4 +71,77 @@ test.describe("personas", () => {
     await expect(page.getByTestId("step-build")).not.toHaveAttribute("data-view-only", "true");
     await expect(page.getByTestId("step-design")).toHaveAttribute("data-view-only", "true");
   });
+});
+
+// The theme switch in the user menu: System by default (follows the OS), and an explicit choice is
+// kept over a reload, applied before first paint.
+test("theme follows the system and the choice persists", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(15, 11, 20)");
+  await page.getByTestId("user-menu").click();
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  await page.reload();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(250, 249, 247)");
+  await page.getByTestId("user-menu").click();
+  await expect(page.getByTestId("theme-light")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("theme-system")).toHaveAttribute("aria-checked", "false");
+});
+
+test("the stepper shows one status pill and works from the keyboard", async ({ page }) => {
+  await page.goto("/");
+  await newProjectAndScan(page);
+  await expect(page.getByRole("navigation", { name: "Migration steps" }).getByTestId("step-status-pill")).toHaveCount(1);
+  await page.getByTestId("step-discover").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByTestId("step-validate")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByTestId("step-deploy")).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(page.getByTestId("step-upload")).toBeFocused();
+  await page.setViewportSize({ width: 900, height: 900 });
+  await page.getByTestId("stepper-compact").click();
+  await page.getByTestId("step-option-design").click();
+  await expect(page.getByTestId("step-design")).toHaveAttribute("aria-current", "step");
+  await expect(page.getByTestId("stepper-compact")).toContainText("Step 4 of 7 · Design");
+});
+
+test("the stepper never overflows from 1024 px to 1440 px, no step is squeezed, and the header compacts on scroll", async ({ page }) => {
+  await page.goto("/");
+  await newProjectAndScan(page);
+  // Clicking Scan scrolls the content area to bring the button into view (the page below the
+  // stepper is taller than the window now), which compacts the header: start from the top.
+  await page.evaluate(() => document.querySelector("main")!.scrollTo(0, 0));
+  for (const width of [1024, 1100, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    const tablist = page.getByRole("navigation", { name: "Migration steps" });
+    await expect(tablist).toBeVisible();
+    expect(await tablist.evaluate((n) => n.scrollWidth <= n.clientWidth + 1)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    // The open step shows its label; no other step is squeezed below its dot and icon.
+    const widths = await tablist.locator("li").evaluateAll((lis) =>
+      lis.map((li) => {
+        const button = li.querySelector("button")!;
+        const label = button.querySelector("span.truncate") as HTMLElement;
+        return { open: button.getAttribute("aria-current") === "step", button: button.getBoundingClientRect().width, label: label.getBoundingClientRect().width };
+      }),
+    );
+    for (const w of widths) {
+      if (w.open) expect(w.label, `${width}px: open step label`).toBeGreaterThan(20);
+      else expect(w.button, `${width}px: closed step`).toBeGreaterThanOrEqual(36);
+    }
+  }
+  const header = page.getByTestId("pinned-header");
+  await expect(header).not.toHaveAttribute("data-compact", "true");
+  await page.evaluate(() => {
+    const filler = document.createElement("div");
+    filler.style.height = "3000px";
+    document.querySelector("main")?.appendChild(filler);
+  });
+  await page.mouse.move(600, 500);
+  await page.mouse.wheel(0, 400);
+  await expect(header).toHaveAttribute("data-compact", "true");
+  await page.mouse.wheel(0, -2000);
+  await expect(header).not.toHaveAttribute("data-compact", "true");
 });

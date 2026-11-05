@@ -1,0 +1,281 @@
+# ExiQO Migrate: hardened single-VM pilot (not the AKS install, and not local development).
+#
+#   make pilot-up                     (or: docker compose -f deploy/docker/compose.pilot.yml up -d --wait)
+#
+# Every secret is a file the operator creates under deploy/docker/secrets/ (the directory is git-
+# and docker-ignored). Nothing here has a default password: a missing file stops `up` with an error.
+# Create the directory 0700 and each file 0444 with no trailing newline needed (one is stripped):
+#
+#   database_url          postgresql+asyncpg://<user>:<password>@<host>:5432/exiqo?ssl=require
+#                         (with --profile postgres: ...@postgres:5432/exiqo, same password as below)
+#   app_secret            Fernet key for stored Azure credentials (python -c "from cryptography.fernet
+#                         import Fernet; print(Fernet.generate_key().decode())")
+#   session_secret        sign-in session key (openssl rand -hex 32)
+#   internal_token        API -> worker bearer token (openssl rand -hex 32)
+#   neo4j_password        password of the bundled Neo4j's neo4j user (openssl rand -hex 24)
+#   oidc_client_secret    Entra ID app registration secret (an empty file for a public client)
+#   azure_openai_api_key  GMF Azure OpenAI key (an empty file when no LLM provider is used)
+#   tls.crt, tls.key      the certificate (full chain) and key for PILOT_HOSTNAME; no ACME, no egress
+#   postgres_password     only with --profile postgres (the bundled pgvector Postgres)
+#
+# Non-secret settings come from the environment or deploy/docker/.env: the ones marked ":?" below
+# are required. The images are referenced by digest from GMF's registry, for example
+# PLATFORM_IMAGE=<acr>.azurecr.io/exiqo-platform@sha256:...; `make pilot-up` defaults them to the
+# images `make images` built locally.
+#
+# Every container: read-only root filesystem, a tmpfs /tmp, all capabilities dropped,
+# no-new-privileges, a non-root user, a health check and restart unless-stopped. Networks: only the
+# proxy publishes a port; web and api sit on an internal network behind it; api, worker, Neo4j and
+# the optional Postgres share a second internal network; api, worker and migrate also join
+# "egress" for the external Postgres, Entra ID, Azure OpenAI, ARM and the package mirrors. Restrict
+# that egress to those hosts with the VM's firewall (the install guide lists them).
+
+name: exiqo-pilot
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+
+x-platform-env: &platform-env
+  DATA_DIR: /data
+  API_BASE_PATH: /api
+  AUTH_MODE: oidc
+  BRAND_NAME: ${BRAND_NAME:-ExiQO}
+  SUPPORT_CONTACT: ${SUPPORT_CONTACT:?set SUPPORT_CONTACT (shown in Help & Support)}
+  CORS_ORIGINS: https://${PILOT_HOSTNAME:?set PILOT_HOSTNAME (the host name on the certificate)}
+  OIDC_TENANT_ID: ${OIDC_TENANT_ID:?set OIDC_TENANT_ID}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
+  OIDC_REDIRECT_URI: https://${PILOT_HOSTNAME}/api/auth/callback
+  ROLE_GROUPS: ${ROLE_GROUPS:-{}}
+  AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+  AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-}
+  AZURE_OPENAI_DEPLOYMENT_STRONG: ${AZURE_OPENAI_DEPLOYMENT_STRONG:-}
+  AZURE_OPENAI_DEPLOYMENT_STANDARD: ${AZURE_OPENAI_DEPLOYMENT_STANDARD:-}
+  AZURE_OPENAI_DEPLOYMENT_EFFICIENT: ${AZURE_OPENAI_DEPLOYMENT_EFFICIENT:-}
+  NUGET_SOURCE: ${NUGET_SOURCE:-}
+  # Target stacks: only .NET until GMF's mirrors are set. A stack other than dotnet needs its mirror
+  # (MAVEN_MIRROR_URL, GOPROXY, UV_INDEX_URL); without it that stack's restore refuses, it never
+  # reaches Maven Central, the public Go proxy or pypi.org.
+  ENABLED_STACKS: ${ENABLED_STACKS:-dotnet}
+  MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
+  GOPROXY: ${GOPROXY:-}
+  UV_INDEX_URL: ${UV_INDEX_URL:-}
+  PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  WORKER_HOST: worker
+  DATABASE_URL_FILE: /run/secrets/database_url
+  APP_SECRET_FILE: /run/secrets/app_secret
+  SESSION_SECRET_FILE: /run/secrets/session_secret
+  INTERNAL_TOKEN_FILE: /run/secrets/internal_token
+  NEO4J_PASSWORD_FILE: /run/secrets/neo4j_password
+  OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+  AZURE_OPENAI_API_KEY_FILE: /run/secrets/azure_openai_api_key
+
+x-platform-secrets: &platform-secrets
+  - database_url
+  - app_secret
+  - session_secret
+  - internal_token
+  - neo4j_password
+  - oidc_client_secret
+  - azure_openai_api_key
+
+services:
+  # Alembic to head, once, before api and worker start (the chart runs it as a hook Job).
+  migrate:
+    <<: *hardened
+    image: ${PLATFORM_IMAGE:?set PLATFORM_IMAGE (registry/exiqo-platform@sha256:...)}
+    user: "10001:10001"
+    restart: "no"
+    environment:
+      <<: *platform-env
+      EXIQO_ROLE: migrate
+    secrets: *platform-secrets
+    tmpfs: ["/tmp:size=64m"]
+    networks: [backend, egress]
+    depends_on:
+      postgres: {condition: service_healthy, required: false}
+
+  api:
+    <<: *hardened
+    image: ${PLATFORM_IMAGE}
+    user: "10001:10001"
+    environment:
+      <<: *platform-env
+      EXIQO_ROLE: api
+    secrets: *platform-secrets
+    tmpfs: ["/tmp:size=512m"]
+    volumes: ["exiqo-data:/data"]
+    networks: [frontend, backend, egress]
+    pids_limit: 1024
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      neo4j: {condition: service_healthy}
+
+  # Runs the jobs (analysis, build, verify, deploy). NuGet packages go to the data volume, not to
+  # the RAM-backed /tmp, and survive restarts. 600 s grace: a stop drains running jobs first.
+  worker:
+    <<: *hardened
+    image: ${PLATFORM_IMAGE}
+    user: "10001:10001"
+    environment:
+      <<: *platform-env
+      EXIQO_ROLE: worker
+      NUGET_PACKAGES: /data/nuget/packages
+    secrets: *platform-secrets
+    # exec: the toolchains (MSBuild tasks, NuGet, Terraform) run helpers they unpack under /tmp.
+    tmpfs: ["/tmp:size=2g,exec"]
+    volumes: ["exiqo-data:/data"]
+    networks: [backend, egress]
+    pids_limit: 4096
+    stop_grace_period: 600s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/internal/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      neo4j: {condition: service_healthy}
+
+  # No egress at all: the frontend network is internal and the browser calls /api on this origin.
+  web:
+    <<: *hardened
+    image: ${WEB_IMAGE:?set WEB_IMAGE (registry/exiqo-web@sha256:...)}
+    user: "10001:10001"
+    tmpfs: ["/tmp:size=128m"]
+    networks: [frontend]
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  # The graph store, reachable from api and worker only. NEO4J_AUTH is assembled from the secret
+  # file inside the container, so the password never appears in this file or `docker inspect`.
+  neo4j:
+    <<: *hardened
+    image: ${NEO4J_IMAGE:-neo4j:5.26.32@sha256:adaa077a3ab023015143b8f73f7076a7d053f12985f5b06f4c6a128c3a2f7240}
+    user: "7474:7474"
+    entrypoint: ["/bin/sh", "-c", "NEO4J_AUTH=\"neo4j/$$(cat /run/secrets/neo4j_password)\" exec tini -g -- /startup/docker-entrypoint.sh neo4j"]
+    environment:
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-1G}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512M}
+      NEO4J_dbms_usage__report_enabled: "false"
+      NEO4J_db_memory_transaction_total_max: ${NEO4J_TX_MEMORY:-700m}  # about 70% of the heap
+    secrets: [neo4j_password]
+    # exec: Neo4j's JNA unpacks its native library to /tmp and maps it.
+    tmpfs: ["/tmp:size=64m,exec"]
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-conf:/var/lib/neo4j/conf
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Optional self-contained database: docker compose --profile postgres up. The default is the
+  # external Postgres (with pgvector) named by the database_url secret.
+  postgres:
+    <<: *hardened
+    profiles: [postgres]
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.1-pg16@sha256:33198da2828a14c30348d2ccb4750833d5ed9a44c88d840a0e523d7417120337}
+    user: "999:999"
+    environment:
+      POSTGRES_DB: exiqo
+      POSTGRES_USER: exiqo
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets: [postgres_password]
+    tmpfs: ["/tmp:size=64m", "/var/run/postgresql:size=1m"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exiqo -d exiqo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # TLS ends here with the operator's certificate. Listens on 8443 inside so it runs unprivileged
+  # with no capabilities; the host's 443 maps to it. /api goes to the API unchanged, the rest to web.
+  proxy:
+    <<: *hardened
+    image: ${CADDY_IMAGE:-caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f}
+    user: "10001:10001"
+    # The image's caddy binary carries the file capability cap_net_bind_service, and the kernel
+    # refuses to exec a file whose capabilities are outside the bounding set, so this one is kept.
+    # It is the only capability the proxy holds (binding ports below 1024; it listens on 8443).
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      PILOT_HOSTNAME: ${PILOT_HOSTNAME}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    secrets:
+      - source: tls_cert
+        target: /run/secrets/tls.crt
+      - source: tls_key
+        target: /run/secrets/tls.key
+    tmpfs: ["/tmp:size=16m", "/data:size=16m", "/config:size=1m"]
+    ports: ["${PILOT_BIND:-0.0.0.0}:443:8443"]
+    networks: [edge, frontend]
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+    depends_on:
+      api: {condition: service_healthy}
+      web: {condition: service_healthy}
+
+configs:
+  caddyfile:
+    file: ./Caddyfile.pilot
+
+secrets:
+  database_url: {file: ./secrets/database_url}
+  app_secret: {file: ./secrets/app_secret}
+  session_secret: {file: ./secrets/session_secret}
+  internal_token: {file: ./secrets/internal_token}
+  neo4j_password: {file: ./secrets/neo4j_password}
+  oidc_client_secret: {file: ./secrets/oidc_client_secret}
+  azure_openai_api_key: {file: ./secrets/azure_openai_api_key}
+  postgres_password: {file: ./secrets/postgres_password}
+  tls_cert: {file: ./secrets/tls.crt}
+  tls_key: {file: ./secrets/tls.key}
+
+networks:
+  edge: {}
+  frontend: {internal: true}
+  backend: {internal: true}
+  egress: {}
+
+volumes:
+  exiqo-data:
+  neo4j-data:
+  neo4j-logs:
+  neo4j-conf:
+  pgdata:

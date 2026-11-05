@@ -1,0 +1,505 @@
+package tests
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"{{ module }}/internal/api"
+	"{{ module }}/internal/platform"
+	"{{ module }}/internal/tib"
+)
+
+// scenario is what every generated test stands on: the generated service in development mode
+// (development tokens, in-memory bus, timers off) behind httptest.NewServer(api.NewRouter(deps)),
+// against the test database, with the scenario drivers and field-by-field comparison with a
+// fixture. A test body reaches the services through e.deps.Services, sends requests with e.send
+// (already authenticated), reads the database with e.database and what was published with
+// e.publishedSince.
+type scenario struct {
+	t      *testing.T
+	deps   *api.Deps
+	server *httptest.Server
+	db     *testDatabase
+	token  string
+}
+
+// newScenario starts the generated service for one test; it stops when the test ends.
+func newScenario(t *testing.T) *scenario {
+	t.Helper()
+	environ := []string{"ASPNETCORE_ENVIRONMENT=Development", "MESSAGING_MODE=InMemory", "JOBS_ENABLED=false"}
+	if url := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL")); url != "" {
+		for _, key := range connectionKeys {
+			environ = append(environ, key+"="+url)
+		}
+	}
+	deps, err := api.NewDeps(platform.NewConfig(environ))
+	if err != nil {
+		t.Fatalf("starting the service: %v", err)
+	}
+	server := httptest.NewServer(api.NewRouter(deps))
+	t.Cleanup(func() {
+		server.Close()
+		deps.Close()
+	})
+	return &scenario{t: t, deps: deps, server: server}
+}
+
+// database is the test database; the test is skipped when TEST_DATABASE_URL is not set.
+func (e *scenario) database() *testDatabase {
+	if e.db == nil {
+		e.db = openTestDatabase(e.t)
+	}
+	return e.db
+}
+
+// publishedMark is how many messages were published so far: pass it to publishedSince.
+func (e *scenario) publishedMark() int {
+	return len(e.deps.Memory.Published())
+}
+
+// publishedSince is the messages published after mark.
+func (e *scenario) publishedSince(mark int) []tib.Message {
+	all := e.deps.Memory.Published()
+	if mark > len(all) {
+		mark = len(all)
+	}
+	return all[mark:]
+}
+
+// ------------------------------------------------------------------ drivers
+
+// runRequest is a REST or HTTP scenario: reset, send the fixture request, compare the response
+// and the side effects.
+func (e *scenario) runRequest(process, name string) {
+	e.t.Helper()
+	fx := loadFixture(e.t, process, name)
+	e.database().reset(e.t, fx)
+	mark := e.publishedMark()
+	request := fx.request()
+	method := tib.Text(tib.Path(request, "method"))
+	if method == "" {
+		method = http.MethodGet
+	}
+	status, body := e.send(method, pathWithQuery(request), tib.Path(request, "body"))
+	e.assertResponseMatches(fx, status, body)
+	e.assertSideEffectsMatch(fx, mark)
+}
+
+// runMessage is a JMS scenario: reset, hand the fixture input to handle as a message on
+// destination with properties (what the TIBCO selector asks for), compare the settlement and the
+// side effects.
+func (e *scenario) runMessage(process, name, destination string, properties map[string]string,
+	handle func(context.Context, *tib.Message) platform.Outcome) {
+	e.t.Helper()
+	fx := loadFixture(e.t, process, name)
+	e.database().reset(e.t, fx)
+	mark := e.publishedMark()
+	message := &tib.Message{Entity: destination, Body: tib.JSON(fx.input()), Properties: properties}
+	var outcome platform.Outcome
+	e.guard(func() { outcome = handle(context.Background(), message) })
+	if fault := fx.fault(); fault == nil {
+		if outcome.Disposition != platform.Complete {
+			e.t.Fatalf("%s: %s (%s): %s", fx.id, outcome.Disposition, outcome.Reason, outcome.Description)
+		}
+	} else {
+		if outcome.Disposition != platform.DeadLetter {
+			e.t.Fatalf("%s: no fault (%s)", fx.id, outcome.Disposition)
+		}
+		if want := tib.Text(tib.Path(fault, "name")); outcome.Reason != want {
+			e.t.Fatalf("%s: fault name: expected %q, actual %q", fx.id, want, outcome.Reason)
+		}
+	}
+	e.assertSideEffectsMatch(fx, mark)
+}
+
+// runJob is a timer scenario: reset, run the job once, compare the side effects.
+func (e *scenario) runJob(process, name string, run func(context.Context) error) {
+	e.t.Helper()
+	fx := loadFixture(e.t, process, name)
+	e.database().reset(e.t, fx)
+	mark := e.publishedMark()
+	var err error
+	e.guard(func() { err = run(context.Background()) })
+	fault := fx.fault()
+	if fault == nil && err != nil {
+		e.t.Fatalf("%s: %v", fx.id, err)
+	}
+	if fault != nil {
+		got, ok := tib.AsFault(err)
+		if !ok {
+			e.t.Fatalf("%s: no fault (%v)", fx.id, err)
+		}
+		if want := tib.Text(tib.Path(fault, "name")); got.FaultName() != want {
+			e.t.Fatalf("%s: fault name: expected %q, actual %q", fx.id, want, got.FaultName())
+		}
+	}
+	e.assertSideEffectsMatch(fx, mark)
+}
+
+// guard runs f and fails the test when it panics (a step not filled yet), so the other tests run.
+func (e *scenario) guard(f func()) {
+	e.t.Helper()
+	defer func() {
+		if p := recover(); p != nil {
+			e.t.Fatalf("the run panicked: %v", p)
+		}
+	}()
+	f()
+}
+
+// ------------------------------------------------------------------ HTTP
+
+// send sends a request to the running service with a development token; body may be Missing.
+// It returns the status and the body as JSON (Missing when empty).
+func (e *scenario) send(method, pathAndQuery string, body tib.Value) (int, tib.Value) {
+	e.t.Helper()
+	var reader io.Reader
+	if !tib.Absent(body) {
+		reader = strings.NewReader(tib.Raw(body))
+	}
+	request, err := http.NewRequest(method, e.server.URL+pathAndQuery, reader)
+	if err != nil {
+		e.t.Fatalf("building %s %s: %v", method, pathAndQuery, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+e.devToken())
+	request.Header.Set("Accept", "application/json")
+	if reader != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	return e.exchange(request)
+}
+
+func (e *scenario) devToken() string {
+	e.t.Helper()
+	if e.token == "" {
+		request, _ := http.NewRequest(http.MethodPost, e.server.URL+"/auth/dev-token",
+			strings.NewReader(`{"subject":"scenario-tests"}`))
+		request.Header.Set("Content-Type", "application/json")
+		status, body := e.exchange(request)
+		if status != http.StatusOK {
+			e.t.Fatalf("/auth/dev-token answered %d: the service under test does not issue development tokens", status)
+		}
+		e.token = tib.Text(tib.Path(body, "access_token"))
+	}
+	return e.token
+}
+
+func (e *scenario) exchange(request *http.Request) (int, tib.Value) {
+	e.t.Helper()
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		e.t.Fatalf("%s failed: %v", request.URL, err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		e.t.Fatalf("reading %s: %v", request.URL, err)
+	}
+	body, err := tib.Parse(string(data))
+	if err != nil {
+		body = string(bytes.TrimSpace(data))
+	}
+	return response.StatusCode, body
+}
+
+func pathWithQuery(request tib.Value) string {
+	path := tib.Text(tib.Path(request, "path"))
+	if path == "" {
+		path = "/"
+	}
+	query, _ := tib.Path(request, "query").(map[string]any)
+	keys := make([]string, 0, len(query))
+	for k := range query {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	sep := "?"
+	for _, k := range keys {
+		path += sep + escape(k) + "=" + escape(text(query[k]))
+		sep = "&"
+	}
+	return path
+}
+
+func escape(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+// ------------------------------------------------------------------ comparison
+
+// assertResponseMatches compares the status and body with expected.output (status, body); a fault
+// answers 500 with its name as title.
+func (e *scenario) assertResponseMatches(fx *fixture, status int, body tib.Value) {
+	e.t.Helper()
+	if fault := fx.fault(); fault != nil {
+		if status != http.StatusInternalServerError {
+			e.t.Fatalf("%s: status: expected 500, actual %d", fx.id, status)
+		}
+		if want, got := tib.Text(tib.Path(fault, "name")), tib.Text(tib.Path(body, "title")); want != got {
+			e.t.Fatalf("%s: fault name: expected %q, actual %q", fx.id, want, got)
+		}
+		return
+	}
+	actual := map[string]any{"status": tib.Of(status), "body": body}
+	assertFields(e.t, fx.id, fx.expected("output"), actual, fx.outputNoise())
+}
+
+// assertSideEffectsMatch compares the rows written (in the test database) and the messages
+// published after mark (on the bus) with expected.side_effects.
+func (e *scenario) assertSideEffectsMatch(fx *fixture, mark int) {
+	e.t.Helper()
+	for _, effect := range tib.Items(fx.expected("side_effects")) {
+		payload, _ := tib.Path(effect, "payload").(map[string]any)
+		noise := map[string]bool{}
+		for _, n := range tib.Items(tib.Path(effect, "noise")) {
+			noise[tib.Text(n)] = true
+		}
+		switch tib.Text(tib.Path(effect, "kind")) {
+		case "row_written":
+			table := tib.Text(tib.Path(effect, "table"))
+			found := false
+			for _, row := range e.database().query(e.t, table) {
+				if matches(payload, func(name string) string { return text(row[strings.ToLower(name)]) }, noise) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				e.t.Fatalf("%s: no row in %s matches %s", fx.id, table, tib.Raw(payload))
+			}
+		case "message_published":
+			entity := tib.Text(tib.Path(effect, "target"))
+			found := false
+			for _, m := range e.publishedSince(mark) {
+				if m.Entity != entity {
+					continue
+				}
+				parsed, err := tib.Parse(m.Body)
+				if err != nil {
+					continue
+				}
+				if matches(payload, func(name string) string { return text(tib.Path(parsed, name)) }, noise) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				e.t.Fatalf("%s: no message on %s matches %s", fx.id, entity, tib.Raw(payload))
+			}
+		default:
+			// service_called and subprocess_called are compared by the verifier, not here.
+		}
+	}
+}
+
+// assertFields checks that every leaf of expected equals the same path of actual, except the
+// noise paths.
+func assertFields(t *testing.T, id string, expected, actual tib.Value, noise map[string]bool) {
+	t.Helper()
+	want, got := map[string]string{}, map[string]string{}
+	flatten(expected, "", want)
+	flatten(actual, "", got)
+	keys := make([]string, 0, len(want))
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var mismatches []string
+	for _, k := range keys {
+		if noise[k] {
+			continue
+		}
+		value, ok := got[k]
+		if !fieldEquals(want[k], value) {
+			if !ok {
+				value = "(missing)"
+			}
+			mismatches = append(mismatches, fmt.Sprintf("%s: expected '%s', actual '%s'", k, want[k], value))
+		}
+	}
+	if len(mismatches) > 0 {
+		t.Fatalf("%s: %d field(s) differ:\n%s", id, len(mismatches), strings.Join(mismatches, "\n"))
+	}
+}
+
+// text is a value as text: a string's content, a number in plain notation, a time in ISO form.
+func text(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case time.Time:
+		return x.Format(time.RFC3339Nano)
+	case []byte:
+		return string(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case map[string]any, []any:
+		return tib.Raw(x)
+	}
+	return tib.Text(v)
+}
+
+// fieldEquals is equality as text, as numbers, or as dates; an empty expected value matches a
+// missing one.
+func fieldEquals(expected, actual string) bool {
+	if expected == actual {
+		return true
+	}
+	if a, ok := tib.Number(expected); ok {
+		if b, ok := tib.Number(actual); ok {
+			return a.Cmp(b) == 0
+		}
+	}
+	if a, ok := offsetTime(expected); ok {
+		if b, ok := offsetTime(actual); ok {
+			return a.Equal(b) // both carry an offset: the same instant
+		}
+	}
+	a, aok := localTime(expected)
+	b, bok := localTime(actual)
+	return aok && bok && a.Equal(b)
+}
+
+func offsetTime(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, strings.Replace(s, " ", "T", 1))
+	return t, err == nil
+}
+
+func localTime(s string) (time.Time, bool) {
+	s = strings.Replace(s, " ", "T", 1)
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC), true
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func matches(expected map[string]any, actual func(string) string, noise map[string]bool) bool {
+	for k, v := range expected {
+		if !noise[k] && !fieldEquals(text(v), actual(k)) {
+			return false
+		}
+	}
+	return true
+}
+
+func flatten(v tib.Value, path string, out map[string]string) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, item := range x {
+			if path == "" {
+				flatten(item, k, out)
+			} else {
+				flatten(item, path+"."+k, out)
+			}
+		}
+	case []any:
+		for i, item := range x {
+			flatten(item, path+"["+strconv.Itoa(i)+"]", out)
+		}
+	default:
+		if path != "" {
+			out[path] = text(v)
+		}
+	}
+}
+
+// ------------------------------------------------------------------ fixtures
+
+// fixture is one parity scenario fixture (tests/fixtures/<process>/<scenario>.json): the scenario
+// input, the request it becomes, and the expected output, fault and side effects derived from the
+// TIBCO model. Paths listed as noise (wall-clock values) are not compared; the fixture says why
+// in noise_reasons.
+type fixture struct {
+	id   string
+	root tib.Value
+}
+
+type seedRow struct {
+	table string
+	row   map[string]*string
+}
+
+// loadFixture reads the fixture of scenario (its file stem) of process.
+func loadFixture(t *testing.T, process, name string) *fixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("fixtures", process, name+".json"))
+	if err != nil {
+		t.Fatalf("fixture %s/%s: %v", process, name, err)
+	}
+	root, err := tib.Parse(string(data))
+	if err != nil {
+		t.Fatalf("fixture %s/%s: %v", process, name, err)
+	}
+	id := tib.Text(tib.Path(root, "scenario_id"))
+	if id == "" {
+		id = name
+	}
+	return &fixture{id: id, root: root}
+}
+
+// expected is expected.<name>: output, fault or side_effects (Missing when absent).
+func (f *fixture) expected(name string) tib.Value {
+	return tib.Path(f.root, "expected", name)
+}
+
+// fault is the expected fault (name, data), or nil when the run must not fault.
+func (f *fixture) fault() map[string]any {
+	fault, _ := f.expected("fault").(map[string]any)
+	return fault
+}
+
+// outputNoise are the output paths not compared (wall-clock values).
+func (f *fixture) outputNoise() map[string]bool {
+	out := map[string]bool{}
+	for _, n := range tib.Items(f.expected("output_noise")) {
+		out[tib.Text(n)] = true
+	}
+	return out
+}
+
+// input is the scenario input (a JMS message body, a REST request's parameters and body).
+func (f *fixture) input() tib.Value {
+	return tib.Path(f.root, "input")
+}
+
+// request is the HTTP request the generator resolved from the REST starter, or Missing.
+func (f *fixture) request() tib.Value {
+	return tib.Path(f.root, "request")
+}
+
+func (f *fixture) seedRows() []seedRow {
+	var out []seedRow
+	for _, item := range tib.Items(tib.Path(f.root, "seed_state")) {
+		row := map[string]*string{}
+		values, _ := tib.Path(item, "row").(map[string]any)
+		for k, v := range values {
+			if v == nil {
+				row[k] = nil
+				continue
+			}
+			s := text(v)
+			row[k] = &s
+		}
+		out = append(out, seedRow{table: tib.Text(tib.Path(item, "table")), row: row})
+	}
+	return out
+}

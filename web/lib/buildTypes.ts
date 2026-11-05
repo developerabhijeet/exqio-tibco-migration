@@ -1,10 +1,13 @@
 // Shapes of the Build, Verify, Deploy, Settings, History and Readiness routes (Task 19 API).
-import type { Gate } from "./types";
+import type { CitedText } from "./citations-model";
+import type { Gate, StackStatus } from "./types";
 
 export interface BuildSummary {
   id: string;
   status: "queued" | "running" | "passed" | "failed" | string;
   runtime: string;
+  stack?: string;
+  iteration?: number | null;
   build_hash: string | null;
   job_id: string | null;
   created_at: string | null;
@@ -67,11 +70,23 @@ export interface BuildRejection {
   body?: string;
 }
 
+/** One file of an edit set as the build applied it (engine/sourcing/merge.py MergeResult). */
+export interface HandEditResult {
+  path: string;
+  outcome: "kept" | "merged" | "conflict" | "added" | "deleted" | "restored" | string;
+  detail: string;
+}
+
 export interface BuilderResult {
   filled: string[];
   rejections: BuildRejection[];
   provider?: string | null;
   ai_available?: boolean;
+  /** A build from an edit set: what happened to each hand-edited file. */
+  hand_edits?: HandEditResult[];
+  /** An infrastructure-only resume; `carried_from` names the build whose test evidence it carries. */
+  infra_only?: boolean;
+  carried_from?: string | null;
   test_engineer?: {
     filled?: string[];
     rejections?: BuildRejection[];
@@ -93,6 +108,8 @@ export interface BuildView {
   job_id: string | null;
   status: string;
   runtime: string;
+  stack?: string;
+  iteration?: number | null;
   build_hash: string | null;
   spec_hash: string | null;
   design_hash: string | null;
@@ -143,6 +160,9 @@ export interface BuildFiles {
 
 export interface BuildFileContent extends BuildFileEntry {
   content: string;
+  /** `content` with each line masked by the API (configured sensitive fields), line for line: the
+   * text to quote from the file anywhere but the code viewer. */
+  content_masked?: string;
   language: string;
 }
 
@@ -178,6 +198,9 @@ export interface ReviewFinding {
   note?: string | null;
   /** The build that acted on a kept finding, once one has. */
   applied_in?: string | null;
+  /** The text with a chip for its file and line (and named activities). `cited.text` is the
+   * MASKED text and is what is rendered; null on a finding with no text. */
+  cited?: CitedText | null;
 }
 
 export interface InfraFile {
@@ -203,6 +226,8 @@ export interface RunState {
   started_at: string | null;
   exit_code: number | null;
   log_tail?: string;
+  /** Why the service is not running when the API knows, e.g. "the worker hosting the service is gone". */
+  reason?: string | null;
 }
 
 export interface Scenario {
@@ -227,14 +252,21 @@ export interface ScenarioList {
 
 export interface FieldDiff {
   path: string;
+  /** RAW values: render `expected_display` / `actual_display` (masked by the API) instead. */
   expected: unknown;
   actual: unknown;
+  /** The value as shown, MASKED by the API: "absent", "null", "***" for a sensitive field, else JSON. */
+  expected_display?: string;
+  actual_display?: string;
   status: "match" | "defect" | "intended" | "noise" | string;
   finding_id: string | null;
   /** false on an intended difference no TIBCO sandbox run has confirmed (newer API). */
   confirmed?: boolean;
   /** "control" on a defect a Fix finding touches only through a branch decision; it stays a defect (newer API). */
   via?: "control" | string;
+  /** "<path>: expected <e>, got <a>." plus its note, with chips for the scenario run and the
+   * finding. MASKED (values of sensitive fields never show); absent on a match no finding explains. */
+  cited?: CitedText | null;
 }
 
 export interface ScenarioReport {
@@ -287,9 +319,33 @@ export interface AzureConnection {
   tenant?: string;
   subscription?: string;
   settings?: Record<string, string | null>;
+  /** The deploy environment: credentials and infra/live/<environment> (dev when null). */
+  environment?: string | null;
+  auth_mode?: "local" | DeployAuth;
+  client_id?: string | null;
+  key_vault_uri?: string | null;
+  secret_name?: string | null;
   secret_stored?: boolean;
   warning?: string | null;
   updated_at?: string | null;
+}
+
+export type DeployAuth = "workload_identity" | "keyvault_sp";
+
+/** One declared Azure target (GET /deploy/environments): ids and where a secret lives, no value. */
+export interface DeployEnvironment {
+  name: string;
+  tenant: string;
+  subscription: string;
+  client_id: string;
+  auth: DeployAuth;
+  key_vault_uri: string;
+  secret_name: string;
+}
+
+export interface DeployEnvironments {
+  mode: "workload_identity" | "local";
+  environments: DeployEnvironment[];
 }
 
 export interface AzureConnectBody {
@@ -358,6 +414,8 @@ export interface SettingsView {
   };
   routing: { bands: Record<string, [number, number]>; fallback: string; complexity: string };
   toolchains: Record<string, ToolInfo>;
+  stacks: StackStatus[];
+  default_stack: string;
   langfuse: { enabled: boolean; host: string | null; keys_configured: boolean };
   /** Bring your own Azure OpenAI key. The key itself is never sent to the browser. */
   azure_openai: {
@@ -372,6 +430,7 @@ export interface SettingsView {
 }
 
 export interface SettingsPatch {
+  default_stack?: string;
   models?: Record<string, string>;
   routing_bands?: Record<string, [number, number]>;
   langfuse_enabled?: boolean;
@@ -523,6 +582,9 @@ export interface ReadinessRow {
   status: "met" | "partial" | "missing" | string;
   evidence: { kind: string; ref: string; label: string }[];
   gap: string | null;
+  /** "<expectation>: <status>; <gap>." with one chip per evidence item on it. MASKED; rendered
+   * instead of the evidence list. */
+  cited?: CitedText | null;
 }
 
 export interface ReadinessView {
@@ -530,3 +592,68 @@ export interface ReadinessView {
   rows: ReadinessRow[];
   summary: { met: number; partial: number; missing: number };
 }
+
+/** The connectors of Settings → Connectors (api/app/connectors/base.py KINDS). */
+export type ConnectorKind = "github" | "atlassian" | "figma";
+
+/** POST /connectors/{kind}/test; the message is redacted by the API. */
+export interface ConnectionTest {
+  ok: boolean;
+  account: string | null;
+  site: string | null;
+  scopes: string[];
+  latency_ms: number;
+  message: string;
+}
+
+/** The last connection test of a connector, kept by the API. */
+export interface ConnectorLastTest {
+  result: ConnectionTest;
+  at: string;
+  actor: string;
+}
+
+/**
+ * One connector of GET /settings/connectors. Everyone gets the two flags; an admin also gets the
+ * effective URLs (the admin's override, else the install's), the overrides themselves, the
+ * install layer, the allowlist, the defaults, the secret names, whether each secret is mounted
+ * (never its value) and the last test.
+ */
+export interface ConnectorSettings {
+  install_enabled: boolean;
+  enabled: boolean;
+  app_enabled?: boolean;
+  overrides?: Record<string, string>;
+  install?: Record<string, unknown>;
+  allowed_hosts?: string[];
+  secret_names?: Record<string, string>;
+  secrets_present?: Record<string, boolean>;
+  last_test?: ConnectorLastTest | null;
+  // effective URLs
+  base_url?: string;
+  api_url?: string;
+  web_url?: string;
+  confluence_url?: string;
+  jira_url?: string;
+  // defaults
+  default_owner?: string;
+  space_key?: string;
+  parent_page_id?: string;
+  project_key?: string;
+  issue_type?: string;
+  labels?: string[];
+  file_keys?: string[];
+}
+
+export type ConnectorSettingsView = Record<ConnectorKind, ConnectorSettings>;
+
+/** GET /connectors: which connectors are on, for any signed-in user. */
+export interface ConnectorFlags {
+  github: { enabled: boolean };
+  atlassian: { enabled: boolean; confluence: boolean; jira: boolean };
+  figma: { enabled: boolean };
+}
+
+/** PUT /settings/connectors: a partial update of the admin's layer (there are no secret fields). */
+export type ConnectorPatch = Partial<Record<string, string | string[] | boolean>>;
+export type ConnectorSettingsPatch = Partial<Record<ConnectorKind, ConnectorPatch>>;

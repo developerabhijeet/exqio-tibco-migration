@@ -43,10 +43,10 @@ function Dial({ score, colour }: { score: number; colour: string }) {
         strokeDasharray={`${circumference * score} ${circumference}`}
         transform="rotate(-90 64 64)"
       />
-      <text x="64" y="62" textAnchor="middle" className="fill-plum text-[26px] font-semibold" dominantBaseline="middle">
+      <text x="64" y="62" textAnchor="middle" className="fill-heading text-3xl font-semibold" dominantBaseline="middle">
         {Math.round(score * 100)}
       </text>
-      <text x="64" y="82" textAnchor="middle" className="fill-slate text-[11px]" dominantBaseline="middle">
+      <text x="64" y="82" textAnchor="middle" className="fill-slate text-2xs" dominantBaseline="middle">
         percent
       </text>
     </svg>
@@ -71,7 +71,7 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
   if (!metrics) {
     return (
       <Panel title="Conversion accuracy" eyebrow="Computed by code" testId="accuracy-score" id="accuracy">
-        <p className="text-[14px] text-slate">The score appears when the build reaches its metrics stage.</p>
+        <p className="text-md text-slate">The score appears when the build reaches its metrics stage.</p>
       </Panel>
     );
   }
@@ -80,7 +80,7 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
   if (score === null || score === undefined) {
     return (
       <Panel title="Conversion accuracy" eyebrow="Computed by code" testId="accuracy-score" id="accuracy">
-        <p data-testid="accuracy-absent" className="text-[14px] text-slate">
+        <p data-testid="accuracy-absent" className="text-md text-slate">
           {detail ?? "This build recorded no accuracy score. Generate and build again to compute one."}
         </p>
       </Panel>
@@ -106,10 +106,10 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
       <div className="flex flex-wrap items-center gap-6">
         <Dial score={score} colour={t.ring} />
         <div className="min-w-[280px] flex-1">
-          <p className={`text-[34px] font-semibold leading-none ${t.text}`} data-testid="accuracy-value">
+          <p className={`text-4xl font-semibold leading-none ${t.text}`} data-testid="accuracy-value">
             {pct(score)}
           </p>
-          <p className="mt-1.5 text-[13.5px] text-slate">
+          <p className="mt-1.5 text-md text-slate">
             {failedCompile ? (
               <span className="font-medium text-error">
                 The solution does not compile, so the score is 0 whatever the other metrics say: none of this code runs.
@@ -131,46 +131,48 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
       </div>
 
       {!failedCompile ? (
-        <table className="mt-5 w-full text-[13px]">
-          <thead>
-            <tr className="table-head">
-              <th scope="col" className="rounded-l-btn px-3 py-1.5">
-                Metric
-              </th>
-              <th scope="col" className="px-3 py-1.5 text-right">
-                Value
-              </th>
-              <th scope="col" className="px-3 py-1.5 text-right">
-                Weight
-              </th>
-              <th scope="col" className="rounded-r-btn px-3 py-1.5 text-right">
-                Contribution
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {AXES.map((a) => {
-              const value = metrics[a.key];
-              const has = typeof value === "number";
-              const weight = has ? WEIGHTS[a.key] / weightTotal : 0;
-              return (
-                <tr key={a.key} data-testid={`accuracy-row-${a.key}`} className="row-hover">
-                  <td className="px-3 py-1.5 text-ink">{a.label}</td>
-                  <td className={`px-3 py-1.5 text-right font-medium ${has ? "text-plum" : "text-slate"}`}>
-                    {has ? pct(value as number) : "not measured"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-slate">{has ? pct(weight) : "left out"}</td>
-                  <td className="px-3 py-1.5 text-right font-medium text-plum">
-                    {has ? pct((value as number) * weight) : "0%"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="table-scroll mt-5">
+          <table className="table text-sm">
+            <thead>
+              <tr className="table-head">
+                <th scope="col" className="rounded-l-btn px-3 py-1.5">
+                  Metric
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right">
+                  Value
+                </th>
+                <th scope="col" className="px-3 py-1.5 text-right">
+                  Weight
+                </th>
+                <th scope="col" className="rounded-r-btn px-3 py-1.5 text-right">
+                  Contribution
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {AXES.map((a) => {
+                const value = metrics[a.key];
+                const has = typeof value === "number";
+                const weight = has ? WEIGHTS[a.key] / weightTotal : 0;
+                return (
+                  <tr key={a.key} data-testid={`accuracy-row-${a.key}`} className="row-hover">
+                    <td className="px-3 py-1.5 text-ink">{a.label}</td>
+                    <td className={`px-3 py-1.5 text-right font-medium ${has ? "text-heading" : "text-slate"}`}>
+                      {has ? pct(value as number) : "not measured"}
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-slate">{has ? pct(weight) : "left out"}</td>
+                    <td className="px-3 py-1.5 text-right font-medium text-heading">
+                      {has ? pct((value as number) * weight) : "0%"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : null}
 
-      <p className="mt-4 flex items-start gap-2 text-[12.5px] text-slate">
+      <p className="mt-4 flex items-start gap-2 text-sm text-slate">
         <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
         <span>
           {formula ??
@@ -180,7 +182,7 @@ export function AccuracyScore({ metrics }: { metrics: Metrics | null }) {
         </span>
       </p>
       {detail ? (
-        <p className="mt-2 rounded-btn bg-page px-3 py-2 font-mono text-[11.5px] leading-5 text-ink" data-testid="accuracy-detail">
+        <p className="mt-2 rounded-btn bg-page px-3 py-2 font-mono text-xs leading-5 text-ink" data-testid="accuracy-detail">
           <Gauge size={12} className="mr-1 inline" aria-hidden />
           {detail}
         </p>

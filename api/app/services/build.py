@@ -20,14 +20,21 @@ Order, each stage logged ``code`` or ``ai``:
    or the Test Engineer wrote a test (then only the test reviewer runs: no production reviewer
    is asked about placeholder code). Test findings are stored with the others (reviewer
    ``test``);
-6. restore, build, format, test: ``dotnet``; restore always runs, bounded to
-   ``RESTORE_TIMEOUT_S``; a failure is annotated with the NuGet probe; a step that cannot run is
-   recorded as failed with the reason (``dotnet`` absent, restore failed), never hidden;
+6. restore, build, format, test: the stack's runner (``dotnet`` for .NET); restore always runs,
+   bounded to ``RESTORE_TIMEOUT_S`` on .NET; a .NET failure is annotated with the NuGet probe; a
+   step that cannot run is recorded as failed with the reason (the stack's tool absent, restore
+   failed), never hidden;
 7. repair (ai): only when restore and build succeeded and tests fail;
 8. infra: Terraform and Terragrunt assets, Dockerfile and pipelines, then their validation;
 9. metrics: the fixed formulas of spec 2.5;
 10. persist: build files with origin and TIBCO lineage, test results, reviews, metrics, infra
     assets and the build hash; G4 to G6 reset when decided (a new build).
+
+The target stack is the approved design's (``DesignRecord.stack``), which must still be the
+project's (``approved_design`` refuses otherwise, so the endpoint answers 409 before a build row
+exists); it is stored on ``Build.stack`` and every stage goes through ``get_stack(stack)``: the
+generator, the runner, the agents' language checks and prompt pack, the test inventory and the
+source files the metrics count. The .NET path calls what it always called.
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,10 +54,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import utcnow
+from api.app.jobs.locks import ScenarioLock
 from api.app.jobs.runner import JobContext
-from api.app.models import Build, BuildFile, DesignRecord, InfraAsset, Metric, Process, TestResult
+from api.app.models import (
+    Build,
+    BuildFile,
+    DesignRecord,
+    InfraAsset,
+    Metric,
+    Process,
+    Project,
+    TestResult,
+)
+from api.app.services import edits as edits_svc
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from api.app.services import iterations as iteration_svc
+from api.app.services import settings as settings_svc
+from api.app.services.build_tree import build_tree_files
 from api.app.services.context import engine_app, engine_findings, engine_process, engine_rules
 from api.app.services.design import ai_logger
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
@@ -57,15 +79,20 @@ from api.app.services.providers import build_provider, model_call_recorder
 from engine.agents.builder import BuildRejection, fill_method_bodies
 from engine.agents.jsonout import JsonOutputError
 from engine.agents.provider import ProviderError
-from engine.agents.reviewers import REVIEWERS, TEST_REVIEWER, review_panel, reviewed_test_files
-from engine.agents.test_engineer import fill_test_bodies
-from engine.dotnet_gen import runner as dotnet_runner
-from engine.dotnet_gen.generator import (
-    GeneratedSolution,
-    GenFile,
-    generate_solution,
-    solution_layout,
+from engine.agents.reviewers import (
+    HAND_REVIEW_MAX_BYTES,
+    REVIEWERS,
+    TEST_REVIEWER,
+    hand_review_suffixes,
+    review_panel,
+    reviewed_files,
+    reviewed_test_files,
+    skipped_hand_files,
+    unreviewed_hand_files,
 )
+from engine.agents.test_engineer import fill_test_bodies, placeholder_methods
+from engine.dotnet_gen import runner as dotnet_runner
+from engine.dotnet_gen.generator import GeneratedSolution, GenFile
 from engine.dotnet_gen.metrics import compute_metrics
 from engine.dotnet_gen.models import DesignRecord as EngineDesign
 from engine.dotnet_gen.repair import (
@@ -80,9 +107,18 @@ from engine.dotnet_gen.trx import BRANCH_SUFFIX, RULES_SUFFIX, SCENARIO_SUFFIX, 
 from engine.infra_gen.generator import generate_infra
 from engine.infra_gen.validators import validate_infra
 from engine.parity.models import Scenario as EngineScenario
+from engine.sourcing.merge import MergeResult, apply_edits, hand_paths
+from engine.stacks import get_stack
+from engine.stacks.base import Mirrors, StackGenerator, StackRunner
+from engine.stacks.testindex import INDEX_PATH, IndexEntry
 
 STAGES = ["design check", "generate", "tests", "test engineer", "builder", "review", "restore", "build", "format", "test",
           "repair", "infra", "infra validate", "metrics", "persist"]
+#: A build from an edit set (sub-project 6) logs one more stage: the hand edits merged into the fresh
+#: generation. The Build tab reads stage names from the job, so a normal build's list is unchanged.
+HAND_EDITS = "hand edits"
+EDIT_STAGES = [*STAGES[:2], HAND_EDITS, *STAGES[2:]]
+INFRA_ONLY = "skipped: infrastructure-only edits"
 RUNTIMES = ("container_app", "aks")
 LOG_LIMIT = 20000
 RESET_REASON = "new build"
@@ -106,12 +142,19 @@ _METHOD = re.compile(r"public (?:async )?Task (?P<name>\w+)\(\)")
 
 
 class BuildRefused(Exception):
-    """The build cannot start (HTTP 409): G3 not approved or no design record."""
+    """The build cannot start (HTTP 409): G3 not approved, no design record, or the design is for
+    another stack than the project's (or for one this install cannot build)."""
+
+
+def stack_mismatch(design_stack: str, project_stack: str) -> str:
+    return (f"the approved design is for {design_stack}, the project now targets {project_stack}: "
+            "re-run Design")
 
 
 def find_dotnet() -> str | None:
-    """The ``dotnet`` binary the build uses (``scripts/toolchain.detect()``); tests monkeypatch it."""
-    return dotnet_runner.find_dotnet()
+    """The ``dotnet`` binary the build uses (the cached ``detect_toolchains``, else ``PATH``);
+    blocking, so the job calls it through ``asyncio.to_thread``; tests monkeypatch it."""
+    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")  # tool_path never raises
 
 
 def run_restore(root: Path, dotnet: str) -> StepResult:
@@ -123,23 +166,61 @@ def nuget_available() -> bool:
     return nuget_probe()[0]
 
 
-def nuget_probe(timeout_s: float = 5.0) -> tuple[bool, str]:
-    """``(reachable, what was checked)``: the offline cache, else ``GET`` of the nuget.org index."""
+def nuget_probe(timeout_s: float = 5.0, source: str | None = None) -> tuple[bool, str]:
+    """``(reachable, what was checked)``: the offline cache, else ``GET`` of the package source.
+
+    The source is the GMF mirror (``NUGET_SOURCE``); without one it is dotnet's own first enabled
+    source, so a mirrored install never contacts a public feed."""
     import urllib.error
     import urllib.request
 
     if os.environ.get("EXIQO_NUGET_CACHE") or dotnet_runner.NUGET_CACHE.is_dir():
         return True, f"offline cache {os.environ.get('EXIQO_NUGET_CACHE') or dotnet_runner.NUGET_CACHE}"
-    url = "https://api.nuget.org/v3/index.json"
+    mirror = Settings().nuget_source if source is None else source
+    url = dotnet_runner.nuget_index_url(mirror, find_dotnet())
+    if url is None:
+        return False, "no NuGet package source is configured (set NUGET_SOURCE)"
+    if dotnet_runner.is_local_source(url):
+        return True, f"local package source {url}"
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             return resp.status == 200, f"GET {url}: HTTP {resp.status}"
+    except urllib.error.HTTPError as exc:
+        # A mirror that answers 401/403 is reachable; restore reports the credential problem.
+        return exc.code < 500 and bool(mirror.strip()), f"GET {url}: HTTP {exc.code}"
+    except ValueError as exc:
+        return False, f"NUGET_SOURCE {url!r} is neither an existing folder nor an http(s) URL: {exc}"
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
         return False, f"GET {url} failed: {exc}"
 
 
 def toolchain() -> dict[str, Any]:
-    return dotnet_runner._toolchain_detect()
+    """Every detected tool (the cached ``detect_toolchains``); blocking, call it off the loop."""
+    return settings_svc.detect_toolchains()
+
+
+def mirrors(settings: Settings) -> Mirrors:
+    """The package mirrors a generated project restores from (GMF's; empty = the tool's default)."""
+    return Mirrors(nuget=settings.nuget_source, maven=settings.maven_mirror_url,
+                   goproxy=settings.goproxy, pypi=settings.uv_index_url)
+
+
+class ToolchainMissing(RuntimeError):
+    """The worker lacks a tool a non-.NET stack needs; the build job fails before generating."""
+
+
+def missing_tools(stack: StackGenerator) -> list[str]:
+    """The tools of ``stack.required_tools`` this worker does not have (.NET: ``find_dotnet``).
+    Blocking (detection), so the job calls it through ``asyncio.to_thread``."""
+    if stack.key == "dotnet":
+        return [] if find_dotnet() else ["dotnet"]
+    tools = toolchain()
+    return [t for t in stack.required_tools if not (tools.get(t) or {}).get("present")]
+
+
+def toolchain_missing_message(stack: StackGenerator, tools: list[str]) -> str:
+    return (f"the {stack.key} toolchain is missing on this worker: {', '.join(tools)}; install it "
+            "(Settings shows the toolchains) and build again")
 
 
 def _tail(text: str, limit: int = LOG_LIMIT) -> str:
@@ -158,8 +239,11 @@ def _step(name: str, ok: bool, log: str, started: float, *, skipped: bool = Fals
             "duration_ms": int((time.monotonic() - started) * 1000)}
 
 
-async def approved_design(session: AsyncSession, process: Process) -> DesignRecord:
-    """The design record G3 approved (by its design hash); ``BuildRefused`` otherwise."""
+async def approved_design(session: AsyncSession, process: Process,
+                          enabled: list[str] | None = None) -> DesignRecord:
+    """The design record G3 approved (by its design hash); ``BuildRefused`` otherwise, also when
+    its stack is not the project's, is not implemented, or is not in ``enabled`` (this install's
+    ``enabled_stack_list``; ``None`` skips that check)."""
     rows = await gate_svc.gate_rows(session, process.id)
     g3 = rows.get("G3")
     if g3 is None or g3.state != "approved":
@@ -172,10 +256,22 @@ async def approved_design(session: AsyncSession, process: Process) -> DesignReco
         raise BuildRefused("the design record G3 approved is not stored")
     if design.spec_hash != process.spec_hash:
         raise BuildRefused("the approved design record is stale: the spec hash changed since G3")
+    design_stack = (design.record or {}).get("stack") or "dotnet"
+    project = await session.get(Project, process.project_id)
+    project_stack = project.target_stack if project is not None and project.target_stack else "dotnet"
+    if design_stack != project_stack:
+        raise BuildRefused(stack_mismatch(design_stack, project_stack))
+    try:
+        get_stack(design_stack)
+    except KeyError as exc:
+        raise BuildRefused(f"the {design_stack} stack cannot be built on this install: {exc.args[0]}") from exc
+    if enabled is not None and design_stack not in enabled:
+        raise BuildRefused(f"the {design_stack} stack cannot be built on this install: "
+                           "not enabled on this install (stacks.enabled)")
     return design
 
 
-def build_job(build_id: str, settings: Settings, knowledge: Knowledge, scenario_lock: asyncio.Lock):
+def build_job(build_id: str, settings: Settings, knowledge: Knowledge, scenario_lock: ScenarioLock):
     async def run(ctx: JobContext) -> dict[str, Any]:
         try:
             return await run_build(ctx, build_id, settings, knowledge, scenario_lock)
@@ -226,9 +322,30 @@ def _cs_literal(lit: str) -> str:
         return lit.strip('"')
 
 
-def test_inventory(files: list[GenFile], app_name: str) -> list[dict[str, Any]]:
-    """Every generated ``[Fact]`` with its rule, branch or scenario id and whether it has a body."""
+def test_inventory(files: list[GenFile], app_name: str, stack: str = "dotnet") -> list[dict[str, Any]]:
+    """Every generated ``[Fact]`` with its rule, branch or scenario id and whether it has a body.
+
+    Other stacks carry the same facts in ``.exiqo/test-index.json`` (written with the project). The
+    index says what the generator wrote; ``has_body`` of a rule or branch test is read again from its
+    file (the Test Engineer fills bodies after the index was written), the index's own value kept
+    only when the file is not among ``files``."""
     out: list[dict[str, Any]] = []
+    if stack != "dotnet":
+        texts = {f.path: f.content for f in files}
+        for f in files:
+            if f.path != INDEX_PATH:
+                continue
+            for e in (IndexEntry.model_validate(d) for d in json.loads(f.content)):
+                has_body = e.has_body
+                if e.kind in ("rule", "branch") and e.path in texts:
+                    try:
+                        has_body = not placeholder_methods(texts[e.path], stack, [e])
+                    except KeyError:  # a stack not registered on this install: the index's word
+                        pass
+                out.append({"name": e.name, "display_name": e.display_name or e.name, "kind": e.kind,
+                            "rule_key": e.rule_id, "ref": e.branch_id or e.scenario_id, "file": e.path or None,
+                            "has_body": has_body, "outcome": "not_run", "message": None, "duration_ms": None})
+        return out
     for f in files:
         name = Path(f.path).stem
         if not f.path.startswith("tests/") or not name.endswith((RULES_SUFFIX, BRANCH_SUFFIX, SCENARIO_SUFFIX)):
@@ -348,7 +465,7 @@ def call_closure(app: Any, process: Any) -> list[str]:
 
 # ------------------------------------------------------------------ the job
 async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledge: Knowledge,
-                    scenario_lock: asyncio.Lock) -> dict[str, Any]:
+                    scenario_lock: ScenarioLock) -> dict[str, Any]:
     from api.app.services import verify as verify_svc
 
     async with ctx.sessionmaker() as s:
@@ -362,10 +479,12 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         project_id = row.project_id
         process_id = row.id
         await ctx.stage(STAGES[0])
-        design_row = await approved_design(s, row)
+        design_row = await approved_design(s, row, settings.enabled_stack_list)
         design = EngineDesign.model_validate(design_row.record)
+        stack = get_stack(design.stack)  # approved_design refused a stack this install cannot build
         await ctx.log(f"G3 approved; design record v{design_row.version} (design hash "
-                      f"{design_row.design_hash[:12]}, spec hash {design_row.spec_hash[:12]})")
+                      f"{design_row.design_hash[:12]}, spec hash {design_row.spec_hash[:12]}); "
+                      f"target stack {stack.key} ({stack.label})")
         app = await engine_app(s, row)
         proc = engine_process(app, row)
         rules = await engine_rules(s, process_id)
@@ -375,8 +494,13 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         previous_build = await latest_for(s, process_id)
         carried_reviews = kept_findings(previous_build) if previous_build and previous_build.id != build_id else []
         build.design_id = design_row.id
+        build.iteration = await iteration_svc.job_iteration(s, ctx.payload, process_id)
+        # what the iteration brought in (compiler errors, failing tests, logs, requirements): hints
+        iteration_ctx = await iteration_svc.design_context(s, process_id, build.iteration)
+        edit = await edits_svc.load_edit_build(s, build) if build.edit_set_id else None
         build.spec_hash = row.spec_hash
         build.design_hash = design_row.design_hash
+        build.stack = stack.key
         await s.commit()
         try:
             srows, notes, fresh = await verify_svc.ensure_scenarios(s, settings, row, scenario_lock)
@@ -388,6 +512,18 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             scenario_note = f"no parity scenarios (scenario database unavailable: {exc}); scenario tests are empty"
     out_dir = settings.builds_dir / build_id
     approved_rules = [r for r in rules if r.status in ("approved", "edited")]
+    lang = stack.language
+    if edit is not None and edit.infra_only:
+        return await _run_infra_only(ctx, build_id, settings, edit, app, design, proc, rules, runtime, out_dir,
+                                     process_id, row.spec_hash, design_row.design_hash, stack)
+    # X14a: the worker checks its own toolchain when the build starts (the API pods of a split
+    # install have none). A non-.NET stack without its tools fails here, naming them, before any
+    # model is paid to write code nothing could compile; .NET keeps building and says "dotnet not
+    # found" on each step it skips.
+    if stack.key != "dotnet" and settings.build_toolchain:
+        absent = await asyncio.to_thread(missing_tools, stack)
+        if absent:
+            raise ToolchainMissing(toolchain_missing_message(stack, absent))
 
     # 2. generate (code)
     await ctx.stage(STAGES[1])
@@ -403,11 +539,29 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"generating {len(closure)} called sub-process(es) from their TIBCO source: "
                       f"{', '.join(sorted(i.rsplit('.', 1)[-1] for i in closure))}")
     solution: GeneratedSolution = await asyncio.to_thread(
-        generate_solution, app, [proc.id, *closure], {proc.id: design}, {proc.id: rules},
-        {proc.id: findings}, scenarios, out_dir)
-    agent_files = [f for f in solution.files if f.origin == "agent" and not f.path.startswith("tests/")]
+        stack.generate, app, [proc.id, *closure], {proc.id: design}, {proc.id: rules},
+        {proc.id: findings}, scenarios, out_dir, mirrors(settings))
+    agent_files = [f for f in solution.files if f.origin == "agent" and not lang.is_test_path(f.path)]
     await ctx.log(f"solution {solution.name}: {len(solution.files)} file(s) in {out_dir}; "
                   f"{len(agent_files)} production file(s) with bodies left to the Code Builder")
+    # 2b. hand edits (code): merged into the fresh generation; the agents leave those files alone
+    hand: set[str] = set()
+    hand_results: list[MergeResult] = []
+    if edit is not None:
+        await ctx.stage(HAND_EDITS)
+        code_changes = [c for c in edit.changes if not edit.is_infra(c)]
+        git = await asyncio.to_thread(git_path)
+        hand_results = await asyncio.to_thread(apply_edits, solution, edit.baseline_root, edit.edited_root,
+                                               code_changes, required_scaffold(stack, solution.name), git,
+                                               edit.scaffold_changed(design_row.design_hash, row.spec_hash),
+                                               edit.model_written)
+        hand = hand_paths(hand_results)
+        solution.files = [f.model_copy(update={"origin": "hand"}) if f.path in hand else f for f in solution.files]
+        agent_files = [f for f in solution.files if f.origin == "agent" and not lang.is_test_path(f.path)]
+        await _log_hand_edits(ctx, hand_results, f"edit set {edit.edit_set_id[:12]} against build "
+                              f"{(edit.baseline_build_id or 'gone')[:12]}; "
+                              f"{len(edit.changes) - len(code_changes)} infrastructure change(s) follow the "
+                              "infrastructure generation")
     # A build generates the one process it is given. A sub-process it calls that has no design
     # record of its own is emitted as a stub for the Code Builder to invent, even though its TIBCO
     # definition is parsed and sitting in the estate. That invention is where this build will go
@@ -420,7 +574,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
 
     # 3. tests first (code)
     await ctx.stage(STAGES[2])
-    inventory = test_inventory(solution.files, solution.name)
+    inventory = test_inventory(solution.files, solution.name, stack.key)
     counts = {k: sum(1 for t in inventory if t["kind"] == k) for k in ("rule", "branch", "scenario")}
     no_body = [t for t in inventory if not t["has_body"]]
     await ctx.log(f"tests written before any body: {counts['rule']} rule, {counts['branch']} branch, "
@@ -448,7 +602,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log("nothing to write: every rule and branch test already has a body", tag="ai")
     else:
         try:
-            te_memory = await knowledge.retrieve_memory(project_id, f"{proc.name} tests")
+            te_memory = await knowledge.retrieve_memory(project_id, f"{proc.name} tests",
+                                                        prefer_iteration=iteration_ctx.n if iteration_ctx else None)
         except KnowledgeUnavailable as exc:
             te_memory = []
             await ctx.log(f"migration memory unavailable: {exc}")
@@ -465,12 +620,14 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             try:
                 written += await fill_test_bodies(solution, target_proc, rules_for, scenarios_for,
                                                   target_design, te_memory, provider, te_rejections,
-                                                  warnings=te_warnings)
+                                                  warnings=te_warnings, stack=stack.key,
+                                                  iteration=iteration_ctx if target_proc.id == proc.id else None,
+                                                  hand_paths=hand)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Test Engineer failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, written)
         te_filled = sorted(f.path for f in written)
-        inventory = test_inventory(solution.files, solution.name)
+        inventory = test_inventory(solution.files, solution.name, stack.key)
         still = [t for t in inventory if not t["has_body"] and t["kind"] in ("rule", "branch")]
         await ctx.log(f"Test Engineer wrote {len(placeholders) - len(still)} of {len(placeholders)} rule and branch "
                       f"test bodies in {len(te_filled)} file(s); {len(te_rejections)} body(ies) rejected by the "
@@ -491,7 +648,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     else:
         memory_items: list[Any] = []
         try:
-            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} mapping patterns")
+            memory_items = await knowledge.retrieve_memory(project_id, f"{proc.name} mapping patterns",
+                                                           prefer_iteration=iteration_ctx.n if iteration_ctx else None)
         except KnowledgeUnavailable as exc:
             await ctx.log(f"migration memory unavailable: {exc}")
         # Every process in the solution, not only the one under review: a called sub-process is
@@ -511,7 +669,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             rules_for = approved_rules if target_proc.id == proc.id else []
             try:
                 filled += await fill_method_bodies(solution, target_design, target_proc, rules_for,
-                                                   memory_items, provider, rejections)
+                                                   memory_items, provider, rejections, stack=stack.key,
+                                                   iteration=iteration_ctx if target_proc.id == proc.id else None,
+                                                   hand_paths=hand)
             except (ProviderError, JsonOutputError) as exc:
                 await ctx.log(f"Code Builder failed on {target_proc.name}: {exc}", tag="ai")
         _apply(solution, filled)
@@ -527,19 +687,28 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     reviewers_run: list[str] = []
     if provider is None:
         await ctx.log("skipped: no model configured", tag="ai")
-    elif not filled_paths and not te_filled:
+    elif not filled_paths and not te_filled and not hand:
         await ctx.log("skipped: no agent-written code or tests to review", tag="ai")
     else:
-        # without code the builder filled there is nothing for the production reviewers
-        panel = [*REVIEWERS, TEST_REVIEWER] if filled_paths else [TEST_REVIEWER]
-        if not filled_paths:
+        # without code the builder filled (or a person edited) there is nothing for the production reviewers
+        reviewed_code = bool(filled_paths) or bool(hand & set(reviewed_files(solution, stack.key)))
+        not_source = unreviewed_hand_files(solution, stack.key)
+        if not_source:
+            await ctx.log("not sent to the review panel (hand edits that are not source files of the stack, "
+                          f"{', '.join(hand_review_suffixes(stack.key))}): " + ", ".join(not_source), tag="ai")
+        too_large = skipped_hand_files(solution, stack.key)
+        if too_large:
+            await ctx.log(f"not sent to the review panel (hand edits over {HAND_REVIEW_MAX_BYTES // 1024} KB): "
+                          + ", ".join(too_large), tag="ai")
+        panel = [*REVIEWERS, TEST_REVIEWER] if reviewed_code else [TEST_REVIEWER]
+        if not reviewed_code:
             await ctx.log("no agent-written production code: only the test reviewer runs, over the rule and "
                           "branch tests", tag="ai")
         try:
             found = await review_panel(solution, design, approved_rules, findings, provider, process=proc,
-                                       reviewers=panel)
-            reviewers_run = ([*REVIEWERS] if filled_paths else []) + (
-                [TEST_REVIEWER] if reviewed_test_files(solution, proc) else [])
+                                       reviewers=panel, stack=stack.key)
+            reviewers_run = ([*REVIEWERS] if reviewed_code else []) + (
+                [TEST_REVIEWER] if reviewed_test_files(solution, proc, stack.key) else [])
             reviews = [r.model_dump() for r in found]
             triage = {t: sum(1 for r in found if r.triage == t) for t in ("patch", "defer", "decision")}
             tested = sum(1 for r in found if r.reviewer == TEST_REVIEWER)
@@ -552,7 +721,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 6. restore, build, format, test (code)
     steps: list[dict[str, Any]] = []
     dotnet_steps = settings.build_toolchain
-    dotnet = find_dotnet() if dotnet_steps else None
+    is_dotnet = stack.key == "dotnet"
+    dotnet = (await asyncio.to_thread(find_dotnet) if dotnet_steps else None) if is_dotnet else None
     # the generated tests read TEST_DATABASE_URL; the runner's child environment is an allowlist, so
     # it is passed explicitly (the repair loop's re-runs use the same runner and get it too)
     test_db = settings.test_database_url.strip()
@@ -560,10 +730,18 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # the shared runtime (the Service Bus adapter the test host swaps for an in-memory bus, the
     # TIBCO value helpers, masking), which a test of this workflow cannot reach; counting it
     # answers a question nobody asked at G4.
-    scope = {f.path for f in solution.files if f.process_id == proc.id and f.path.startswith("src/")}
-    runner = (DotnetRunner(solution.root, dotnet=dotnet, coverage_scope=scope,
-                           env={"TEST_DATABASE_URL": test_db} if test_db else None)
-              if dotnet else None)
+    if is_dotnet:
+        scope = {f.path for f in solution.files if f.process_id == proc.id and f.path.startswith("src/")}
+    else:
+        scope = {f.path for f in solution.files if f.process_id == proc.id
+                 and f.path.endswith(stack.source_suffixes) and not lang.is_test_path(f.path)}
+    test_env = {"TEST_DATABASE_URL": test_db} if test_db else None
+    runner: StackRunner | DotnetRunner | None
+    if is_dotnet:
+        runner = DotnetRunner(solution.root, dotnet=dotnet, coverage_scope=scope, env=test_env) if dotnet else None
+    else:  # the tools were checked before generating
+        runner = stack.runner(solution.root, env=test_env, coverage_scope=scope) if dotnet_steps else None
+    no_tool = NO_DOTNET  # only .NET reaches a step without its toolchain
     if not dotnet_steps:
         await ctx.log(TOOLCHAIN_OFF)
     elif runner is not None and not test_db:
@@ -577,11 +755,13 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     if not dotnet_steps:
         restore = StepResult(ok=False, log=TOOLCHAIN_OFF)
     elif runner is None:
-        restore = StepResult(ok=False, log=NO_DOTNET)
+        restore = StepResult(ok=False, log=no_tool)
+    elif not is_dotnet:
+        restore = await asyncio.to_thread(runner.restore)
     else:
         restore = await asyncio.to_thread(run_restore, solution.root, dotnet)
         if not restore.ok:
-            reachable, probe = await asyncio.to_thread(nuget_probe)
+            reachable, probe = await asyncio.to_thread(nuget_probe, 5.0, settings.nuget_source)
             note = NUGET_DOWN if (not reachable or dotnet_runner.nuget_unreachable(restore.log)) else \
                 "restore failed with the package source reachable: see the log above"
             restore = StepResult(ok=False, log=f"{restore.log.rstrip()}\n\n{note}\nprobe: {probe}")
@@ -605,7 +785,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                               + (f"; failing: {', '.join(a.failing[:5])}" if a.failing else ""), tag="ai")
 
             cr = await compile_repair_loop(runner, solution, proc, approved_rules, provider,
-                                           recorder=on_compile_attempt)
+                                           recorder=on_compile_attempt, stack=stack.key,
+                                           iteration=iteration_ctx, protected=hand)
             before_errors = len(build_result.errors)
             build_result = cr.final
             compile_notes = [(f"compile repair: {len(cr.attempts)} attempt(s), "
@@ -620,19 +801,22 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"build {'passed' if build_result.ok else 'failed'}: {build_result.warnings} warning(s), "
                       f"{len(build_result.errors)} error(s)")
     else:
-        why = TOOLCHAIN_OFF if not dotnet_steps else (NO_DOTNET if runner is None else "not run: restore failed")
+        why = TOOLCHAIN_OFF if not dotnet_steps else (no_tool if runner is None else "not run: restore failed")
         steps.append(_step("build", False, why, t0, skipped=True))
         await ctx.log(f"build {why}")
 
     await ctx.stage(STAGES[8])
     t0 = time.monotonic()
     if runner is None:
-        why = TOOLCHAIN_OFF if not dotnet_steps else NO_DOTNET
+        why = TOOLCHAIN_OFF if not dotnet_steps else no_tool
         steps.append(_step("format", False, why, t0, skipped=True))
         await ctx.log(f"format {why}")
     else:
         whitespace = not restore.ok
-        mode = "dotnet format whitespace --folder (no restore needed)" if whitespace else "dotnet format"
+        if is_dotnet:
+            mode = "dotnet format whitespace --folder (no restore needed)" if whitespace else "dotnet format"
+        else:
+            mode = f"{stack.key} formatter" + (" (whitespace only: restore failed)" if whitespace else "")
         # Format the generated code before judging it. Templates and model-written bodies are not
         # laid out the way dotnet format would lay them out, so checking without formatting first
         # only ever reported that fact as a failure.
@@ -660,7 +844,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"tests: {passed} of {len(test_run.cases)} passed"
                       + (f", line coverage {test_run.coverage_line:.1%}" if test_run.coverage_line is not None else ""))
     else:
-        why = TOOLCHAIN_OFF if not dotnet_steps else (NO_DOTNET if runner is None else "not run: the solution did not compile")
+        why = TOOLCHAIN_OFF if not dotnet_steps else (no_tool if runner is None else "not run: the solution did not compile")
         steps.append(_step("test", False, why, t0, skipped=True))
         await ctx.log(f"tests {why}")
 
@@ -680,7 +864,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           + (f": {a.reason}" if a.reason else "") + f"; failing: {', '.join(a.failing[:5])}",
                           tag="ai")
 
-        result = await repair_loop(runner, solution, proc, approved_rules, provider, recorder=on_attempt)
+        result = await repair_loop(runner, solution, proc, approved_rules, provider, recorder=on_attempt,
+                                   stack=stack.key, iteration=iteration_ctx, protected=hand)
         repair = result.model_dump(mode="json")
         test_run = result.final
         if not result.attempts and not result.final.cases:
@@ -700,7 +885,7 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                           + (f": {a.reason}" if a.reason else ""), tag="ai")
 
         applied = await apply_review_findings(runner, solution, proc, approved_rules, carried_reviews,
-                                              provider, recorder=on_review_attempt)
+                                              provider, recorder=on_review_attempt, stack=stack.key, protected=hand)
         review_applied = applied.applied > 0
         test_run = applied.final
         await ctx.log(f"review findings: {applied.applied} of {len(applied.attempts)} attempt(s) applied; "
@@ -709,32 +894,34 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
         await ctx.log(f"{len(carried_reviews)} kept review finding(s) not applied: they need a model and a "
                       f"compiling solution", tag="ai")
 
-    inventory = test_inventory(solution.files, solution.name)  # has_body from the final files
+    inventory = test_inventory(solution.files, solution.name, stack.key)  # has_body from the final files
 
     # 8. infrastructure (code)
     await ctx.stage(STAGES[11])
     infra_files = await asyncio.to_thread(generate_infra, app, design, solution.root, solution.name,
-                                          runtime=runtime)
+                                          runtime=runtime, stack=stack.key)
     await ctx.log(f"{len(infra_files)} infrastructure file(s): Terraform modules, Terragrunt live config "
                   f"({runtime}), Dockerfile, pipelines")
+    infra_hand: set[str] = set()
+    if edit is not None:
+        infra_files, infra_results = await asyncio.to_thread(
+            apply_infra_edits, edit, solution.root, solution.name, infra_files, git,
+            edit.scaffold_changed(design_row.design_hash, row.spec_hash))
+        infra_hand = hand_paths(infra_results)
+        hand_results += infra_results
+        await _log_hand_edits(ctx, infra_results, "infrastructure hand edits")
     await ctx.stage(STAGES[12])
-    tools = await asyncio.to_thread(toolchain)
-    validation = await asyncio.to_thread(validate_infra, solution.root, (tools.get("terraform") or {}).get("path"),
-                                         (tools.get("terragrunt") or {}).get("path"))
-    await ctx.log(f"terraform fmt -check: {validation.fmt_ok}; module validate: "
-                  f"{sum(1 for m in validation.modules if m.validate_ok)} of {len(validation.modules)}; "
-                  f"terragrunt hcl fmt --check: {validation.hclfmt_ok}; ok: {validation.ok}")
-    for note in validation.notes:
-        await ctx.log(note)
+    validation = await _validate_infra(ctx, settings, solution.root)
 
     # 9. metrics (code)
     await ctx.stage(STAGES[13])
-    br = build_result or BuildResult(ok=False, files=sum(1 for f in solution.files if f.path.endswith(".cs")),
-                                     log="not built")
+    source_files = sum(1 for f in solution.files if f.path.endswith(stack.source_suffixes))
+    br = build_result or BuildResult(ok=False, files=source_files, log="not built")
     tr = test_run or TestRun(ok=False, log="not run")
     infra_ok = validation.ok if validation.tools_present and any(validation.tools_present.values()) else None
-    metrics = compute_metrics(rules, len(branch_transitions(proc)), tr, br, format_ok, infra_ok, process=proc.id)
-    if runner is not None and not restore.ok:
+    metrics = compute_metrics(rules, len(branch_transitions(proc)), tr, br, format_ok, infra_ok, process=proc.id,
+                              source_files=None if is_dotnet else source_files)
+    if is_dotnet and runner is not None and not restore.ok:
         metrics.details["standards_adherence"] += (" (reduced check: dotnet format whitespace --folder only, "
                                                    "because restore failed; analyzers and style rules were not run)")
     await ctx.log("metrics: " + "; ".join(f"{k} {v}" for k, v in metrics.details.items()))
@@ -742,13 +929,14 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
     # 10. persist (code)
     await ctx.stage(STAGES[14])
     tests = merge_results(inventory, test_run)
-    layout = solution_layout(solution.name)
+    layout = {"projects": {kind: {"name": p.name, "folder": p.folder}
+                           for kind, p in stack.layout(solution.name).projects.items()}}
     all_files: list[tuple[GenFile, str]] = []
     for f in solution.files:
         origin = "ai" if f.path in filled_paths or f.path in te_filled else f.origin
         all_files.append((f, origin))
     for f in infra_files:
-        all_files.append((GenFile(path=f.path, content=f.content), "infra"))
+        all_files.append((GenFile(path=f.path, content=f.content), "hand" if f.path in infra_hand else "infra"))
     digest = hashlib.sha256()
     file_rows = []
     for f, origin in sorted(all_files, key=lambda x: x[0].path):
@@ -777,21 +965,9 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             s.add(TestResult(build_id=build_id, name=t["name"], display_name=t["display_name"], kind=t["kind"],
                              rule_key=t["rule_key"], ref=t["ref"], file=t["file"], outcome=t["outcome"],
                              duration_ms=t["duration_ms"], message=t["message"], has_body=t["has_body"]))
-        values = metrics.model_dump()
-        for name in ("rule_carry_forward", "test_pass_rate", "branch_coverage", "code_coverage",
-                     "standards_adherence", "compile_ok", "warnings", "infra_ok",
-                     "conversion_accuracy"):
-            v = values[name]
-            unit = "bool" if isinstance(v, bool) or name in ("compile_ok", "infra_ok") else (
-                "count" if name == "warnings" else "ratio")
-            detail_key = {"compile_ok": "compile", "infra_ok": "infra_validity", "warnings": "compile"}.get(name, name)
-            s.add(Metric(build_id=build_id, name=name, value=None if v is None else float(v), unit=unit,
-                         data={"formula": metrics.formulas.get(detail_key), "detail": metrics.details.get(detail_key)}))
+        _store_metrics(s, build_id, metrics)
         vjson = validation.model_dump(mode="json")
-        for f in infra_files:
-            s.add(InfraAsset(build_id=build_id, path=f.path, kind=infra_kind(f.path),
-                             sha256=hashlib.sha256(f.content.encode("utf-8")).hexdigest(),
-                             validation=_asset_validation(f.path, vjson)))
+        _store_infra_assets(s, build_id, infra_files, vjson)
         b.steps = steps
         b.reviews = reviews
         b.repair = repair
@@ -800,6 +976,8 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
                      "reviewers": reviewers_run,
                      "test_engineer": {"filled": te_filled, "warnings": te_warnings,
                                        "rejections": [_rejection(r) for r in te_rejections]}}
+        if edit is not None:
+            b.builder["hand_edits"] = [r.model_dump() for r in hand_results]
         b.infra_validation = vjson
         b.output_dir = str(solution.root)
         b.build_hash = build_hash
@@ -819,6 +997,243 @@ async def run_build(ctx: JobContext, build_id: str, settings: Settings, knowledg
             "restore_ok": restore.ok, "infra_ok": validation.ok, "gates_reset": reset,
             "provider": choice.name}
 
+
+
+# ------------------------------------------------------------------ shared by both build paths
+def _store_metrics(s: AsyncSession, build_id: str, metrics: Any) -> None:
+    values = metrics.model_dump()
+    for name in ("rule_carry_forward", "test_pass_rate", "branch_coverage", "code_coverage",
+                 "standards_adherence", "compile_ok", "warnings", "infra_ok",
+                 "conversion_accuracy"):
+        v = values[name]
+        unit = "bool" if isinstance(v, bool) or name in ("compile_ok", "infra_ok") else (
+            "count" if name == "warnings" else "ratio")
+        detail_key = {"compile_ok": "compile", "infra_ok": "infra_validity", "warnings": "compile"}.get(name, name)
+        s.add(Metric(build_id=build_id, name=name, value=None if v is None else float(v), unit=unit,
+                     data={"formula": metrics.formulas.get(detail_key), "detail": metrics.details.get(detail_key)}))
+
+
+def _store_infra_assets(s: AsyncSession, build_id: str, infra_files: list[GenFile], vjson: dict[str, Any]) -> None:
+    for f in infra_files:
+        s.add(InfraAsset(build_id=build_id, path=f.path, kind=infra_kind(f.path),
+                         sha256=hashlib.sha256(f.content.encode("utf-8")).hexdigest(),
+                         validation=_asset_validation(f.path, vjson)))
+
+
+async def _validate_infra(ctx: JobContext, settings: Settings, root: Path) -> Any:
+    tools = await asyncio.to_thread(toolchain)
+    validation = await asyncio.to_thread(validate_infra, root, (tools.get("terraform") or {}).get("path"),
+                                         (tools.get("terragrunt") or {}).get("path"),
+                                         {"TF_CLI_CONFIG_FILE": settings.tf_cli_config_file}
+                                         if settings.tf_cli_config_file else None,
+                                         init=settings.infra_validate_init,
+                                         init_timeout_s=settings.terraform_init_timeout_s)
+    await ctx.log(f"terraform fmt -check: {validation.fmt_ok}; module validate: "
+                  f"{sum(1 for m in validation.modules if m.validate_ok)} of {len(validation.modules)}; "
+                  f"terragrunt hcl fmt --check: {validation.hclfmt_ok}; ok: {validation.ok}")
+    for note in validation.notes:
+        await ctx.log(note)
+    return validation
+
+
+# ------------------------------------------------------------------ builds from an edit set
+def required_scaffold(stack: StackGenerator, app_name: str) -> set[str]:
+    """The solution and project files (the stack's build files) a deleted edit may not remove while
+    the generation writes them."""
+    layout = stack.layout(app_name)
+    return {f for f in (layout.solution_file, *(p.build_file for p in layout.projects.values())) if f}
+
+
+def git_path() -> str:
+    """``git`` for the three-way merge (``scripts/toolchain``; the platform image has it)."""
+    return (toolchain().get("git") or {}).get("path") or "git"
+
+
+async def _log_hand_edits(ctx: JobContext, results: list[MergeResult], note: str) -> None:
+    counts = {o: sum(1 for r in results if r.outcome == o)
+              for o in ("kept", "merged", "conflict", "added", "deleted", "restored")}
+    await ctx.log(f"{note}: " + ", ".join(f"{n} {o}" for o, n in counts.items()))
+    for r in results:
+        await ctx.log(f"{r.outcome} {r.path}" + (f" ({r.detail})" if r.detail else ""))
+
+
+def apply_infra_edits(edit: edits_svc.EditBuild, root: Path, name: str, infra_files: list[GenFile],
+                      git: str, scaffold_changed: bool = False) -> tuple[list[GenFile], list[MergeResult]]:
+    """The edit set's infrastructure changes merged into the fresh infrastructure generation (after
+    it, so the generator does not write over them). ``scaffold_changed`` (the design or spec moved
+    since the baseline): a file already hand-edited in the baseline is kept and listed as a conflict
+    (X23), as the code files are."""
+    changes = [c for c in edit.changes if edit.is_infra(c)]
+    if not changes:
+        return infra_files, []
+    infra = GeneratedSolution(root=root, name=name, files=list(infra_files), build_hash="")
+    results = apply_edits(infra, edit.baseline_root, edit.edited_root, changes, set(), git,
+                          scaffold_changed=scaffold_changed, model_written=edit.model_written)
+    return infra.files, results
+
+
+def _copy_baseline(edit: edits_svc.EditBuild, dest: Path) -> list[str]:
+    """The baseline build's shipped files copied under ``dest`` (regular files only)."""
+    assert edit.baseline_root is not None
+    names = build_tree_files(edit.baseline_root, edit.excluded)
+    for name in names:
+        target = dest / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((edit.baseline_root / name).read_bytes())
+    return names
+
+
+def _code_tree_identical(edit: edits_svc.EditBuild, root: Path) -> bool:
+    """Every non-infrastructure file of the baseline is in ``root`` with the bytes its build_files
+    row recorded: the code, tests and their evidence are the baseline's."""
+    for r in edit.baseline_files:
+        if r["origin"] == "infra":
+            continue
+        path = root / r["path"]
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != r["sha256"]:
+            return False
+    return bool(edit.baseline_files)
+
+
+async def _carried_evidence(ctx: JobContext, edit: edits_svc.EditBuild) -> dict[str, Any] | None:
+    """The baseline build's steps, test results, metrics and status (X23), ``None`` without one."""
+    async with ctx.sessionmaker() as s:
+        base = await s.get(Build, edit.baseline_build_id) if edit.baseline_build_id else None
+        if base is None or base.status not in ("passed", "failed"):
+            return None
+        tests = (await s.scalars(select(TestResult).where(TestResult.build_id == base.id))).all()
+        metrics = (await s.scalars(select(Metric).where(Metric.build_id == base.id))).all()
+        return {"id": base.id, "status": base.status, "steps": [dict(x) for x in base.steps or []],
+                "tests": [{c: getattr(t, c) for c in ("name", "display_name", "kind", "rule_key", "ref", "file",
+                                                      "outcome", "duration_ms", "message", "has_body")}
+                          for t in tests],
+                "metrics": [{"name": m.name, "value": m.value, "unit": m.unit, "data": m.data} for m in metrics]}
+
+
+async def _run_infra_only(ctx: JobContext, build_id: str, settings: Settings, edit: edits_svc.EditBuild, app: Any,
+                          design: EngineDesign, proc: Any, rules: list[Any], runtime: str, out_dir: Path,
+                          process_id: str, spec_hash: str | None, design_hash: str | None,
+                          stack: StackGenerator) -> dict[str, Any]:
+    """An edit set that changes only infrastructure: the baseline build's tree is copied, and the
+    build runs from ``infra`` with the hand edits merged after the infrastructure generation.
+
+    When the copied code tree is byte-identical to the baseline's and the build uses the same spec
+    and design, the code stages are the baseline's: its steps, test results, metrics (infra
+    validity aside) and status are carried, each marked "carried from build <id>" (X23). Otherwise
+    they are recorded as skipped and the build cannot pass."""
+    await ctx.stage(STAGES[1])
+    if edit.baseline_root is None:
+        raise ValueError("the baseline build's folder is gone: an infrastructure-only resume copies it")
+    names = await asyncio.to_thread(_copy_baseline, edit, out_dir)
+    if stack.key == "dotnet":
+        sln = next((n for n in names if "/" not in n and n.endswith(".sln")), None)
+        if sln is None:
+            raise ValueError("the baseline build has no solution file")
+        name = sln.removesuffix(".sln")
+    else:
+        name = stack.naming.type_name(app.id, "App")
+        build_file = stack.layout(name).solution_file
+        if build_file and build_file not in names:
+            raise ValueError(f"the baseline build has no {build_file}")
+    await ctx.log(f"infrastructure-only edits: copied {len(names)} file(s) of build "
+                  f"{(edit.baseline_build_id or '')[:12]} into {out_dir}")
+    carried = None
+    if not edit.scaffold_changed(design_hash, spec_hash) and await asyncio.to_thread(_code_tree_identical, edit,
+                                                                                      out_dir):
+        carried = await _carried_evidence(ctx, edit)
+    if carried is None:
+        await ctx.log("the code tree is not the baseline's (or the baseline has no result): nothing is carried")
+    note = f"carried from build {carried['id']}" if carried else INFRA_ONLY
+    steps: list[dict[str, Any]] = []
+    carried_steps = {x.get("name"): x for x in (carried or {}).get("steps", [])}
+    for stage in STAGES[2:11]:
+        await ctx.stage(stage)
+        await ctx.log(note)
+        if stage not in ("restore", "build", "format", "test"):
+            continue
+        before = carried_steps.get(stage)
+        if before is not None:
+            steps.append({**before, "log": f"{note}\n{before.get('log') or ''}"})
+        else:
+            steps.append(_step(stage, False, INFRA_ONLY, time.monotonic(), skipped=True))
+
+    await ctx.stage(STAGES[11])
+    infra_files = await asyncio.to_thread(generate_infra, app, design, out_dir, name, runtime=runtime,
+                                          stack=stack.key)
+    await ctx.log(f"{len(infra_files)} infrastructure file(s) generated")
+    await ctx.stage(HAND_EDITS)
+    git = await asyncio.to_thread(git_path)
+    infra_files, results = await asyncio.to_thread(apply_infra_edits, edit, out_dir, name, infra_files, git,
+                                                   edit.scaffold_changed(design_hash, spec_hash))
+    infra_hand = hand_paths(results)
+    await _log_hand_edits(ctx, results, f"edit set {edit.edit_set_id[:12]}")
+    await ctx.stage(STAGES[12])
+    validation = await _validate_infra(ctx, settings, out_dir)
+
+    await ctx.stage(STAGES[13])
+    infra_ok = validation.ok if validation.tools_present and any(validation.tools_present.values()) else None
+    metrics = compute_metrics(rules, len(branch_transitions(proc)), TestRun(ok=False, log=INFRA_ONLY),
+                              BuildResult(ok=False, files=0, log=INFRA_ONLY), False, infra_ok, process=proc.id)
+    if carried:
+        await ctx.log(f"metrics {note}; infrastructure validity measured here")
+
+    await ctx.stage(STAGES[14])
+    infra_paths = {f.path for f in infra_files}
+    rows = [dict(r) for r in edit.baseline_files if r["origin"] != "infra" and r["path"] not in infra_paths]
+    for f in infra_files:
+        raw = f.content.encode("utf-8")
+        rows.append({"path": f.path, "origin": "hand" if f.path in infra_hand else "infra",
+                     "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw), "process_id": None,
+                     "tibco_ref": None})
+    digest = hashlib.sha256()
+    for r in sorted(rows, key=lambda r: r["path"]):
+        digest.update(r["path"].encode("utf-8") + b"\0" + r["sha256"].encode("ascii") + b"\0")
+    build_hash = digest.hexdigest()
+    # nothing was compiled or tested in this build: without carried evidence it cannot say "passed"
+    status = carried["status"] if carried else "failed"
+    async with ctx.sessionmaker() as s:
+        b = await s.get(Build, build_id)
+        process = await s.get(Process, process_id)
+        s.add_all(BuildFile(build_id=build_id, **r) for r in rows)
+        if carried:
+            s.add_all(TestResult(build_id=build_id, **t) for t in carried["tests"])
+            infra_metric = metrics.model_dump()["infra_ok"]
+            for m in carried["metrics"]:
+                value = (None if infra_metric is None else float(infra_metric)) if m["name"] == "infra_ok" \
+                    else m["value"]
+                s.add(Metric(build_id=build_id, name=m["name"], value=value, unit=m["unit"], data=m["data"]))
+        else:
+            _store_metrics(s, build_id, metrics)
+        vjson = validation.model_dump(mode="json")
+        _store_infra_assets(s, build_id, infra_files, vjson)
+        b.steps = steps
+        b.reviews = []
+        b.builder = {"filled": [], "rejections": [], "provider": None, "ai_available": False, "reviewers": [],
+                     "test_engineer": {"filled": [], "warnings": [], "rejections": []},
+                     "infra_only": True, "hand_edits": [r.model_dump() for r in results]}
+        if carried:
+            b.builder["carried_from"] = carried["id"]
+        b.infra_validation = vjson
+        b.output_dir = str(out_dir)
+        b.build_hash = build_hash
+        b.status = status
+        b.finished_at = utcnow()
+        gates = await gate_svc.gate_rows(s, process_id)
+        reset = await gate_svc.reset_gates(s, process, gates, "G4", RESET_REASON, gate_svc.SYSTEM,
+                                           gate_svc.SYSTEM, {"build_id": build_id, "build_hash": build_hash})
+        gate_svc.audit(s, process, gate_svc.SYSTEM, "build finished", actor_kind=gate_svc.SYSTEM,
+                       detail={"build_id": build_id, "status": status, "build_hash": build_hash,
+                               "infra_only": True, "carried_from": carried["id"] if carried else None})
+        await s.commit()
+    await ctx.log(f"stored {len(rows)} file(s); build hash {build_hash[:12]}; infrastructure-only; status {status}"
+                  + (f"; gates reset: {', '.join(reset)}" if reset else ""))
+    tests = (carried or {}).get("tests", [])
+    return {"build_id": build_id, "status": status, "build_hash": build_hash,
+            "compile_ok": bool(carried) and any(x.get("name") == "build" and x.get("ok") for x in steps),
+            "tests": len(tests), "tests_passed": sum(1 for t in tests if t["outcome"] == "passed"),
+            "restore_ok": bool(carried) and any(x.get("name") == "restore" and x.get("ok") for x in steps),
+            "infra_ok": validation.ok, "gates_reset": reset, "provider": None, "infra_only": True,
+            "carried_from": carried["id"] if carried else None}
 
 
 def _rejection(r: Any) -> dict[str, Any]:
@@ -941,7 +1356,8 @@ async def build_view(session: AsyncSession, build: Build) -> dict[str, Any]:
     process = await session.get(Process, build.process_id)
     gates = await gate_svc.gates_view(session, process) if process else []
     return {"id": build.id, "process_id": build.process_id, "job_id": build.job_id, "status": build.status,
-            "runtime": build.runtime, "build_hash": build.build_hash, "spec_hash": build.spec_hash,
+            "runtime": build.runtime, "stack": build.stack or "dotnet", "iteration": build.iteration,
+            "build_hash": build.build_hash, "spec_hash": build.spec_hash,
             "design_hash": build.design_hash, "design_id": build.design_id,
             "created_at": build.created_at.isoformat() if build.created_at else None,
             "finished_at": build.finished_at.isoformat() if build.finished_at else None,

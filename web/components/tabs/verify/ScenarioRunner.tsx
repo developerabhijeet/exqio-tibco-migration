@@ -149,7 +149,7 @@ export function ScenarioRunner({
         </>
       }
     >
-      {runBlocked ? <p className="mb-2 text-[13px] text-slate">Run verify: {runBlocked}</p> : null}
+      {runBlocked ? <p className="mb-2 text-sm text-slate">Run verify: {runBlocked}</p> : null}
       {error ? <ErrorNote error={error} /> : null}
       {list.error ? <ErrorNote error={list.error} /> : null}
       {adding ? (
@@ -160,13 +160,13 @@ export function ScenarioRunner({
             add();
           }}
         >
-          <label className="text-[13px] text-slate">
+          <label className="text-sm text-slate">
             Name
             <input className="input mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="dealer with a canceled deal" required />
           </label>
-          <label className="text-[13px] text-slate">
+          <label className="text-sm text-slate">
             Input (JSON, the same shape as the generated scenarios)
-            <textarea className="input mt-1 h-28 font-mono text-[12.5px]" value={input} onChange={(e) => setInput(e.target.value)} />
+            <textarea className="input mt-1 h-28 font-mono text-sm" value={input} onChange={(e) => setInput(e.target.value)} />
           </label>
           <div className="flex items-end gap-2">
             <button type="submit" className="btn-primary" disabled={busy === "add" || !name.trim()}>
@@ -177,18 +177,18 @@ export function ScenarioRunner({
               Cancel
             </button>
           </div>
-          <p className="text-[12px] text-slate md:col-span-3">
+          <p className="text-xs text-slate md:col-span-3">
             The expected result is computed by the evaluator from the TIBCO model, never typed in.
           </p>
         </form>
       ) : null}
       {scenarios.length === 0 ? (
-        <p className="text-[14px] text-slate">
+        <p className="text-md text-slate">
           {list.isLoading ? "Loading scenarios." : "No scenarios yet. Generate scenarios builds one per branch, the happy path and the faults from the model."}
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-btn border border-line">
-          <table className="w-full min-w-[640px] text-[13px]">
+        <div className="table-scroll rounded-btn border border-line">
+          <table className="table min-w-[640px] text-sm">
             <thead>
               <tr className="table-head">
                 <th className="px-3 py-2">Kind</th>
@@ -205,9 +205,9 @@ export function ScenarioRunner({
                   </td>
                   <td className="px-3 py-2">
                     <p className="font-medium text-ink">{s.name}</p>
-                    <p className="font-mono text-[11px] text-slate">{s.key}</p>
+                    <p className="font-mono text-2xs text-slate">{s.key}</p>
                   </td>
-                  <td className="px-3 py-2 font-mono text-[12px]">{preview(s.input)}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{preview(s.input)}</td>
                   <td className="px-3 py-2 text-slate">{s.origin === "sme" ? `SME ${s.created_by ?? ""}` : "model"}</td>
                 </tr>
               ))}
@@ -216,7 +216,7 @@ export function ScenarioRunner({
         </div>
       )}
       {(list.data?.notes ?? []).length > 0 ? (
-        <ul className="mt-2 space-y-0.5 text-[12.5px] text-decision">
+        <ul className="mt-2 space-y-0.5 text-sm text-decision">
           {list.data!.notes.map((n) => (
             <li key={n}>{n}</li>
           ))}

@@ -1,0 +1,1608 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExiQO Migrate chart values",
+  "description": "Refuses what must never reach a GMF install: AUTH_MODE dev, local deploy credentials, image tags, fewer than two API or web replicas, a tenant that is not a GUID, NetworkPolicies off and a Kubernetes Secret in place of Key Vault and environment overrides (ciEnv). Only the CI overlay (x-ci: true) may use dev sign-in, a Kubernetes Secret, no NetworkPolicies and ciEnv.",
+  "type": "object",
+  "definitions": {
+    "guid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "cidr": {
+      "type": "string",
+      "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "digest"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "required": [
+            "cpu",
+            "memory",
+            "ephemeral-storage"
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "memory",
+            "ephemeral-storage"
+          ]
+        }
+      }
+    },
+    "quantity": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$"
+    },
+    "annotations": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  },
+  "required": [
+    "image",
+    "brand",
+    "auth",
+    "deploy",
+    "identity",
+    "keyVault",
+    "ingress",
+    "api",
+    "web",
+    "worker",
+    "data",
+    "postgres",
+    "egress",
+    "networkPolicy",
+    "providers",
+    "mirrors",
+    "langfuse",
+    "migration",
+    "neo4jBackup",
+    "neo4j",
+    "stacks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "x-ci": {
+      "type": "boolean"
+    },
+    "ciEnv": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "PROVIDER": {
+          "enum": [
+            "fake"
+          ]
+        },
+        "EMBEDDINGS_BACKEND": {
+          "enum": [
+            "hash",
+            "fastembed"
+          ]
+        },
+        "BUILD_TOOLCHAIN": {
+          "enum": [
+            "true",
+            "false"
+          ]
+        },
+        "JOB_STALE_SECONDS": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      }
+    },
+    "corsOrigins": {
+      "type": "string"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "web"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "enum": [
+            "IfNotPresent",
+            "Always",
+            "Never"
+          ]
+        },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "platform": {
+          "$ref": "#/definitions/image"
+        },
+        "web": {
+          "$ref": "#/definitions/image"
+        }
+      }
+    },
+    "brand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supportContact": {
+          "type": "string"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "oidc",
+            "dev"
+          ]
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "roleGroups": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "admin",
+              "viewer",
+              "sme",
+              "architect",
+              "engineer",
+              "qa",
+              "ops"
+            ]
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "oidc"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "tenantId",
+          "clientId"
+        ],
+        "properties": {
+          "tenantId": {
+            "$ref": "#/definitions/guid"
+          },
+          "clientId": {
+            "$ref": "#/definitions/guid"
+          }
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credentialMode"
+      ],
+      "properties": {
+        "credentialMode": {
+          "enum": [
+            "workload_identity"
+          ]
+        },
+        "environments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "subscription",
+              "auth"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "tenant": {
+                "$ref": "#/definitions/guid"
+              },
+              "subscription": {
+                "$ref": "#/definitions/guid"
+              },
+              "clientId": {
+                "$ref": "#/definitions/guid"
+              },
+              "auth": {
+                "enum": [
+                  "workload_identity",
+                  "keyvault_sp"
+                ]
+              },
+              "keyVaultUri": {
+                "type": "string",
+                "pattern": "^https://"
+              },
+              "secretName": {
+                "type": "string"
+              }
+            },
+            "if": {
+              "properties": {
+                "auth": {
+                  "const": "keyvault_sp"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "keyVaultUri",
+                "secretName"
+              ],
+              "properties": {
+                "secretName": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platformClientId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/guid"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "deployIdentities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/guid"
+          }
+        },
+        "backupClientId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/guid"
+            },
+            {
+              "const": ""
+            }
+          ]
+        }
+      }
+    },
+    "keyVault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "secrets"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "csi",
+            "kubernetesSecret"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^([a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9])?$"
+        },
+        "tenantId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/guid"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "kubernetesSecretName": {
+          "type": "string"
+        },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "databaseUrl",
+            "appSecret",
+            "sessionSecret",
+            "internalToken"
+          ],
+          "properties": {
+            "databaseUrl": {
+              "type": "string",
+              "minLength": 1
+            },
+            "testDatabaseUrl": {
+              "type": "string"
+            },
+            "appSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "internalToken": {
+              "type": "string",
+              "minLength": 1
+            },
+            "neo4jPassword": {
+              "type": "string"
+            },
+            "neo4jAuth": {
+              "type": "string"
+            },
+            "oidcClientSecret": {
+              "type": "string"
+            },
+            "azureOpenaiApiKey": {
+              "type": "string"
+            },
+            "claudeCodeOauthToken": {
+              "type": "string"
+            },
+            "langfuseSecretKey": {
+              "type": "string"
+            },
+            "githubToken": {
+              "type": "string"
+            },
+            "atlassianToken": {
+              "type": "string"
+            },
+            "atlassianUser": {
+              "type": "string"
+            },
+            "figmaToken": {
+              "type": "string"
+            },
+            "connectorsCaBundle": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "csi"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "minLength": 3
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "className"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+        },
+        "tlsSecretName": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/annotations"
+        },
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/annotations"
+            }
+          }
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "tmpSize": {
+          "$ref": "#/definitions/quantity"
+        }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "maxReplicas",
+        "slots",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "slots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "targetCPUUtilization": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 100
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "tmpSize": {
+          "$ref": "#/definitions/quantity"
+        },
+        "nugetCacheSize": {
+          "$ref": "#/definitions/quantity"
+        },
+        "stackCacheSize": {
+          "$ref": "#/definitions/quantity"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storageClass": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "create",
+            "name"
+          ],
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "skuName": {
+              "enum": [
+                "Premium_LRS",
+                "Premium_ZRS",
+                "Standard_LRS",
+                "Standard_ZRS",
+                "Standard_GRS"
+              ]
+            },
+            "storageAccount": {
+              "type": "string",
+              "pattern": "^([a-z0-9]{3,24})?$"
+            },
+            "resourceGroup": {
+              "type": "string"
+            },
+            "shareName": {
+              "type": "string",
+              "pattern": "^([a-z0-9][a-z0-9-]{1,61}[a-z0-9])?$"
+            },
+            "mountOptions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "size": {
+          "$ref": "#/definitions/quantity"
+        },
+        "accessMode": {
+          "enum": [
+            "ReadWriteMany",
+            "ReadWriteOnce"
+          ]
+        },
+        "existingClaim": {
+          "type": "string"
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "cidrs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/cidr"
+          }
+        }
+      }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowCidrs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/cidr"
+          }
+        },
+        "allowNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "fqdns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ingressCidrs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/cidr"
+          }
+        },
+        "dnsNamespace": {
+          "type": "string"
+        },
+        "kubeApiCidrs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/cidr"
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "azureOpenAI": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "apiVersion": {
+              "type": "string"
+            },
+            "auth": {
+              "enum": [
+                "managed_identity",
+                "key"
+              ]
+            },
+            "deployments": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "strong": {
+                  "type": "string"
+                },
+                "standard": {
+                  "type": "string"
+                },
+                "efficient": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "mirrors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nuget": {
+          "type": "string",
+          "pattern": "^(https://.+)?$"
+        },
+        "npm": {
+          "type": "string",
+          "pattern": "^(https://.+)?$"
+        },
+        "terraformConfig": {
+          "type": "string"
+        },
+        "maven": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "goproxy": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "pypi": {
+          "type": "string",
+          "pattern": "^(https://[^\\s,]+)?$"
+        },
+        "caBundle": {
+          "type": "string"
+        }
+      }
+    },
+    "langfuse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "host": {
+            "pattern": "^https://.+"
+          }
+        },
+        "required": [
+          "host"
+        ]
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "neo4jBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 9
+        },
+        "storageAccount": {
+          "type": "string",
+          "pattern": "^([a-z0-9]{3,24})?$"
+        },
+        "container": {
+          "type": "string"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 600
+        },
+        "stopTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 30
+        },
+        "scratchSize": {
+          "$ref": "#/definitions/quantity"
+        },
+        "azureCliImage": {
+          "type": "string",
+          "pattern": "@sha256:[0-9a-f]{64}$"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "disabledReason": {
+          "type": "string"
+        }
+      }
+    },
+    "neo4j": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "uri": {
+          "type": "string",
+          "pattern": "^((bolt|neo4j)(\\+s|\\+ssc)?://.+)?$"
+        },
+        "externalCidrs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/cidr"
+          }
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "customImage": {
+              "type": "string",
+              "pattern": "@sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        "readyGraceSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gatesReadiness": {
+          "type": "boolean"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "externalCidrs"
+        ],
+        "properties": {
+          "externalCidrs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "connectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caBundle": {
+          "type": "string",
+          "pattern": "^(\\s*-----BEGIN CERTIFICATE-----[\\s\\S]*)?$",
+          "not": {
+            "pattern": "PRIVATE KEY"
+          }
+        },
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "baseUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            },
+            "apiUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            },
+            "commitEmail": {
+              "type": "string"
+            }
+          }
+        },
+        "atlassian": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "flavor": {
+              "enum": [
+                "datacenter",
+                "cloud"
+              ]
+            },
+            "confluenceUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            },
+            "jiraUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            }
+          }
+        },
+        "figma": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            },
+            "apiUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            },
+            "webUrl": {
+              "type": "string",
+              "pattern": "^(https://[^/@\\s]+(/[^@\\s]*)?)?$"
+            },
+            "imageHosts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^/:\\s]+(:[0-9]+)?$"
+              }
+            },
+            "imageCidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "imageHosts": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "imageHosts"
+            ]
+          },
+          "then": {
+            "required": [
+              "imageCidrs"
+            ],
+            "properties": {
+              "imageCidrs": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "stacks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "dotnet",
+              "java",
+              "go",
+              "python"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "x-ci": {
+        "const": true
+      }
+    },
+    "required": [
+      "x-ci"
+    ]
+  },
+  "then": {},
+  "else": {
+    "properties": {
+      "ciEnv": {
+        "maxProperties": 0
+      },
+      "auth": {
+        "properties": {
+          "mode": {
+            "const": "oidc"
+          }
+        }
+      },
+      "keyVault": {
+        "properties": {
+          "mode": {
+            "const": "csi"
+          }
+        }
+      },
+      "networkPolicy": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "identity": {
+        "required": [
+          "platformClientId"
+        ],
+        "properties": {
+          "platformClientId": {
+            "$ref": "#/definitions/guid"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "github": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "github"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "githubToken"
+                    ],
+                    "properties": {
+                      "githubToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "github": {
+                    "required": [
+                      "allowedHosts",
+                      "cidrs"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "github": {
+                    "properties": {
+                      "baseUrl": {
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "baseUrl"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "figma": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "figma"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "figmaToken"
+                    ],
+                    "properties": {
+                      "figmaToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "figma": {
+                    "required": [
+                      "allowedHosts",
+                      "cidrs"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "figma": {
+                    "properties": {
+                      "apiUrl": {
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "apiUrl"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "atlassian": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            },
+            "required": [
+              "atlassian"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "keyVault": {
+                "properties": {
+                  "secrets": {
+                    "required": [
+                      "atlassianToken"
+                    ],
+                    "properties": {
+                      "atlassianToken": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "atlassian": {
+                    "required": [
+                      "allowedHosts",
+                      "cidrs"
+                    ],
+                    "properties": {
+                      "allowedHosts": {
+                        "minItems": 1
+                      },
+                      "cidrs": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "connectors": {
+                "properties": {
+                  "atlassian": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "confluenceUrl": {
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "confluenceUrl"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "jiraUrl": {
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "jiraUrl"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "connectors": {
+            "properties": {
+              "atlassian": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  },
+                  "flavor": {
+                    "const": "cloud"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "flavor"
+                ]
+              }
+            },
+            "required": [
+              "atlassian"
+            ]
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "then": {
+        "properties": {
+          "keyVault": {
+            "properties": {
+              "secrets": {
+                "required": [
+                  "atlassianUser"
+                ],
+                "properties": {
+                  "atlassianUser": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "java"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "maven"
+            ],
+            "properties": {
+              "maven": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "go"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "goproxy"
+            ],
+            "properties": {
+              "goproxy": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "stacks"
+        ],
+        "properties": {
+          "stacks": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "contains": {
+                  "const": "python"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mirrors"
+        ],
+        "properties": {
+          "mirrors": {
+            "required": [
+              "pypi"
+            ],
+            "properties": {
+              "pypi": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://[^\\s,]+$"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

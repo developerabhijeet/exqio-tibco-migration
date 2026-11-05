@@ -1,0 +1,52 @@
+# Caddy configuration for the pilot proxy (deploy/docker/compose.pilot.yml, service proxy).
+# TLS uses the operator's certificate files: no ACME, so the proxy makes no outbound calls. It
+# listens on 8443 (unprivileged; the host's 443 maps to it), sends /api/* to the API without
+# rewriting the path (API_BASE_PATH=/api) and everything else to the web.
+{
+	admin off
+	auto_https disable_redirects
+	https_port 8443
+	http_port 8080
+	storage file_system /data
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$PILOT_HOSTNAME}:8443 {
+	tls /run/secrets/tls.crt /run/secrets/tls.key
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+	# Belt and braces: the API serves no docs or schema in oidc mode, and the proxy refuses them too.
+	@apidocs path /api/docs /api/docs/* /api/redoc /api/redoc/* /api/openapi.json
+	handle @apidocs {
+		respond 404
+	}
+
+	# The API, unbuffered and uncompressed: job progress is a server-sent event stream.
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+	handle {
+		encode zstd gzip
+		reverse_proxy web:3000
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Container health check only; bound to loopback inside the container.
+http://127.0.0.1:8081 {
+	bind 127.0.0.1
+	respond /healthz "ok" 200
+}

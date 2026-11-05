@@ -19,14 +19,15 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from engine.analysis.models import Finding, Rule
-from engine.dotnet_gen.generator import GeneratedSolution, ident
+from engine.dotnet_gen.generator import GeneratedSolution, GenFile, ident
 from engine.dotnet_gen.models import DesignRecord
 from engine.ir.models import Process
+from engine.stacks import get_stack
 
-from .builder import code_only, is_test_path
+from .builder import language
 from .designer import findings_block, rules_block, skeleton_text
 from .prompting import ask_json, render_process, render_prompt
-from .test_engineer import TEST_FILE_KINDS, placeholder_methods
+from .test_engineer import TEST_FILE_KINDS, placeholder_methods, test_files_with_entries
 
 Reviewer = Literal["equivalence", "security", "standards", "test"]
 Triage = Literal["patch", "defer", "decision"]
@@ -64,32 +65,72 @@ class ReviewFinding(BaseModel):
     triage: Triage
 
 
-def reviewed_files(solution: GeneratedSolution) -> dict[str, str]:
-    """The agent-written production files: what a model changed."""
+#: Hand-edited files the panel reads (sub-project 6): the stack's source files (its
+#: ``source_suffixes``), text, at most this size.
+HAND_REVIEW_MAX_BYTES = 64 * 1024
+
+
+def hand_review_suffixes(stack: str = "dotnet") -> tuple[str, ...]:
+    """The suffixes of the hand-edited files the panel reads: the stack's source files."""
+    return get_stack(stack).source_suffixes
+
+
+def _hand_source(f: GenFile, stack: str = "dotnet") -> bool:
+    return (f.origin == "hand" and not language(stack).is_test_path(f.path)
+            and f.path.endswith(hand_review_suffixes(stack))
+            and "\x00" not in f.content and "\ufffd" not in f.content)
+
+
+def reviewed_files(solution: GeneratedSolution, stack: str = "dotnet") -> dict[str, str]:
+    """The agent-written production files (what a model changed) and the hand-edited source files
+    a person changed (sub-project 6: the panel still reviews them) within ``HAND_REVIEW_MAX_BYTES``;
+    project files, assets and larger files are not sent (:func:`skipped_hand_files`)."""
+    lang = language(stack)
     return {
         f.path: f.content for f in solution.files
-        if f.origin == "agent" and not is_test_path(f.path)
+        if (f.origin == "agent" and not lang.is_test_path(f.path))
+        or (_hand_source(f, stack) and len(f.content.encode("utf-8")) <= HAND_REVIEW_MAX_BYTES)
     }
+
+
+def unreviewed_hand_files(solution: GeneratedSolution, stack: str = "dotnet") -> list[str]:
+    """Hand-edited production files the panel does not read because they are not text source files
+    of the stack (project files, assets, binaries), sorted; the build log names them."""
+    return sorted(f.path for f in solution.files
+                  if f.origin == "hand" and not language(stack).is_test_path(f.path) and not _hand_source(f, stack))
+
+
+def skipped_hand_files(solution: GeneratedSolution, stack: str = "dotnet") -> list[str]:
+    """Hand-edited source files too large for the panel, sorted."""
+    return sorted(f.path for f in solution.files
+                  if _hand_source(f, stack) and len(f.content.encode("utf-8")) > HAND_REVIEW_MAX_BYTES)
 
 
 _TEST_ATTR = re.compile(r"\[\s*(?:Fact|Theory)\b")
 
 
-def reviewed_test_files(solution: GeneratedSolution, process: Process | None = None) -> dict[str, str]:
+def reviewed_test_files(solution: GeneratedSolution, process: Process | None = None,
+                        stack: str = "dotnet") -> dict[str, str]:
     """The rule and branch test files (``<Stem>RulesTests.cs``, ``<Stem>BranchTests.cs``) that
     hold at least one written test (not every test is still a ``no test body`` placeholder).
-    With ``process`` only that process's files."""
+    With ``process`` only that process's files. Another ``stack``: the rule and branch test files
+    its test index lists, with more indexed tests than placeholders."""
+    if stack != "dotnet":
+        return {f.path: f.content for f, entries in test_files_with_entries(solution, process, stack)
+                if sum(1 for e in entries if e.kind in ("rule", "branch"))
+                > len(placeholder_methods(f.content, stack, entries))}
+    lang = language(stack)
     suffixes = tuple(f"{k}.cs" for k in TEST_FILE_KINDS)
     stem = ident(process.name, "Process") if process is not None else None
     out: dict[str, str] = {}
     for f in solution.files:
         name = PurePosixPath(f.path).name
-        if not is_test_path(f.path) or not name.endswith(suffixes):
+        if not lang.is_test_path(f.path) or not name.endswith(suffixes):
             continue
         if process is not None and (name not in {stem + s for s in suffixes}
                                     or f.process_id not in (None, process.id)):
             continue
-        if len(_TEST_ATTR.findall(code_only(f.content))) > len(placeholder_methods(f.content)):
+        if len(_TEST_ATTR.findall(lang.code_only(f.content))) > len(placeholder_methods(f.content)):
             out[f.path] = f.content
     return out
 
@@ -150,6 +191,7 @@ async def review_panel(
     process: Process | None = None,
     diff: str | None = None,
     reviewers: Iterable[Reviewer] | None = None,
+    stack: str = "dotnet",
 ) -> list[ReviewFinding]:
     """Run the three production reviewers in turn, equivalence first, then the test reviewer
     when rule or branch tests were written, and return their findings in that order.
@@ -161,19 +203,20 @@ async def review_panel(
     ``diff`` overrides the default view of the change (the numbered agent-written files); findings
     are still kept only for those files. ``process`` adds the TIBCO source for the equivalence
     comparison; without it the rule citations are the source. Test findings (reviewer ``test``)
-    have the same shape and are kept only for the reviewed test files."""
+    have the same shape and are kept only for the reviewed test files. ``stack`` picks the
+    language checks and the prompt pack."""
     chosen = set(REVIEWERS) | {TEST_REVIEWER} if reviewers is None else set(reviewers)
     unknown = sorted(chosen - set(REVIEWERS) - {TEST_REVIEWER})
     if unknown:
         raise ValueError(f"unknown reviewer(s): {', '.join(unknown)}")
-    files = reviewed_files(solution)
+    files = reviewed_files(solution, stack)
     code = diff if diff is not None else numbered(files)
     if process is not None:
         source = render_process(process, [])
     else:
         source = "TIBCO source not supplied; compare against the citations of the rules."
     spec = skeleton_text(design)
-    tests = reviewed_test_files(solution, process) if TEST_REVIEWER in chosen else {}
+    tests = reviewed_test_files(solution, process, stack) if TEST_REVIEWER in chosen else {}
 
     # Each reviewer reads the same code and answers on its own; nothing one finds changes what
     # another is asked. Run them together: four sequential calls made the panel the third longest
@@ -181,7 +224,7 @@ async def review_panel(
     jobs: list[tuple[str, dict[str, str], tuple[str, str]]] = []
     for reviewer in (r for r in REVIEWERS if r in chosen):
         jobs.append((reviewer, files, render_prompt(
-            f"reviewer_{reviewer}",
+            f"reviewer_{reviewer}", stack,
             process_name=process.name if process is not None else design.process_id,
             source=source,
             design=spec,
@@ -191,7 +234,7 @@ async def review_panel(
         )))
     if tests:
         jobs.append((TEST_REVIEWER, tests, render_prompt(
-            "reviewer_test",
+            "reviewer_test", stack,
             process_name=process.name if process is not None else design.process_id,
             rules=rules_block(rules),
             targets=_branches(process),

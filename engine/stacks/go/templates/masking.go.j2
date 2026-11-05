@@ -1,0 +1,83 @@
+package tib
+
+import (
+	"regexp"
+	"strings"
+	"unicode"
+)
+
+// sensitiveNames are the field names that hold a sensitive value, lower case without separators.
+var sensitiveNames = nameSet(
+{% for n in names %}
+	{{ n | go_string }},
+{% endfor %}
+)
+
+func nameSet(names ...string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, name := range names {
+		out[name] = true
+	}
+	return out
+}
+
+var sensitiveText = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b|\b(?:\d[ -]?){8,18}\d\b`)
+
+var separators = regexp.MustCompile(`[^a-z0-9]`)
+
+// IsSensitiveName is true for a field name that holds a sensitive value (ssn, accountNumber,
+// card_number, ...).
+func IsSensitiveName(name string) bool {
+	return sensitiveNames[separators.ReplaceAllString(strings.ToLower(name), "")]
+}
+
+// Mask masks one value: every letter and digit except the last four becomes *, separators stay,
+// so 909-32-1184 prints as ***-**-1184.
+func Mask(value string) string {
+	chars := []rune(value)
+	keep := 4
+	for i := len(chars) - 1; i >= 0; i-- {
+		if !unicode.IsLetter(chars[i]) && !unicode.IsDigit(chars[i]) {
+			continue
+		}
+		if keep > 0 {
+			keep--
+		} else {
+			chars[i] = '*'
+		}
+	}
+	return string(chars)
+}
+
+// MaskText masks SSN-shaped values and long digit runs (account and card numbers) inside free text.
+func MaskText(text string) string {
+	return sensitiveText.ReplaceAllStringFunc(text, Mask)
+}
+
+// MaskJSON is a copy of the value with every sensitive field masked (for error responses and logs).
+func MaskJSON(v Value) Value {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, item := range x {
+			switch item.(type) {
+			case map[string]any, []any, nil, missing:
+				out[k] = MaskJSON(item)
+			default:
+				if IsSensitiveName(k) {
+					out[k] = Mask(Text(item))
+				} else {
+					out[k] = item
+				}
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = MaskJSON(item)
+		}
+		return out
+	}
+	return v
+}

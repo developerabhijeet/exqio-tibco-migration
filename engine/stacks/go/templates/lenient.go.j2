@@ -1,0 +1,133 @@
+package tib
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"strconv"
+)
+
+// The scalar types of the contract structs. A request body is checked against its contract the
+// way the TIBCO engine and the Java stack (Jackson's defaults) read it: a number or a boolean for a
+// string field, a numeric string or an integral number (12.0, 1e2) for an integer, "true" or
+// "false" for a boolean. A value that has no such reading ("x" or 12.5 for an integer, an object
+// for a scalar) is still a type error, and the request is refused.
+
+// String is a contract string: a JSON string, number or boolean.
+type String string
+
+// Int is a contract int: an integral JSON number or a numeric string.
+type Int int
+
+// Int64 is a contract long: an integral JSON number or a numeric string.
+type Int64 int64
+
+// Float is a contract double or float: a JSON number or a numeric string.
+type Float float64
+
+// Boolean is a contract boolean: true, false, "true" or "false".
+type Boolean bool
+
+// scalar is the text of a JSON scalar and whether it was a string; null is "".
+func scalar(data []byte, kind string) (string, bool, error) {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || data[0] == '{' || data[0] == '[' {
+		return "", false, fmt.Errorf("cannot read %s as %s", short(data), kind)
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return "", false, err
+		}
+		return s, true, nil
+	}
+	return string(data), false, nil
+}
+
+func short(data []byte) string {
+	if len(data) > 20 {
+		return string(data[:20]) + "..."
+	}
+	return string(data)
+}
+
+func integral(data []byte, kind string, bits int) (int64, bool, error) {
+	text, _, err := scalar(data, kind)
+	if err != nil || text == "null" {
+		return 0, text == "null", err
+	}
+	r, ok := new(big.Rat).SetString(text)
+	if !ok || !numeric.MatchString(text) {
+		return 0, false, fmt.Errorf("cannot read %q as %s", text, kind)
+	}
+	if !r.IsInt() || r.Num().BitLen() >= bits {
+		return 0, false, fmt.Errorf("cannot read %q as %s", text, kind)
+	}
+	return r.Num().Int64(), false, nil
+}
+
+// UnmarshalJSON reads a string, a number or a boolean.
+func (v *String) UnmarshalJSON(data []byte) error {
+	text, quoted, err := scalar(data, "string")
+	if err != nil {
+		return err
+	}
+	if !quoted && text == "null" {
+		return nil
+	}
+	*v = String(text)
+	return nil
+}
+
+// UnmarshalJSON reads an integral number or a numeric string.
+func (v *Int) UnmarshalJSON(data []byte) error {
+	n, null, err := integral(data, "int", 32)
+	if err == nil && !null {
+		*v = Int(n)
+	}
+	return err
+}
+
+// UnmarshalJSON reads an integral number or a numeric string.
+func (v *Int64) UnmarshalJSON(data []byte) error {
+	n, null, err := integral(data, "long", 64)
+	if err == nil && !null {
+		*v = Int64(n)
+	}
+	return err
+}
+
+// UnmarshalJSON reads a number or a numeric string.
+func (v *Float) UnmarshalJSON(data []byte) error {
+	text, _, err := scalar(data, "double")
+	if err != nil || text == "null" {
+		return err
+	}
+	if !numeric.MatchString(text) {
+		return fmt.Errorf("cannot read %q as double", text)
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return fmt.Errorf("cannot read %q as double", text)
+	}
+	*v = Float(f)
+	return nil
+}
+
+// UnmarshalJSON reads true, false, "true" or "false".
+func (v *Boolean) UnmarshalJSON(data []byte) error {
+	text, _, err := scalar(data, "boolean")
+	if err != nil || text == "null" {
+		return err
+	}
+	switch text {
+	case "true":
+		*v = true
+	case "false":
+		*v = false
+	default:
+		return fmt.Errorf("cannot read %q as boolean", text)
+	}
+	return nil
+}

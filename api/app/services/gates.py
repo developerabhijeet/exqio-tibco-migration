@@ -36,8 +36,10 @@ from itertools import pairwise
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.app.auth.roles import Principal
+from api.app.config import Settings
 from api.app.db import utcnow
 from api.app.models import AnalysisRun, AuditLog, CoverageItem, Finding, Gate, Process, Rule
 from api.app.services import evidence as evidence_svc
@@ -273,10 +275,32 @@ async def gates_view(session: AsyncSession, process: Process) -> list[dict[str, 
     return [gate_out(name, rows.get(name), reasons[name], process, notes.get(name)) for name in GATES]
 
 
+async def enqueue_gate_ingest(sessionmaker: async_sessionmaker[AsyncSession], settings: Settings,
+                              process: Process, gate: str) -> str | None:
+    """After a decision is committed: queue the gate's memory ingest (phase ``gate``); a no-op
+    without ``NEO4J_URI``."""
+    from api.app.services.memory_ingest import enqueue_ingest  # it reads this module's rows
+
+    if not settings.neo4j_uri:
+        return None
+    async with sessionmaker() as s:
+        row = await s.scalar(select(Gate).where(Gate.process_id == process.id, Gate.gate == gate))
+    if row is None or row.decided_at is None:
+        return None
+    return await enqueue_ingest(sessionmaker, settings, project_id=process.project_id, phase="gate",
+                                scope=f"gate:{process.ir_id}:{gate}",
+                                source={"process_id": process.id, "gate": gate},
+                                actor=row.decided_by or "system",
+                                ingest_key=f"gate:{row.id}:{row.decided_at.isoformat()}")
+
+
 async def decide(session: AsyncSession, process: Process, gate: str, state: str, note: str | None,
-                 user: str) -> dict[str, Any]:
+                 principal: Principal) -> dict[str, Any]:
     """Approve or reject one gate. Approval needs the gate enabled (else ``GateBlocked``, 409);
-    the owner may always reject, and the note is recorded as the reason."""
+    the owner may always reject, and the note is recorded as the reason. The gate row names the
+    principal's UPN (dev: the persona); the audit line also carries its Entra ``oid``. The caller
+    commits, then calls :func:`enqueue_gate_ingest`."""
+    user = principal.actor
     await reconcile(session, process)
     if state == "approved":
         reasons = (await gate_reasons(session, process))[gate]
@@ -317,10 +341,15 @@ async def decide(session: AsyncSession, process: Process, gate: str, state: str,
     audit(session, process, user, f"gate {state}", gate=gate,
           detail={"spec_hash": process.spec_hash, "note": note, "previous_state": previous,
                   **({"reason": note or "rejected by the gate owner"} if state == "rejected" else {}),
-                  **{k: v for k, v in hashes.items() if v}, **extra})
+                  **{k: v for k, v in hashes.items() if v}, **extra,
+                  "actor_oid": principal.oid, "actor_upn": principal.upn})
     if state == "rejected" and gate != GATES[-1]:
         await reset_gates(session, process, rows, GATES[GATES.index(gate) + 1], f"{gate} rejected",
                           user, "user", {"spec_hash": process.spec_hash})
+    if gate == GATES[-1] and state == "approved":
+        from api.app.services import iterations  # it imports this module
+
+        await iterations.close_when_deployed(session, process.id)
     if gate == "G2":
         if state == "approved":
             process.migration_status = "validated"

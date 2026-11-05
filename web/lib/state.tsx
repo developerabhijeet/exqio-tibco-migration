@@ -1,10 +1,12 @@
 "use client";
 
-// Screen state shared by the top bar, the stepper and the tabs: the user (sent as X-User), the
-// project, the active step, the open process and domain, and the scan job's streamed log.
+// Screen state shared by the top bar, the stepper and the tabs: the sign-in mode and user (the
+// persona sent as X-User in dev, the Entra user in oidc), the project, the active step, the open
+// process and domain, and the scan job's streamed log.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setApiUser } from "./api";
+import { probeAuth, type AuthState } from "./auth";
 import { subscribeJob } from "./sse";
 import type { InspectorTab, JobEvent, UserName } from "./types";
 import { USERS } from "./types";
@@ -21,7 +23,21 @@ export interface ScanState {
   error: string | null;
 }
 
+export interface BuildFileRequest {
+  path: string;
+  line: number | null;
+  /** The API process the file belongs to; null for whichever process Build shows. */
+  processId: string | null;
+  /** When it was asked for (Date.now()), so a late or repeated request is told apart. */
+  at: number;
+}
+
+/** How long a file request waits for Build to open it before it is dropped. */
+export const BUILD_FILE_TTL_MS = 10_000;
+
 interface AppState {
+  /** dev or oidc, and in oidc the signed-in user; "unknown" until /auth/me has answered. */
+  auth: AuthState;
   user: UserName;
   setUser: (u: UserName) => void;
   projectId: string | null;
@@ -42,8 +58,15 @@ interface AppState {
   /** Open a step on the canvas with its XML lines, remembering the step to come back to. */
   jumpToStep: (activityId: string, processId?: string | null) => void;
   returnTo: StepKey | null;
-  askOpen: boolean;
-  setAskOpen: (open: boolean) => void;
+  /**
+   * A generated file asked for (by a citation, say), opened by Build's source and target explorer
+   * of that process. Dropped when the step leaves Build or after BUILD_FILE_TTL_MS unanswered.
+   */
+  buildFile: BuildFileRequest | null;
+  openBuildFile: (path: string | null, line?: number | null, processId?: string | null) => void;
+  /** The ExiQoian slide-over (components/exiqoian), open across steps and screens. */
+  chatOpen: boolean;
+  setChatOpen: (open: boolean) => void;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -67,6 +90,7 @@ function store(key: string, value: string | null): void {
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
+  const [auth, setAuth] = useState<AuthState>({ mode: "unknown", me: null });
   const [user, setUserState] = useState<UserName>("sme.vicky");
   const [projectId, setProjectIdState] = useState<string | null>(null);
   const [step, setStepState] = useState<StepKey>("upload");
@@ -74,7 +98,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [nodeId, selectNode] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("Config");
   const [returnTo, setReturnTo] = useState<StepKey | null>(null);
-  const [askOpen, setAskOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [buildFile, setBuildFile] = useState<BuildFileRequest | null>(null);
+  const openBuildFile = useCallback((path: string | null, line?: number | null, pid?: string | null) => {
+    setBuildFile(path ? { path, line: line ?? null, processId: pid ?? null, at: Date.now() } : null);
+  }, []);
+  // A file request only stands while Build is open, and not forever even then.
+  useEffect(() => {
+    if (!buildFile) return;
+    if (step !== "build") {
+      setBuildFile(null);
+      return;
+    }
+    const t = setTimeout(() => setBuildFile((b) => (b === buildFile ? null : b)), BUILD_FILE_TTL_MS);
+    return () => clearTimeout(t);
+  }, [buildFile, step]);
   const processRef = useRef<string | null>(null);
   useEffect(() => {
     processRef.current = processId;
@@ -90,7 +128,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setApiUser(u);
     }
     setProjectIdState(stored("exiqo.project"));
-  }, []);
+    let live = true;
+    probeAuth().then((a) => {
+      if (!live) return;
+      setAuth(a);
+      // oidc: what was fetched before the mode was known went out with X-User; ask again
+      if (a.mode === "oidc") qc.invalidateQueries();
+    });
+    return () => {
+      live = false;
+    };
+  }, [qc]);
 
   const setUser = useCallback(
     (u: UserName) => {
@@ -197,6 +245,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppState>(
     () => ({
+      auth,
       user,
       setUser,
       projectId,
@@ -215,10 +264,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setInspectorTab,
       jumpToStep,
       returnTo,
-      askOpen,
-      setAskOpen,
+      buildFile,
+      openBuildFile,
+      chatOpen,
+      setChatOpen,
     }),
     [
+      auth,
       user,
       setUser,
       projectId,
@@ -234,7 +286,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       inspectorTab,
       jumpToStep,
       returnTo,
-      askOpen,
+      buildFile,
+      openBuildFile,
+      chatOpen,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

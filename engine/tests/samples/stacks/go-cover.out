@@ -1,0 +1,6 @@
+mode: set
+gmf/internal/core/funding_status_lookup_service.go:10.30,12.2 1 1
+gmf/internal/core/funding_status_lookup_service.go:14.30,16.2 1 1
+gmf/internal/core/funding_status_lookup_service.go:18.30,20.2 1 0
+gmf/internal/core/funding_status_lookup_service.go:18.30,20.2 1 0
+gmf/internal/other/other.go:1.1,2.2 5 0

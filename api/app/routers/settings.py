@@ -7,10 +7,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api.app.deps import RunnerDep, SessionDep, SettingsDep, UserDep
+from api.app.deps import ADMIN_ONLY, PrincipalDep, RunnerDep, SessionDep, SettingsDep, UserDep
 from api.app.models import Eval, Process
+from api.app.routers.stacks import require_available
 from api.app.services import providers as provider_svc
 from api.app.services import settings as svc
+from engine.stacks import StackKey
 
 router = APIRouter(tags=["settings"])
 
@@ -30,6 +32,7 @@ class SettingsPatch(BaseModel):
     routing_bands: dict[str, list[int]] | None = None  # {strong: [8, 10], standard: [4, 7], efficient: [0, 3]}
     langfuse_enabled: bool | None = None
     azure: AzureKeys | None = None
+    default_stack: StackKey | None = None
 
 
 class EvalRequest(BaseModel):
@@ -46,7 +49,11 @@ async def get_settings(settings: SettingsDep, session: SessionDep) -> dict[str, 
 
 @router.put("/settings")
 async def put_settings(body: SettingsPatch, session: SessionDep, settings: SettingsDep,
-                       user: UserDep) -> dict[str, Any]:
+                       user: UserDep, principal: PrincipalDep) -> dict[str, Any]:
+    if body.default_stack is not None and body.default_stack != settings.default_stack:
+        if "admin" not in principal.roles:  # the install default is an admin's call
+            raise HTTPException(status_code=403, detail=ADMIN_ONLY)
+        require_available(body.default_stack, settings)
     try:
         await svc.update(session, settings, body.model_dump(exclude_none=True), user)
     except (ValueError, TypeError) as exc:
@@ -69,7 +76,6 @@ async def start_eval(body: EvalRequest, session: SessionDep, runner: RunnerDep,
     session.add(ev)
     await session.commit()
     job_id = await runner.submit("eval", {"eval_id": ev.id, "process_ids": body.process_ids},
-                                 provider_svc.eval_job(ev.id, body.process_ids, settings),
                                  project_id=first.project_id)
     ev.job_id = job_id
     await session.commit()

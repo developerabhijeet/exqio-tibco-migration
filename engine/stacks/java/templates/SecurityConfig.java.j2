@@ -1,0 +1,125 @@
+package {{ pkg }}.api;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.List;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtDecoders;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.SupplierJwtDecoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+/**
+ * A resource server: every route needs a bearer token except GET /health and, in development,
+ * POST /auth/dev-token. auth.mode=Development (Auth__Mode) accepts the HS256 development token of
+ * DevTokenController and is refused outside the development profile; any other mode validates
+ * Microsoft Entra ID tokens (auth.entra-id.instance, tenant-id and audience).
+ */
+@Configuration
+public class SecurityConfig {
+    @Bean
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .cors(Customizer.withDefaults())
+                .authorizeHttpRequests(auth -> auth.requestMatchers(HttpMethod.GET, "/health", "/health/**")
+                        .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/dev-token")
+                        .permitAll()
+                        .requestMatchers("/error")
+                        .permitAll()
+                        .anyRequest()
+                        .authenticated())
+                .exceptionHandling(e -> e.authenticationEntryPoint(SecurityConfig::unauthorized))
+                .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults())
+                        .authenticationEntryPoint(SecurityConfig::unauthorized));
+        return http.build();
+    }
+
+    /**
+     * 401 as application/problem+json with a fixed detail (the same body as the Go and Python
+     * services; the decoder's error text is never echoed).
+     */
+    static void unauthorized(HttpServletRequest request, HttpServletResponse response, AuthenticationException ex)
+            throws IOException {
+        String detail = request.getHeader("Authorization") == null
+                ? "a bearer token is required"
+                : "the bearer token is not valid";
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setHeader("WWW-Authenticate", "Bearer");
+        response.setContentType("application/problem+json");
+        response.getWriter().write("{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,\"detail\":\""
+                + detail + "\"}");
+    }
+
+    @Bean
+    JwtDecoder jwtDecoder(Environment environment) {
+        boolean development = environment.acceptsProfiles(Profiles.of("development"));
+        boolean devAuth = "Development".equalsIgnoreCase(environment.getProperty("auth.mode", "Production"));
+        if (devAuth && !development) {
+            throw new IllegalStateException("auth.mode=Development is allowed only in the development profile.");
+        }
+        if (devAuth) {
+            DevTokenController.Settings settings = DevTokenController.settings(environment);
+            NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(settings.key())
+                    .macAlgorithm(MacAlgorithm.HS256)
+                    .build();
+            decoder.setJwtValidator(validator(settings.issuer(), settings.audience()));
+            return decoder;
+        }
+        String issuer = environment.getProperty("auth.entra-id.instance", "")
+                + environment.getProperty("auth.entra-id.tenant-id", "") + "/v2.0";
+        String audience = environment.getProperty("auth.entra-id.audience", "");
+        return new SupplierJwtDecoder(() -> {
+            NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuer);
+            decoder.setJwtValidator(validator(issuer, audience));
+            return decoder;
+        });
+    }
+
+    private static OAuth2TokenValidator<Jwt> validator(String issuer, String audience) {
+        OAuth2TokenValidator<Jwt> audienceCheck =
+                new JwtClaimValidator<List<String>>(JwtClaimNames.AUD, aud -> aud != null && aud.contains(audience));
+        return new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefaultWithIssuer(issuer), audienceCheck);
+    }
+
+    /** Development only: the web Verify tab calls the service from the browser (cors.origins, Cors__Origins__0). */
+    @Bean
+    CorsConfigurationSource corsConfigurationSource(Environment environment) {
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        if (environment.acceptsProfiles(Profiles.of("development"))) {
+            List<String> origins = Binder.get(environment)
+                    .bind("cors.origins", Bindable.listOf(String.class))
+                    .orElse(List.of("http://localhost:3000"));
+            CorsConfiguration cors = new CorsConfiguration();
+            cors.setAllowedOrigins(origins);
+            cors.setAllowedMethods(List.of("*"));
+            cors.setAllowedHeaders(List.of("*"));
+            source.registerCorsConfiguration("/**", cors);
+        }
+        return source;
+    }
+}

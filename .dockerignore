@@ -1,0 +1,37 @@
+# Build context for deploy/docker/platform.Dockerfile and web.Dockerfile (context: the repo root).
+# An allowlist: nothing reaches the builder unless it is named here, so a new local file (a .env,
+# a credentials export, a data dump) can never end up in an image by accident.
+*
+
+# platform image: the Python packages, the toolchain detector the engine loads, the Alembic config
+!pyproject.toml
+!uv.lock
+!api/
+!engine/
+!scripts/toolchain.py
+!deploy/docker/entrypoint.sh
+
+# web image: sources and the lockfile; dependencies are installed in the build stage
+!web/
+# the help guides web/scripts/copy-guides.mjs bundles into the Help & Support screen
+!docs/deploy/
+
+# Never shipped, even inside an allowed folder. api/tests holds the EXIQO_TEST_HANDLERS job
+# handlers, which must not exist in a production image; engine/tests holds fixtures only.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+api/tests
+engine/tests
+**/.env*
+web/node_modules
+web/.next
+web/.next-*
+web/out
+web/test-results
+web/playwright-report
+web/e2e
+web/content
+web/tsconfig.tsbuildinfo
+web/public/monaco

@@ -1,4 +1,4 @@
-"""Job runner, SSE event stream, restart recovery and the user principal dependency (Task 17)."""
+"""Job runner, SSE event stream, lost-worker recovery and the user principal dependency (Task 17)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,8 @@ import json
 from fastapi import Depends
 from sqlalchemy import select
 
-from api.app.deps import require_user
+from api.app.deps import require_actor
+from api.app.jobs import registry
 from api.app.jobs.runner import JobContext
 from api.app.models import Job, JobEvent
 
@@ -38,7 +39,8 @@ async def _demo(ctx: JobContext) -> dict:
 
 async def test_sse_streams_log_events(client, app):
     runner = app.state.runner
-    job_id = await runner.submit("demo", {"n": 3}, _demo)
+    registry.register("demo", lambda ctx, w: _demo(ctx))
+    job_id = await runner.submit("demo", {"n": 3})
     async with client.stream("GET", f"/jobs/{job_id}/events") as r:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
@@ -74,7 +76,8 @@ async def test_failed_job_streams_error(client, app):
         await ctx.log("about to fail")
         raise RuntimeError("parser exploded")
 
-    job_id = await app.state.runner.submit("demo", {}, boom)
+    registry.register("demo", lambda ctx, w: boom(ctx))
+    job_id = await app.state.runner.submit("demo", {})
     async with client.stream("GET", f"/jobs/{job_id}/events") as r:
         events = _parse_sse("".join([c async for c in r.aiter_text()]))
     assert [e["event"] for e in events] == ["log", "error"]
@@ -106,23 +109,24 @@ async def test_events_for_other_worker_are_polled(client, app):
     assert [e["data"]["text"] for e in events] == ["from elsewhere", "done"]
 
 
-async def test_restart_marks_running_jobs_failed(app):
+async def test_recovery_fails_running_job_without_heartbeat(app):
+    """A running job with no heartbeat (left by a process older than worker heartbeats) is lost."""
     sm = app.state.sessionmaker
     async with sm() as s:
         job = Job(kind="scan", status="running", payload={})
         s.add(job)
         await s.commit()
         job_id = job.id
-    await app.state.runner.recover()
+    await app.state.runner.worker.reap()
     async with sm() as s:
         job = await s.get(Job, job_id)
-        assert job.status == "failed" and job.error == "api restarted" and job.finished_at
+        assert job.status == "failed" and job.error == "worker lost" and job.finished_at
         evs = (await s.execute(select(JobEvent).where(JobEvent.job_id == job_id))).scalars().all()
-        assert [(e.event, e.text) for e in evs] == [("error", "api restarted")]
+        assert [(e.event, e.text) for e in evs] == [("error", "worker lost")]
 
 
 async def test_agent_header_forbidden(client, app):
-    async def whoami(user: str = Depends(require_user)) -> dict:
+    async def whoami(user: str = Depends(require_actor)) -> dict:
         return {"user": user}
 
     app.add_api_route("/_test/whoami", whoami, methods=["POST"])

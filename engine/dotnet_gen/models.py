@@ -106,9 +106,15 @@ class ExpectedDifference(BaseModel):
     description: str
 
 
+DEFAULT_STACK = "dotnet"
+
+
 class DesignRecord(BaseModel):
     process_id: str
     spec_hash: str
+    # The target stack the names below are for (``engine.stacks.STACK_KEYS``). In the hash except
+    # for "dotnet", so every record stored before the field existed keeps its hash.
+    stack: str = DEFAULT_STACK
     solution: SolutionLayout
     mapping: list[MappingRow] = Field(default_factory=list)
     contracts: list[ContractMap] = Field(default_factory=list)
@@ -139,7 +145,13 @@ def compute_design_hash(record: DesignRecord) -> str:
     The hash covers what code decides (process id, spec hash, solution, mapping, contracts, config,
     messaging, resilience, sequence, expected differences); the designer's narrative, decisions and
     open questions are advice on top of it and do not move it.
+
+    ``stack`` is dropped when it is ``"dotnet"``: a .NET record hashes as it did before the field
+    existed (no approved G3 resets on upgrade), while a design for another stack is a different
+    design and must re-earn G3.
     """
     payload = record.model_dump(mode="json", exclude=set(HASH_EXCLUDED))
+    if payload.get("stack") == DEFAULT_STACK:
+        del payload["stack"]
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()

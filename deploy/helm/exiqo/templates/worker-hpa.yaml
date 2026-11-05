@@ -1,0 +1,29 @@
+{{- /*
+Scale the workers on CPU (builds and tests are CPU bound). Scale-down is slow and one pod at a time:
+a removed worker drains its running jobs for up to 570 s.
+*/ -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: exiqo-worker
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: exiqo-worker
+  minReplicas: {{ .Values.worker.replicas }}
+  maxReplicas: {{ max .Values.worker.maxReplicas .Values.worker.replicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.targetCPUUtilization }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 900
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 600}

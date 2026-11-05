@@ -1,0 +1,24 @@
+"""TIBCO faults. Every throw activity has a ``ProcessFault`` subclass in this package; the API turns an
+uncaught one into application/problem+json with the fault name as title and the masked data as
+"fault", and a JMS consumer dead-letters the message with the fault name as reason."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from {{ pkg }}.core import tib
+
+
+class ProcessFault(Exception):
+    """A TIBCO fault: the fault name and its data (the fault element as JSON)."""
+
+    def __init__(self, fault_name: str, fault_data: Any = None) -> None:
+        self.fault_name = fault_name
+        self.fault_data = fault_data if fault_data is not None else {}
+        detail = tib.text(tib.path(self.fault_data, "message"))
+        super().__init__(f"{fault_name}: {detail}" if detail else fault_name)
+
+    @staticmethod
+    def named(error: BaseException, name: str) -> bool:
+        """True when ``error`` is the TIBCO fault ``name`` (a catch of that fault handles it)."""
+        return isinstance(error, ProcessFault) and error.fault_name == name

@@ -52,16 +52,18 @@ def _process_resource_refs(p: Process) -> list[tuple[str | None, Any]]:
 # ------------------------------------------------------------------- endpoint
 def _endpoint(p: Process) -> tuple[str, dict[str, Any]] | None:
     st = p.starter
-    if not st:
-        return None
-    c = st.config
-    if st.kind == "rest" and c.get("path"):
+    return endpoint_of(st.kind, st.config, p.name) if st else None
+
+
+def endpoint_of(kind: str, c: dict[str, Any], process_name: str) -> tuple[str, dict[str, Any]] | None:
+    """The estate-graph endpoint (name, attrs) a starter exposes; shared with the memory projector."""
+    if kind == "rest" and c.get("path"):
         verb = str(c.get("verb") or "").upper()
         return f"{verb} {c['path']}".strip(), {"verb": verb, "path": c["path"], "protocol": "rest"}
-    if st.kind == "http" and c.get("resource_path"):
+    if kind == "http" and c.get("resource_path"):
         return f"HTTP {c['resource_path']}", {"path": c["resource_path"], "protocol": "http"}
-    if st.kind == "soap":
-        op = c.get("operation") or c.get("port_type") or p.name
+    if kind == "soap":
+        op = c.get("operation") or c.get("port_type") or process_name
         return f"SOAP {op}", {"operation": op, "protocol": "soap"}
     return None
 

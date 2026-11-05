@@ -28,12 +28,12 @@ function moduleReason(m: { init_ok: boolean | null; validate_ok: boolean | null;
 
 /** fmt, per-module init and validate, and terragrunt hclfmt, each with its reason when red. */
 export function ValidationRows({ validation, testId }: { validation: InfraValidation | null; testId?: string }) {
-  if (!validation) return <p className="text-[14px] text-slate">No validation recorded.</p>;
+  if (!validation) return <p className="text-md text-slate">No validation recorded.</p>;
   const modules = validation.modules ?? [];
   return (
     <div data-testid={testId} className="space-y-2">
-      <div className="overflow-x-auto rounded-btn border border-line">
-        <table className="w-full min-w-[620px] text-[13px]">
+      <div className="table-scroll rounded-btn border border-line">
+        <table className="table min-w-[620px] text-sm">
           <thead>
             <tr className="table-head">
               <th className="px-3 py-2">Check</th>
@@ -43,14 +43,14 @@ export function ValidationRows({ validation, testId }: { validation: InfraValida
           </thead>
           <tbody className="divide-y divide-line">
             <tr data-check="fmt" data-ok={String(validation.fmt_ok)} className={validation.fmt_ok === false ? "bg-error-bg/40" : ""}>
-              <td className="px-3 py-2 font-mono text-[12px]">terraform fmt -check</td>
+              <td className="px-3 py-2 font-mono text-xs">terraform fmt -check</td>
               <td className="px-3 py-2">
                 <CheckPill ok={validation.fmt_ok} yes="passed" />
               </td>
               <td className="px-3 py-2 text-slate">{validation.fmt_ok === false ? "files need formatting" : ""}</td>
             </tr>
             <tr data-check="hclfmt" data-ok={String(validation.hclfmt_ok)} className={validation.hclfmt_ok === false ? "bg-error-bg/40" : ""}>
-              <td className="px-3 py-2 font-mono text-[12px]">terragrunt hcl fmt --check</td>
+              <td className="px-3 py-2 font-mono text-xs">terragrunt hcl fmt --check</td>
               <td className="px-3 py-2">
                 <CheckPill ok={validation.hclfmt_ok} yes="passed" />
               </td>
@@ -60,7 +60,7 @@ export function ValidationRows({ validation, testId }: { validation: InfraValida
               const reason = moduleReason(m);
               return (
                 <tr key={m.name} className={m.init_ok === false || m.validate_ok === false ? "bg-error-bg/40" : ""}>
-                  <td className="whitespace-nowrap px-3 py-2 font-mono text-[12px]">module {m.name}</td>
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">module {m.name}</td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <span data-check="init" data-ok={String(m.init_ok)} className="mr-1">
                       <CheckPill ok={m.init_ok} yes="init ok" no="init failed" unknown="init not run" />
@@ -74,8 +74,8 @@ export function ValidationRows({ validation, testId }: { validation: InfraValida
                     {reason}
                     {m.log && !/^init skipped/.test(m.log) ? (
                       <details className="mt-1 text-slate">
-                        <summary className="cursor-pointer text-[12px]">log</summary>
-                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-page p-2 font-mono text-[11.5px]">{m.log}</pre>
+                        <summary className="cursor-pointer text-xs">log</summary>
+                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-page p-2 font-mono text-xs">{m.log}</pre>
                       </details>
                     ) : null}
                   </td>
@@ -86,7 +86,7 @@ export function ValidationRows({ validation, testId }: { validation: InfraValida
         </table>
       </div>
       {(validation.notes ?? []).map((n) => (
-        <p key={n} className="text-[13px] text-decision">
+        <p key={n} className="text-sm text-decision">
           {n}
         </p>
       ))}
@@ -130,7 +130,7 @@ export function InfraPanel({ buildId }: { buildId: string }) {
         <div className="max-h-[560px] overflow-y-auto rounded-btn border border-line p-2" data-testid="infra-tree">
           {groups.map((g) => (
             <details key={g.kind} open={g.open} className="group/k">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-1 text-[13px] font-semibold text-plum hover:bg-warm">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-1 text-sm font-semibold text-heading hover:bg-sunken">
                 <ChevronRight size={13} className="text-slate transition-transform group-open/k:rotate-90" aria-hidden />
                 {g.label}
                 <span className="font-normal text-slate">{g.files.length}</span>
@@ -141,8 +141,8 @@ export function InfraPanel({ buildId }: { buildId: string }) {
                     <button
                       type="button"
                       onClick={() => setSelected(f.path)}
-                      className={`w-full truncate rounded px-1 py-0.5 text-left font-mono text-[11.5px] ${
-                        selected === f.path ? "bg-purple-lt text-purple-dk" : "text-ink hover:bg-warm"
+                      className={`w-full truncate rounded px-1 py-0.5 text-left font-mono text-xs ${
+                        selected === f.path ? "bg-accent-soft text-accent-ink" : "text-ink hover:bg-sunken"
                       }`}
                       title={f.path}
                     >

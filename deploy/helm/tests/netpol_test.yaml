@@ -1,0 +1,110 @@
+# Default deny in both directions, then one policy per allowed path (spec section 2, "Network").
+suite: network policies
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/networkpolicies.yaml
+tests:
+  - it: denies all ingress and egress by default
+    documentSelector: {path: metadata.name, value: exiqo-default-deny}
+    asserts:
+      - equal: {path: spec.podSelector, value: {}}
+      - equal: {path: spec.policyTypes, value: [Ingress, Egress]}
+      - notExists: {path: spec.ingress}
+      - notExists: {path: spec.egress}
+  - it: worker port 9100 admits the api pods only
+    documentSelector: {path: metadata.name, value: exiqo-worker-ingress}
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels
+          value: {app.kubernetes.io/name: exiqo, app.kubernetes.io/instance: RELEASE-NAME, app.kubernetes.io/component: worker}
+      - equal: {path: spec.policyTypes, value: [Ingress]}
+      - lengthEqual: {path: spec.ingress, count: 1}
+      - equal:
+          path: spec.ingress[0].from
+          value:
+            - podSelector:
+                matchLabels: {app.kubernetes.io/name: exiqo, app.kubernetes.io/instance: RELEASE-NAME, app.kubernetes.io/component: api}
+      - equal: {path: "spec.ingress[0].ports", value: [{port: 9100, protocol: TCP}]}
+  - it: the api admits the ingress controller only, on 8000
+    documentSelector: {path: metadata.name, value: exiqo-api-ingress}
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0]
+          value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}
+      - equal: {path: "spec.ingress[0].ports", value: [{port: 8000, protocol: TCP}]}
+  - it: web admits the ingress controller only, on 3000
+    documentSelector: {path: metadata.name, value: exiqo-web-ingress}
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0]
+          value: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}
+      - equal: {path: "spec.ingress[0].ports", value: [{port: 3000, protocol: TCP}]}
+  - it: api and worker may reach the bundled Neo4j on 7687
+    documentSelector: {path: metadata.name, value: exiqo-neo4j-egress}
+    asserts:
+      - equal:
+          path: spec.podSelector.matchExpressions
+          value: [{key: app.kubernetes.io/component, operator: In, values: [api, worker]}]
+      - equal:
+          path: spec.egress
+          value: [{to: [{podSelector: {matchLabels: {app: exiqo-neo4j}}}], ports: [{port: 7687, protocol: TCP}]}]
+  - it: neo4j bolt admits api, worker and backup only
+    documentSelector: {path: metadata.name, value: exiqo-neo4j-ingress}
+    asserts:
+      - equal: {path: spec.podSelector.matchLabels, value: {app: exiqo-neo4j}}
+      - equal: {path: "spec.ingress[0].ports", value: [{port: 7687, protocol: TCP}]}
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchExpressions
+          value:
+            - {key: app.kubernetes.io/component, operator: In, values: [api, worker, neo4j-backup]}
+  - it: every pod may resolve names through kube-dns
+    documentSelector: {path: metadata.name, value: exiqo-dns-egress}
+    asserts:
+      - equal: {path: spec.podSelector, value: {}}
+      - equal:
+          path: spec.egress[0].to[0]
+          value:
+            namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+            podSelector: {matchLabels: {k8s-app: kube-dns}}
+  - it: platform egress goes to the listed CIDRs and Postgres only
+    documentSelector: {path: metadata.name, value: exiqo-platform-egress}
+    asserts:
+      - equal:
+          path: spec.podSelector.matchExpressions
+          value: [{key: app.kubernetes.io/component, operator: In, values: [api, worker, migrate]}]
+      - contains:
+          path: spec.egress
+          content:
+            to: [{ipBlock: {cidr: 10.20.30.0/28}}]
+            ports: [{port: 5432, protocol: TCP}]
+      - contains:
+          path: spec.egress
+          content:
+            to: [{ipBlock: {cidr: 10.40.0.0/24}}, {ipBlock: {cidr: 20.190.128.0/18}}]
+            ports: [{port: 443, protocol: TCP}]
+
+---
+suite: network policies, external Neo4j
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/networkpolicies.yaml
+tests:
+  - it: an external Neo4j without externalCidrs fails (an empty "to" would allow any address)
+    values:
+      - ../exiqo/values.gmf.example.yaml
+      - ../tests/values/external-neo4j-no-cidrs.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "externalCidrs"
+  - it: an external Neo4j is reached at its CIDRs on 7687 only
+    set:
+      neo4j.enabled: false
+      neo4j.uri: bolt+s://neo4j.gmf.example:7687
+      neo4j.externalCidrs: [10.60.0.0/28]
+    documentSelector: {path: metadata.name, value: exiqo-neo4j-egress}
+    asserts:
+      - equal:
+          path: spec.egress
+          value: [{to: [{ipBlock: {cidr: 10.60.0.0/28}}], ports: [{port: 7687, protocol: TCP}]}]

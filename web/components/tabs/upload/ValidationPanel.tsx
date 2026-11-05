@@ -22,12 +22,12 @@ function Row({
       <div className="flex items-start gap-2.5">
         <Icon size={18} className={`mt-0.5 shrink-0 ${color}`} aria-hidden />
         <div className="min-w-0 flex-1">
-          <p className="font-medium text-plum">{title}</p>
-          <p className="text-[14px] text-slate">{detail}</p>
+          <p className="font-medium text-heading">{title}</p>
+          <p className="text-md text-slate">{detail}</p>
           {items && items.length > 0 ? (
             <details className="mt-1">
-              <summary className="cursor-pointer text-[13px] text-purple">Show {items.length}</summary>
-              <ul className="mt-1 max-h-40 overflow-y-auto font-mono text-[12px] text-slate">
+              <summary className="cursor-pointer text-sm text-accent-ink">Show {items.length}</summary>
+              <ul className="mt-1 max-h-40 overflow-y-auto font-mono text-xs text-slate">
                 {items.map((i) => (
                   <li key={i} className="truncate">
                     {i}
@@ -47,7 +47,7 @@ export function ValidationPanel({ files, report }: { files: FileEntry[]; report:
   const unsupported = files.filter((f) => f.kind === "other");
   const unreadable = report?.failures ?? [];
   return (
-    <section className="card p-5" data-testid="validation-panel">
+    <section className="card" data-testid="validation-panel">
       {/* Collapsed: the checks are opened when they are discussed, not read off a full panel. */}
       <details className="group/validation">
         <summary className="cursor-pointer list-none">
@@ -58,7 +58,7 @@ export function ValidationPanel({ files, report }: { files: FileEntry[]; report:
               aria-hidden
             />
             Validation
-            <span className="ml-auto text-[14px] font-normal text-slate">3 checks</span>
+            <span className="ml-auto text-md font-normal text-slate">3 checks</span>
           </h3>
         </summary>
         <ul className="mt-1 divide-y divide-line">

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<report name="gmfcredit">
+  <package name="com/gmf/gmfcredit">
+    <class name="com/gmf/gmfcredit/FundingService" sourcefilename="FundingService.java">
+      <counter type="LINE" missed="2" covered="6"/>
+    </class>
+    <sourcefile name="FundingService.java">
+      <counter type="INSTRUCTION" missed="9" covered="30"/>
+      <counter type="LINE" missed="2" covered="6"/>
+    </sourcefile>
+  </package>
+  <counter type="INSTRUCTION" missed="9" covered="30"/>
+  <counter type="LINE" missed="2" covered="6"/>
+</report>

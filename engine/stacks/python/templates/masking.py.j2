@@ -1,0 +1,67 @@
+"""Masking for sensitive fields (SSN, account and card numbers): every letter and digit except the
+last four becomes ``*`` and separators stay, so ``909-32-1184`` prints as ``***-**-1184``."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+SENSITIVE_NAMES = frozenset({
+{% for n in names %}
+    {{ n | py_string }},
+{% endfor %}
+})
+
+_SENSITIVE_TEXT = re.compile(r"\b\d{3}-\d{2}-\d{4}\b|\b(?:\d[ -]?){8,18}\d\b")
+
+
+def is_sensitive_name(name: str | None) -> bool:
+    """True for a field name that holds a sensitive value (ssn, accountNumber, card_number, ...)."""
+    return name is not None and re.sub(r"[^a-z0-9]", "", name.lower()) in SENSITIVE_NAMES
+
+
+def mask(value: str | None) -> str:
+    """Masks one value, keeping its last four letters or digits and its separators."""
+    if not value:
+        return ""
+    chars = list(value)
+    keep = 4
+    for i in range(len(chars) - 1, -1, -1):
+        if not chars[i].isalnum():
+            continue
+        if keep > 0:
+            keep -= 1
+        else:
+            chars[i] = "*"
+    return "".join(chars)
+
+
+def mask_text(text: str | None) -> str:
+    """Masks SSN-shaped values and long digit runs (account and card numbers) inside free text."""
+    if not text:
+        return ""
+    return _SENSITIVE_TEXT.sub(lambda m: mask(m.group()), text)
+
+
+def mask_json(value: Any) -> Any:
+    """A copy of the value with every sensitive field masked (for error responses and logs)."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if is_sensitive_name(str(k)) and v is not None and not isinstance(v, dict | list):
+                out[k] = mask(str(v))
+            else:
+                out[k] = mask_json(v)
+        return out
+    if isinstance(value, list):
+        return [mask_json(v) for v in value]
+    return value
+
+
+def masked_repr_args(model: Any) -> list[tuple[str, Any]]:
+    """``__repr_args__`` of a contract model: its fields, sensitive ones masked."""
+    out = []
+    for name in type(model).model_fields:
+        value = getattr(model, name)
+        out.append((name, mask(str(value)) if is_sensitive_name(name) and value is not None else value))
+    return out

@@ -80,7 +80,7 @@ export function StandardsPanel() {
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
         <div>
           <div className="grid gap-2.5">
-            <label className="text-[13px]">
+            <label className="text-sm">
               <span className="label">Kind</span>
               <select
                 className="select mt-1 w-full"
@@ -96,7 +96,7 @@ export function StandardsPanel() {
                 ))}
               </select>
             </label>
-            <label className="text-[13px]">
+            <label className="text-sm">
               <span className="label">Note (optional)</span>
               <input
                 className="input mt-1"
@@ -122,12 +122,12 @@ export function StandardsPanel() {
             }}
             data-testid="standards-dropzone"
             className={`mt-3 flex flex-col items-center justify-center rounded-card border-2 border-dashed px-4 py-6 text-center transition-colors ${
-              blocked ? "border-line bg-warm/50 opacity-60" : over ? "border-purple bg-purple-lt" : "border-line bg-white"
+              blocked ? "border-line bg-sunken/50 opacity-60" : over ? "border-accent bg-accent-soft" : "border-line bg-surface"
             }`}
           >
-            <UploadCloud size={28} className={blocked ? "text-slate" : "text-purple"} aria-hidden />
-            <p className="mt-2 text-[13.5px] font-medium text-plum">Drop a spec or blueprint</p>
-            <p className="mt-0.5 text-[12.5px] text-slate">
+            <UploadCloud size={28} className={blocked ? "text-slate" : "text-accent-ink"} aria-hidden />
+            <p className="mt-2 text-md font-medium text-heading">Drop a spec or blueprint</p>
+            <p className="mt-0.5 text-sm text-slate">
               PDF, Word, Markdown, diagrams, OpenAPI. Up to {formatSize(MAX_BYTES)} each.
             </p>
           </div>
@@ -140,9 +140,9 @@ export function StandardsPanel() {
             data-testid="standards-input"
             onChange={(e) => void take(e.target.files)}
           />
-          {blocked ? <p className="mt-2 text-[12.5px] text-slate">{blocked}</p> : null}
+          {blocked ? <p className="mt-2 text-sm text-slate">{blocked}</p> : null}
           {rejected.length > 0 ? (
-            <ul className="mt-2 space-y-1 rounded-btn bg-decision-bg px-3 py-2 text-[12.5px] text-ink" data-testid="standards-rejected">
+            <ul className="mt-2 space-y-1 rounded-btn bg-decision-bg px-3 py-2 text-sm text-ink" data-testid="standards-rejected">
               {rejected.map((r) => (
                 <li key={r}>{r}</li>
               ))}
@@ -152,10 +152,10 @@ export function StandardsPanel() {
 
         <div>
           {!ready ? null : docs.length === 0 ? (
-            <div className="flex h-full min-h-[180px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-warm/40 px-6 py-8 text-center">
+            <div className="flex h-full min-h-[180px] flex-col items-center justify-center rounded-card border border-dashed border-line bg-sunken/40 px-6 py-8 text-center">
               <Library size={26} className="text-slate" aria-hidden />
-              <p className="mt-2 font-medium text-plum">No standards attached</p>
-              <p className="mt-1 max-w-[460px] text-[13px] text-slate">
+              <p className="mt-2 font-medium text-heading">No standards attached</p>
+              <p className="mt-1 max-w-[460px] text-sm text-slate">
                 Attach GMF&apos;s reference architecture, a solution blueprint, or the API and security standards this
                 process has to meet, so the design record is reviewed against them.
               </p>
@@ -166,17 +166,17 @@ export function StandardsPanel() {
                 <li key={d.id} className="row-hover flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3" data-testid="standard-row">
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className="truncate font-medium text-plum" title={d.name}>
+                      <span className="truncate font-medium text-heading" title={d.name}>
                         {d.name}
                       </span>
                       <Pill tone="det">{kindLabel(d.kind)}</Pill>
                     </span>
-                    {d.note ? <span className="mt-0.5 block text-[12.5px] text-ink">{d.note}</span> : null}
-                    <span className="mt-0.5 block text-[12px] text-slate">
+                    {d.note ? <span className="mt-0.5 block text-sm text-ink">{d.note}</span> : null}
+                    <span className="mt-0.5 block text-xs text-slate">
                       {formatSize(d.size)}
                       {d.type ? ` · ${d.type}` : ""} · attached by {d.addedBy} on {when(d.addedAt)}
                     </span>
-                    <span className="mt-0.5 block truncate font-mono text-[11px] text-slate" title={d.sha256}>
+                    <span className="mt-0.5 block truncate font-mono text-2xs text-slate" title={d.sha256}>
                       sha256 {d.sha256.slice(0, 32)}
                       {d.sha256.length > 32 ? "…" : ""}
                     </span>
@@ -199,8 +199,8 @@ export function StandardsPanel() {
         </div>
       </div>
 
-      <p className="mt-4 rounded-btn border border-line bg-page px-3 py-2 text-[12.5px] leading-relaxed text-slate">
-        <span className="font-semibold text-plum">What this records.</span> The file is read in this browser and its
+      <p className="mt-4 rounded-btn border border-line bg-page px-3 py-2 text-sm leading-relaxed text-slate">
+        <span className="font-semibold text-heading">What this records.</span> The file is read in this browser and its
         SHA-256 taken, so the entry names the exact revision of the document, not just a filename. The contents stay on
         this machine: they are not uploaded, and the design generator does not read them yet, so attaching a standard
         does not change what a build produces. Use it to state which documents the design record is reviewed against at

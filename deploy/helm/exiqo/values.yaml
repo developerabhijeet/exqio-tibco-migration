@@ -1,0 +1,391 @@
+# ExiQO Migrate on AKS. values.schema.json validates every key below and refuses the settings that
+# must never reach a GMF install (dev sign-in, local deploy credentials, image tags, a single API
+# replica). values.gmf.example.yaml is a complete install to copy; docs/deploy/GMF-INSTALL.md is
+# the guide.
+#
+# Resource names are fixed (exiqo-api, exiqo-worker, ...), whatever the release is called: the
+# Workload Identity federated credentials name the service accounts, so one install per namespace.
+#
+# Identities (user-assigned managed identities, each with federated credentials whose issuer is
+# the cluster's OIDC issuer URL and whose subject is system:serviceaccount:<namespace>:<account>):
+#   exiqo-platform   identity.platformClientId. Key Vault "Key Vault Secrets User" on keyVault.name
+#                    (the CSI driver reads the secrets with it) and, with Entra auth to Azure OpenAI,
+#                    "Cognitive Services OpenAI User". Federated for exiqo-api, exiqo-worker,
+#                    exiqo-migrate and exiqo-neo4j (and exiqo-neo4j-backup unless
+#                    identity.backupClientId names another identity).
+#   exiqo-deploy-*   one per deploy target (identity.deployIdentities), RBAC on that subscription.
+#                    Each is federated for exiqo-worker: the worker pod has one projected token
+#                    (AZURE_FEDERATED_TOKEN_FILE), and Terraform exchanges it for whichever
+#                    identity ARM_CLIENT_ID names (the environment's client id from
+#                    DEPLOY_ENVIRONMENTS). Entra accepts the exchange because that identity also
+#                    trusts the exiqo-worker subject, so one service account serves every target.
+
+# The CI-only overlay (ci/values.kind.yaml) sets this; the schema then allows AUTH_MODE=dev and a
+# Kubernetes Secret in place of Key Vault. Never set it in an install.
+x-ci: false
+# CI only (x-ci): variables set on the api and worker containers, overriding the ConfigMap (the kind
+# end to end sets PROVIDER=fake, EMBEDDINGS_BACKEND=hash, BUILD_TOOLCHAIN=false and a short
+# JOB_STALE_SECONDS), and nothing else: the schema allows only those four (and refuses ciEnv
+# without x-ci), and the template refuses any other name.
+ciEnv: {}
+
+image:
+  # GMF's registry, e.g. gmfacr.azurecr.io. Images are pulled by digest only (no tags).
+  registry: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  platform:
+    repository: exiqo-platform
+    digest: ""  # sha256:... from the release pipeline
+  web:
+    repository: exiqo-web
+    digest: ""
+
+brand:
+  name: ExiQO
+  supportContact: ""  # shown in Help & Support, e.g. GMF's platform team mailbox
+
+# Sign-in: Entra ID OIDC against GMF's app registration (redirect URI
+# https://<ingress.host>/api/auth/callback).
+auth:
+  mode: oidc
+  tenantId: ""  # a GUID: the token issuer is https://login.microsoftonline.com/<tenantId>/v2.0
+  clientId: ""
+  # role key -> Entra group object ids and/or app role values. Keys: admin, viewer, sme,
+  # architect, engineer, qa, ops.
+  roleGroups: {}
+
+# Browser origins the API accepts; empty means https://<ingress.host>.
+corsOrigins: ""
+
+deploy:
+  credentialMode: workload_identity
+  # The Deploy step's targets, offered by the Deploy tab. clientId defaults to
+  # identity.deployIdentities[name]; tenant defaults to auth.tenantId. auth: workload_identity, or
+  # keyvault_sp with keyVaultUri and secretName (a service principal secret the worker reads at plan
+  # time and never stores).
+  environments: []
+  #  - name: dev
+  #    subscription: 00000000-0000-0000-0000-000000000000
+  #    auth: workload_identity
+
+identity:
+  platformClientId: ""
+  deployIdentities: {}  # environment name -> client id
+  backupClientId: ""    # Neo4j backup upload (Storage Blob Data Contributor); default platform
+
+keyVault:
+  # csi: the Secrets Store CSI driver (Azure provider) mounts the secrets below at /mnt/secrets.
+  # kubernetesSecret: CI only (x-ci), a Secret named kubernetesSecretName with the same file names.
+  mode: csi
+  name: ""
+  tenantId: ""  # default auth.tenantId
+  kubernetesSecretName: ""
+  # logical name -> Key Vault secret name; empty means not used (no <NAME>_FILE is set).
+  secrets:
+    databaseUrl: exiqo-database-url          # DATABASE_URL (postgresql+asyncpg://...?ssl=require)
+    testDatabaseUrl: ""                      # TEST_DATABASE_URL, a database whose name ends _test
+    appSecret: exiqo-app-secret              # APP_SECRET (Fernet key)
+    sessionSecret: exiqo-session-secret      # SESSION_SECRET
+    internalToken: exiqo-internal-token      # INTERNAL_TOKEN (api -> worker bearer)
+    neo4jPassword: exiqo-neo4j-password      # NEO4J_PASSWORD (the bare password)
+    # The bundled Neo4j's initial credentials, "neo4j/<the same password>": the subchart reads
+    # them from a Kubernetes Secret, which the exiqo-neo4j SecretProviderClass syncs from this
+    # object. Neo4j applies them on first start only; rotate with ALTER USER, then both objects.
+    neo4jAuth: exiqo-neo4j-auth
+    oidcClientSecret: ""                     # OIDC_CLIENT_SECRET, empty for a public client
+    azureOpenaiApiKey: ""                    # AZURE_OPENAI_API_KEY, empty with managed identity
+    claudeCodeOauthToken: ""                 # only with providers.claude.enabled
+    langfuseSecretKey: ""                    # only with langfuse.enabled
+    # Connector credentials, each required by (and mounted only with) its enabled connector.
+    githubToken: ""                          # GITHUB_TOKEN (PAT or GitHub App installation token source)
+    atlassianToken: ""                       # ATLASSIAN_TOKEN (Data Center PAT, or cloud API token)
+    atlassianUser: ""                        # ATLASSIAN_USER (cloud only: the account email for basic auth)
+    figmaToken: ""                           # FIGMA_TOKEN (personal access token of a GMF service account)
+    # PEM bundle of GMF's private CA(s) the connectors verify TLS against, mounted at
+    # /mnt/secrets/connectors_ca_bundle (CONNECTORS_CA_BUNDLE). Alternative: connectors.caBundle.
+    connectorsCaBundle: ""
+
+ingress:
+  enabled: true
+  # nginx (ingress-nginx) by default. Application Gateway (AGIC), for example:
+  #   className: azure-application-gateway
+  #   annotations:
+  #     appgw.ingress.kubernetes.io/ssl-redirect: "true"
+  #     appgw.ingress.kubernetes.io/request-timeout: "3600"
+  #     appgw.ingress.kubernetes.io/connection-draining: "true"
+  #     appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+  #   api:
+  #     annotations:  # null removes the nginx defaults
+  #       nginx.ingress.kubernetes.io/proxy-body-size: null
+  #       nginx.ingress.kubernetes.io/proxy-read-timeout: null
+  #       nginx.ingress.kubernetes.io/proxy-buffering: null
+  #       nginx.ingress.kubernetes.io/proxy-request-buffering: null
+  #       nginx.ingress.kubernetes.io/proxy-send-timeout: null
+  # With AGIC the 2 GB upload limit is the gateway's (WAF policy: request body inspection off for
+  # /api/projects uploads, file upload limit 4000 MB), and networkPolicy.ingressCidrs is the
+  # gateway subnet (the gateway is outside the cluster).
+  className: nginx
+  host: ""
+  tlsSecretName: ""  # the GMF certificate (e.g. synced from Key Vault), in this namespace
+  annotations: {}    # on both Ingresses
+  api:
+    # /api only: uploads up to 2 GB, SSE and long requests unbuffered, no rewrite (the API is
+    # mounted at /api).
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 2100m
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+
+# ephemeral-storage covers the pod's emptyDirs (they count against it): /tmp for the api, /tmp and
+# the NuGet cache for the worker. Keep requests >= the sizes below.
+api:
+  replicas: 2
+  resources:
+    requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 6Gi}
+    limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 8Gi}
+  tmpSize: 6Gi  # an upload (up to 2 GiB) is received and unpacked under /tmp before DATA_DIR
+
+web:
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 512Mi}
+    limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi}
+
+worker:
+  replicas: 2       # the autoscaler's minimum
+  maxReplicas: 6
+  slots: 2          # JOB_WORKERS: concurrent jobs per worker pod
+  targetCPUUtilization: 70
+  resources:
+    # A Maven build needs about 2 GiB of heap and metaspace per slot (Java stack): raise the memory
+    # request and limit with slots when stacks.enabled has java.
+    requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 36Gi}
+    limits: {cpu: "4", memory: 8Gi, ephemeral-storage: 42Gi}
+  tmpSize: 16Gi     # dotnet, MSBuild and Terraform work under /tmp
+  # NUGET_PACKAGES, per pod: NuGet's lock is per machine, so restores from several workers into one
+  # shared folder collide, and SMB is slow for many small files. Refilled from the mirror.
+  nugetCacheSize: 10Gi
+  # /cache/stacks, per pod (an emptyDir, only when a stack other than dotnet is enabled): the Maven repository (m2), the Go module and build caches
+  # and uv's cache of the other target stacks. Refilled from the mirrors after a restart.
+  stackCacheSize: 10Gi
+
+# The target stacks this install may build (ENABLED_STACKS). dotnet needs nothing extra. Every other
+# stack needs its mirror below (the schema and the template refuse an install without it), because
+# the pods have no route to the public package repositories.
+stacks:
+  enabled: [dotnet]  # any of dotnet, java, go, python
+
+# DATA_DIR, shared by api and worker pods: the api writes and unpacks uploads under
+# /data/uploads (api/app/routers/projects.py); the worker writes each generated solution under
+# /data/builds/<build id> (api/app/services/build.py) and runs dotnet restore, build, format and
+# test there, and Verify starts the built service from it (the apphost needs its exec bit). On
+# Azure Files the built-in classes mount the share root-owned 0777 and fsGroup does not apply to
+# SMB, so UID 10001 could not chmod or set times (copystat, tar -p, the apphost, git). The chart's
+# StorageClass mounts the share as 10001; storageClass.create: false uses storageClass.name, an
+# existing class with the same mount options. StorageClasses are cluster-scoped: a second install
+# in another namespace sets create: false and names this one.
+data:
+  storageClass:
+    create: true
+    name: exiqo-azurefile-premium
+    skuName: Premium_LRS
+    mountOptions: [uid=10001, gid=10001, dir_mode=0770, file_mode=0770, mfsymlinks, cache=strict,
+                   nosharesock, actimeo=30]
+    # A share created beforehand (deploy/azure outputs these): the account, its resource group and
+    # the share. Empty: the driver creates an account in the node resource group. The cluster's
+    # identity needs "Storage Account Contributor" on a named account (it reads the account key).
+    storageAccount: ""
+    resourceGroup: ""
+    shareName: ""
+  size: 200Gi
+  accessMode: ReadWriteMany
+  existingClaim: ""
+
+postgres:
+  host: ""   # Azure Database for PostgreSQL flexible server (shown in /system/status)
+  cidrs: []  # its private endpoint / delegated subnet, for the NetworkPolicy (port 5432)
+
+egress:
+  # Destinations the platform pods (api, worker, migrate) may reach on egress.ports: the private
+  # endpoints of Key Vault, Azure OpenAI and the mirrors, and Entra ID / ARM (or the Azure
+  # Firewall that fronts them). A NetworkPolicy matches addresses only: host names are allowed by
+  # GMF's Azure Firewall, which fqdns lists (also shown in the About panel as EGRESS_ALLOWLIST).
+  allowCidrs: []
+  allowNamespaces: []  # in-cluster mirrors, any port
+  ports: [443]
+  fqdns:
+    - login.microsoftonline.com
+    - "*.vault.azure.net"
+    - management.azure.com
+    - "*.openai.azure.com"
+
+networkPolicy:
+  enabled: true
+  ingressNamespaces: [ingress-nginx]  # the ingress controller's namespace
+  ingressCidrs: []                     # AGIC: the Application Gateway subnet
+  dnsNamespace: kube-system
+  kubeApiCidrs: []                     # the API server address(es): the Neo4j backup scales Neo4j
+
+providers:
+  claude:
+    enabled: false  # also needs keyVault.secrets.claudeCodeOauthToken and the Claude egress
+  azureOpenAI:
+    endpoint: ""
+    apiVersion: ""
+    auth: managed_identity  # or key (keyVault.secrets.azureOpenaiApiKey)
+    deployments: {strong: "", standard: "", efficient: ""}
+
+mirrors:
+  nuget: ""            # NUGET_SOURCE, written into generated nuget.config
+  npm: ""              # NPM_CONFIG_REGISTRY
+  terraformConfig: ""  # a Terraform CLI config (provider_installation network_mirror), as text
+  maven: ""            # MAVEN_MIRROR_URL (https): required with stacks.enabled java; written into the generated Maven settings as the only repository
+  goproxy: ""          # GOPROXY (https): required with go; "off" is used when go is not enabled
+  pypi: ""             # UV_INDEX_URL and PIP_INDEX_URL (https): required with python
+  # PEM text of the CA that signed the mirrors' certificates, when it is a private one. Mounted on
+  # the worker at /etc/exiqo-ca/ca.pem; the entrypoint imports it (keytool) into a copy of the JDK
+  # trust store that Maven uses; Go and uv get it added to the system roots (SSL_CERT_FILE). Public CAs
+  # need nothing.
+  caBundle: ""
+
+# Connectors (GitHub Enterprise, Confluence/Jira, Figma): all off. The install layer is the ceiling
+# for Settings -> Connectors. Hosts and addresses are GMF's own; the chart names no public host.
+# An enabled connector needs its keyVault.secrets.* token, allowedHosts (the hosts the client may
+# reach; also added to the About panel's egress list) and its own cidrs: the NetworkPolicy
+# exiqo-connectors-egress opens TCP 443 to exactly those (egress.allowCidrs does not substitute).
+# Every URL is https:// with no user info.
+connectors:
+  # GMF's private CA, as PEM text (a ConfigMap mounted in api and worker) -- or keyVault.secrets.
+  # connectorsCaBundle for a Key Vault object. Not both. Empty: the image's trust store.
+  caBundle: ""
+  github:
+    enabled: false
+    baseUrl: ""          # e.g. https://github.gmf.example.com (GHES) or https://api.<sub>.ghe.com
+    apiUrl: ""           # optional; default <baseUrl>/api/v3 for GHES
+    allowedHosts: []     # hosts the client may reach, e.g. [github.gmf.example.com]
+    cidrs: []            # NetworkPolicy egress (private endpoint / firewall subnet), port 443
+    commitEmail: ""      # commit author email; empty -> exiqo-migrate@invalid
+  atlassian:
+    enabled: false
+    flavor: datacenter   # or cloud (then keyVault.secrets.atlassianUser is required)
+    confluenceUrl: ""    # GMF's Data Center or cloud Confluence base URL
+    jiraUrl: ""          # GMF's Jira base URL
+    allowedHosts: []
+    cidrs: []
+  figma:
+    enabled: false
+    apiUrl: ""           # Figma's REST base URL, when GMF allows its Figma organisation
+    webUrl: ""           # base for frame links shown to people; empty -> names without links
+    imageHosts: []       # optional: hosts of rendered images (off when empty)
+    imageCidrs: []       # required when imageHosts is set: their addresses, port 443
+    allowedHosts: []
+    cidrs: []
+
+langfuse:
+  enabled: false
+  host: ""  # only a host GMF runs
+
+migration:
+  activeDeadlineSeconds: 900
+  resources:
+    requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi}
+    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 512Mi}
+
+# Nightly neo4j-admin dump to a GMF Blob container. Neo4j holds the project memory, so the bundled
+# Neo4j needs this on (with storageAccount) or a non-empty disabledReason (the chart refuses to
+# render when neither is set). Community edition dumps only a stopped database, so this job
+# stops Neo4j (StatefulSet to 0), dumps the store, starts Neo4j and uploads: Neo4j is down for the
+# stop-dump-start window (about a minute while the graph is small). Enterprise has online backup.
+# Retention is the storage account's lifecycle policy. Needs networkPolicy.kubeApiCidrs.
+neo4jBackup:
+  enabled: false
+  disabledReason: ""    # required when enabled is false and neo4j.enabled is true (e.g. "kind CI")
+  schedule: "30 2 * * *"
+  storageAccount: ""
+  container: neo4j-backups
+  activeDeadlineSeconds: 7200
+  stopTimeoutSeconds: 360
+  scratchSize: 32Gi  # the dump, before upload (emptyDir on the node)
+  azureCliImage: mcr.microsoft.com/azure-cli:2.91.0-azurelinux4.0@sha256:1487a97d4fdd27b91e502bd568871a3dbf7e70b8777218a7dc7d51abd45b236f
+  # per step; the pod's emptyDirs (the dump scratch above, the CLI's /tmp) count against the sum
+  resources:
+    requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+    limits: {cpu: "1", memory: 2Gi, ephemeral-storage: 40Gi}
+
+# The official Neo4j chart (Community, one instance), plus uri for an external Neo4j when
+# enabled is false (then neo4jBackup does not apply). The names below are fixed (exiqo-neo4j) like
+# the rest of the chart. Bolt over TLS: set neo4j.ssl.bolt (a certificate Secret) and
+# uri: bolt+s://exiqo-neo4j:7687.
+neo4j:
+  enabled: true
+  uri: ""                # default bolt://exiqo-neo4j:7687
+  externalCidrs: []      # with enabled: false, for the NetworkPolicy (port 7687)
+  # Readiness: /readyz includes Neo4j. A Neo4j that is down is reported "degraded" (still ready) for
+  # readyGraceSeconds, so the nightly stop-dump-start window does not take the API out of service;
+  # after that it is "down" and the pod is not ready. gatesReadiness: false leaves it informational.
+  readyGraceSeconds: 900
+  gatesReadiness: true
+  # ---- subchart values (https://neo4j.com/docs/operations-manual/5/kubernetes/) ----
+  fullnameOverride: exiqo-neo4j
+  disableLookups: true   # the auth Secret is synced by the CSI driver at pod start, after render
+  neo4j:
+    name: exiqo-neo4j
+    edition: community
+    passwordFromSecret: exiqo-neo4j-auth
+    resources: {cpu: "1", memory: 4Gi}
+  image:
+    customImage: docker.io/library/neo4j:5.26.32@sha256:adaa077a3ab023015143b8f73f7076a7d053f12985f5b06f4c6a128c3a2f7240
+  volumes:
+    data:
+      mode: dynamic
+      dynamic:
+        storageClassName: managed-csi-premium
+        accessModes: [ReadWriteOnce]
+        requests: {storage: 64Gi}
+  services:
+    neo4j:
+      enabled: false  # no LoadBalancer: Neo4j is reached in-cluster only
+  config:
+    server.config.strict_validation.enabled: "false"
+    dbms.usage_report.enabled: "false"
+    db.memory.transaction.total.max: "1g"  # about 70% of the heap
+    server.memory.heap.initial_size: 1500m
+    server.memory.heap.max_size: 1500m
+    server.memory.pagecache.size: 1g
+  podSpec:
+    serviceAccountName: exiqo-neo4j
+    terminationGracePeriodSeconds: 300
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 7474
+    runAsGroup: 7474
+    fsGroup: 7474
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 7474
+    runAsGroup: 7474
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: [ALL]}
+  # Read-only root: the image's entrypoint writes the merged configuration to
+  # /var/lib/neo4j/conf and its JNA library unpacks under /tmp. The CSI volume is what makes the
+  # driver sync exiqo-neo4j-auth (secretObjects sync only while a pod mounts the class).
+  additionalVolumes:
+    - name: tmp
+      emptyDir: {sizeLimit: 1Gi}
+    - name: runtime-conf
+      emptyDir: {sizeLimit: 16Mi}
+    - name: kv-neo4j
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes: {secretProviderClass: exiqo-neo4j}
+  additionalVolumeMounts:
+    - {name: tmp, mountPath: /tmp}
+    - {name: runtime-conf, mountPath: /var/lib/neo4j/conf}
+    - {name: kv-neo4j, mountPath: /mnt/secrets, readOnly: true}

@@ -1,0 +1,204 @@
+# Connectors: off by default; an enabled one gets its secret file, its hosts in the egress list and
+# a NetworkPolicy rule to its CIDRs only; GMF's CA bundle is mounted by ConfigMap or Key Vault.
+suite: connectors
+values:
+  - ../exiqo/values.gmf.example.yaml
+templates:
+  - templates/networkpolicies.yaml
+  - templates/api-deployment.yaml
+  - templates/worker-deployment.yaml
+  - templates/configmap.yaml
+  - templates/secretproviderclass.yaml
+  - templates/web-deployment.yaml
+tests:
+  - it: renders no connector policy, secret or host when all are off
+    asserts:
+      - isNull: {path: metadata.name}
+        template: templates/networkpolicies.yaml
+        documentSelector: {path: metadata.name, value: exiqo-connectors-egress, skipEmptyTemplates: true}
+      - equal: {path: 'data.CONNECTORS', value: '{"atlassian":{"enabled":false},"figma":{"enabled":false},"github":{"enabled":false}}'}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - notExists: {path: data.CONNECTORS_CA_BUNDLE}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GITHUB_TOKEN_FILE, value: /mnt/secrets/github_token}
+        template: templates/api-deployment.yaml
+  - it: GitHub enabled mounts the token file and opens 443 to its CIDR
+    set:
+      connectors.github: {enabled: true, baseUrl: "https://github.gmf.example.com", allowedHosts: [github.gmf.example.com], cidrs: [10.20.0.0/24]}
+      keyVault.secrets.githubToken: exiqo-github-token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GITHUB_TOKEN_FILE, value: /mnt/secrets/github_token}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GITHUB_TOKEN_FILE, value: /mnt/secrets/github_token}
+        template: templates/worker-deployment.yaml
+      - equal: {path: 'spec.egress', value: [{to: [{ipBlock: {cidr: 10.20.0.0/24}}], ports: [{port: 443, protocol: TCP}]}]}
+        template: templates/networkpolicies.yaml
+        documentSelector: {path: metadata.name, value: exiqo-connectors-egress}
+      - equal: {path: 'spec.podSelector.matchExpressions', value: [{key: app.kubernetes.io/component, operator: In, values: [api, worker]}]}
+        template: templates/networkpolicies.yaml
+        documentSelector: {path: metadata.name, value: exiqo-connectors-egress}
+      - equal: {path: 'data.CONNECTOR_SECRET_NAMES', value: '{"github":{"token":"exiqo-github-token"}}'}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - matchRegex: {path: 'data.EGRESS_ALLOWLIST', pattern: 'github\.gmf\.example\.com'}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - matchRegex: {path: 'spec.parameters.objects', pattern: 'objectName: exiqo-github-token\n\s+objectAlias: github_token'}
+        template: templates/secretproviderclass.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+  - it: Atlassian cloud mounts the user file as well, Figma image hosts join the egress list
+    set:
+      connectors.atlassian: {enabled: true, flavor: cloud, confluenceUrl: "https://gmf.example.net/wiki", allowedHosts: [gmf.example.net], cidrs: [10.0.0.0/24]}
+      connectors.figma: {enabled: true, apiUrl: "https://figma.gmf.example.com", webUrl: "https://figma.gmf.example.com", allowedHosts: [figma.gmf.example.com], imageHosts: [img.gmf.example.com], imageCidrs: [10.3.0.0/24], cidrs: [10.1.0.0/24]}
+      keyVault.secrets: {atlassianToken: t, atlassianUser: u, figmaToken: f}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ATLASSIAN_USER_FILE, value: /mnt/secrets/atlassian_user}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: FIGMA_TOKEN_FILE, value: /mnt/secrets/figma_token}
+        template: templates/api-deployment.yaml
+      - matchRegex: {path: 'data.EGRESS_ALLOWLIST', pattern: 'img\.gmf\.example\.com'}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - lengthEqual: {path: spec.egress, count: 3}
+        template: templates/networkpolicies.yaml
+        documentSelector: {path: metadata.name, value: exiqo-connectors-egress}
+  - it: a CA bundle from the values is a ConfigMap mounted in api and worker
+    set:
+      connectors.caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    asserts:
+      - equal: {path: data.CONNECTORS_CA_BUNDLE, value: /etc/exiqo-connectors-ca/ca.pem}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - matchRegex: {path: 'data["ca.pem"]', pattern: 'BEGIN CERTIFICATE'}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-connectors-ca}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: connectors-ca, configMap: {name: exiqo-connectors-ca, defaultMode: 292}}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: connectors-ca, mountPath: /etc/exiqo-connectors-ca, readOnly: true}
+        template: templates/worker-deployment.yaml
+  - it: a CA bundle from Key Vault is a file under /mnt/secrets, with no _FILE variable
+    set:
+      keyVault.secrets.connectorsCaBundle: exiqo-gmf-ca
+    asserts:
+      - equal: {path: data.CONNECTORS_CA_BUNDLE, value: /mnt/secrets/connectors_ca_bundle}
+        template: templates/configmap.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+      - matchRegex: {path: 'spec.parameters.objects', pattern: 'objectName: exiqo-gmf-ca\n\s+objectAlias: connectors_ca_bundle'}
+        template: templates/secretproviderclass.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform-worker}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CONNECTORS_CA_BUNDLE_FILE, value: /mnt/secrets/connectors_ca_bundle}
+        template: templates/api-deployment.yaml
+  - it: refuses both CA sources
+    set:
+      connectors.caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+      keyVault.secrets.connectorsCaBundle: exiqo-gmf-ca
+    template: templates/worker-deployment.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "not both"}
+  - it: refuses http URLs
+    set:
+      connectors.github: {enabled: true, baseUrl: "http://github.gmf.example.com", allowedHosts: [github.gmf.example.com], cidrs: [10.20.0.0/24]}
+      keyVault.secrets.githubToken: t
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "connectors.github.baseUrl"}
+  - it: refuses a URL with user info
+    set:
+      connectors.github: {enabled: true, baseUrl: "https://bob:pw@github.gmf.example.com", allowedHosts: [github.gmf.example.com], cidrs: [10.20.0.0/24]}
+      keyVault.secrets.githubToken: t
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "connectors.github.baseUrl"}
+  - it: refuses an enabled connector without its token secret
+    set:
+      connectors.github: {enabled: true, baseUrl: "https://github.gmf.example.com", allowedHosts: [github.gmf.example.com], cidrs: [10.20.0.0/24]}
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "githubToken"}
+  - it: refuses Atlassian cloud without the user secret
+    set:
+      connectors.atlassian: {enabled: true, flavor: cloud, confluenceUrl: "https://gmf.example.net/wiki", allowedHosts: [gmf.example.net], cidrs: [10.0.0.0/24]}
+      keyVault.secrets.atlassianToken: t
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "atlassianUser"}
+  - it: refuses an enabled connector without its own cidrs, even with egress.allowCidrs
+    set:
+      connectors.figma: {enabled: true, apiUrl: "https://figma.gmf.example.com", allowedHosts: [figma.gmf.example.com]}
+      keyVault.secrets.figmaToken: t
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "cidrs"}
+  - it: Figma image hosts need imageCidrs, which join the policy
+    set:
+      connectors.figma: {enabled: true, apiUrl: "https://figma.gmf.example.com", allowedHosts: [figma.gmf.example.com], cidrs: [10.1.0.0/24], imageHosts: [img.gmf.example.com]}
+      keyVault.secrets.figmaToken: t
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "imageCidrs"}
+  - it: Figma imageCidrs are opened on 443 in the same policy
+    set:
+      connectors.figma: {enabled: true, apiUrl: "https://figma.gmf.example.com", allowedHosts: [figma.gmf.example.com], cidrs: [10.1.0.0/24], imageHosts: [img.gmf.example.com], imageCidrs: [10.2.0.0/24]}
+      keyVault.secrets.figmaToken: t
+    template: templates/networkpolicies.yaml
+    documentSelector: {path: metadata.name, value: exiqo-connectors-egress}
+    asserts:
+      - equal: {path: 'spec.egress[1].to', value: [{ipBlock: {cidr: 10.2.0.0/24}}]}
+      - equal: {path: 'spec.egress[1].ports', value: [{port: 443, protocol: TCP}]}
+  - it: refuses the loopback flag
+    set:
+      connectors.github.allowInsecureLoopback: true
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "allowInsecureLoopback"}
+  - it: refuses a CA bundle holding a private key
+    set:
+      connectors.caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----"
+    template: templates/configmap.yaml
+    asserts:
+      - failedTemplate: {errorPattern: "connectors.caBundle"}
+  - it: Atlassian datacenter mounts no user file, and a disabled connector's token is not mounted
+    set:
+      connectors.atlassian: {enabled: true, flavor: datacenter, confluenceUrl: "https://confluence.gmf.example.com", allowedHosts: [confluence.gmf.example.com], cidrs: [10.0.0.0/24]}
+      keyVault.secrets: {atlassianToken: t, atlassianUser: u, githubToken: g}
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ATLASSIAN_USER_FILE, value: /mnt/secrets/atlassian_user}
+        template: templates/api-deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ATLASSIAN_TOKEN_FILE, value: /mnt/secrets/atlassian_token}
+        template: templates/api-deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GITHUB_TOKEN_FILE, value: /mnt/secrets/github_token}
+        template: templates/worker-deployment.yaml
+      - notMatchRegex: {path: 'spec.parameters.objects', pattern: 'github_token|atlassian_user'}
+        template: templates/secretproviderclass.yaml
+        documentSelector: {path: metadata.name, value: exiqo-platform}
+  - it: the CA mount appears in api and worker only
+    set:
+      connectors.caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    template: templates/web-deployment.yaml
+    asserts:
+      - notExists:
+          path: "spec.template.spec.volumes[?(@.name == 'connectors-ca')]"

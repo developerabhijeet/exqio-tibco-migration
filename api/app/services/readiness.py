@@ -6,13 +6,13 @@ exists but falls short, the gap says how) or ``missing`` (no evidence yet).
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
+from api.app.jobs.registry import INTERNAL_PREFIX
 from api.app.models import (
     Build,
     Domain,
@@ -25,8 +25,9 @@ from api.app.models import (
     Scenario,
     TestResult,
 )
+from api.app.services.citations import cite_readiness_row
 from api.app.services.evidence import latest_verify_runs, unconfirmed_count, unconfirmed_text
-from api.app.services.knowledge import Knowledge
+from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 
 EXPECTATIONS: list[tuple[str, str]] = [
     ("synthetic_estate", "Reference estate"),
@@ -56,16 +57,13 @@ def _row(key: str, status: str, evidence: list[dict[str, str]], gap: str | None)
 
 
 async def _knowledge_counts(knowledge: Knowledge, project_id: str) -> tuple[int, int] | str:
-    def count() -> tuple[int, int]:
-        chunks = knowledge.query("SELECT count(*) AS n FROM knowledge.chunks WHERE project_id = %s", [project_id])
-        memory = knowledge.query("SELECT count(*) AS n FROM knowledge.memory_items WHERE project_id = %s",
-                                 [project_id])
-        return int(chunks[0]["n"]), int(memory[0]["n"])
-
+    """Current Chunk and Memory nodes of the project, or the reason memory cannot be read
+    (``memory not configured``, ``memory unavailable: <class>``)."""
     try:
-        return await asyncio.to_thread(count)
-    except Exception as exc:  # noqa: BLE001  report it as the gap, never fail the page
-        return f"{type(exc).__name__}: {exc}"
+        counts = await knowledge.counts(project_id)
+    except KnowledgeUnavailable as exc:  # the gap, never a failed page
+        return str(exc)
+    return counts["Chunk"], counts["Memory"]
 
 
 async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowledge,
@@ -234,7 +232,7 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     # knowledge layer
     counts = await _knowledge_counts(knowledge, project_id)
     if isinstance(counts, str):
-        rows.append(_row("knowledge_layer", "missing", [], f"knowledge store unavailable: {counts}"))
+        rows.append(_row("knowledge_layer", "missing", [], counts))
     else:
         chunks, memory = counts
         ev = [_ev("ask", "/ask", f"{chunks} indexed chunk(s), {memory} migration memory item(s)")]
@@ -256,7 +254,8 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
         rows.append(_row("test_data", "missing", [], "no scenarios generated yet"))
 
     # tokenomics
-    jobs = await session.scalar(select(func.count(Job.id)).where(Job.project_id == project_id)) or 0
+    jobs = await session.scalar(select(func.count(Job.id)).where(
+        Job.project_id == project_id, ~Job.kind.startswith(INTERNAL_PREFIX, autoescape=True))) or 0
     priced = [c for c in calls if (c.tokens_in or c.tokens_out)]
     ev = [_ev("history", f"/history?project_id={project_id}", f"{jobs} job(s), {len(calls)} model call(s)")]
     if priced:
@@ -266,5 +265,10 @@ async def readiness(session: AsyncSession, settings: Settings, knowledge: Knowle
     else:
         rows.append(_row("tokenomics", "missing", [], "nothing has run yet"))
 
+    # ``cited``: the status sentence (with the gap) and one ref per evidence item. ``cited.text``
+    # is MASKED and the spans index into it (code points): clients render it when present.
+    build_process = {b.id: b.process_id for b in builds}
+    for r in rows:
+        r["cited"] = cite_readiness_row(r, build_process).model_dump(mode="json")
     summary = {s: sum(1 for r in rows if r["status"] == s) for s in ("met", "partial", "missing")}
     return {"project_id": project_id, "rows": rows, "summary": summary}

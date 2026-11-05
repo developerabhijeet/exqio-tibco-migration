@@ -8,8 +8,11 @@
  * Program.cs, a Terraform unit in the generated infrastructure, the test run, the review panel or
  * the parity report. A control this build produced no evidence for is left out of the panel
  * altogether rather than counted as met; one that ran and failed is always shown. The ring is
- * therefore only ever as green as the evidence behind it.
+ * therefore only ever as green as the evidence behind it. The evidence is a chip at the end of the
+ * check's sentence (built with `tail`, as the API builds its claims): its preview is the evidence
+ * as read, and it opens where it was read from (the line in the generated file, or the panel).
  */
+import { useState } from "react";
 import { ChevronRight, ShieldCheck } from "lucide-react";
 import { Panel } from "@/components/tabs/build/Panel";
 import { Pill } from "@/components/ui/Pill";
@@ -23,6 +26,8 @@ import {
   useParity,
 } from "@/lib/buildQueries";
 import { useIdentity } from "@/lib/identity";
+import { cut, PREVIEW_MAX, tail, type CiteRef, type CiteTarget } from "@/lib/citations";
+import { CitedText } from "@/components/citations/CitedText";
 
 type State = "met" | "unmet" | "unknown";
 
@@ -37,16 +42,40 @@ interface Check {
   source: string;
   /** The evidence itself: a line of generated code, a unit name, a count. */
   evidence?: string | null;
+  /** Where the evidence opens, and the chip's name for it. */
+  at?: { label: string; target: CiteTarget };
 }
 
 const TONE: Record<State, "gate" | "error" | "det"> = { met: "gate", unmet: "error", unknown: "det" };
 const LABEL: Record<State, string> = { met: "in place", unmet: "not in place", unknown: "" };
 
-/** The first line of `text` that holds `needle`, trimmed, for the evidence line. */
-function lineWith(text: string | undefined, needle: string): string | null {
-  if (!text) return null;
-  const line = text.split("\n").find((l) => l.includes(needle));
+/** The first line of `code` that holds `needle`, as the API masked it (`shown`, line for line),
+ * trimmed: the evidence quoted in a preview. The browser never masks; without the API's masked
+ * lines there is no quote (null), never the raw line. */
+function lineWith(code: string | undefined, shown: string | undefined, needle: string): string | null {
+  if (!code || shown === undefined) return null;
+  const i = code.split("\n").findIndex((l) => l.includes(needle));
+  const line = i >= 0 ? shown.split("\n")[i] : undefined;
   return line ? line.trim() : null;
+}
+
+/** The 1-based number of that line, or null. */
+function lineNo(text: string | undefined, needle: string): number | null {
+  if (!text) return null;
+  const i = text.split("\n").findIndex((l) => l.includes(needle));
+  return i >= 0 ? i + 1 : null;
+}
+
+/** The check's sentence with its evidence as one chip at the end; plain without evidence. Evidence
+ * with no place of its own (no Program.cs in the file list, say) still gets its chip, on Build. The
+ * preview is cut like every server-built ref's; its text was masked by the API (a file's
+ * content_masked lines, a review finding's cited text) or holds no data (paths, counts). */
+function citedCheck(check: Check, processId: string | null) {
+  const at = check.at ?? { label: "Build", target: { kind: "step" as const, step: "build", process_id: processId } };
+  const refs: CiteRef[] = check.evidence
+    ? [{ id: "c1", phase: "deploy", kind: "evidence", label: at.label, preview: cut(check.evidence, PREVIEW_MAX), target: at.target }]
+    : [];
+  return tail(check.title, refs);
 }
 
 function has(text: string | undefined, needle: string): State {
@@ -69,8 +98,8 @@ function Ring({ met, total }: { met: number; total: number }) {
         strokeDasharray={`${(c * pct) / 100} ${c}`}
         transform="rotate(-90 70 70)"
       />
-      <text x="70" y="68" textAnchor="middle" className="fill-plum text-[26px] font-semibold">{pct}%</text>
-      <text x="70" y="88" textAnchor="middle" className="fill-slate text-[11px]">{met} of {total}</text>
+      <text x="70" y="68" textAnchor="middle" className="fill-heading text-3xl font-semibold">{pct}%</text>
+      <text x="70" y="88" textAnchor="middle" className="fill-slate text-2xs">{met} of {total}</text>
     </svg>
   );
 }
@@ -79,8 +108,8 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
   const pct = total === 0 ? 0 : Math.round((met / total) * 100);
   return (
     <div>
-      <div className="flex items-baseline justify-between text-[13px]">
-        <span className="font-medium text-plum">{label}</span>
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="font-medium text-heading">{label}</span>
         <span className="text-slate">{met} of {total}</span>
       </div>
       <div className="mt-1 h-2 overflow-hidden rounded-full bg-line">
@@ -93,24 +122,47 @@ function Bar({ label, met, total }: { label: string; met: number; total: number 
   );
 }
 
-function Row({ check }: { check: Check }) {
+/**
+ * One check: a disclosure button (the chevron), the check's sentence with its evidence chip, and
+ * the state. The chip sits beside the button, not inside it (no interactive element nested in
+ * another, as a <summary> would make it); a click on the sentence outside the chip also toggles.
+ */
+function Row({ check, processId }: { check: Check; processId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const detailsId = `security-check-details-${check.key}`;
   return (
-    <details className="group/chk border-b border-line last:border-0">
-      <summary className="flex cursor-pointer list-none items-center gap-2 py-2.5">
-        <ChevronRight size={14} className="shrink-0 text-slate transition-transform group-open/chk:rotate-90" aria-hidden />
-        <span className="min-w-0 flex-1 text-[14px] text-ink">{check.title}</span>
+    <div className="border-b border-line last:border-0" data-testid="security-check" data-key={check.key} data-open={open ? "true" : "false"}>
+      <div className="flex items-center gap-2 py-2.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          aria-label={`Details: ${check.title}`}
+          data-testid="security-check-toggle"
+          onClick={() => setOpen((o) => !o)}
+          className="shrink-0 rounded-[6px] p-0.5 text-slate hover:text-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+        >
+          <ChevronRight size={14} className={`transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
+        </button>
+        {/* Mouse convenience only (the button is the keyboard path); a click on the chip navigates. */}
+        <span
+          className="min-w-0 flex-1 cursor-pointer text-md text-ink"
+          data-testid="security-check-text"
+          onClick={(e) => {
+            if (!(e.target as HTMLElement).closest('[data-testid="cite-chip"]')) setOpen((o) => !o);
+          }}
+        >
+          <CitedText value={citedCheck(check, processId)} />
+        </span>
         <Pill tone={TONE[check.state]}>{LABEL[check.state]}</Pill>
-      </summary>
-      <div className="pb-3 pl-[22px] text-[13px] text-slate">
+      </div>
+      <div id={detailsId} hidden={!open} className="pb-3 pl-[22px] text-sm text-slate">
         <p>{check.what}</p>
         <p className="mt-1">
           <span className="label">Read from</span> {check.source}
         </p>
-        {check.evidence ? (
-          <pre className="mt-1 overflow-x-auto rounded bg-page p-2 font-mono text-[11.5px] text-ink">{check.evidence}</pre>
-        ) : null}
       </div>
-    </details>
+    </div>
   );
 }
 
@@ -125,79 +177,79 @@ function RequestPath() {
             <path d="M0,0 L10,5 L0,10 z" className="fill-slate" />
           </marker>
         </defs>
-        <g className="fill-slate text-[10px] font-semibold tracking-[0.12em]">
+        <g className="fill-slate text-2xs font-semibold tracking-[0.12em]">
           <text x="8" y="56">CALLER</text>
           <text x="8" y="146">SERVICE</text>
           <text x="8" y="252">STARTUP</text>
         </g>
 
-        <rect x="96" y="28" width="150" height="46" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="171" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">Caller</text>
-        <text x="171" y="64" textAnchor="middle" className="fill-slate text-[10px]">holds a token for the API</text>
+        <rect x="96" y="28" width="150" height="46" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="171" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">Caller</text>
+        <text x="171" y="64" textAnchor="middle" className="fill-slate text-2xs">holds a token for the API</text>
 
         <path d="M246,51 L286,51" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="288" y="28" width="150" height="46" rx="8" className="fill-purple-lt stroke-purple" strokeWidth="1.3" />
-        <text x="363" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">API Management</text>
-        <text x="363" y="64" textAnchor="middle" className="fill-slate text-[10px]">product, policy, throttle</text>
+        <rect x="288" y="28" width="150" height="46" rx="8" className="fill-accent-soft stroke-accent" strokeWidth="1.3" />
+        <text x="363" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">API Management</text>
+        <text x="363" y="64" textAnchor="middle" className="fill-slate text-2xs">product, policy, throttle</text>
 
         <path d="M438,51 L478,51" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="480" y="28" width="170" height="46" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="565" y="48" textAnchor="middle" className="fill-ink text-[12px] font-semibold">HTTPS to the workload</text>
-        <text x="565" y="64" textAnchor="middle" className="fill-slate text-[10px]">private endpoint</text>
+        <rect x="480" y="28" width="170" height="46" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="565" y="48" textAnchor="middle" className="fill-ink text-xs font-semibold">HTTPS to the workload</text>
+        <text x="565" y="64" textAnchor="middle" className="fill-slate text-2xs">private endpoint</text>
 
         <path d="M565,74 L565,104" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="96" y="106" width="760" height="76" rx="10" className="fill-warm stroke-line" strokeWidth="1.2" />
-        <text x="112" y="124" className="fill-ink text-[11.5px] font-semibold">The generated .NET 10 service</text>
+        <rect x="96" y="106" width="760" height="76" rx="10" className="fill-sunken stroke-line" strokeWidth="1.2" />
+        <text x="112" y="124" className="fill-ink text-xs font-semibold">The generated .NET 10 service</text>
 
-        <rect x="112" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="187" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Authentication</text>
-        <text x="187" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">bearer token validated</text>
+        <rect x="112" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="187" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Authentication</text>
+        <text x="187" y="163" textAnchor="middle" className="fill-slate text-2xs">bearer token validated</text>
 
         <path d="M262,152 L286,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="288" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="363" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Authorization</text>
-        <text x="363" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">every endpoint requires it</text>
+        <rect x="288" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="363" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Authorization</text>
+        <text x="363" y="163" textAnchor="middle" className="fill-slate text-2xs">every endpoint requires it</text>
 
         <path d="M438,152 L462,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="464" y="132" width="150" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="539" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Controller</text>
-        <text x="539" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">contract from the TIBCO XSD</text>
+        <rect x="464" y="132" width="150" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="539" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Controller</text>
+        <text x="539" y="163" textAnchor="middle" className="fill-slate text-2xs">contract from the TIBCO XSD</text>
 
         <path d="M614,152 L638,152" className="stroke-slate" strokeWidth="1.3" fill="none" markerEnd="url(#sp-a)" />
 
-        <rect x="640" y="132" width="200" height="40" rx="6" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="740" y="149" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Domain service and repository</text>
-        <text x="740" y="163" textAnchor="middle" className="fill-slate text-[9.5px]">the approved rules, the same SQL</text>
+        <rect x="640" y="132" width="200" height="40" rx="6" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="740" y="149" textAnchor="middle" className="fill-ink text-2xs font-semibold">Domain service and repository</text>
+        <text x="740" y="163" textAnchor="middle" className="fill-slate text-2xs">the approved rules, the same SQL</text>
 
         <path d="M86,152 L96,152" className="stroke-slate" strokeWidth="1.3" fill="none" />
         <path d="M187,182 L187,214" className="stroke-slate" strokeWidth="1.2" strokeDasharray="4 3" fill="none" markerEnd="url(#sp-a)" />
         <path d="M740,182 L740,214" className="stroke-slate" strokeWidth="1.2" strokeDasharray="4 3" fill="none" markerEnd="url(#sp-a)" />
 
         <rect x="96" y="216" width="190" height="52" rx="8" className="fill-gate-bg stroke-gate" strokeWidth="1.4" />
-        <text x="191" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Key Vault, at startup</text>
-        <text x="191" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">read with the managed identity</text>
-        <text x="191" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">no secret in configuration</text>
+        <text x="191" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Key Vault, at startup</text>
+        <text x="191" y="251" textAnchor="middle" className="fill-slate text-2xs">read with the managed identity</text>
+        <text x="191" y="263" textAnchor="middle" className="fill-slate text-2xs">no secret in configuration</text>
 
-        <rect x="320" y="216" width="190" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="415" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Masking</text>
-        <text x="415" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">sensitive values masked before</text>
-        <text x="415" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">a log line or a fault leaves</text>
+        <rect x="320" y="216" width="190" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="415" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Masking</text>
+        <text x="415" y="251" textAnchor="middle" className="fill-slate text-2xs">sensitive values masked before</text>
+        <text x="415" y="263" textAnchor="middle" className="fill-slate text-2xs">a log line or a fault leaves</text>
 
-        <rect x="544" y="216" width="190" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="639" y="236" textAnchor="middle" className="fill-ink text-[11px] font-semibold">Azure Monitor</text>
-        <text x="639" y="251" textAnchor="middle" className="fill-slate text-[9.5px]">logs, traces and metrics</text>
-        <text x="639" y="263" textAnchor="middle" className="fill-slate text-[9.5px]">from the first run</text>
+        <rect x="544" y="216" width="190" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="639" y="236" textAnchor="middle" className="fill-ink text-2xs font-semibold">Azure Monitor</text>
+        <text x="639" y="251" textAnchor="middle" className="fill-slate text-2xs">logs, traces and metrics</text>
+        <text x="639" y="263" textAnchor="middle" className="fill-slate text-2xs">from the first run</text>
 
-        <rect x="768" y="216" width="88" height="52" rx="8" className="fill-white stroke-slate" strokeWidth="1.2" />
-        <text x="812" y="240" textAnchor="middle" className="fill-ink text-[11px] font-semibold">/health</text>
-        <text x="812" y="255" textAnchor="middle" className="fill-slate text-[9.5px]">anonymous</text>
+        <rect x="768" y="216" width="88" height="52" rx="8" className="fill-surface stroke-slate" strokeWidth="1.2" />
+        <text x="812" y="240" textAnchor="middle" className="fill-ink text-2xs font-semibold">/health</text>
+        <text x="812" y="255" textAnchor="middle" className="fill-slate text-2xs">anonymous</text>
       </svg>
-      <figcaption className="mt-2 text-[12px] text-slate">
+      <figcaption className="mt-2 text-xs text-slate">
         The path is read from the generated service: the middleware order, the authorization requirement and the
         health endpoint are the ones in its own Program.cs.
       </figcaption>
@@ -205,7 +257,7 @@ function RequestPath() {
   );
 }
 
-export function SecurityPanel({ buildId }: { buildId: string | null }) {
+export function SecurityPanel({ buildId, processId = null }: { buildId: string | null; processId?: string | null }) {
   const { config } = useIdentity();
   const files = useBuildFiles(buildId);
   const program = files.data?.files.find((f) => f.path.endsWith("Program.cs"))?.path ?? null;
@@ -216,6 +268,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
   const parity = useParity(buildId);
 
   const code = source.data?.content;
+  const codeShown = source.data?.content_masked;
   const infraPaths = infra.data?.files.map((f) => f.path) ?? null;
   const unit = (name: string): State =>
     infraPaths === null ? "unknown" : infraPaths.some((p) => p.includes(`/${name}/`)) ? "met" : "unmet";
@@ -224,6 +277,19 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
   const openSecurity = (reviews.data ?? []).filter((r) => r.reviewer === "security" && r.decision !== "reject");
   const summary = tests.data?.summary;
   const authority = config.instance.trim() && config.audience.trim();
+  const programName = program?.split("/").pop() ?? "Program.cs";
+  const maskingPath = files.data?.files.find((f) => f.path.endsWith("Masking.cs"))?.path ?? null;
+  // Evidence read from a line of the generated Program.cs opens the code viewer at that line.
+  const inProgram = (needle: string) => {
+    const line = lineNo(code, needle);
+    return program
+      ? { label: line ? `${programName}:${line}` : programName, target: { kind: "file" as const, step: "build" as const, process_id: processId, path: program, line } }
+      : undefined;
+  };
+  const panel = (label: string, step: "build" | "verify", hash: string) => ({
+    label,
+    target: { kind: "step" as const, step, process_id: processId, hash },
+  });
 
   const checks: Check[] = [
     {
@@ -233,7 +299,8 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       what: "The controllers are mapped with an authorization requirement, so an unauthenticated call is refused before it reaches any rule.",
       state: has(code, "MapControllers().RequireAuthorization()"),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
-      evidence: lineWith(code, "MapControllers().RequireAuthorization()"),
+      evidence: lineWith(code, codeShown, "MapControllers().RequireAuthorization()"),
+      at: inProgram("MapControllers().RequireAuthorization()"),
     },
     {
       key: "health",
@@ -242,7 +309,8 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       what: "Health probes answer without a token; nothing else does.",
       state: has(code, 'MapHealthChecks("/health").AllowAnonymous()'),
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
-      evidence: lineWith(code, "MapHealthChecks"),
+      evidence: lineWith(code, codeShown, "MapHealthChecks"),
+      at: inProgram("MapHealthChecks"),
     },
     {
       key: "jwt",
@@ -252,8 +320,9 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: code === undefined ? "unknown" : code.includes("AddJwtBearer") ? "met" : "unmet",
       source: program ? `the generated ${program.split("/").pop()}` : "the generated service",
       evidence: authority
-        ? `${lineWith(code, "AddJwtBearer") ?? "AddJwtBearer"}\n${config.instance}  ·  audience ${config.audience}`
-        : lineWith(code, "AddJwtBearer"),
+        ? `${lineWith(code, codeShown, "AddJwtBearer") ?? "AddJwtBearer"}\n${config.instance}  ·  audience ${config.audience}`
+        : lineWith(code, codeShown, "AddJwtBearer"),
+      at: inProgram("AddJwtBearer"),
     },
     {
       key: "vault",
@@ -264,7 +333,8 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
         ? "unknown"
         : code.includes("AddAzureKeyVault") && unit("key_vault") === "met" ? "met" : "unmet",
       source: "the generated service and the key_vault unit of the generated infrastructure",
-      evidence: lineWith(code, "AddAzureKeyVault"),
+      evidence: lineWith(code, codeShown, "AddAzureKeyVault"),
+      at: inProgram("AddAzureKeyVault"),
     },
     {
       key: "identity",
@@ -274,6 +344,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: unit("identity"),
       source: "the identity unit of the generated infrastructure",
       evidence: infraPaths?.find((p) => p.includes("/identity/")) ?? null,
+      at: panel("identity unit", "build", "#infra"),
     },
     {
       key: "masking",
@@ -282,7 +353,10 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       what: "Account numbers and similar values are masked before a log line or a fault message leaves the service.",
       state: masking,
       source: "the generated Masking helper",
-      evidence: files.data?.files.find((f) => f.path.endsWith("Masking.cs"))?.path ?? null,
+      evidence: maskingPath,
+      at: maskingPath
+        ? { label: "Masking.cs", target: { kind: "file", step: "build", process_id: processId, path: maskingPath } }
+        : undefined,
     },
     {
       key: "review",
@@ -295,7 +369,8 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
         ? null
         : openSecurity.length === 0
           ? "no open finding from the security reviewer"
-          : `${openSecurity.length} open finding(s): ${openSecurity.map((r) => r.text).slice(0, 3).join(" · ")}`,
+          : `${openSecurity.length} open finding(s): ${openSecurity.map((r) => r.cited?.text ?? "").slice(0, 3).join(" · ")}`,
+      at: panel("review panel", "build", "#review"),
     },
     {
       key: "tests",
@@ -305,6 +380,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       state: !summary || summary.total === 0 ? "unknown" : summary.passed === summary.total ? "met" : "unmet",
       source: "the test run of this build",
       evidence: summary ? `${summary.passed} passed, ${summary.failed} failed, ${summary.total} in total` : null,
+      at: panel("test run", "build", "#tests"),
     },
     {
       key: "parity",
@@ -316,6 +392,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       evidence: parity.data
         ? `${parity.data.matched} of ${parity.data.compared} fields match, ${parity.data.unexplained} unexplained`
         : null,
+      at: panel("parity report", "verify", "#parity"),
     },
     {
       key: "infra",
@@ -331,6 +408,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       evidence: infra.data?.validation?.modules
         ? `${infra.data.validation.modules.filter((m) => m.validate_ok).length} of ${infra.data.validation.modules.length} units valid`
         : null,
+      at: panel("infrastructure validation", "build", "#infra"),
     },
   ];
 
@@ -348,7 +426,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       eyebrow="Controls on the generated service"
       testId="security-panel"
       actions={
-        <span className="flex items-center gap-2 text-[13px]">
+        <span className="flex items-center gap-2 text-sm">
           <AzureIcon size={15} />
           <span className="label">Controls</span>
           <Pill tone={shown.length > 0 && met === shown.length ? "gate" : met === 0 ? "det" : "decision"}>
@@ -358,7 +436,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
       }
     >
       {!buildId || shown.length === 0 ? (
-        <p className="text-[14px] text-slate">Build this process first; the controls are read from the build.</p>
+        <p className="text-md text-slate">Build this process first; the controls are read from the build.</p>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-6">
@@ -377,7 +455,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
                 <p className="label">{g}</p>
                 <div className="mt-1 rounded-btn border border-line px-3">
                   {shown.filter((c) => c.group === g).map((c) => (
-                    <Row key={c.key} check={c} />
+                    <Row key={c.key} check={c} processId={processId} />
                   ))}
                 </div>
               </div>
@@ -385,7 +463,7 @@ export function SecurityPanel({ buildId }: { buildId: string | null }) {
           </div>
 
           <details className="group/path mt-4">
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-[14px] font-medium text-plum">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-md font-medium text-heading">
               <ChevronRight size={15} className="text-slate transition-transform group-open/path:rotate-90" aria-hidden />
               The request path, and where each control sits
             </summary>

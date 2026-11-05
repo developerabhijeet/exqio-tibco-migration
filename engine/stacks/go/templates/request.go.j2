@@ -1,0 +1,45 @@
+package api
+
+import (
+	"io"
+	"net/http"
+
+	"{{ module }}/internal/platform"
+	"{{ module }}/internal/tib"
+)
+
+// maxBody is the largest request body the starters read (10 MiB).
+const maxBody = 10 << 20
+
+// readBody is the JSON body of r (Missing when it is empty); a body that is not JSON is a bad request.
+func readBody(r *http.Request) (tib.Value, error) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+	if err != nil {
+		return nil, &platform.BadRequest{Detail: "the request body could not be read"}
+	}
+	body, err := tib.Parse(string(data))
+	if err != nil {
+		return nil, &platform.BadRequest{Detail: err.Error()}
+	}
+	return body, nil
+}
+
+// parameter sets a REST starter's parameter, a numeric one as a number; a missing required
+// parameter, or a numeric one that is not a number, is a bad request.
+func parameter(parameters map[string]any, name, value string, numeric, required bool) error {
+	if value == "" {
+		if required {
+			return &platform.BadRequest{Detail: "the required parameter " + name + " is missing"}
+		}
+		return nil
+	}
+	if !numeric {
+		parameters[name] = value
+		return nil
+	}
+	if _, ok := tib.Number(value); !ok {
+		return &platform.BadRequest{Detail: "the parameter " + name + " is not a number"}
+	}
+	parameters[name] = tib.Num(value)
+	return nil
+}

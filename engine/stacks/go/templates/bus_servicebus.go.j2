@@ -1,0 +1,221 @@
+package platform
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+
+	"{{ module }}/internal/tib"
+)
+
+// ServiceBus is Azure Service Bus (MESSAGING_MODE=ServiceBus), reached at its fully qualified
+// namespace with DefaultAzureCredential (the workload's managed identity; no connection strings).
+// A handler's dead-letter outcome dead-letters the message with its reason; an abandon outcome
+// abandons it so Service Bus redelivers it.
+type ServiceBus struct {
+	client  *azservicebus.Client
+	topics  map[string]bool
+	mu      sync.Mutex
+	senders map[string]*azservicebus.Sender
+	stops   []func()
+}
+
+// NewServiceBus connects to namespace; topics are the entities the design names as topics.
+func NewServiceBus(namespace string, topics []string) (*ServiceBus, error) {
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("service bus credential: %w", err)
+	}
+	client, err := azservicebus.NewClient(namespace, credential, nil)
+	if err != nil {
+		return nil, fmt.Errorf("service bus %s: %w", namespace, err)
+	}
+	set := map[string]bool{}
+	for _, t := range topics {
+		set[t] = true
+	}
+	return &ServiceBus{client: client, topics: set, senders: map[string]*azservicebus.Sender{}}, nil
+}
+
+func (b *ServiceBus) sender(entity string) (*azservicebus.Sender, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s, ok := b.senders[entity]; ok {
+		return s, nil
+	}
+	s, err := b.client.NewSender(entity, nil) // a queue or a topic: Service Bus addresses both by name
+	if err != nil {
+		return nil, err
+	}
+	b.senders[entity] = s
+	return s, nil
+}
+
+// Publish sends message to a queue or topic.
+func (b *ServiceBus) Publish(ctx context.Context, entity string, message tib.Value, properties map[string]string) error {
+	s, err := b.sender(entity)
+	if err != nil {
+		return err
+	}
+	contentType := "application/json"
+	out := &azservicebus.Message{Body: []byte(tib.JSON(message)), ContentType: &contentType,
+		ApplicationProperties: map[string]any{}}
+	for k, v := range properties {
+		out.ApplicationProperties[k] = v
+	}
+	if id, ok := properties[CorrelationID]; ok {
+		out.CorrelationID = &id
+	}
+	if to, ok := properties[ReplyTo]; ok {
+		out.ReplyTo = &to
+	}
+	return s.SendMessage(ctx, out, nil)
+}
+
+func received(entity string, m *azservicebus.ReceivedMessage) *tib.Message {
+	properties := map[string]string{}
+	for k, v := range m.ApplicationProperties {
+		properties[k] = fmt.Sprint(v)
+	}
+	if m.CorrelationID != nil {
+		properties[CorrelationID] = *m.CorrelationID
+	}
+	if m.ReplyTo != nil {
+		properties[ReplyTo] = *m.ReplyTo
+	}
+	if m.MessageID != "" {
+		properties[MessageID] = m.MessageID
+	}
+	if m.EnqueuedTime != nil {
+		properties[EnqueuedTime] = m.EnqueuedTime.UTC().Format(time.RFC3339Nano)
+	}
+	return &tib.Message{Entity: entity, Body: string(m.Body), Properties: properties}
+}
+
+func (b *ServiceBus) receiver(entity string) (*azservicebus.Receiver, error) {
+	if topic, subscriptionName, ok := strings.Cut(entity, "/"); ok {
+		return b.client.NewReceiverForSubscription(topic, subscriptionName, nil)
+	}
+	return b.client.NewReceiverForQueue(entity, nil)
+}
+
+// Subscribe receives on a queue, or on topic/subscription, until the returned function is called.
+func (b *ServiceBus) Subscribe(entity string, handler Handler) (func(), error) {
+	receiver, err := b.receiver(entity)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			messages, err := receiver.ReceiveMessages(ctx, 10, nil)
+			if err != nil {
+				if ctx.Err() == nil {
+					slog.Warn("service bus receive failed", "entity", entity, "error", err)
+					time.Sleep(time.Second)
+				}
+				continue
+			}
+			for _, m := range messages {
+				b.settle(ctx, receiver, entity, m, handler)
+			}
+		}
+	}()
+	stop := func() {
+		cancel()
+		<-done
+		_ = receiver.Close(context.Background())
+	}
+	b.mu.Lock()
+	b.stops = append(b.stops, stop)
+	b.mu.Unlock()
+	return stop, nil
+}
+
+func (b *ServiceBus) settle(ctx context.Context, receiver *azservicebus.Receiver, entity string,
+	m *azservicebus.ReceivedMessage, handler Handler) {
+	outcome := settle(ctx, handler, received(entity, m))
+	var err error
+	switch outcome.Disposition {
+	case DeadLetter:
+		err = receiver.DeadLetterMessage(ctx, m, &azservicebus.DeadLetterOptions{Reason: &outcome.Reason,
+			ErrorDescription: &outcome.Description})
+	case Abandon:
+		slog.Warn("message abandoned", "entity", entity, "reason", outcome.Reason)
+		err = receiver.AbandonMessage(ctx, m, nil)
+	default:
+		err = receiver.CompleteMessage(ctx, m, nil)
+	}
+	if err != nil {
+		slog.Warn("settling a message failed", "entity", entity, "error", err)
+	}
+}
+
+// Request sends with a reply-to queue and waits for the correlated reply on it.
+func (b *ServiceBus) Request(ctx context.Context, entity string, message tib.Value, timeout time.Duration) (*tib.Message, error) {
+	id := newID()
+	replyTo := entity + ".reply"
+	if err := b.Publish(ctx, entity, message, map[string]string{ReplyTo: replyTo, CorrelationID: id}); err != nil {
+		return nil, err
+	}
+	receiver, err := b.client.NewReceiverForQueue(replyTo, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer receiver.Close(context.Background())
+	wait, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		messages, err := receiver.ReceiveMessages(wait, 10, nil)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || wait.Err() != nil {
+				return nil, fmt.Errorf("no reply on %s within %s", replyTo, timeout)
+			}
+			return nil, err
+		}
+		for _, m := range messages {
+			if m.CorrelationID != nil && *m.CorrelationID == id {
+				_ = receiver.CompleteMessage(ctx, m, nil)
+				return received(replyTo, m), nil
+			}
+			_ = receiver.AbandonMessage(ctx, m, nil)
+		}
+	}
+}
+
+// Reply answers request on its reply-to entity with the same correlation id.
+func (b *ServiceBus) Reply(ctx context.Context, request *tib.Message, message tib.Value) error {
+	replyTo, ok := request.Properties[ReplyTo]
+	if !ok {
+		return fmt.Errorf("message on %s has no %s property", request.Entity, ReplyTo)
+	}
+	properties := map[string]string{}
+	if id, ok := request.Properties[CorrelationID]; ok {
+		properties[CorrelationID] = id
+	}
+	return b.Publish(ctx, replyTo, message, properties)
+}
+
+// Close stops every subscription and closes the senders and the connection.
+func (b *ServiceBus) Close(ctx context.Context) error {
+	b.mu.Lock()
+	stops, senders := b.stops, b.senders
+	b.stops, b.senders = nil, map[string]*azservicebus.Sender{}
+	b.mu.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+	for _, s := range senders {
+		_ = s.Close(ctx)
+	}
+	return b.client.Close(ctx)
+}

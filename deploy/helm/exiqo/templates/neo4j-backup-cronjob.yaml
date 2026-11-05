@@ -1,0 +1,197 @@
+{{- /*
+Nightly Neo4j dump to GMF Blob. neo4j-admin database dump reads a stopped database only (Community
+has no online backup), from the store files, so one pod on the Neo4j pod's node (the data disk is
+ReadWriteOnce) runs, in order:
+  stop              (Azure CLI image, UID 10001) scale exiqo-neo4j to 0 and wait for the pod to go;
+                    on a timeout it scales back to 1 and fails the job
+  dump              (the Neo4j image, its UID 7474) dump to an emptyDir; always exits 0 and leaves
+                    its result in /backup/status, so the next step always runs
+  start-and-upload  (Azure CLI image, UID 10001) scale back to 1 first, then upload with Workload
+                    Identity (az login --federated-token, az storage blob upload --auth-mode login)
+The Kubernetes API is called with curl (the Azure CLI image has no kubectl; the official kubectl
+image has no shell); the Role allows scaling exiqo-neo4j and reading its pod, nothing else.
+If the pod is killed between stop and start (node loss, the deadline), Neo4j stays at 0 replicas
+until `kubectl scale statefulset exiqo-neo4j --replicas=1` or the next helm upgrade.
+*/ -}}
+{{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled }}
+{{- $b := .Values.neo4jBackup -}}
+{{- $clientId := .Values.identity.backupClientId | default .Values.identity.platformClientId -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: exiqo-neo4j-backup
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "neo4j-backup") | nindent 4 }}
+  {{- if $clientId }}
+  annotations:
+    azure.workload.identity/client-id: {{ $clientId | quote }}
+    azure.workload.identity/tenant-id: {{ .Values.auth.tenantId | quote }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: exiqo-neo4j-backup
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "neo4j-backup") | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets/scale]
+    resourceNames: [exiqo-neo4j]
+    verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    resourceNames: [exiqo-neo4j-0]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: exiqo-neo4j-backup
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "neo4j-backup") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: exiqo-neo4j-backup
+subjects:
+  - kind: ServiceAccount
+    name: exiqo-neo4j-backup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: exiqo-neo4j-backup
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "neo4j-backup") | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Never retried: a retry would stop Neo4j again.
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $b.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "exiqo.componentLabels" (dict "ctx" . "component" "neo4j-backup") | nindent 12 }}
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: exiqo-neo4j-backup
+          # The one pod that calls the Kubernetes API (to scale Neo4j).
+          automountServiceAccountToken: true
+          enableServiceLinks: false
+          # fsGroup 7474 is the Neo4j store's group already, so mounting the disk changes nothing.
+          securityContext:
+            runAsNonRoot: true
+            fsGroup: 7474
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
+          {{- include "exiqo.imagePullSecrets" . | nindent 10 }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels: {app: exiqo-neo4j}
+                  topologyKey: kubernetes.io/hostname
+          initContainers:
+            - name: stop
+              image: {{ $b.azureCliImage }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- include "exiqo.containerSecurityContext" dict | nindent 16 }}
+              command: [bash, -c]
+              args:
+                - |
+                  set -eu
+                  {{- include "exiqo.backupKube" . | nindent 18 }}
+                  echo "backup: stopping $STS"
+                  scale 0
+                  deadline=$(( $(date +%s) + STOP_TIMEOUT ))
+                  while [ "$(kube "$API/api/v1/namespaces/$NS/pods/$STS-0")" != 404 ]; do
+                    if [ "$(date +%s)" -ge "$deadline" ]; then
+                      echo "backup: $STS-0 still there after ${STOP_TIMEOUT}s; starting it again" >&2
+                      scale 1 || true
+                      exit 1
+                    fi
+                    sleep 5
+                  done
+                  echo "backup: $STS stopped"
+              env:
+                {{- include "exiqo.backupEnv" . | nindent 16 }}
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - {name: cli-tmp, mountPath: /tmp}
+            - name: dump
+              image: {{ .Values.neo4j.image.customImage }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- include "exiqo.containerSecurityContext" (dict "uid" 7474) | nindent 16 }}
+              command: [bash, -c]
+              args:
+                - |
+                  rm -f /backup/status /backup/neo4j.dump
+                  if neo4j-admin database dump neo4j --to-path=/backup; then
+                    echo ok > /backup/status
+                  else
+                    echo "failed (exit $?)" > /backup/status
+                  fi
+                  exit 0
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - {name: neo4j-data, mountPath: /data, subPath: data}
+                - {name: backup, mountPath: /backup}
+                - {name: neo4j-tmp, mountPath: /tmp}
+                - {name: neo4j-logs, mountPath: /logs}
+          containers:
+            - name: start-and-upload
+              image: {{ $b.azureCliImage }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- include "exiqo.containerSecurityContext" dict | nindent 16 }}
+              command: [bash, -c]
+              args:
+                - |
+                  set -eu
+                  {{- include "exiqo.backupKube" . | nindent 18 }}
+                  echo "backup: starting $STS"
+                  started=ok
+                  scale 1 || started=failed
+                  status=$(cat /backup/status 2>/dev/null || echo "missing")
+                  if [ "$status" != ok ]; then echo "backup: dump $status" >&2; exit 1; fi
+                  az login --service-principal --username "$AZURE_CLIENT_ID" --tenant "$AZURE_TENANT_ID" --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" --allow-no-subscriptions --output none
+                  name="neo4j/$(date -u +%Y-%m-%dT%H%M%SZ)/neo4j.dump"
+                  az storage blob upload --auth-mode login --account-name "$STORAGE_ACCOUNT" --container-name "$CONTAINER" --name "$name" --file /backup/neo4j.dump --no-progress --output none
+                  echo "backup: uploaded $name"
+                  [ "$started" = ok ]
+              env:
+                {{- include "exiqo.backupEnv" . | nindent 16 }}
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - {name: cli-tmp, mountPath: /tmp}
+                - {name: backup, mountPath: /backup, readOnly: true}
+          volumes:
+            - name: neo4j-data
+              persistentVolumeClaim:
+                claimName: data-exiqo-neo4j-0
+            - name: backup
+              emptyDir:
+                sizeLimit: {{ $b.scratchSize | default "32Gi" }}
+            - name: cli-tmp
+              emptyDir: {sizeLimit: 256Mi}
+            - name: neo4j-tmp
+              emptyDir: {sizeLimit: 1Gi}
+            - name: neo4j-logs
+              emptyDir: {sizeLimit: 256Mi}
+{{- end }}

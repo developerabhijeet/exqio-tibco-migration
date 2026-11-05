@@ -16,15 +16,20 @@ import { ParityTable } from "./ParityTable";
 import { ScenarioRunner } from "./ScenarioRunner";
 import { DevTokenHelper, ServiceControl, SwaggerFrame, useService } from "./SwaggerFrame";
 import { TestDataPanel } from "./TestDataPanel";
+import { StackBadge, StackNote } from "@/components/ui/StackBadge";
+import { useProjectStack } from "@/lib/stacks";
+import { ReenterOnFailure } from "@/components/iterations/ReenterDialog";
 
 export function VerifyTab() {
   const qc = useQueryClient();
   const { projectId, processId } = useAppState();
+  const projectStack = useProjectStack();
   useScrollToHash();
   const processes = useProcesses(projectId);
   const gates = useGates(processId);
   const { buildId, loading } = useLatestBuildId(processId);
   const build = useBuild(buildId);
+  const recordStack = build.data?.stack ?? projectStack;
   const svc = useService(buildId);
   const { stream, watch } = useJob("verify", processId);
   const proc = processes.data?.find((p) => p.id === processId) ?? null;
@@ -44,15 +49,21 @@ export function VerifyTab() {
 
   return (
     <div className="space-y-5" data-testid="verify-tab">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 6</p>
-          <h2 className="panel-title">Verify</h2>
-          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+          <h2 className="panel-title flex items-center gap-2">
+            Verify
+            <StackBadge stack={recordStack} />
+          </h2>
+          <p className="mt-1 max-w-[760px] text-md text-slate">
             The scenarios run through the platform&apos;s model of the TIBCO process; expected values are derived from the TIBCO
             model, not from a TIBCO runtime. The same inputs then go to the running .NET service. Every field is compared; a
             difference is a defect unless a finding decided Fix explains it. QA approves parity (G5).
           </p>
+          <div className="mt-2 max-w-[720px]">
+            <StackNote recordStack={recordStack} kind={build.data?.stack ? "build" : "design"} />
+          </div>
         </div>
         <ProcessPicker />
       </div>
@@ -70,7 +81,7 @@ export function VerifyTab() {
               consequence="Verify cannot start the generated service until a build of this process passes."
             />
           ) : buildId ? (
-            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+            <p className="flex items-center gap-1.5 text-sm text-slate">
               Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
               {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>
@@ -84,7 +95,7 @@ export function VerifyTab() {
               hint="QA approves parity when no difference is unexplained and no scenario errored."
             />
             {g5?.notes?.length ? (
-              <ul data-testid="g5-notes" className="mt-1.5 space-y-0.5 text-[13px] text-decision">
+              <ul data-testid="g5-notes" className="mt-1.5 space-y-0.5 text-sm text-decision">
                 {g5.notes.map((n) => (
                   <li key={n}>{n}</li>
                 ))}
@@ -97,7 +108,8 @@ export function VerifyTab() {
               <DevTokenHelper run={svc.run} running={svc.state === "running"} />
             </div>
           ) : null}
-          {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} /> : null}
+          {buildId ? <SwaggerFrame run={svc.run} state={svc.state} reason={svc.reason} stack={recordStack} /> : null}
+          <ReenterOnFailure processId={processId} processName={proc?.name} kinds={["parity_defect"]} what="parity defect(s)" />
           <ScenarioRunner processId={processId} buildId={buildId} running={svc.state === "running"} stream={stream} onRun={runVerify} />
           <ParityTable buildId={buildId} />
           <TestDataPanel processId={processId} />

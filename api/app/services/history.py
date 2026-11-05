@@ -10,6 +10,10 @@ are collected into one session with no job id.
 Phases, by job kind: ``discovery`` (scan, discover, analyse, and Ask calls made outside a job),
 ``design`` (design), ``build`` (build, generate, test, infra), ``verify`` (verify, plan) and ``platform``
 (provider evaluations and anything else not on the migration path).
+
+Internal jobs (kinds starting with ``INTERNAL_PREFIX``, the memory ingest) are left out of the
+timeline, the totals and the sessions unless ``include_internal`` is set: they are the platform's
+bookkeeping, not a step anyone ran. ``GET /jobs/{id}`` still serves them.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from typing import Any
 from sqlalchemy import false, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.app.jobs.registry import INTERNAL_PREFIX
 from api.app.models import AuditLog, Gate, Job, ModelCall, Process
 
 # "platform" is the bucket for work outside the four wizard stages (evaluation runs, and any
@@ -79,8 +84,11 @@ def _iso(ts: Any) -> str | None:
     return ts.isoformat() if ts is not None else None
 
 
-async def history(session: AsyncSession, project_id: str) -> dict[str, Any]:
-    jobs = (await session.execute(select(Job).where(Job.project_id == project_id))).scalars().all()
+async def history(session: AsyncSession, project_id: str, *, include_internal: bool = False) -> dict[str, Any]:
+    jobs_q = select(Job).where(Job.project_id == project_id)
+    if not include_internal:
+        jobs_q = jobs_q.where(~Job.kind.startswith(INTERNAL_PREFIX, autoescape=True))
+    jobs = (await session.execute(jobs_q)).scalars().all()
     job_ids = [j.id for j in jobs]
     calls_q = select(ModelCall).where(or_(ModelCall.project_id == project_id,
                                           ModelCall.job_id.in_(job_ids) if job_ids else false()))

@@ -1,0 +1,78 @@
+{{- /*
+The HTTP API (EXIQO_ROLE=api) on 8000, mounted at /api (API_BASE_PATH); the probes are the outer
+app's /healthz (no dependencies) and /readyz (Postgres, secret files and Neo4j: a Neo4j that
+is down is "degraded", still ready, for NEO4J_READY_GRACE_SECONDS, then fails readiness) at the root.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: exiqo-api
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      {{- include "exiqo.selector" (dict "ctx" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exiqo.componentLabels" (dict "ctx" . "component" "api") | nindent 8 }}
+        azure.workload.identity/use: "true"
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: exiqo-api
+      # Workload Identity projects its own audience-bound token; the Kubernetes API token is unused.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "exiqo.podSecurityContext" . | nindent 8 }}
+      {{- include "exiqo.imagePullSecrets" . | nindent 6 }}
+      {{- include "exiqo.spread" (dict "ctx" . "component" "api") | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: api
+          image: {{ include "exiqo.image" (dict "ctx" . "which" "platform") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "exiqo.containerSecurityContext" dict | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: exiqo-platform
+          env:
+            - name: EXIQO_ROLE
+              value: api
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            {{- include "exiqo.secretFileEnv" (dict "ctx" . "role" "api") | nindent 12 }}
+            {{- include "exiqo.ciEnv" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 8
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "exiqo.platformVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "exiqo.platformVolumes" (dict "ctx" . "role" "api" "tmpSize" .Values.api.tmpSize) | nindent 8 }}

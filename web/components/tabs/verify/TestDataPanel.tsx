@@ -21,12 +21,12 @@ export function TestDataPanel({ processId }: { processId: string }) {
     <Panel title="Test data" eyebrow="Generated, masked" testId="test-data-panel" id="test-data">
       {data.error ? <ErrorNote error={data.error} /> : null}
       {!d ? (
-        <p className="text-[14px] text-slate">{data.isLoading ? "Loading." : "No test data yet: generate the scenarios first."}</p>
+        <p className="text-md text-slate">{data.isLoading ? "Loading." : "No test data yet: generate the scenarios first."}</p>
       ) : (
         <div className="space-y-3">
-          <p className="text-[14px] text-ink">{d.note}</p>
-          <div className="rounded-btn border border-line bg-page px-3 py-2 text-[13px]">
-            <p className="flex items-center gap-1.5 font-semibold text-plum">
+          <p className="text-md text-ink">{d.note}</p>
+          <div className="rounded-btn border border-line bg-page px-3 py-2 text-sm">
+            <p className="flex items-center gap-1.5 font-semibold text-heading">
               <Lock size={13} aria-hidden /> Masking rules
             </p>
             <p className="mt-0.5 text-ink">{d.masking}</p>
@@ -47,41 +47,43 @@ export function TestDataPanel({ processId }: { processId: string }) {
             const cols = [...new Set(t.rows.flatMap((r) => Object.keys(r)))];
             return (
               <div key={t.table} data-testid="test-data-table" className="overflow-x-auto rounded-btn border border-line">
-                <p className="flex items-center gap-2 border-b border-line bg-page px-3 py-1.5 text-[13px]">
-                  <span className="font-mono font-semibold text-plum">{t.table}</span>
+                <p className="flex items-center gap-2 border-b border-line bg-page px-3 py-1.5 text-sm">
+                  <span className="font-mono font-semibold text-heading">{t.table}</span>
                   <span className="text-slate">{t.operations.join(", ")}</span>
                   <span className="ml-auto text-slate">{t.rows.length} rows</span>
                 </p>
-                <table className="w-full text-[12.5px]">
-                  <thead>
-                    <tr className="text-left text-[11px] uppercase tracking-wide text-slate">
-                      {cols.map((c) => (
-                        <th key={c} className="px-3 py-1.5">
-                          {c}
-                          {masked.has(c.toLowerCase()) ? <Lock size={10} className="ml-1 inline text-decision" aria-label="masked" /> : null}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {t.rows.map((r, i) => (
-                      <tr key={i}>
+                <div className="table-scroll">
+                  <table className="table text-sm">
+                    <thead>
+                      <tr className="text-left text-2xs uppercase tracking-wide text-slate">
                         {cols.map((c) => (
-                          <td key={c} className={`px-3 py-1.5 font-mono ${masked.has(c.toLowerCase()) ? "text-decision" : "text-ink"}`}>
-                            {cell(r[c])}
-                          </td>
+                          <th key={c} className="px-3 py-1.5">
+                            {c}
+                            {masked.has(c.toLowerCase()) ? <Lock size={10} className="ml-1 inline text-decision" aria-label="masked" /> : null}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {t.rows.map((r, i) => (
+                        <tr key={i}>
+                          {cols.map((c) => (
+                            <td key={c} className={`px-3 py-1.5 font-mono ${masked.has(c.toLowerCase()) ? "text-decision" : "text-ink"}`}>
+                              {cell(r[c])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             );
           })}
           {d.inputs.length > 0 ? (
-            <div className="overflow-x-auto rounded-btn border border-line">
-              <p className="border-b border-line bg-page px-3 py-1.5 text-[13px] font-semibold text-plum">Scenario inputs</p>
-              <table className="w-full text-[12.5px]">
+            <div className="table-scroll rounded-btn border border-line">
+              <p className="border-b border-line bg-page px-3 py-1.5 text-sm font-semibold text-heading">Scenario inputs</p>
+              <table className="table table-dense text-sm">
                 <tbody className="divide-y divide-line">
                   {d.inputs.map((x) => (
                     <tr key={x.scenario}>
@@ -97,7 +99,7 @@ export function TestDataPanel({ processId }: { processId: string }) {
             </div>
           ) : null}
           {d.notes.map((n) => (
-            <p key={n} className="text-[12.5px] text-decision">
+            <p key={n} className="break-words text-sm text-decision">
               {n}
             </p>
           ))}

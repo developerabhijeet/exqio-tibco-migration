@@ -41,9 +41,8 @@ make web                  # web on http://localhost:3000
 ```
 
 Without a Docker daemon, `make db` uses the Postgres at `DATABASE_URL`: create the `exiqo` role
-and the `exiqo` and `exiqo_test` databases first, on a server with the pgvector package installed
-(the knowledge store creates the `vector` extension when it can, otherwise create it as a
-superuser).
+and the `exiqo` and `exiqo_test` databases first (migration memory lives in Neo4j, so Postgres
+needs no extension).
 
 ## Environment variables
 
@@ -73,6 +72,25 @@ shows each provider as configured or missing and never shows a value.
 | `EXIQO_NUGET_CACHE`                                                               | an offline NuGet feed for generated solutions (default `.tools/nuget-cache` when present)                                                                                       |
 | `API_PORT`, `WEB_PORT`                                                            | the dev ports (default 9000 and 3000). The Makefile and the web both read these, so the web always calls the API `make api` starts                                              |
 | `NEXT_PUBLIC_API_URL`                                                             | overrides the API URL the web calls; by default it is built from `API_PORT`                                                                                                     |
+| `<NAME>_FILE`                                                                      | for `DATABASE_URL`, `TEST_DATABASE_URL`, `APP_SECRET`, `NEO4J_PASSWORD`, `AZURE_OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OIDC_CLIENT_SECRET`, `SESSION_SECRET`, `INTERNAL_TOKEN`, `LANGFUSE_SECRET_KEY`: a file whose content is the value (one trailing newline removed); it wins over the plain variable, and a missing file stops startup |
+| `EXIQO_ROLE`                                                                       | `all` (default, one process), `api`, or `worker` |
+| `AUTH_MODE`                                                                        | `dev` (default, the dev personas) or `oidc` (Entra ID sign-in) |
+| `DEPLOY_CREDENTIAL_MODE`                                                           | `local` (default, development only) or `workload_identity` for the Deploy step |
+| `NUGET_SOURCE`, `TF_CLI_CONFIG_FILE`                                              | GMF package mirrors: the generated `nuget.config` uses this feed as its only source (source `gmf`; the offline cache is still added), and Terraform/Terragrunt run with this CLI config (provider network mirror). Empty keeps nuget.org and the public registry |
+| `API_BASE_PATH`                                                                    | URL prefix the API is served under (default empty) |
+| `INTERNAL_TOKEN`, `INTERNAL_PORT`, `WORKER_HOST`                                   | bearer, port (default 9100) and pod IP (empty means `127.0.0.1`) of the worker's cluster-internal listener; a worker (`make worker`) refuses to start without `INTERNAL_TOKEN`, role `all` does not need it |
+| `JOB_STALE_SECONDS`, `JOB_HEARTBEAT_SECONDS`, `JOB_MAX_ATTEMPTS`                   | job heartbeat every 10 s (default), a job is stale after 90 s, at most 2 attempts |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`                                        | the Neo4j graph (user default `neo4j`) |
+| `NEO4J_DATABASE`                                                                   | the Neo4j database (default `neo4j`) |
+| `NEO4J_READY_GRACE_SECONDS`, `NEO4J_GATES_READINESS`                               | Neo4j gates `/readyz` when `NEO4J_URI` is set (default true); after this grace (default 900 s) |
+| `MEMORY_INGEST_MAX_ATTEMPTS`, `MEMORY_EXACT_SCAN_MAX`                              | memory ingest attempts per job (default 10); the exact-scan vector limit (default 50000) |
+| `NEO4J_TEST_URI`, `NEO4J_TEST_USER`, `NEO4J_TEST_PASSWORD`                         | the throwaway Neo4j the memory tests reset; `make test` starts `neo4j-test` (`bolt://localhost:7688`, password `exiqo-test-neo4j`); unset or empty skips them |
+| `BRAND_NAME`, `SUPPORT_CONTACT`                                                    | product name shown in the UI (default `ExiQO`) and the support contact line |
+| `AZURE_OPENAI_AUTH`                                                                | `key` (default) or `managed_identity` |
+| `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `SESSION_SECRET` | Entra ID sign-in and the session cookie key, used when `AUTH_MODE=oidc` |
+| `ROLE_GROUPS`                                                                      | role to Entra group ids (JSON), for example `{"engineer":["<group id>"]}` |
+| `DEPLOY_ENVIRONMENTS`                                                              | Azure targets for Deploy (JSON list of name, tenant, subscription, client_id, auth, key_vault_uri, secret_name) |
+| `IMAGE_DIGESTS`, `EGRESS_ALLOWLIST`                                                | image digests (JSON object) and allowed egress hosts (JSON list) the install reports |
 
 
 
@@ -87,15 +105,35 @@ shows each provider as configured or missing and never shows a value.
 | `make api`         | the API with reload on `API_PORT` (default 9000); refuses a busy port and names what holds it                                                                                          |
 | `make web`         | the web dev server on `WEB_PORT` (default 3000), pointed at `API_URL`; refuses a busy port, since a dev server left from an earlier session keeps calling the port it was started with |
 | `make test`        | engine and API test suites (pytest)                                                                                                                                                    |
+| `make test-all`    | everything, including `slow` tests (the 20 000-node ingest); `make test` deselects them (`PYTEST_MARK`) |
+| `make neo4j-test-reset` | clean slate for the memory tests: removes the `neo4j-test` container and its data volume, then starts it healthy |
 | `make e2e`         | Playwright through the seven tabs; starts its own API and web on two free ports                                                                                                        |
 | `make demo-check`  | the acceptance run (below)                                                                                                                                                             |
 | `make samples`     | regenerate the synthetic estate                                                                                                                                                        |
 | `make samples-zip` | zip it to `samples/synthetic-gmf.zip`                                                                                                                                                  |
 | `make toolchain`   | report `dotnet`, `terraform`, `terragrunt`, `docker`, `az`, `node`                                                                                                                     |
+| `make stack-locks` | refresh the Go and Python dependency locks of the target stacks (needs `GOPROXY` and `UV_INDEX_URL`) |
 | `make nuget-cache` | build an offline NuGet feed in `.tools/nuget-cache` (run where NuGet is reachable, then copy it)                                                                                       |
 
 
 
+
+## Target stacks
+
+A project picks the language the migrated service is generated in; the platform's design, tests,
+parity and memory are the same for all of them.
+
+| Stack | Generated service | Build tools | Package source |
+|---|---|---|---|
+| `dotnet` (default) | C# · .NET 10 · ASP.NET Core | `dotnet` | NuGet |
+| `java` | Java 21 · Spring Boot 3.5 | JDK 21, Maven | Maven mirror |
+| `go` | Go · net/http · pgx | Go | Go module proxy |
+| `python` | Python 3.12 · FastAPI | `uv`, Python 3.12 | PyPI mirror |
+
+`ENABLED_STACKS` (the chart's `stacks.enabled`) says which are offered; `make toolchain` shows the
+tools present. The generated dependency versions are pinned in `engine/stacks/<stack>/`; refresh
+the Go and Python locks with `make stack-locks` where the mirrors are reachable (`GOPROXY`,
+`UV_INDEX_URL`). The install guide has the mirrors, firewall hosts and worker sizing.
 
 ## What runs with no keys
 
@@ -113,6 +151,22 @@ Azure subscription for a real plan. The generated tests need a Postgres: export
 `TEST_DATABASE_URL` (the build passes it to them) or run Docker Desktop, because with it empty
 they start a Testcontainers `postgres:16-alpine`, which needs a Docker daemon and, on the first
 run, a Docker Hub pull.
+
+### Connectors (local fakes)
+
+GitHub, Confluence, Jira and Figma integrations are off by default. To try them without any real
+service, run the fakes and use the settings it prints:
+
+```sh
+python scripts/fake_connectors.py
+```
+
+It serves a fake GitHub, Confluence, Jira and Figma on loopback ports, writes token files to a
+temporary directory and prints the `CONNECTORS` and `*_FILE` variables to start the API with.
+`python scripts/demo_check.py --only connectors` then runs the connection tests (it prints
+`connectors: SKIP (none enabled)` when none is on); `--publish --github-repo <owner>/<repo>` in a
+full run also pushes, publishes a page and creates an issue. Installing them for real is in
+`docs/deploy/GMF-INSTALL.md` ("Connectors") and `docs/deploy/RUNBOOK.md`.
 
 ## Tests
 
@@ -143,6 +197,12 @@ checks the infrastructure, verifies, runs the plan in connect-later mode and che
 masking, readiness and the audit trail. It prints a pass/fail table and exits non-zero on any
 failed row.
 
+A `connectors` step runs the enabled connectors' connection tests (skipped when none is enabled; the tests need `admin`).
+
+A `memory` step checks the project memory: available, a revision per
+content phase, lineage and search for each target, a non-empty latest diff, a curation note as
+`sme.vicky` that lands as a new revision, and an answer that cites a memory node.
+
 It probes NuGet (or the offline cache) and the provider registry first and runs in one of two
 modes, named at the top of the table with the reason:
 
@@ -154,10 +214,85 @@ enabled, the service not running and verify refused, the registry reported unrea
 
 Force a mode with `make demo-check DEMO_ARGS="--mode full"` (or `--mode offline`).
 
+`--stack dotnet|java|go|python` (default `dotnet`) runs the same seven steps on a project with that
+target stack: it asserts the build's stack, the metrics keys, parity with no unexplained
+difference and, with memory configured, a `MIGRATED_TO` edge to a `method:<stack>:` node.
+`make demo-check DEMO_ARGS="--stack java"`.
+
+Against an installed platform (the smoke test in the install guide) run the script directly:
+`scripts/demo_check.py --base-url https://<host>` talks to the API under `<host>/api`, and `--token`
+(or `EXIQO_TOKEN`) sends an Entra access token for an `AUTH_MODE=oidc` install. Without those flags
+it behaves as described above.
+
+## Memory
+
+Each project keeps a versioned memory in Neo4j: the estate, analyses, designs, builds and the
+decisions people take, linked from legacy process to generated code, and every change creates a
+numbered revision. Search, Ask and the generation steps read from it. `make neo4j` starts the
+local database (set `NEO4J_URI` and its credentials in `.env`); the API and workers ingest into it
+after each phase. Open the **Memory** explorer in the web app to search, browse the graph and
+lineage, step through revisions and diffs, and add curations (notes, mapping corrections,
+obsolete marks) as an SME or admin; viewers read only. `make demo-check` has a `memory`
+step that exercises all of this.
+
+## ExiQoian
+
+ExiQoian is the project assistant, opened from the top bar on every project screen (or Ctrl+J and
+Cmd+J) by every persona, viewers included. It answers only about the current project, its TIBCO
+workflows, the modernized application and what each phase found, from the project's memory, with a
+citation chip after each sentence it supports (hover for the artifact, click to open it). It
+declines everything else, and any text that tries to change how it works, with a fixed reply and
+no model call; it takes no actions. It needs the Neo4j memory and works with or without a model
+provider. `make demo-check` has an `exiqoian` step after `memory`: as `sme.vicky` it asks "What
+does DealerFundingRequest do?" and requires an answer with at least one citation, then asks "what
+is 2+2" and requires the off-topic decline. Operating notes (conversation privacy, the
+`exiqoian asked` audit row, the rate limit) are in `docs/deploy/RUNBOOK.md`, "ExiQoian".
+
+## Iterations
+
+When a build fails, a parity scenario differs or a plan errors, the loop closes without starting
+over. Each pass is a numbered iteration, and every memory revision carries its number.
+
+1. **Re-enter Design.** An architect presses Re-enter design (Build, Verify, Deploy, or always on
+   Design). The dialog lists the failures the platform collected (tick or untick each), takes up to
+   10 log files of 5 MB each and an updated requirements text. Opening the iteration resets G3 to
+   G6 and reruns Design with the errors and requirements as data; a requirement that changes
+   behaviour comes back as a draft rule marked "from iteration n" for the SME to approve, which is
+   the one path to a behaviour change.
+2. **Resume from edited code.** An engineer downloads a build (the zip carries `EXIQO_BASELINE.json`),
+   edits it and drops it on "Upload an edited copy". The preview lists exactly the modified, added and
+   deleted files; Resume builds from them with a three-way merge, keeps hand edits (badged "hand edit"
+   and protected from the agents), and lists conflicts, where the hand edit wins.
+3. **GitHub as a source.** With the GitHub connector on, the Repository panel connects an
+   `owner/name` branch: a TIBCO estate becomes an upload and a scan, an exported build with edits
+   becomes an edit set. "Pull" fetches later commits; an iteration's build can be pushed back
+   to `exiqo/<process>/iteration-<n>`.
+
+`make demo-check` has an `iteration` step after `memory`: as `architect.lee` it opens iteration 2
+with a requirement on the first target, waits for the design, checks G3 is pending again,
+downloads the latest build, changes one agent file, uploads it and checks the preview lists exactly
+that path; with memory configured it also checks for a revision with iteration 2. Failure modes
+(a stuck iteration, an edit set that conflicts, a clone that times out) are in
+`docs/deploy/RUNBOOK.md`, "Iterations".
+
+## Install on AKS
+
+The guides for installing and running the platform in GM Financial's Azure tenant are in
+`docs/deploy/`:
+
+- `docs/deploy/GMF-INSTALL.md`: prerequisites, mirrors, Entra app registration, Key Vault secrets,
+  values, `helm upgrade --install`, smoke test, backup and restore, rotation, troubleshooting.
+- `docs/deploy/DEPLOY-STEP-SECRETS.md`: the identities the Deploy step uses to plan infrastructure.
+- `docs/deploy/RUNBOOK.md`: scaling, draining, stuck jobs, restore drills, upgrades and rollback.
+
+The chart is `deploy/helm/exiqo`, the optional Azure prerequisites are `deploy/azure`, and the
+release pipelines are `deploy/pipelines`.
+
 ## Further reading
 
 - `docs/DEMO.md`: the five-minute demo flow, drill-downs and the pre-flight checklist.
 - `docs/TOOLCHAIN.md`: local tools and what the build container could not reach.
+- `docs/deploy/`: the GM Financial install guide, Deploy-step secrets guide and runbook.
 - `docs/superpowers/specs/2026-10-10-exiqo-migrate-design.md`: the design spec.
 - `docs/superpowers/plans/2026-10-10-exiqo-migrate.md`: the implementation plan.
 

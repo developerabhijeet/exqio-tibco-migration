@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: exiqo-api
+  labels:
+    {{- include "exiqo.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "exiqo.selector" (dict "ctx" . "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

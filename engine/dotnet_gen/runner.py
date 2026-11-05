@@ -7,7 +7,7 @@ each test back to a rule, branch or scenario id by the naming convention in ``tr
 The binary comes from ``scripts/toolchain.detect()`` (``<repo>/.tools/bin``, ``.tools/dotnet``,
 then ``PATH``). When ``<repo>/.tools/nuget-cache`` exists (``make nuget-cache``) its path is passed
 as ``EXIQO_NUGET_CACHE``; the generated ``Directory.Build.props`` adds it as a restore source, so a
-machine without access to api.nuget.org can restore from the offline cache.
+machine without access to the public feed can restore from the offline cache.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from engine.child_env import child_env
+from engine.child_env import child_env, run_captured
 from engine.dotnet_gen.coverage import merge_cobertura
 from engine.dotnet_gen.trx import TestCase, parse_trx
 
@@ -140,19 +140,55 @@ def nuget_unreachable(log: str) -> bool:
     return bool(_NUGET_DOWN.search(log or ""))
 
 
-def nuget_available(timeout_s: float = 5.0) -> bool:
-    """True when packages can be restored: the offline cache exists or api.nuget.org answers.
+def nuget_index_url(source: str = "", dotnet: str | None = None) -> str | None:
+    """The package source to probe: the GMF mirror (``source``), else the first enabled source
+    ``dotnet nuget list source`` reports, so no public feed URL is hard-coded here and a machine
+    with a mirror never probes anything else."""
+    if source.strip():
+        return source.strip()
+    exe = dotnet or find_dotnet()
+    if not exe:
+        return None
+    try:
+        done = subprocess.run([exe, "nuget", "list", "source"], check=False, capture_output=True,
+                              text=True, timeout=30, env=child_env())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    enabled = False
+    for line in (done.stdout or "").splitlines():
+        if re.match(r"\s*\d+\.\s", line):
+            enabled = "[Enabled]" in line
+        elif enabled and re.match(r"\s*https?://\S+\s*$", line):
+            return line.strip()
+    return None
 
+
+def is_local_source(url: str) -> bool:
+    """True for a NuGet source that is a folder (local path or UNC share), not a URL."""
+    return "://" not in url and os.path.isdir(url)
+
+
+def nuget_available(timeout_s: float = 5.0, source: str = "") -> bool:
+    """True when packages can be restored: the offline cache exists or the package source answers.
+
+    The source is ``source`` (the GMF mirror, ``NUGET_SOURCE``) or else dotnet's first enabled one.
     A cheap probe so callers can skip a restore that would spend a minute retrying an unreachable
     source; ``restore()`` itself still reports the real outcome.
     """
     if os.environ.get("EXIQO_NUGET_CACHE") or NUGET_CACHE.is_dir():
         return True
-    try:
-        with urllib.request.urlopen("https://api.nuget.org/v3/index.json", timeout=timeout_s) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+    url = nuget_index_url(source)
+    if url is None:
         return False
+    if is_local_source(url):
+        return True
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+            return resp.status == 200
+    except urllib.error.HTTPError as exc:
+        return exc.code < 500 and bool(source.strip())  # a mirror that answers (401) is reachable
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, ValueError):
+        return False  # ValueError: not a URL urlopen understands (a mistyped source)
 
 
 def _count_cs(root: Path) -> int:
@@ -206,15 +242,15 @@ class DotnetRunner:
 
     def _run(self, args: list[str], timeout_s: int | None = None,
              env: dict[str, str] | None = None) -> tuple[int, str]:
+        limit = timeout_s or self.timeout_s
         try:
-            proc = subprocess.run([self.dotnet, *args], cwd=self.root, env=self.env(env), capture_output=True,
-                                  text=True, timeout=timeout_s or self.timeout_s, check=False)
+            code, out, timed_out = run_captured([self.dotnet, *args], cwd=self.root, env=self.env(env),
+                                                timeout_s=limit)
         except FileNotFoundError as exc:
             return 127, f"dotnet not found: {exc}"
-        except subprocess.TimeoutExpired as exc:
-            out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-            return 124, f"{out}\ntimed out after {exc.timeout}s: dotnet {' '.join(args)}"
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        if timed_out:
+            return 124, f"{out}\ntimed out after {limit}s: dotnet {' '.join(args)}"
+        return code, out
 
     # steps
     def restore(self, project: str | None = None, env: dict[str, str] | None = None) -> StepResult:

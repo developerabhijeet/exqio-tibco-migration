@@ -15,8 +15,9 @@ text is unchanged (matched on normalised text, against the analyst's original wo
 SME edited it); SME decisions on matched rules survive. Static findings keep the engine ids
 (``S<n>-<process>-<k>``); AI findings are ``F1..Fn``, matched the same way.
 
-After persisting, the process's summary, rules and findings are written to the knowledge store
-as chunks for Ask, and SME decisions are recorded in migration memory.
+After the job, its ``memory.ingest`` follow-up writes the process's summary, rules and findings
+into the memory graph as chunks for Ask; SME decisions are recorded as migration memory
+(``memory_events``) and re-ingest the analysis chunks.
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ from api.app.models import (
     Rule,
 )
 from api.app.services import gates as gate_svc
+from api.app.services.citations import activity_names, cite_finding, cite_rule, mask
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import (
     CODE_ONLY_NOTICE,
@@ -63,7 +65,6 @@ from engine.analysis.static_rules import run_static_rules
 from engine.analysis.verifier import verify_citations
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
-from engine.knowledge.store import KnowledgeError, guard_text
 
 log = logging.getLogger(__name__)
 
@@ -130,18 +131,20 @@ def assign_finding_keys(findings: list[EngineFinding], existing: list[dict[str, 
         used.add(f.id)
 
 
-# ------------------------------------------------------------------ knowledge chunks
-def chunk_items(process_name: str, summary: str | None, rules: list[Any],
-                findings: list[Any]) -> list[tuple[str, str]]:
-    """Prose chunks for Ask. Rows or engine models both work (duck typed)."""
-    items: list[tuple[str, str]] = []
+# ------------------------------------------------------------------ memory chunks
+def chunk_entries(process_name: str, summary: str | None, rules: list[Any],
+                  findings: list[Any]) -> list[tuple[str, str, str, list[str]]]:
+    """``(kind, key, text, cited activity ids)`` of every prose chunk, unguarded (the memory
+    ingest counts the raw-XML refusals itself). Rows or engine models both work (duck typed)."""
+    items: list[tuple[str, str, str, list[str]]] = []
     if summary:
-        items.append(("summary", f"Summary of {process_name}: {summary}"))
+        items.append(("summary", "summary", f"Summary of {process_name}: {summary}", []))
     for r in rules:
         key = getattr(r, "rule_key", None) or r.id
-        steps = ", ".join(dict.fromkeys(_cit(c)["activity_id"] for c in r.citations or []))
-        items.append(("rule", f"Rule {key} of {process_name} ({r.status}): {r.text}"
-                              + (f" Steps: {steps}." if steps else "")))
+        cited = list(dict.fromkeys(_cit(c)["activity_id"] for c in r.citations or []))
+        steps = ", ".join(cited)
+        items.append(("rule", key, f"Rule {key} of {process_name} ({r.status}): {r.text}"
+                                   + (f" Steps: {steps}." if steps else ""), cited))
     for f in findings:
         key = getattr(f, "finding_key", None) or f.id
         text = f"Finding {key} ({f.severity}) in {process_name}: {f.text}"
@@ -149,32 +152,23 @@ def chunk_items(process_name: str, summary: str | None, rules: list[Any],
             text += f" Business impact: {f.business_impact}"
         if getattr(f, "decision", None):
             text += f" Decision: {f.decision}" + (f" ({f.note})" if f.note else "") + "."
-        items.append(("finding", text))
-    out = []
-    for kind, text in items:
-        try:
-            guard_text(text)
-        except KnowledgeError:
-            continue  # raw TIBCO markup is never embedded
-        out.append((kind, text))
-    return out
+        cited = list(dict.fromkeys(_cit(c)["activity_id"] for c in f.citations or []
+                                   if _cit(c).get("activity_id")))
+        items.append(("finding", key, text, cited))
+    return items
 
 
 def _cit(c: Any) -> dict[str, Any]:
     return c if isinstance(c, dict) else c.model_dump()
 
 
-async def reindex(knowledge: Knowledge, session: AsyncSession, process: Process) -> str | None:
-    """Rewrite the process's chunks from the stored rows; returns an error text or None."""
-    analysis = await gate_svc.latest_analysis(session, process.id)
-    summary = (analysis.summary or {}).get("text") if analysis else None
-    rules = await gate_svc.load_rules(session, process.id)
-    findings = await gate_svc.load_findings(session, process.id)
+async def reindex(knowledge: Knowledge, process: Process) -> str | None:
+    """Queue a re-ingest of the process's analysis chunks into memory; returns an error text or
+    None."""
     try:
-        await knowledge.index_process(process.project_id, process.id,
-                                      chunk_items(process.name, summary, rules, findings))
+        await knowledge.reindex_process(process.project_id, process.id)
     except KnowledgeUnavailable as exc:
-        log.warning("knowledge chunks not written for %s: %s", process.id, exc)
+        log.warning("analysis re-ingest not queued for %s: %s", process.id, exc)
         return str(exc)
     return None
 
@@ -207,7 +201,7 @@ def _carried_rules(rows: list[Rule]) -> list[EngineRule]:
         out.append(EngineRule(
             id=r.rule_key, text=r.text, confidence=r.confidence,
             status="draft" if r.status == "unverified" else r.status, owner=r.owner,
-            memory_refs=list(r.memory_refs or []),
+            memory_refs=list(r.memory_refs or []), source=r.source,
             citations=[Citation.model_validate(_cit(c)) for c in r.citations or []],
             challenge=EngineChallenge.model_validate(ch) if ch else None))
     return out
@@ -401,11 +395,6 @@ async def run_analysis(ctx: JobContext, process_id: str, settings: Settings,
                   + f"; spec hash {result['spec_hash'][:12]}"
                   + (f"; gates reset: {', '.join(result['gates_reset'])}" if result["gates_reset"] else ""))
 
-    async with ctx.sessionmaker() as s:
-        process = await s.get(Process, process_id)
-        error = await reindex(knowledge, s, process)
-    await ctx.log(f"knowledge store not updated: {error}" if error else
-                  "summary, rules and findings indexed for Ask")
     return {**result, "ai_available": ai_available, "ai_reason": ai_reason, "provider": choice.name,
             "full_run": full_run}
 
@@ -428,9 +417,24 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
         await s.flush()
 
         old_rules = {r.rule_key: r for r in await gate_svc.load_rules(s, process_id)}
-        old_rule_keys = set(old_rules)
+        # Rules an iteration proposed (``source`` set) are not the analyst's to drop: they survive
+        # every re-analysis, decided or not, and never count as a change of the rule set.
+        proposed = {k: r for k, r in old_rules.items() if r.source}
+        proposed_keys = frozenset(proposed)  # frozen: a merged one below still is not a change
+        old_rule_keys = set(old_rules) - proposed_keys
+        next_free = max([0, int((meta.get("key_marks") or {}).get("rule", 0)),
+                         *(gate_svc.key_number(k) for k in old_rules),
+                         *(gate_svc.key_number(r.id) for r in rules)]) + 1
         rows: dict[str, Rule] = {}
         for r in rules:
+            kept = proposed.get(r.id)
+            if kept is not None and norm(kept.text) != norm(r.text) and norm(kept.original_text) != norm(r.text):
+                # a key taken by a proposed rule meanwhile (an analysis racing an iteration's design)
+                originals[f"R{next_free}"] = originals.pop(r.id, r.text)
+                r.id = f"R{next_free}"
+                next_free += 1
+            elif kept is not None:
+                proposed.pop(r.id)  # the analyst found the same rule: one row, updated by the analyst
             row = old_rules.pop(r.id, None)
             if row is None:
                 row = Rule(process_id=process_id, rule_key=r.id)
@@ -448,6 +452,9 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
             row.challenge = r.challenge.model_dump(mode="json") if r.challenge else None
             rows[r.id] = row
         for gone in old_rules.values():
+            if gone.rule_key in proposed:
+                rows[gone.rule_key] = gone
+                continue
             if gone.status in gate_svc.RULE_DECIDED:
                 if keep_decided:
                     rows[gone.rule_key] = gone
@@ -508,7 +515,7 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
 
         if process.migration_status == "not_started":
             process.migration_status = "analysed"
-        changed = old_rule_keys != set(rows) or old_finding_keys != kept_findings
+        changed = old_rule_keys != set(rows) - proposed_keys or old_finding_keys != kept_findings
         gate_svc.audit(s, process, gate_svc.SYSTEM, "analysis completed", actor_kind=gate_svc.SYSTEM,
                        detail={"job_id": ctx.job_id, "provider": provider_name, "rules": len(rows),
                                "findings": len(kept_findings), "verified": verification.verified,
@@ -526,6 +533,42 @@ async def _persist(ctx: JobContext, process_id: str, provider_name: str, meta: d
                 "coverage_total": coverage.total}
 
 
+# ------------------------------------------------------------------ rules an iteration proposes
+async def store_proposed_rules(session: AsyncSession, process: Process, proposals: list[Any], n: int,
+                               job_id: str | None = None) -> list[str]:
+    """Store the designer's ``proposed_rules`` of iteration ``n`` as draft rules (no citations,
+    confidence 0, ``source = "iteration n"``) for the SME to decide; a proposal whose text an
+    existing rule already has is skipped. Keys continue above every key the process used (its rules
+    and the latest analysis's high-water mark, which is raised so a re-analysis never reuses them).
+    Drafts are outside the spec hash, so nothing is reset until one is approved. Returns the keys."""
+    rules = await gate_svc.load_rules(session, process.id)
+    analysis = await gate_svc.latest_analysis(session, process.id)
+    marks = dict(((analysis.summary or {}).get("key_marks") or {}) if analysis else {})
+    next_n = max([int(marks.get("rule", 0)), *(gate_svc.key_number(r.rule_key) for r in rules)]) + 1
+    known = {norm(t) for r in rules for t in (r.text, r.original_text) if t}
+    source = f"iteration {n}"
+    keys: list[str] = []
+    for proposal in proposals:
+        text = str(getattr(proposal, "text", "") or "").strip()
+        if not text or norm(text) in known:
+            continue
+        known.add(norm(text))
+        key = f"R{next_n}"
+        next_n += 1
+        session.add(Rule(process_id=process.id, analysis_id=analysis.id if analysis else None, rule_key=key,
+                         text=text, original_text=text, citations=[], confidence=0.0, status="draft",
+                         source=source, memory_refs=[]))
+        keys.append(key)
+        gate_svc.audit(session, process, gate_svc.SYSTEM, "rule proposed", actor_kind=gate_svc.SYSTEM,
+                       detail={"rule_key": key, "text": text, "rationale": getattr(proposal, "rationale", ""),
+                               "iteration": n, "job_id": job_id})
+    if keys and analysis is not None:
+        analysis.summary = {**(analysis.summary or {}),
+                            "key_marks": {**marks, "rule": next_n - 1}}  # a new dict for the JSONB change
+    await session.flush()
+    return keys
+
+
 # ------------------------------------------------------------------ checks after a decision
 async def refresh_checks(session: AsyncSession, process: Process, analysis: AnalysisRun | None,
                          rules: list[Rule]) -> tuple[Any, Any]:
@@ -535,7 +578,7 @@ async def refresh_checks(session: AsyncSession, process: Process, analysis: Anal
         return None, None
     proc = IRProcess.model_validate(process.ir)
     engine_rules = [EngineRule(id=r.rule_key, text=r.text, confidence=r.confidence, status=r.status,
-                               citations=[Citation.model_validate(_cit(c)) for c in r.citations or []])
+                               source=r.source, citations=[Citation.model_validate(_cit(c)) for c in r.citations or []])
                     for r in rules]
     verification = verify_citations(proc, engine_rules)
     for row, er in zip(rules, engine_rules, strict=True):
@@ -607,7 +650,7 @@ async def update_rule(session: AsyncSession, knowledge: Knowledge, rule_id: str,
     await session.commit()
     await _remember(knowledge, process.project_id, memory, user)
     if reindex_needed:
-        await reindex(knowledge, session, process)
+        await reindex(knowledge, process)
     return process
 
 
@@ -635,7 +678,7 @@ async def decide_finding(session: AsyncSession, knowledge: Knowledge, finding_id
               {"process_id": process.id, "process_name": process.name, "finding_id": row.id,
                "finding_key": row.finding_key, "decision": decision, "note": note, "user": user})
     await _remember(knowledge, process.project_id, memory, user)
-    await reindex(knowledge, session, process)
+    await reindex(knowledge, process)
     return process
 
 
@@ -651,7 +694,8 @@ async def _remember(knowledge: Knowledge, project_id: str, memory: tuple[str, di
 
 
 # ------------------------------------------------------------------ view
-def _rule_out(r: Rule, failures: list[dict[str, Any]]) -> dict[str, Any]:
+def _rule_out(r: Rule, failures: list[dict[str, Any]], process: Process,
+              names: dict[str, str]) -> dict[str, Any]:
     cits = []
     for c in r.citations or []:
         c = _cit(c)
@@ -662,16 +706,20 @@ def _rule_out(r: Rule, failures: list[dict[str, Any]]) -> dict[str, Any]:
         cits.append({"activity_id": c.get("activity_id"), "kind": c.get("kind"), "text": c.get("text"),
                      "verified": fail is None, "reason": fail.get("reason") if fail else None})
     return {"id": r.id, "rule_key": r.rule_key, "text": r.text, "original_text": r.original_text,
+            "original_text_masked": mask(r.original_text) if r.original_text else None,
             "citations": cits, "confidence": r.confidence, "status": r.status, "owner": r.owner,
-            "memory_refs": r.memory_refs or [], "challenge": r.challenge, "updated_by": r.updated_by,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            "memory_refs": r.memory_refs or [], "challenge": r.challenge, "source": r.source,
+            "updated_by": r.updated_by,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "cited": cite_rule(r, process, citations=cits, names=names)}
 
 
-def _finding_out(f: Finding) -> dict[str, Any]:
+def _finding_out(f: Finding, process: Process, names: dict[str, str]) -> dict[str, Any]:
     return {"id": f.id, "finding_key": f.finding_key, "severity": f.severity, "text": f.text,
             "citations": [_cit(c) for c in f.citations or []], "source": f.source,
             "business_impact": f.business_impact, "decision": f.decision, "note": f.note,
-            "decided_by": f.decided_by, "decided_at": f.decided_at.isoformat() if f.decided_at else None}
+            "decided_by": f.decided_by, "decided_at": f.decided_at.isoformat() if f.decided_at else None,
+            "cited": cite_finding(f, process, names=names)}
 
 
 async def analysis_view(session: AsyncSession, process: Process) -> dict[str, Any]:
@@ -688,6 +736,7 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
     status = {r.rule_key: r.status for r in rules}
     live = [f for f in failures if status.get(f.get("rule_id")) != "rejected"]
     covered = sum(1 for i in items if i.covered_by or i.technical_reason)
+    names = activity_names(process)
     return {
         "process_id": process.id,
         "analysed": analysis is not None,
@@ -700,9 +749,10 @@ async def analysis_view(session: AsyncSession, process: Process) -> dict[str, An
         "notice": summary.get("notice"),
         "static_only": analysis.static_only if analysis else None,
         "summary": summary.get("text"),
-        "rules": [_rule_out(r, failures) for r in rules],
-        "findings": [_finding_out(f) for f in findings],
+        "rules": [_rule_out(r, failures, process, names) for r in rules],
+        "findings": [_finding_out(f, process, names) for f in findings],
         "verification": {"verified": ver.get("verified", 0), "total": ver.get("total", 0),
+                         "requirement_backed": ver.get("requirement_backed", 0),
                          "failures": failures, "passed": not live},
         "coverage": {"covered": covered, "total": len(items), "complete": covered == len(items),
                      "items": [{"kind": i.kind, "ref": i.ref, "covered_by": i.covered_by or [],

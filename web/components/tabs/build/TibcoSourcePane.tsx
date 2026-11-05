@@ -11,7 +11,7 @@ import { elementSpan, focusLine, type XmlHighlight } from "@/lib/xmlspan";
 
 const CodeView = dynamic(() => import("@/components/canvas/CodeView"), {
   ssr: false,
-  loading: () => <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-[13px] text-slate">Loading editor</div>,
+  loading: () => <div className="h-[520px] rounded-btn border border-line bg-page p-4 text-sm text-slate">Loading editor</div>,
 });
 
 /** A step's element band and the line the reader lands on (its SQL when known), as Discover computes them. */
@@ -53,7 +53,7 @@ export function TibcoSourcePane({
       <div
         data-testid="tibco-source"
         style={{ minHeight: height }}
-        className="flex items-center justify-center rounded-btn border border-dashed border-line bg-warm/60 p-6 text-center text-[14px] text-slate"
+        className="flex items-center justify-center rounded-btn border border-dashed border-line bg-sunken/60 p-6 text-center text-md text-slate"
       >
         Select a TIBCO process file, or a generated file that implements a step, to see the TIBCO source here.
       </div>
@@ -63,13 +63,13 @@ export function TibcoSourcePane({
     <div className="flex min-w-0 flex-col gap-2" data-testid="tibco-source">
       <div className="flex min-h-[28px] flex-wrap items-center gap-2">
         <FileText size={15} className="text-slate" aria-hidden />
-        <span data-testid="tibco-source-path" className="min-w-0 truncate font-mono text-[12.5px] font-semibold text-plum">
+        <span data-testid="tibco-source-path" className="min-w-0 truncate font-mono text-sm font-semibold text-heading">
           {proc.source_path}
         </span>
         <Pill tone="purple" title="The uploaded TIBCO source of this process">
           TIBCO {proc.dialect}
         </Pill>
-        <span className="ml-auto text-[12px] text-slate" data-testid="tibco-source-span">
+        <span className="ml-auto text-xs text-slate" data-testid="tibco-source-span">
           {span ? `${activityName ? `${activityName}: ` : ""}${highlightLabel(span)}` : "read only"}
         </span>
       </div>
@@ -77,7 +77,7 @@ export function TibcoSourcePane({
       {xml.data ? (
         <CodeView value={xml.data} language="xml" height={height} highlight={span} testId="tibco-xml" wrap />
       ) : xml.isLoading ? (
-        <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-[13px] text-slate">
+        <div style={{ height }} className="rounded-btn border border-line bg-page p-4 text-sm text-slate">
           Loading the TIBCO source
         </div>
       ) : null}

@@ -5,8 +5,8 @@ import { Pill } from "@/components/ui/Pill";
 import { useService } from "@/components/tabs/verify/SwaggerFrame";
 
 /**
- * Compiles and runs the generated solution on the API host and shows what it did: the port it came
- * up on, a link to its Swagger UI, and the tail of its own log. The same service the Verify tab
+ * Compiles and runs the generated solution on a worker and shows what it did: the address the API
+ * proxies it at, a link to its Swagger UI, and the tail of its own log. The same service the Verify tab
  * drives, surfaced beside the download so the sequence is one place: take the code, run the code,
  * call the code.
  *
@@ -21,10 +21,10 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
   return (
     <div className="mt-5 border-t border-line pt-4" data-testid="run-here">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <TerminalSquare size={16} className="text-purple" aria-hidden />
-        <span className="font-semibold text-plum">Run it here</span>
-        <span className="text-[13px] text-slate">
-          Starts the generated service on this host and opens its Swagger UI, without downloading anything.
+        <TerminalSquare size={16} className="text-accent-ink" aria-hidden />
+        <span className="font-semibold text-heading">Run it here</span>
+        <span className="text-sm text-slate">
+          Starts the generated service on the platform and opens its Swagger UI, without downloading anything.
         </span>
         <span className="ml-auto flex items-center gap-2">
           <span title={blocked ?? undefined}>
@@ -51,7 +51,7 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
         </span>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13.5px]">
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-md">
         <span className="flex items-center gap-1.5" data-testid="run-here-status" data-state={state}>
           <span className="label">Status</span>
           <Pill tone={state === "running" ? "gate" : state === "starting" ? "purple" : state === "stopped" ? "error" : "det"}>
@@ -60,7 +60,7 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
         </span>
         {state === "running" && run?.url ? (
           <span>
-            <span className="label mr-1.5">Listening on</span>
+            <span className="label mr-1.5">Reached at</span>
             <span className="font-mono text-ink">{run.url}</span>
           </span>
         ) : null}
@@ -71,7 +71,7 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
             target="_blank"
             rel="noreferrer"
             data-testid="run-here-swagger"
-            className="flex items-center gap-1.5 font-medium text-purple hover:underline"
+            className="flex items-center gap-1.5 font-medium text-accent-ink hover:underline"
           >
             <ExternalLink size={14} aria-hidden /> Open Swagger
           </a>
@@ -79,11 +79,11 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
       </div>
 
       {blocked ? (
-        <p className="mt-2 text-[13px] text-slate">{blocked}</p>
+        <p className="mt-2 text-sm text-slate">{blocked}</p>
       ) : reason ? (
         <p
           data-testid="run-here-reason"
-          className="mt-2 whitespace-pre-wrap break-words rounded-btn bg-error-bg px-3 py-2 text-[13px] text-error"
+          className="mt-2 whitespace-pre-wrap break-words rounded-btn bg-error-bg px-3 py-2 text-sm text-error"
         >
           {reason}
         </p>
@@ -91,14 +91,14 @@ export function RunHere({ buildId, compiled }: { buildId: string; compiled: bool
 
       {run?.log_tail ? (
         <details className="mt-3">
-          <summary className="cursor-pointer text-[13px] font-medium text-plum">Running output</summary>
-          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-[11.5px] leading-5 text-ink">
+          <summary className="cursor-pointer text-sm font-medium text-heading">Running output</summary>
+          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-btn bg-page p-3 font-mono text-xs leading-5 text-ink">
             {run.log_tail}
           </pre>
         </details>
       ) : null}
 
-      <p className="mt-3 text-[12.5px] text-slate">
+      <p className="mt-3 text-sm text-slate">
         It restores and runs the same solution the zip contains, with Development authentication, the in-process bus and
         the scenario database. It needs a host with the .NET SDK and access to the NuGet feed; where either is missing
         the reason above is the service&apos;s own log.

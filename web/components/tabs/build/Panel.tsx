@@ -23,18 +23,23 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section id={id} className={`card scroll-mt-4 p-5 ${className}`} data-testid={testId}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <section
+      id={id}
+      // A panel with an id is a hash target (#tests): it lands below the pinned header.
+      className={`card ${id ? "scroll-mt-[calc(var(--pinned-h,0px)+6rem)]" : ""} ${className}`}
+      data-testid={testId}
+    >
+      <div className="card-header">
+        <div className="min-w-0">
           {eyebrow ? <p className="label">{eyebrow}</p> : null}
-          <h3 className="flex items-center gap-2 text-[18px] font-semibold text-plum">
+          <h3 className="card-title mt-0.5 flex items-center gap-2">
             {icon}
             {title}
           </h3>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
-      <div className="mt-3">{children}</div>
+      <div>{children}</div>
     </section>
   );
 }
@@ -70,7 +75,7 @@ export function CheckPill({ ok, yes = "ok", no = "failed", unknown = "not run" }
 export function TagPill({ tag }: { tag: "code" | "ai" | string }) {
   return (
     <span
-      className={`h-fit shrink-0 rounded px-1.5 text-[10.5px] font-semibold uppercase leading-5 ${
+      className={`h-fit shrink-0 rounded px-1.5 text-2xs font-semibold uppercase leading-5 ${
         tag === "ai" ? "bg-ai-bg text-ai" : "bg-det-bg text-det"
       }`}
     >

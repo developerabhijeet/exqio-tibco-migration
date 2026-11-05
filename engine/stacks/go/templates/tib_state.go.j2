@@ -1,0 +1,207 @@
+package tib
+
+import (
+	"errors"
+	"reflect"
+)
+
+// Message is a message as received from the bus: entity, JSON body and properties.
+type Message struct {
+	Entity     string            `json:"entity"`
+	Body       string            `json:"body"`
+	Properties map[string]string `json:"properties"`
+}
+
+// Result is what a process run returns to its starter: the HTTP status and the reply body, if any.
+type Result struct {
+	StatusCode int
+	Body       Value
+}
+
+// Completed is the result of a run that ended without a reply activity.
+var Completed = Result{StatusCode: 204}
+
+// OK is a reply (or the end mapping of a sub-process) with status 200.
+func OK(body Value) Result {
+	return Result{StatusCode: 200, Body: body}
+}
+
+// ErrorReply is a REST client or server error reply (TIBCO client4XXError or server5XXError): its
+// statusCode is the status.
+func ErrorReply(reply Value) Result {
+	return Result{StatusCode: Integer(Path(reply, "statusCode"), 500), Body: reply}
+}
+
+// Done is a pointer to r: what a fault handler's body returns when it ends the run.
+func Done(r Result) *Result {
+	return &r
+}
+
+// State holds the variables of one process run, by their TIBCO names: the starter's
+// ($ReceiveFundingRequest, $get.parameters, $Start), each activity's output ($LookupDealer), the
+// group variables of an iterate ($index, $currentElement) and $_error after an error link or a
+// catch.
+type State struct {
+	variables map[string]Value
+	message   *Message
+	lastError error
+	result    *Result
+}
+
+// NewState is a run started with one variable (the starter output, or $Start of a sub-process).
+func NewState(name string, v Value) *State {
+	return (&State{variables: map[string]Value{}}).Set(name, v)
+}
+
+// Get is the variable, or Missing when it was never set.
+func (s *State) Get(name string) Value {
+	if v, ok := s.variables[name]; ok {
+		return v
+	}
+	return Missing
+}
+
+// Set sets a variable; Missing is stored as null.
+func (s *State) Set(name string, v Value) *State {
+	if Absent(v) {
+		v = nil
+	}
+	s.variables[name] = v
+	return s
+}
+
+// WithMessage records the message a JMS starter received (for a JMS reply).
+func (s *State) WithMessage(m *Message) *State {
+	s.message = m
+	return s
+}
+
+// Message is the message a JMS starter received, or nil.
+func (s *State) Message() *Message {
+	return s.message
+}
+
+// Reply records a reply that does not end the run (TIBCO carries on after it); the first one counts.
+func (s *State) Reply(r Result) {
+	if s.result == nil {
+		s.result = &r
+	}
+}
+
+// Finish is what the run returns: the recorded reply, or Completed.
+func (s *State) Finish() Result {
+	if s.result != nil {
+		return *s.result
+	}
+	return Completed
+}
+
+// LastError is the error that sent the run down an error link or into a catch, if any.
+func (s *State) LastError() error {
+	return s.lastError
+}
+
+// SetLastError records the error and exposes it as $_error (class, msg, and the fault name and
+// data of a fault).
+func (s *State) SetLastError(err error) {
+	s.lastError = err
+	value := Object()
+	value["class"] = reflect.TypeOf(err).String()
+	value["msg"] = err.Error()
+	var fault Faulted
+	if errors.As(err, &fault) {
+		value["faultName"] = fault.FaultName()
+		value["data"] = fault.FaultData()
+	}
+	s.variables["_error"] = value
+}
+
+// Link is a TIBCO link: its id and the steps it connects.
+type Link struct {
+	ID   string
+	From string
+	To   string
+}
+
+// Flow runs TIBCO link semantics for processes that are not straight-line (parallel links,
+// several conditional links on one step, error links, joins): a step runs once, when every
+// incoming link is decided and at least one was taken; a step whose incoming links were all not
+// taken is skipped and its outgoing links are not taken either (dead path elimination), so a join
+// waits for every live predecessor.
+type Flow struct {
+	incoming map[string][]Link
+	outgoing map[string][]Link
+	taken    map[string]bool
+	finished map[string]bool
+	queued   map[string]bool
+	ready    []string
+}
+
+// NewFlow is the flow of links.
+func NewFlow(links ...Link) *Flow {
+	f := &Flow{incoming: map[string][]Link{}, outgoing: map[string][]Link{}, taken: map[string]bool{},
+		finished: map[string]bool{}, queued: map[string]bool{}}
+	for _, link := range links {
+		f.outgoing[link.From] = append(f.outgoing[link.From], link)
+		f.incoming[link.To] = append(f.incoming[link.To], link)
+	}
+	return f
+}
+
+// Start queues a step that has no incoming link (the starter).
+func (f *Flow) Start(step string) {
+	if !f.queued[step] {
+		f.queued[step] = true
+		f.ready = append(f.ready, step)
+	}
+}
+
+// Next is the next step whose incoming links are all decided; false when the run is done.
+func (f *Flow) Next() (string, bool) {
+	if len(f.ready) == 0 {
+		return "", false
+	}
+	step := f.ready[0]
+	f.ready = f.ready[1:]
+	return step, true
+}
+
+// Complete records that step ran and which of its outgoing links it took.
+func (f *Flow) Complete(step string, taken ...string) {
+	set := map[string]bool{}
+	for _, id := range taken {
+		set[id] = true
+	}
+	f.finish(step, set)
+}
+
+func (f *Flow) finish(step string, taken map[string]bool) {
+	if f.finished[step] {
+		return
+	}
+	f.finished[step] = true
+	for _, link := range f.outgoing[step] {
+		f.taken[link.ID] = taken[link.ID]
+		f.evaluate(link.To)
+	}
+}
+
+func (f *Flow) evaluate(step string) {
+	if f.queued[step] || f.finished[step] {
+		return
+	}
+	live := false
+	for _, link := range f.incoming[step] {
+		taken, decided := f.taken[link.ID]
+		if !decided {
+			return // a predecessor has not run yet
+		}
+		live = live || taken
+	}
+	if live {
+		f.queued[step] = true
+		f.ready = append(f.ready, step)
+	} else {
+		f.finish(step, map[string]bool{}) // dead path: no incoming link was taken
+	}
+}

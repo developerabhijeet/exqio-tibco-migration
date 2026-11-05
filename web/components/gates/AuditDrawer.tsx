@@ -47,43 +47,43 @@ export function AuditDrawer({ processId, open, onClose }: { processId: string; o
         aria-modal="true"
         aria-label="Audit trail"
         data-testid="audit-drawer"
-        className="relative flex h-full w-[520px] max-w-full flex-col border-l border-line bg-white shadow-2xl"
+        className="relative flex h-full w-[520px] max-w-full flex-col border-l border-line bg-surface shadow-e3"
       >
         <div className="flex items-start justify-between border-b border-line px-6 py-5">
           <div>
             <p className="eyebrow">Audit trail</p>
             <h2 className="panel-title mt-1">Decisions on this process</h2>
-            <p className="mt-1 text-[13px] text-slate">Every rule, finding and gate decision, newest first.</p>
+            <p className="mt-1 text-sm text-slate">Every rule, finding and gate decision, newest first.</p>
           </div>
           <button type="button" className="btn-ghost" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
         <ol className="flex-1 divide-y divide-line overflow-y-auto px-6">
-          {audit.isLoading ? <li className="py-4 text-[14px] text-slate">Loading.</li> : null}
+          {audit.isLoading ? <li className="py-4 text-md text-slate">Loading.</li> : null}
           {!audit.isLoading && rows.length === 0 ? (
-            <li className="py-4 text-[14px] text-slate">No decisions recorded yet.</li>
+            <li className="py-4 text-md text-slate">No decisions recorded yet.</li>
           ) : null}
           {rows.map((e) => {
             const hashes = hashesOf(e);
             const s = summary(e);
             return (
-              <li key={e.id} className="py-3 text-[14px]" data-testid="audit-row">
+              <li key={e.id} className="py-3 text-md" data-testid="audit-row">
                 <div className="flex flex-wrap items-center gap-x-2">
                   <History size={14} className="text-slate" aria-hidden />
-                  <span className="font-semibold text-plum">{e.action}</span>
-                  {e.gate ? <span className="font-mono text-[12px] text-gate">{e.gate}</span> : null}
-                  <span className="ml-auto text-[12px] text-slate">{new Date(e.ts).toLocaleString()}</span>
+                  <span className="font-semibold text-heading">{e.action}</span>
+                  {e.gate ? <span className="font-mono text-xs text-gate">{e.gate}</span> : null}
+                  <span className="ml-auto text-xs text-slate">{new Date(e.ts).toLocaleString()}</span>
                 </div>
-                <p className="mt-0.5 text-[13px] text-slate">
+                <p className="mt-0.5 text-sm text-slate">
                   by <span className={e.actor_kind === "user" ? "font-medium text-ink" : ""}>{e.actor}</span>
                   {hashes.map((h) => (
-                    <span key={h.label} className="ml-2 font-mono text-[11.5px]" title={h.hash}>
+                    <span key={h.label} className="ml-2 font-mono text-xs" title={h.hash}>
                       {h.label} {h.hash.slice(0, 12)}
                     </span>
                   ))}
                 </p>
-                {s ? <p className="mt-1 break-words text-[13px] text-ink">{s}</p> : null}
+                {s ? <p className="mt-1 break-words text-sm text-ink">{s}</p> : null}
               </li>
             );
           })}

@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from engine.citations.model import CitedText
+
 GateName = Literal["G1", "G2", "G3", "G4", "G5", "G6"]
 
 
@@ -19,6 +21,9 @@ class DomainOut(BaseModel):
     ir_process_ids: list[str]
     evidence: list[dict[str, Any]]  # {kind: module|table|queue|call|name, text}
     renamed_by: str | None
+    # The rationale, one ref per evidence item. ``cited.text`` is MASKED and the spans index
+    # into it (code points): render ``cited.text``.
+    cited: CitedText | None = None
 
 
 class DomainRename(BaseModel):
@@ -65,14 +70,21 @@ class RuleOut(BaseModel):
     rule_key: str  # R1..Rn
     text: str
     original_text: str | None
+    # ``original_text`` masked like ``cited.text``: what clients show as "Drafted as".
+    original_text_masked: str | None = None
     citations: list[CitationOut]
     confidence: float
     status: Literal["draft", "approved", "edited", "rejected", "unverified"]
     owner: str | None
     memory_refs: list[str]
     challenge: ChallengeOut | None
+    source: str | None = None  # "iteration <n>" for a rule an iteration proposed
     updated_by: str | None
     updated_at: str | None
+    # ``text`` with a span per cited activity. ``cited.text`` is the MASKED text and the spans
+    # index into it (code points), not into ``text``: when ``cited`` is present, clients render
+    # ``cited.text``, never ``text``.
+    cited: CitedText | None = None
 
 
 class FindingCitationOut(BaseModel):
@@ -93,6 +105,10 @@ class FindingOut(BaseModel):
     note: str | None
     decided_by: str | None
     decided_at: str | None
+    # ``text`` with a span per cited activity. ``cited.text`` is the MASKED text and the spans
+    # index into it (code points), not into ``text``: when ``cited`` is present, clients render
+    # ``cited.text``, never ``text``.
+    cited: CitedText | None = None
 
 
 class VerificationOut(BaseModel):
@@ -100,6 +116,7 @@ class VerificationOut(BaseModel):
     total: int
     failures: list[dict[str, Any]]  # {rule_id: rule key, citation: {activity_id, kind, text}, reason}
     passed: bool  # no failing citation on a rule that is not rejected
+    requirement_backed: int = 0  # uncited rules an iteration proposed (ruling X21)
 
 
 class CoverageItemOut(BaseModel):
@@ -190,12 +207,25 @@ class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
+class MemoryCitationOut(BaseModel):
+    """The memory node version a hit came from (``engine.memory.model.Citation``)."""
+    uid: str
+    label: str
+    phase: str
+    revision: int
+    artifact_type: str
+    artifact_id: str | None = None
+    process_id: str | None = None
+    path: str | None = None
+
+
 class HitOut(BaseModel):
-    id: str
+    id: str  # the memory node uid (= citation.uid)
     kind: str  # summary|rule|finding|decision|pattern|seed|...
     process_id: str | None  # API process id for analysis chunks
     text: str
     score: float
+    citation: MemoryCitationOut | None = None
 
 
 class AnswerOut(BaseModel):

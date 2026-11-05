@@ -21,11 +21,11 @@ function Dir({ dir, depth, open }: { dir: TreeDir; depth: number; open: OpenProp
   }, [holdsSelected]);
   return (
     <details ref={ref} open={depth < 1}>
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-0.5 text-[14px] hover:bg-warm">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-0.5 text-md hover:bg-sunken">
         <ChevronRight size={14} className="text-slate transition-transform [details[open]>summary>&]:rotate-90" aria-hidden />
-        <Folder size={14} className="text-purple" aria-hidden />
-        <span className="font-medium text-plum">{dir.name}</span>
-        <span className="text-[12px] text-slate">{dir.count}</span>
+        <Folder size={14} className="text-accent-ink" aria-hidden />
+        <span className="font-medium text-heading">{dir.name}</span>
+        <span className="text-xs text-slate">{dir.count}</span>
       </summary>
       <div className="ml-4 border-l border-line pl-2">
         {dir.dirs.map((d) => (
@@ -46,7 +46,7 @@ function FileRow({ f, open }: { f: FileEntry; open: OpenProps }) {
     <>
       <FileText size={13} className={muted ? "text-line" : "text-slate"} aria-hidden />
       <span className={`truncate ${muted ? "text-slate" : "text-ink"}`}>{name}</span>
-      <span className="ml-auto shrink-0 font-mono text-[11px] text-slate">
+      <span className="ml-auto shrink-0 font-mono text-2xs text-slate">
         {KIND_LABELS[f.kind] ?? f.kind}
         {f.dialect ? ` · ${f.dialect}` : ""} · {formatBytes(f.size)}
       </span>
@@ -61,15 +61,15 @@ function FileRow({ f, open }: { f: FileEntry; open: OpenProps }) {
         aria-current={active ? "true" : undefined}
         title={`Open ${f.path}`}
         onClick={() => open.onOpen?.(f)}
-        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[13px] ${
-          active ? "bg-purple-lt font-semibold" : "hover:bg-warm"
+        className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-sm ${
+          active ? "bg-accent-soft font-semibold" : "hover:bg-sunken"
         }`}
       >
         {body}
       </button>
     );
   }
-  return <div className="flex items-center gap-1.5 px-1 py-0.5 text-[13px]">{body}</div>;
+  return <div className="flex items-center gap-1.5 px-1 py-0.5 text-sm">{body}</div>;
 }
 
 export function FileTree({
@@ -88,8 +88,8 @@ export function FileTree({
         {counts.map((c) => (
           <span
             key={c.kind}
-            className={`inline-flex items-center gap-1.5 rounded-btn border px-2 py-0.5 text-[13px] ${
-              c.kind === "other" ? "border-line bg-page text-slate" : "border-purple-lt bg-purple-lt text-plum"
+            className={`inline-flex items-center gap-1.5 rounded-btn border px-2 py-0.5 text-sm ${
+              c.kind === "other" ? "border-line bg-page text-slate" : "border-accent-soft bg-accent-soft text-heading"
             }`}
           >
             <span className="font-mono">{c.label}</span>
@@ -111,7 +111,7 @@ export function FileTree({
   // the moment an estate lands.
   if (collapsible) {
     return (
-      <section className="card p-5" data-testid="file-tree">
+      <section className="card" data-testid="file-tree">
         <details className="group/files">
           <summary className="cursor-pointer list-none">
             <h3 className="panel-title flex items-center gap-1.5">
@@ -121,7 +121,7 @@ export function FileTree({
                 aria-hidden
               />
               Files
-              <span className="ml-auto text-[14px] font-normal text-slate">{files.length} files</span>
+              <span className="ml-auto text-md font-normal text-slate">{files.length} files</span>
             </h3>
           </summary>
           {body}
@@ -130,10 +130,10 @@ export function FileTree({
     );
   }
   return (
-    <section className="card p-5" data-testid="file-tree">
+    <section className="card" data-testid="file-tree">
       <div className="flex items-center justify-between">
         <h3 className="panel-title">Files</h3>
-        <span className="text-[14px] text-slate">{files.length} files</span>
+        <span className="text-md text-slate">{files.length} files</span>
       </div>
       {body}
     </section>

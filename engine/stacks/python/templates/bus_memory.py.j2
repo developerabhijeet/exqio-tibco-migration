@@ -1,0 +1,95 @@
+"""In-memory bus for tests and local runs (MESSAGING_MODE=InMemory): delivery is immediate, every
+message is recorded, and dead-lettered messages are kept with their reason, so tests and the verifier
+can read what a process published and how each message was settled."""
+
+from __future__ import annotations
+
+import asyncio
+import datetime as _dt
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from {{ pkg }}.core import tib
+from {{ pkg }}.core.bus import (
+    CORRELATION_ID,
+    DEAD_LETTER,
+    ENQUEUED_TIME,
+    MESSAGE_ID,
+    REPLY_TO,
+    Handler,
+    Message,
+    MessageBus,
+    Outcome,
+)
+
+
+@dataclass(frozen=True)
+class DeadLetter:
+    """A message a consumer dead-lettered, with the reason and description it gave."""
+
+    message: Message
+    reason: str
+    description: str | None
+
+
+class InMemoryMessageBus(MessageBus):
+    def __init__(self) -> None:
+        self.handlers: dict[str, list[Handler]] = {}
+        self.published: list[Message] = []  # every message published or delivered, in order
+        self.dead_lettered: list[DeadLetter] = []
+        self._replies: dict[str, asyncio.Future[Message]] = {}
+
+    def published_to(self, entity: str) -> list[Message]:
+        """Messages published to one entity (a queue or a topic name)."""
+        return [m for m in self.published if m.entity == entity]
+
+    async def publish(self, entity: str, message: Any, properties: dict[str, str] | None = None) -> None:
+        stamped = dict(properties or {})
+        stamped.setdefault(MESSAGE_ID, str(uuid.uuid4()))
+        stamped.setdefault(ENQUEUED_TIME, tib.date_time(_dt.datetime.now(_dt.UTC)))
+        await self.deliver(Message(entity, tib.dumps(message, drop_nulls=True), stamped))
+
+    async def deliver(self, message: Message) -> list[Outcome]:
+        """Records ``message``, hands it to the subscribers of its entity and returns how each settled it."""
+        self.published.append(message)
+        correlation = message.properties.get(CORRELATION_ID)
+        if correlation is not None:
+            waiter = self._replies.pop(f"{message.entity}|{correlation}", None)
+            if waiter is not None and not waiter.done():
+                waiter.set_result(message)
+                return []
+        outcomes: list[Outcome] = []
+        for handler in list(self.handlers.get(message.entity, [])):
+            outcome = await handler(message)
+            if outcome.disposition == DEAD_LETTER:
+                self.dead_lettered.append(DeadLetter(message, outcome.reason or "DeadLettered", outcome.description))
+            outcomes.append(outcome)
+        return outcomes
+
+    def subscribe(self, entity: str, handler: Handler) -> Callable[[], None]:
+        key = entity.split("/", 1)[0]  # topic/subscription: every subscription sees every topic message
+        handlers = self.handlers.setdefault(key, [])
+        handlers.append(handler)
+        return lambda: handlers.remove(handler) if handler in handlers else None
+
+    async def request(self, entity: str, message: Any, timeout_s: float) -> Message:
+        correlation = uuid.uuid4().hex
+        reply_to = f"{entity}.reply"
+        waiter: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
+        self._replies[f"{reply_to}|{correlation}"] = waiter
+        try:
+            await self.publish(entity, message, {REPLY_TO: reply_to, CORRELATION_ID: correlation})
+            return await asyncio.wait_for(waiter, timeout_s)
+        except TimeoutError as ex:
+            raise RuntimeError(f"no reply on {reply_to} within {timeout_s}s") from ex
+        finally:
+            self._replies.pop(f"{reply_to}|{correlation}", None)
+
+    async def reply(self, request: Message, message: Any) -> None:
+        reply_to = request.properties.get(REPLY_TO)
+        if reply_to is None:
+            raise RuntimeError(f"message on {request.entity} has no {REPLY_TO} property")
+        correlation = request.properties.get(CORRELATION_ID)
+        await self.publish(reply_to, message, {CORRELATION_ID: correlation} if correlation else {})

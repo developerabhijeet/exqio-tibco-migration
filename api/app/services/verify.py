@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import socket
 import threading
 import time
@@ -40,7 +41,7 @@ import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import psycopg
@@ -51,16 +52,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.app.config import Settings
 from api.app.db import psycopg_url, utcnow
+from api.app.jobs.locks import ScenarioLock
 from api.app.jobs.runner import JobContext
 from api.app.models import Build, FieldDiff, Process, Scenario, ScenarioRun
 from api.app.services import evidence
 from api.app.services import gates as gate_svc
+from api.app.services import settings as settings_svc
 from api.app.services.context import engine_app, engine_findings, engine_process
 from api.app.services.stub_server import StubServer, client_names
 from engine.analysis.models import Finding
+from engine.child_env import scrub_urls
 from engine.domains.discover import activity_sql, sql_tables
 from engine.dotnet_gen.generator import is_sensitive_name, solution_layout
-from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle, find_dotnet
+from engine.dotnet_gen.runner import DotnetRunner, ServiceHandle
 from engine.dotnet_gen.tests_gen import TestContext, _request
 from engine.ir.models import Application as IRApplication
 from engine.ir.models import Process as IRProcess
@@ -79,6 +83,10 @@ from engine.parity.models import Scenario as EngineScenario
 from engine.parity.scenarios import generate_scenarios, took_link
 from engine.parity.seed import SeedData, estate_root
 from engine.parity.stubs import DEFAULT_TIMEOUT_MS, StubRegistry, WireMockStubs
+from engine.stacks import get_stack
+
+if TYPE_CHECKING:
+    from api.app.services.hosting import Hosting
 
 MODEL_LABEL = "expected output derived from the TIBCO model"
 TEST_DATA_NOTE = ("Rows generated from the schemas, enumerations and branch predicates, with masking applied "
@@ -238,7 +246,7 @@ async def load_scenarios(session: AsyncSession, process_id: str) -> list[Scenari
                                        .order_by(Scenario.created_at, Scenario.key))).scalars().all())
 
 
-async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Process, lock: asyncio.Lock,
+async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Process, lock: ScenarioLock,
                            *, refresh: bool = False) -> tuple[list[Scenario], list[str], bool]:
     """Generate (and cache) the scenarios of a process when there are none, or always with
     ``refresh``. ``POST /processes/{id}/scenarios/generate``, the build job and the verify job call
@@ -250,7 +258,7 @@ async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Proc
     rows = await load_scenarios(session, proc.id)
     if rows and not refresh and any(r.origin == "generated" for r in rows):
         return rows, [], False
-    async with lock:
+    async with lock():
         rows = await load_scenarios(session, proc.id)
         if rows and not refresh and any(r.origin == "generated" for r in rows):
             return rows, [], False
@@ -272,7 +280,7 @@ async def ensure_scenarios(session: AsyncSession, settings: Settings, proc: Proc
     return await load_scenarios(session, proc.id), notes, True
 
 
-async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Process, lock: asyncio.Lock,
+async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Process, lock: ScenarioLock,
                            user: str, name: str, data: dict[str, Any], stub_responses: dict[str, Any],
                            seed_state: list[dict[str, Any]]) -> tuple[Scenario, list[str]]:
     app = await engine_app(session, proc)
@@ -284,7 +292,7 @@ async def add_sme_scenario(session: AsyncSession, settings: Settings, proc: Proc
     sc = EngineScenario(id=key, process_id=ip.id, name=name, kind="sme", input=data, source="sme",
                         stub_responses={k: StubResponse.model_validate(v) for k, v in stub_responses.items()},
                         seed_state=[SeedRow.model_validate(s) for s in seed_state])
-    async with lock:
+    async with lock():
         filled, notes = await asyncio.to_thread(_evaluate_sync, settings, proc.project_id, app, [sc])
     if not filled:
         raise EvaluationError("; ".join(notes) or "the evaluator could not run the scenario")
@@ -363,6 +371,7 @@ class RunInfo:
     started_at: str = field(default_factory=lambda: utcnow().isoformat())
     stubs: StubServer | None = None  # the outbound HTTP stub server the service's clients point at
     clients: list[str] = field(default_factory=list)
+    swagger_path: str | None = "/swagger"  # None: the service has no Swagger UI (the Java stack)
 
     def stop(self) -> None:
         try:
@@ -405,7 +414,37 @@ def release_port(port: int) -> None:
         _RESERVED_PORTS.discard(port)
 
 
-def connection_names(build_root: Path, app_name: str) -> list[str]:
+def service_contract(build_root: Path, app_name: str, stack: str) -> dict[str, Any] | None:
+    """The project's ``.exiqo/service-contract.json`` (``StackLayout.contract_file``); ``None`` for
+    a stack without one (.NET) or when it cannot be read."""
+    return service_contract_state(build_root, app_name, stack)[0]
+
+
+def service_contract_state(build_root: Path, app_name: str, stack: str) -> tuple[dict[str, Any] | None, str]:
+    """``(contract, problem)``: problem is "" when read, "missing" when the file is absent (or the
+    stack has none) and "invalid" when it exists but is not a JSON object."""
+    contract_file = get_stack(stack).layout(app_name).contract_file
+    if contract_file is None:
+        return None, "missing"
+    try:
+        text = (build_root / contract_file).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "invalid"
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None, "invalid"
+    return (data, "") if isinstance(data, dict) else (None, "invalid")
+
+
+def connection_names(build_root: Path, app_name: str, stack: str = "dotnet") -> list[str]:
+    """The ``ConnectionStrings__<name>`` the service reads: from appsettings for .NET, from the
+    service contract's ``connections`` for the other stacks."""
+    if stack != "dotnet":
+        contract = service_contract(build_root, app_name, stack) or {}
+        return sorted(str(n) for n in contract.get("connections") or [] if str(n).lower() != "servicebus")
     layout = solution_layout(app_name)
     folder = layout["projects"]["api"]["folder"]
     path = build_root / folder / "appsettings.Development.json"
@@ -441,8 +480,9 @@ def run_status(info: RunInfo | None) -> dict[str, Any]:
         return {"running": False, "url": None, "port": None, "pid": None, "swagger_url": None,
                 "started_at": None, "exit_code": None}
     code = info.handle.poll()
+    swagger = f"{info.url}{info.swagger_path}" if info.swagger_path else None
     return {"running": code is None, "url": info.url, "port": info.port, "pid": info.handle.pid,
-            "swagger_url": f"{info.url}/swagger", "started_at": info.started_at, "exit_code": code}
+            "swagger_url": swagger, "started_at": info.started_at, "exit_code": code}
 
 
 def read_log(info: RunInfo | None, limit: int = 20000) -> str:
@@ -452,22 +492,56 @@ def read_log(info: RunInfo | None, limit: int = 20000) -> str:
         text = Path(info.handle.log_path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return text[-limit:]
+    return scrub_urls(text[-limit:])
+
+
+START_TIMEOUT_S = 240.0  # dotnet run (java -jar) until /health answers
+
+
+def missing_service_tools(stack: str) -> list[str]:
+    """The tools of a non-.NET stack's ``required_tools`` this worker lacks (the cached detector);
+    blocking, so ``start_service`` calls it off the loop; tests monkeypatch it."""
+    tools = settings_svc.detect_toolchains()
+    return [t for t in get_stack(stack).required_tools if not (tools.get(t) or {}).get("present")]
+
+
+def find_dotnet() -> str | None:
+    """The ``dotnet`` binary (the cached ``detect_toolchains``, else ``PATH``); blocking, so
+    ``start_service`` calls it off the loop; tests monkeypatch it."""
+    return settings_svc.tool_path("dotnet") or shutil.which("dotnet")
 
 
 async def start_service(settings: Settings, build: Build, project_id: str, app: IRApplication,
-                        lock: asyncio.Lock, timeout_s: float = 240.0) -> RunInfo:
-    """``dotnet run`` of the build's Api project on a free port against the seeded scenario
-    database (raises ``RuntimeError`` with the log tail)."""
+                        lock: ScenarioLock, timeout_s: float = START_TIMEOUT_S) -> RunInfo:
+    """``dotnet run`` of the build's Api project (another stack: its runner's ``run_service``, for
+    Java ``java -jar`` of the packaged jar) on a free port against the seeded scenario database
+    (raises ``RuntimeError`` with the log tail). A non-.NET stack's tools are checked first and a
+    missing one is named (X14a)."""
     if not build.output_dir or not Path(build.output_dir).is_dir():
         raise RuntimeError("the build has no solution on disk")
-    dotnet = find_dotnet()
-    if dotnet is None:
-        raise RuntimeError("dotnet not found: install the .NET 10 SDK (see Settings, toolchains)")
+    stack_key = build.stack or "dotnet"
+    is_dotnet = stack_key == "dotnet"
     root = Path(build.output_dir)
-    app_name = next((p.stem for p in root.glob("*.sln")), None)
-    if app_name is None:
-        raise RuntimeError("no .sln in the build folder")
+    dotnet: str | None = None
+    if is_dotnet:
+        dotnet = await asyncio.to_thread(find_dotnet)
+        if dotnet is None:
+            raise RuntimeError("dotnet not found: install the .NET 10 SDK (see Settings, toolchains)")
+        app_name = next((p.stem for p in root.glob("*.sln")), None)
+        if app_name is None:
+            raise RuntimeError("no .sln in the build folder")
+        clients = client_names(root)
+    else:
+        missing = await asyncio.to_thread(missing_service_tools, stack_key)
+        if missing:
+            raise RuntimeError(f"the {stack_key} toolchain is missing on this worker: {', '.join(missing)}; "
+                               "install it (Settings shows the toolchains) to start the service")
+        app_name = root.name
+        contract, problem = service_contract_state(root, app_name, stack_key)
+        if contract is None:
+            raise RuntimeError("no .exiqo/service-contract.json in the build folder" if problem == "missing"
+                               else ".exiqo/service-contract.json in the build folder is not a valid JSON object")
+        clients = sorted(str(c) for c in contract.get("clients") or [])
     dsn = scenario_dsn(settings, project_id)
 
     def seed() -> None:
@@ -477,9 +551,8 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
         finally:
             db.close()
 
-    async with lock:
+    async with lock():
         await asyncio.to_thread(seed)
-    clients = client_names(root)
     stubs: StubServer | None = None
     held: socket.socket | None = None
     port: int | None = None
@@ -495,15 +568,24 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
 
     try:
         stubs = StubServer()
-        env = service_env(dsn, connection_names(root, app_name), clients, stubs.url,
-                          settings.cors_origin_list)
+        # through the API's proxy the browser is same-origin with the service; only the local
+        # all-in-one process (role all) still lets the web origins call it directly
+        env = service_env(dsn, connection_names(root, app_name, stack_key), clients, stubs.url,
+                          settings.cors_origin_list if settings.exiqo_role == "all" else [])
         held, port = reserve_port()
-        runner = DotnetRunner(root, dotnet=dotnet)
         sock, service_port = held, port
+        if is_dotnet:
+            runner = DotnetRunner(root, dotnet=dotnet)
 
-        def launch() -> ServiceHandle:
-            sock.close()  # hand the port to the service at the last moment
-            return runner.run_service(solution_layout(app_name)["api_project"], service_port, env, timeout_s)
+            def launch() -> ServiceHandle:
+                sock.close()  # hand the port to the service at the last moment
+                return runner.run_service(solution_layout(app_name)["api_project"], service_port, env, timeout_s)
+        else:
+            stack_runner = get_stack(stack_key).runner(root)
+
+            def launch() -> ServiceHandle:
+                sock.close()
+                return stack_runner.run_service(service_port, env, timeout_s)
 
         launching = asyncio.ensure_future(asyncio.to_thread(launch))
         handle: ServiceHandle = await asyncio.shield(launching)
@@ -520,7 +602,8 @@ async def start_service(settings: Settings, build: Build, project_id: str, app: 
     except BaseException:
         cleanup()
         raise
-    return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients)
+    return RunInfo(build_id=build.id, handle=handle, port=port, stubs=stubs, clients=clients,
+                   swagger_path="/swagger" if is_dotnet else None)
 
 
 _BACKGROUND: set[asyncio.Task[Any]] = set()
@@ -829,8 +912,11 @@ def _derive_expected(
         db.close()
 
 
-async def run_verify(ctx: JobContext, build_id: str, settings: Settings, services: dict[str, RunInfo],
-                     lock: asyncio.Lock) -> dict[str, Any]:
+async def run_verify(ctx: JobContext, build_id: str, settings: Settings, hosting: Hosting,
+                     lock: ScenarioLock) -> dict[str, Any]:
+    """The verify job. It runs on the worker that hosts the build's service (the job's affinity is
+    ``builds.run_owner``), so it calls the service on loopback through ``hosting``, never through
+    the API's proxy."""
     async with ctx.sessionmaker() as s:
         build = await s.get(Build, build_id)
         if build is None:
@@ -847,7 +933,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
                   + f", expected results {MODEL_LABEL}, derived again against this run's seed data")
     for n in notes:
         await ctx.log(n)
-    info = services.get(build_id)
+    info = hosting.get(build_id)
     if info is None or not info.running:
         raise ServiceNotRunning("the generated service is not running: start it first (POST /builds/{id}/run)")
     kind = proc.starter.kind if proc.starter else "subprocess"
@@ -861,7 +947,7 @@ async def run_verify(ctx: JobContext, build_id: str, settings: Settings, service
     app_name = next((p.stem for p in Path(build.output_dir or ".").glob("*.sln")), "App")
     await ctx.stage("run")
     results: list[dict[str, Any]] = []
-    async with lock, httpx.AsyncClient(base_url=info.url, timeout=60) as client:
+    async with lock(), httpx.AsyncClient(base_url=info.url, timeout=60) as client:
         token = await dev_token(client)
         client.headers["Authorization"] = f"Bearer {token}"
         await ctx.log(f"development token issued by {info.url}/auth/dev-token")
@@ -1033,24 +1119,41 @@ def _unique_rules(reports: Any) -> list[dict[str, str]]:
 
 
 # ------------------------------------------------------------------ startup
-def _owned_service(pid: int, build: Build) -> bool:
-    """The recorded pid is still a ``dotnet`` process started for this build (not a reused pid)."""
+def process_cmdline(pid: int) -> str | None:
+    """The command line of ``pid`` (``/proc``, Linux pods); ``None`` when it cannot be read."""
     try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
     except OSError:
+        return None
+
+
+def _owned_service(pid: int, build: Build) -> bool:
+    """The recorded pid is still the build's stack's service process (``dotnet``, ``java``: the
+    stack's ``service_process_marker``) started for this build (not a reused pid)."""
+    cmdline = process_cmdline(pid)
+    if cmdline is None:
         return False
-    return "dotnet" in cmdline and bool(build.output_dir) and build.output_dir in cmdline
+    try:
+        marker = get_stack(build.stack or "dotnet").service_process_marker
+    except KeyError:  # a stack this install no longer has: never kill what cannot be identified
+        return False
+    return marker in cmdline and bool(build.output_dir) and build.output_dir in cmdline
 
 
-async def clear_stale_runs(sessionmaker: Any) -> int:
-    """At startup: services recorded by a previous API process are not managed any more. Stop the
-    ones still alive (their process group, only when the pid is still that build's ``dotnet``) and
-    clear ``run_pid``/``run_port``; returns how many rows were cleared."""
+async def clear_stale_runs(sessionmaker: Any, owner: str | None = None) -> int:
+    """At startup: services recorded by an earlier life of this process are not managed any more.
+    Stop the ones still alive (their process group, only when the pid is still that build's
+    ``dotnet``) and clear ``run_pid``/``run_port``/``run_host``/``run_owner``; returns how many rows
+    were cleared. A worker passes its ``owner`` name and clears only its own rows; the local
+    all-in-one process (role ``all``) clears every recorded run."""
     import os
     import signal
 
     async with sessionmaker() as s:
-        rows = (await s.execute(select(Build).where(Build.run_pid.is_not(None)))).scalars().all()
+        q = select(Build).where(Build.run_pid.is_not(None) | Build.run_owner.is_not(None))
+        if owner is not None:
+            q = q.where(Build.run_owner == owner)
+        rows = (await s.execute(q)).scalars().all()
         for b in rows:
             if b.run_pid and _owned_service(b.run_pid, b):
                 try:
@@ -1058,5 +1161,6 @@ async def clear_stale_runs(sessionmaker: Any) -> int:
                 except (ProcessLookupError, PermissionError):
                     pass
             b.run_pid = b.run_port = None
+            b.run_host = b.run_owner = None
         await s.commit()
     return len(rows)

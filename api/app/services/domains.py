@@ -18,6 +18,7 @@ from api.app.config import Settings
 from api.app.jobs.runner import JobContext
 from api.app.models import Domain, GraphEdge, GraphNode, Process
 from api.app.services import gates as gate_svc
+from api.app.services.citations import cite_domain
 from api.app.services.knowledge import Knowledge, KnowledgeUnavailable
 from api.app.services.providers import build_provider, model_call_recorder
 from engine.agents.domain_namer import name_domains
@@ -43,7 +44,7 @@ async def _processes_by_domain(session: AsyncSession, project_id: str) -> dict[s
 def domain_out(d: Domain, procs: list[Process]) -> dict[str, Any]:
     return {"id": d.id, "key": d.key, "name": d.name, "suggested_name": d.suggested_name,
             "process_ids": [p.id for p in procs], "ir_process_ids": [p.ir_id for p in procs],
-            "evidence": d.evidence or [], "renamed_by": d.renamed_by}
+            "evidence": d.evidence or [], "renamed_by": d.renamed_by, "cited": cite_domain(d)}
 
 
 async def list_domains(session: AsyncSession, project_id: str) -> list[dict[str, Any]]:
@@ -107,7 +108,8 @@ async def merge(session: AsyncSession, knowledge: Knowledge, source: Domain, tar
     await _remember(knowledge, target.project_id,
                     f"SME {user} merged the domain \"{source.name}\" into \"{target.name}\".",
                     {"source_id": source.id, "source_name": source.name, "target_id": target.id,
-                     "target_name": target.name, "user": user, "decision": "merged"}, user)
+                     "target_name": target.name, "domain_key": target.key, "user": user,
+                     "decision": "merged"}, user)
     return target
 
 

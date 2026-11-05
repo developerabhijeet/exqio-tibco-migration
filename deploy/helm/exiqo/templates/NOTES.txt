@@ -1,0 +1,31 @@
+ExiQO Migrate {{ .Chart.AppVersion }} in namespace {{ .Release.Namespace }}: https://{{ .Values.ingress.host }}
+
+Sign-in: {{ .Values.auth.mode }}{{ if eq .Values.auth.mode "oidc" }} (Entra tenant {{ .Values.auth.tenantId }}, redirect URI https://{{ .Values.ingress.host }}/api/auth/callback){{ end }}
+Migrations ran in the pre-install/pre-upgrade hook: kubectl -n {{ .Release.Namespace }} logs job/exiqo-migrate
+
+Workload Identity federated credentials (issuer: the cluster's OIDC issuer URL):
+  platform identity {{ .Values.identity.platformClientId | default "(identity.platformClientId)" }}:
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-api
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-worker
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-migrate
+{{- if .Values.neo4j.enabled }}
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-neo4j
+{{- if and .Values.neo4jBackup.enabled (not .Values.identity.backupClientId) }}
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-neo4j-backup
+{{- end }}
+{{- end }}
+{{- range $env, $id := .Values.identity.deployIdentities }}
+  deploy identity {{ $env }} ({{ $id }}):
+    system:serviceaccount:{{ $.Release.Namespace }}:exiqo-worker
+{{- end }}
+{{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled .Values.identity.backupClientId }}
+  backup identity {{ .Values.identity.backupClientId }}:
+    system:serviceaccount:{{ .Release.Namespace }}:exiqo-neo4j-backup
+{{- end }}
+
+Checks:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name=exiqo
+  The About panel (admin role) shows /system/status: image digests, egress allowlist, readiness.
+{{- if and .Values.neo4j.enabled .Values.neo4jBackup.enabled }}
+  Neo4j backup: "{{ .Values.neo4jBackup.schedule }}" (Neo4j stops for the dump; /readyz reports it as down without failing)
+{{- end }}

@@ -42,13 +42,13 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
 
   // A citation chip jumps to the canvas step and its XML lines, and back.
   const firstRule = page.getByTestId("rule-card").first();
-  const chip = firstRule.getByTestId("citation-chip").first();
-  const cited = await chip.getAttribute("data-activity");
+  const chip = firstRule.getByTestId("cite-chip").first();
+  const cited = await chip.getAttribute("data-step");
   expect(cited).toBeTruthy();
   await chip.click();
   await expect(page.getByTestId("process-view")).toBeVisible();
-  await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", cited!);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveCount(1);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveAttribute("data-id", cited!);
   await expect(page.getByTestId("xml-viewer").locator(".xml-hl-line").first()).toBeVisible();
   await page.getByRole("button", { name: "Back to Validate" }).click();
 
@@ -96,17 +96,17 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   await g2.getByRole("button", { name: "Approve G2" }).click();
   await expect(g2).toHaveAttribute("data-state", "approved");
 
-  // Ask AI panel answers with numbered citations.
-  await page.getByRole("button", { name: "Ask AI" }).click();
-  await page.getByRole("button", { name: "Which workflows read the funding table?" }).click();
-  await expect(page.getByTestId("ask-answer")).toBeVisible();
-  await expect(page.getByTestId("ask-citation").first()).toContainText("[1]");
-  // A citation that names a step opens it on the canvas.
-  const askCite = page.locator('[data-testid="ask-citation"]:not([data-step=""])').first();
-  const askStep = await askCite.getAttribute("data-step");
-  await askCite.click();
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
-  await page.getByRole("button", { name: "Close Ask AI" }).click();
+  // ExiQoian answers a suggested question with inline chips; a chip that names a step opens it.
+  await page.getByRole("button", { name: "Ask ExiQoian" }).click();
+  const chat = page.getByTestId("exiqoian-panel");
+  await chat.locator("ul button").first().click();
+  const reply = chat.locator('[data-testid="exiqoian-message"][data-role="assistant"]').first();
+  await expect(reply).toHaveAttribute("data-verdict", "answer", { timeout: 60_000 });
+  const stepCite = reply.locator('[data-testid="cite-chip"]:not([data-step=""])').first();
+  const askStep = await stepCite.getAttribute("data-step");
+  await stepCite.click();
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
+  await page.getByRole("button", { name: "Close ExiQoian" }).click();
   await page.getByRole("button", { name: "Back to Validate" }).click();
 
   // Design: generate the record as the architect and approve G3.

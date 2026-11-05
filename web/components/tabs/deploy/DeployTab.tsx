@@ -16,6 +16,7 @@ import { AzureIcon } from "@/components/ui/BrandIcons";
 import { AzureConnectForm } from "./AzureConnectForm";
 import { SecurityPanel } from "./SecurityPanel";
 import { PlanView } from "./PlanView";
+import { ReenterOnFailure } from "@/components/iterations/ReenterDialog";
 
 export function DeployTab() {
   const qc = useQueryClient();
@@ -43,14 +44,14 @@ export function DeployTab() {
 
   return (
     <div className="space-y-5" data-testid="deploy-tab">
-      <div className="sticky top-[var(--pinned-h,0px)] z-10 -mx-6 bg-page px-6 py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
+      <div className="md:sticky md:top-[var(--pinned-h,0px)] z-10 -mx-[var(--gutter)] bg-page px-[var(--gutter)] py-3 print:static print:m-0 print:p-0 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Step 7</p>
           <h2 className="panel-title flex items-center gap-2">
             <AzureIcon size={19} />
             Deploy
           </h2>
-          <p className="mt-1 max-w-[760px] text-[14px] text-slate">
+          <p className="mt-1 max-w-[760px] text-md text-slate">
             The generated Terraform modules and Terragrunt live configuration are planned against the connected subscription.
             Without a connection, the connect-later state is recorded with the last validation. Operations approves (G6). Apply
             runs from the pipelines, not from here.
@@ -69,7 +70,7 @@ export function DeployTab() {
               consequence="Deploy cannot plan an image of the service until a build of this process passes."
             />
           ) : buildId ? (
-            <p className="flex items-center gap-1.5 text-[13px] text-slate">
+            <p className="flex items-center gap-1.5 text-sm text-slate">
               Latest build <span className="font-mono">{shortHash(buildId, 8)}</span> of {proc?.name}
               {build.data ? <OutcomePill outcome={build.data.status} /> : null}
             </p>
@@ -83,8 +84,9 @@ export function DeployTab() {
             started={!!buildId}
             hint="Operations approves the plan, or the acknowledged connect-later state."
           />
+          <ReenterOnFailure processId={processId} processName={proc?.name} kinds={["plan_error"]} what="failed plan(s)" />
           {buildId ? <PlanView buildId={buildId} stream={stream} onPlanJob={watch} /> : null}
-          <SecurityPanel buildId={buildId} />
+          <SecurityPanel buildId={buildId} processId={processId} />
           <AzureConnectForm
             projectId={projectId}
             onConnectLater={connectLater}
