@@ -63,8 +63,8 @@ test("Validate shows citations inside the rule text and they open the canvas", a
 
   await chip.click();
   await expect(page.getByTestId("process-view")).toBeVisible();
-  await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", step!);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveCount(1);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveAttribute("data-id", step!);
   await expect(page.getByRole("button", { name: "Back to Validate" })).toBeVisible();
 });
 

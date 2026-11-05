@@ -47,8 +47,8 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   expect(cited).toBeTruthy();
   await chip.click();
   await expect(page.getByTestId("process-view")).toBeVisible();
-  await expect(page.locator(".react-flow__node.selected")).toHaveCount(1);
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", cited!);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveCount(1);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveAttribute("data-id", cited!);
   await expect(page.getByTestId("xml-viewer").locator(".xml-hl-line").first()).toBeVisible();
   await page.getByRole("button", { name: "Back to Validate" }).click();
 
@@ -105,7 +105,7 @@ test("validate rules and findings, approve G1 to G3, then an edit reopens G1", a
   const stepCite = reply.locator('[data-testid="cite-chip"]:not([data-step=""])').first();
   const askStep = await stepCite.getAttribute("data-step");
   await stepCite.click();
-  await expect(page.locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
+  await expect(page.getByTestId("process-canvas").locator(".react-flow__node.selected")).toHaveAttribute("data-id", askStep!);
   await page.getByRole("button", { name: "Close ExiQoian" }).click();
   await page.getByRole("button", { name: "Back to Validate" }).click();
 
